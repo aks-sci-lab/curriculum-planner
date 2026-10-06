@@ -126,6 +126,31 @@ test("roster supports aliases, sheet grades and multiple sheets", () => {
   ]), /찾지 못/);
 });
 
+test("application subjects include every student-choice course in promoted grades, ignoring old exclusions", () => {
+  const course = (subject, division, hours, grade = "") => ({
+    subject, division, row: [3, ...hours], grade, area: "교과", selectionType: "일반선택",
+  });
+  const contexts = [
+    course("학교지정", "학교 지정 교육과정", ["", "", 3, "", "", ""]),
+    course("수학", "학생 선택 교육과정", ["", "", 3, 3, "", ""]),
+    course("과학", "학생선택교육과정", ["", "", "", "", 3, ""]),
+    course("현재학년", "학생 선택 교육과정", [3, "", "", "", "", ""]),
+    course("미편제", "학생 선택 교육과정", ["", "", 0, "-", "", ""], "2"),
+    course("구분없음", "", ["", "", 3, "", "", ""]),
+  ];
+  const ctx = vm.createContext({
+    state: { curriculumImportedLayout: {}, applicationExcluded: { "2:수학": true } },
+    importedPlanColumnMap: () => ({ subject: 0, opCredit: 0, baseCredit: -1, semesters: [1, 2, 3, 4, 5, 6] }),
+    importedPlanCourseContexts: () => contexts,
+  });
+  vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("), ctx);
+  const result = plain(ctx.selectedApplicationSubjects());
+  assert.deepEqual(result["1"], []);
+  assert.deepEqual(result["2"].map((c) => c.subject), ["수학"]);
+  assert.equal(result["2"][0].semester, "1·2");
+  assert.deepEqual(result["3"].map((c) => c.subject), ["과학"]);
+});
+
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
   const subjects = setup().subjects;
   const existing = [{ name: "기존학생" }];
@@ -153,7 +178,7 @@ test("roster upload exports selected subjects and round without overwriting appl
   subjects["2"] = [];
   await ctx.handleApplicationRoster(file);
   assert.equal(ctx.downloaded, null);
-  assert.match(ctx.status.textContent, /2학년 과목이 없습니다/);
+  assert.match(ctx.status.textContent, /2학년 학생선택교육과정 과목이 없습니다/);
 });
 
 test("server setup requires admin and rejects invalid/duplicate roster", () => {

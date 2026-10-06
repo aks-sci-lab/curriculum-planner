@@ -227,6 +227,12 @@
         round: state.currentRound, subjects,
         roster: parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())),
       };
+      for (const student of setup.roster) {
+        const targetGrade = String(Number(student.grade) + 1);
+        if (!subjects[targetGrade]?.length) {
+          throw new Error(`현재 ${student.grade}학년이 신청할 ${targetGrade}학년 학생선택교육과정 과목을 찾지 못했습니다. 1단계 편제표의 교육과정 구분과 ${targetGrade}학년 학기 시수를 확인하세요.`);
+        }
+      }
       latestCodes = await rpc("create_course_event", { p_setup: setup }, true);
       downloadTextFile(JSON.stringify(latestCodes, null, 2), "학생별_신청코드.json", "application/json");
       byId("cloudTeacherMessage").textContent = `${setup.round}차 신청을 생성했습니다 (${latestCodes.students.length}명). 학생 코드를 반드시 저장하고 개별 전달하세요.`;
