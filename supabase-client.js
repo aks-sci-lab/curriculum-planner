@@ -11,6 +11,17 @@
   let application = null;
   let teacherBusy = false;
   let studentBusy = false;
+  let printingCodes = null;
+  const eventId = new URLSearchParams(new URL(window.location.href).hash.slice(1)).get("event");
+  const validEvent = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+
+  function eventLink(id) {
+    if (!validEvent.test(id)) throw new Error("수강신청 식별자가 잘못되었습니다.");
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = new URLSearchParams({ event: id }).toString();
+    return url.href;
+  }
 
   async function request(path, { method = "POST", body, authenticated = false } = {}) {
     if (authenticated && !session) throw new Error("교사 로그인이 필요합니다.");
@@ -40,7 +51,7 @@
     }
     if (!response.ok) {
       if (result?.code === "PGRST202" || result?.code === "42P01") {
-        throw new Error("Supabase 초기 설정이 필요합니다. 운영자가 SQL Editor에서 supabase/setup.sql을 실행해야 합니다.");
+        throw new Error("Supabase 설정이 필요합니다. 최초 설치는 supabase/setup.sql, 6자리 코드·로그 업데이트는 supabase/upgrade-codes-history.sql을 SQL Editor에서 실행하세요.");
       }
       throw new Error(result?.message || result?.msg || result?.error_description || "서버 요청에 실패했습니다.");
     }
@@ -78,6 +89,7 @@
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
       byId("cloudRosterInput").disabled = false;
       byId("cloudDownloadCodes").disabled = !latestCodes;
+      byId("cloudPrintCodes").disabled = !latestCodes;
     }
   }
 
@@ -102,6 +114,16 @@
       const title = document.createElement("p");
       title.textContent = `${event.school_year} ${event.school_name} ${event.round}차 · ${event.is_open ? "접수 중" : "마감"} · ${new Date(event.created_at).toLocaleString("ko-KR")}`;
       section.appendChild(title);
+      const link = document.createElement("a");
+      link.href = eventLink(event.id);
+      link.textContent = "이 학교·차수 학생 신청 링크";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      section.appendChild(link);
+      section.appendChild(button("신청 로그 · 롤백", () => teacherAction(async () => {
+        await showHistory(event, section);
+        byId("cloudTeacherMessage").textContent = "이력의 복원 버튼은 해당 기록 시각 직전 상태로 되돌립니다.";
+      })));
       section.appendChild(button(event.is_open ? "신청 마감" : "다시 열기", () => teacherAction(async () => {
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: event.is_open ? "close" : "open" }, true);
         await refreshEvents();
@@ -163,7 +185,8 @@
 
   async function completeGoogleLogin() {
     const callback = new URL(window.location.href);
-    if (callback.hash === "#student" || new URLSearchParams(callback.hash.slice(1)).has("apply")) return;
+    if (callback.hash === "#student" || new URLSearchParams(callback.hash.slice(1)).has("apply") ||
+        new URLSearchParams(callback.hash.slice(1)).has("event")) return;
     if (!callback.searchParams.has("code") && !callback.searchParams.has("error")) return;
     const code = callback.searchParams.get("code");
     const error = callback.searchParams.get("error_description") || callback.searchParams.get("error");
@@ -321,8 +344,13 @@
       byId("cloudStudentChoices").replaceChildren();
       byId("cloudStudentCourses").classList.add("hidden");
       const code = byId("cloudStudentCode").value.trim().toLowerCase();
-      if (!/^[a-f0-9]{32}$/.test(code)) throw new Error("학교에서 받은 32자리 개인 코드를 확인하세요.");
-      const data = await rpc("get_course_application", { p_code: code });
+      if (eventId && !validEvent.test(eventId)) throw new Error("학교 신청 링크가 잘못되었습니다.");
+      if (eventId ? !/^(\d{6}|[a-f0-9]{32})$/.test(code) : !/^[a-f0-9]{32}$/.test(code)) {
+        throw new Error(eventId ? "학교에서 받은 6자리 숫자 코드를 확인하세요." : "6자리 코드는 학교·차수별 신청 링크에서 입력하세요. 기존 긴 코드는 이 입구에서도 사용할 수 있습니다.");
+      }
+      const data = eventId
+        ? await rpc("get_scoped_course_application", { p_event: eventId, p_code: code })
+        : await rpc("get_course_application", { p_code: code });
       if (byId("cloudStudentCode").value.trim().toLowerCase() !== code) {
         throw new Error("코드가 변경되었습니다. 다시 본인 확인을 해주세요.");
       }
@@ -338,10 +366,120 @@
       const code = activeCode;
       const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((box) => box.value);
       if (!selected.length) throw new Error("과목을 1개 이상 선택하세요.");
-      const result = await rpc("save_course_application", { p_code: code, p_selections: selected });
+      const result = eventId
+        ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
+        : await rpc("save_course_application", { p_code: code, p_selections: selected });
       if (activeCode === code) byId("cloudStudentMessage").textContent = result.message;
     });
   });
+    async function showHistory(event, parent) {
+      const data = await rpc("course_event_history", { p_event: event.id }, true);
+      const old = parent.querySelector(".course-history");
+      if (old) old.remove();
+      const panel = document.createElement("section");
+      panel.className = "course-history";
+      const heading = document.createElement("p");
+      heading.textContent = `신청 이력 ${data.entries.length}건 · 기록 시작 ${new Date(data.startedAt).toLocaleString("ko-KR")}`;
+      panel.appendChild(heading);
+      const time = document.createElement("input");
+      time.type = "datetime-local";
+      time.step = "1";
+      time.setAttribute("aria-label", "전체 롤백 기준 시각");
+      panel.appendChild(time);
+      async function restore(before, student = null) {
+        if (!before || Number.isNaN(new Date(before).getTime())) throw new Error("복원할 시각을 선택하세요.");
+        if (!window.confirm(`${student ? "해당 학생" : "전체 학생"}을 ${new Date(before).toLocaleString("ko-KR")} 직전 상태로 복원할까요? 코드와 접수 마감 상태는 변경하지 않습니다.`)) {
+          byId("cloudTeacherMessage").textContent = "롤백을 취소했습니다.";
+          return;
+        }
+        const result = await rpc("rollback_course_event", { p_event: event.id, p_before: before, p_student: student }, true);
+        await showHistory(event, parent);
+        byId("cloudTeacherMessage").textContent = result.message;
+      }
+      panel.appendChild(button("입력 시각 직전으로 전체 롤백", () => teacherAction(() =>
+        restore(time.value ? new Date(time.value).toISOString() : ""))));
+      const studentSelect = document.createElement("select");
+      studentSelect.setAttribute("aria-label", "개별 롤백 학생");
+      const students = new Map(data.entries.map((entry) => [entry.studentId, entry]));
+      for (const [id, s] of students) {
+        const option = document.createElement("option"); option.value = id;
+        option.textContent = `${s.grade}학년 ${s.classroom}반 ${s.number}번 ${s.name}`;
+        studentSelect.appendChild(option);
+      }
+      panel.appendChild(studentSelect);
+      panel.appendChild(button("입력 시각 직전으로 학생 롤백", () => teacherAction(async () => {
+        if (!studentSelect.value) throw new Error("복원할 학생을 선택하세요.");
+        await restore(time.value ? new Date(time.value).toISOString() : "", studentSelect.value);
+      })));
+      panel.appendChild(button("로그 JSON 저장", () =>
+        downloadTextFile(JSON.stringify(data, null, 2), "수강신청_로그.json", "application/json")));
+      for (const entry of data.entries) {
+        const row = document.createElement("p");
+        row.textContent = `${new Date(entry.at).toLocaleString("ko-KR")} · ${entry.grade}학년 ${entry.classroom}반 ${entry.number}번 ${entry.name} · ${entry.action} · ${entry.submittedAt ? entry.selections.join(", ") : "미신청"}` +
+          (entry.rollbackBefore ? ` · 복원 기준 ${new Date(entry.rollbackBefore).toLocaleString("ko-KR")}` : "");
+        row.appendChild(button("이 시각 직전 · 학생 롤백", () => teacherAction(() => restore(entry.at, entry.studentId))));
+        row.appendChild(button("이 시각 직전 · 전체 롤백", () => teacherAction(() => restore(entry.at))));
+        panel.appendChild(row);
+      }
+      parent.appendChild(panel);
+    }
+
+    function filteredPrintStudents() {
+      const classroom = byId("cloudPrintClass").value;
+      return printingCodes.students.filter((s) => !classroom || `${s.grade}:${s.classroom}` === classroom);
+    }
+    function codeMarkup(students) {
+      const link = eventLink(printingCodes.id);
+      return students.map((s) => `<section class="print-page"><h2>수강신청 안내</h2>
+        <p>${escapeHtml(s.grade)}학년 ${escapeHtml(s.classroom)}반 ${escapeHtml(s.number)}번 <strong>${escapeHtml(s.name)}</strong></p>
+        <p>아래 학교·차수 신청 주소로 접속하여 본인 코드를 입력하세요.</p>
+        <p style="overflow-wrap:anywhere">${escapeHtml(link)}</p>
+        <p style="font-size:28px">개인 신청 코드: <strong>${escapeHtml(s.code)}</strong></p>
+        <p>학교·차수와 본인 정보를 확인한 뒤 과목을 선택하고 신청 저장을 누르세요.</p>
+        <p>이 코드는 본인만 사용하세요. 재접속하여 신청 내용을 수정할 수 있습니다.</p></section>`).join("");
+    }
+    function previewCodes() {
+      byId("cloudCodePreview").innerHTML = codeMarkup(filteredPrintStudents());
+    }
+    function openCodes(data) {
+      if (!validEvent.test(data?.id) || !Array.isArray(data.students) || !data.students.length ||
+          data.students.some((s) => !/^(?:\d{6}|[a-f0-9]{32})$/.test(s.code) ||
+            !/^[12]$/.test(String(s.grade)) || !s.classroom || !s.number || typeof s.name !== "string")) {
+        throw new Error("학생별 신청 코드 JSON 형식을 확인하세요. 이전 Apps Script 코드 파일은 지원하지 않습니다.");
+      }
+      printingCodes = data;
+      const filter = byId("cloudPrintClass");
+      filter.replaceChildren();
+      const all = document.createElement("option"); all.value = ""; all.textContent = "전체";
+      filter.appendChild(all);
+      const groups = [...new Set(data.students.map((s) => `${s.grade}:${s.classroom}`))].sort((a,b) =>
+        Number(a.split(":")[0])-Number(b.split(":")[0]) || Number(a.split(":")[1])-Number(b.split(":")[1]));
+      for (const group of groups) {
+        const option = document.createElement("option"); option.value = group;
+        option.textContent = group.replace(":", "학년 ") + "반"; filter.appendChild(option);
+      }
+      filter.value = "";
+      previewCodes();
+      byId("cloudCodeDialog").showModal();
+    }
+    byId("cloudPrintCodes").addEventListener("click", () => teacherAction(async () => {
+      openCodes(latestCodes);
+      byId("cloudTeacherMessage").textContent = "메일머지 출력창을 열었습니다.";
+    }));
+    byId("cloudCodeFile").addEventListener("change", (event) => {
+      const file = event.target.files[0]; event.target.value = "";
+      if (file) teacherAction(async () => {
+        openCodes(JSON.parse(await file.text()));
+        byId("cloudTeacherMessage").textContent = "저장한 코드 파일의 출력창을 열었습니다.";
+      });
+    });
+    byId("cloudPrintClass").addEventListener("change", previewCodes);
+    byId("cloudCodeClose").addEventListener("click", () => byId("cloudCodeDialog").close());
+    byId("cloudCodePrint").addEventListener("click", () => {
+      byId("printBatch").innerHTML = codeMarkup(filteredPrintStudents());
+      byId("cloudCodeDialog").close();
+      window.print();
+    });
   completeGoogleLogin().catch((error) => {
     byId("cloudTeacherMessage").textContent = `로그인 처리 실패: ${error.message}`;
   });

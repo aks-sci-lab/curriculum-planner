@@ -18,9 +18,16 @@ class Element {
     this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) };
   }
   addEventListener(type, callback) { this.listeners[type] = callback; }
-  appendChild(child) { this.children.push(child); }
+  appendChild(child) { child.parent = this; this.children.push(child); }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
+  setAttribute(name, value) { this[name] = value; }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  querySelector(selector) {
+    return this.children.find((child) => selector === ".course-history" && child.className === "course-history") || null;
+  }
+  remove() { this.parent.children = this.parent.children.filter((child) => child !== this); }
   querySelectorAll(selector) {
     const result = [];
     const visit = (element) => {
@@ -61,6 +68,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       location: { href, assign: (url) => redirects.push(url) },
       history: { replaceState: (state, title, url) => history.push(url) },
       confirm: () => true,
+      print: () => { fixtureData.printed = true; },
     },
     switchWorkflowStep: (step) => { fixtureData.step = step; },
     state: { currentRound: "2" },
@@ -68,6 +76,9 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     parseWorkbook: async () => [],
     parseApplicationRoster: () => [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     downloadTextFile: (text, name) => downloads.push({ data: JSON.parse(text), name }),
+    escapeHtml: (value) => String(value).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[c]),
     fetch: async (url, options) => {
       const request = { url, options, body: options.body && JSON.parse(options.body) };
       requests.push(request);
@@ -197,4 +208,95 @@ test("Google login reports missing provider, missing verifier, expired verifier 
     assert.equal(f.storage.size, 0);
     assert.equal(f.history[0], "https://school.example/app/");
   }
+});
+
+test("six-digit codes preserve leading zeroes and always use the scoped school event", async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const f = fixture({ href: `https://school.example/app/#event=${id}` });
+  f.respond = async (request) => ({ data: request.url.endsWith("get_scoped_course_application") ? {
+    student: { grade: "1", classroom: "1", number: "1", name: "가상" },
+    schoolName: "학교", schoolYear: "2026", round: "1", open: true,
+    courses: [{ subject: "수학", credit: 3 }], selections: ["수학"],
+  } : { message: "저장 완료" } });
+  f.elements.cloudStudentCode.value = "001234";
+  await f.fire("cloudStudentLogin", "submit");
+  assert.equal(f.requests[0].body.p_code, "001234");
+  assert.equal(f.requests[0].body.p_event, id);
+  await f.fire("cloudStudentApplication", "submit");
+  assert.ok(f.requests[1].url.endsWith("save_scoped_course_application"));
+  assert.equal(f.requests[1].body.p_event, id);
+  const common = fixture();
+  common.elements.cloudStudentCode.value = "001234";
+  await common.fire("cloudStudentLogin", "submit");
+  assert.equal(common.requests.length, 0);
+  assert.match(common.elements.cloudStudentMessage.textContent, /학교·차수별/);
+});
+
+test("saved codes open mail merge preview, filter by class, escape names and print each student", async () => {
+  const f = fixture();
+  const codes = {
+    id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    students: [
+      { grade: "1", classroom: "1", number: "1", name: "<script>가상</script>", code: "000123" },
+      { grade: "1", classroom: "2", number: "2", name: "가상2", code: "456789" },
+    ],
+  };
+  f.elements.cloudCodeFile.files = [{ text: async () => JSON.stringify(codes) }];
+  await f.fire("cloudCodeFile", "change");
+  assert.equal(f.elements.cloudCodeDialog.open, true);
+  const preview = f.elements.cloudCodePreview.innerHTML;
+  assert.ok(preview.includes("000123"));
+  assert.ok(preview.includes("#event="));
+  assert.ok(!preview.includes("<script>"));
+  f.elements.cloudPrintClass.value = "1:2";
+  await f.fire("cloudPrintClass", "change");
+  assert.ok(!f.elements.cloudCodePreview.innerHTML.includes("000123"));
+  assert.ok(f.elements.cloudCodePreview.innerHTML.includes("456789"));
+  await f.fire("cloudCodePrint", "click");
+  assert.equal(f.printed, true);
+  assert.equal(f.elements.cloudCodeDialog.open, false);
+  assert.equal((f.elements.printBatch.innerHTML.match(/class="print-page"/g) || []).length, 1);
+});
+
+test("teacher log controls send the exact server cutoff and optional student id", async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const studentId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const cutoff = "2026-10-06T08:30:00.123456+00:00";
+  const f = fixture({
+    href: "https://school.example/app/?code=callback",
+    storage: new Map([["curriculum-google-pkce", JSON.stringify({ verifier: "a".repeat(43), createdAt: Date.now() })]]),
+    respond: async (request) => {
+      if (request.url.endsWith("grant_type=pkce")) return { data: {
+        access_token: "test", refresh_token: "test-refresh", expires_in: 3600, user: { email: "teacher@example.invalid" },
+      } };
+      if (request.url.includes("/course_events?")) return { data: [{
+        id, school_name: "학교", school_year: "2026", round: "1", is_open: true, created_at: cutoff,
+      }] };
+      if (request.url.endsWith("course_event_history")) return { data: {
+        startedAt: "2026-10-06T08:00:00Z",
+        entries: [{ id: 1, studentId, grade: "1", classroom: "1", number: "1",
+          name: "가상", at: cutoff, action: "submit", selections: ["수학"], submittedAt: cutoff }],
+      } };
+      return { data: { message: "복원 완료" } };
+    },
+  });
+  await f.settle();
+  const event = f.elements.cloudEventList.children[0];
+  assert.ok(event.children.find((e) => e.tag === "a").href.includes("#event="));
+  event.children.find((e) => e.textContent === "신청 로그 · 롤백").listeners.click();
+  await f.settle();
+  let panel = event.querySelector(".course-history");
+  let row = panel.children.find((e) => e.textContent.includes(" · submit"));
+  row.children.find((e) => e.textContent.includes("학생 롤백")).listeners.click();
+  await f.settle();
+  let rollback = f.requests.find((r) => r.url.endsWith("rollback_course_event"));
+  assert.equal(rollback.body.p_student, studentId);
+  assert.equal(rollback.body.p_before, cutoff);
+  panel = event.querySelector(".course-history");
+  row = panel.children.find((e) => e.textContent.includes(" · submit"));
+  row.children.find((e) => e.textContent.includes("전체 롤백")).listeners.click();
+  await f.settle();
+  rollback = f.requests.filter((r) => r.url.endsWith("rollback_course_event")).at(-1);
+  assert.equal(rollback.body.p_student, null);
+  assert.equal(rollback.body.p_before, cutoff);
 });

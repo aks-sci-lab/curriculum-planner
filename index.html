@@ -897,6 +897,9 @@
     .student-entry h1 { font-size: 22px; }
     .student-entry iframe { display: block; width: 100%; min-height: 78vh; border: 1px solid #d7deed; border-radius: 12px; background: white; }
     .application-link-field { width: 100%; padding: 10px; border: 1px solid #c9d4ea; border-radius: 8px; }
+    #cloudCodeDialog { width: min(820px, 90vw); max-height: 85vh; overflow: auto; border: 1px solid #d7deed; border-radius: 12px; }
+    #cloudCodePreview .print-page { padding: 20px; margin-top: 12px; border: 1px solid #d7deed; }
+    .course-history { max-height: 500px; overflow: auto; padding: 12px; background: #f2f5fb; }
     #printBatch { display: none; }
     @media (max-width: 980px) {
       .workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
@@ -970,10 +973,10 @@
   </section>
   <section class="student-entry hidden" id="supabaseStudentEntry" aria-label="온라인 학생 수강신청">
     <h1>학생 수강신청</h1>
-    <p class="note">학교에서 받은 개인 신청 코드를 입력하세요. 본인 코드만 사용하고 다른 사람에게 공유하지 마세요.</p>
+    <p class="note">학교·차수별 신청 링크로 접속해 6자리 숫자 코드를 입력하세요. 본인 코드만 사용하고 다른 사람에게 공유하지 마세요.</p>
     <form id="cloudStudentLogin">
       <label for="cloudStudentCode">개인 신청 코드</label>
-      <input class="application-link-field" id="cloudStudentCode" type="password" autocomplete="off" required>
+      <input class="application-link-field" id="cloudStudentCode" type="password" inputmode="numeric" autocomplete="off" required>
       <button class="button" type="submit">수강신청으로 이동</button>
     </form>
     <p id="cloudStudentMessage" role="status" aria-live="polite"></p>
@@ -1084,10 +1087,13 @@
           <div class="hidden" id="cloudTeacherControls">
             <p id="cloudTeacherAccount"></p>
             <button class="button" id="cloudTeacherLogout" type="button">로그아웃</button>
-            <p class="note">1단계 편제표와 현재 차수·학교 정보를 먼저 확인하세요. 업로드마다 별도 신청이 생성됩니다. 학생별 코드는 생성 직후 저장하고 본인 코드만 개별 전달하세요. 코드 파일을 잃어버리면 전체 학생 코드 재발급으로 복구할 수 있지만 기존 코드는 모두 무효화됩니다.</p>
+            <p class="note">업로드마다 별도 신청이 생성됩니다. 학교·차수별 링크와 6자리 코드를 안내문으로 출력해 개별 전달하세요. 기존 신청은 전체 학생 코드 재발급으로 6자리로 전환할 수 있습니다. 이전 코드는 모두 무효화되며 신청 결과는 유지됩니다.</p>
             <label class="file-button" for="cloudRosterInput">학생 명렬 업로드 · 수강신청 생성</label>
             <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
             <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
+            <button class="button" id="cloudPrintCodes" type="button" disabled>학생 코드 메일머지 출력창</button>
+            <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>
+            <input class="hidden" id="cloudCodeFile" type="file" accept=".json">
             <button class="button" id="cloudRefreshEvents" type="button">내 수강신청 새로고침</button>
             <p>공통 학생 입구: <a id="cloudStudentLink" href="#student">학생 수강신청</a></p>
             <div id="cloudEventList"></div>
@@ -1095,7 +1101,7 @@
           <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
           <details class="google-form-guide">
             <summary>최초 운영자 설정 (교사별 Apps Script 배포 불필요)</summary>
-            <p class="note">운영자가 Supabase SQL Editor에서 저장소의 `supabase/setup.sql`을 한 번 실행하고 Google 로그인 제공자를 연결해야 합니다. Google Cloud의 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요. 자세한 절차는 README의 Supabase 설정 안내를 참고하세요.</p>
+            <p class="note">신규 설치는 Supabase SQL Editor에서 `supabase/setup.sql` 다음 `supabase/upgrade-codes-history.sql`을 실행하세요. 기존 설치는 업데이트 파일만 한 번 실행합니다. Google 로그인 제공자 연결도 필요하며 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요.</p>
           </details>
         </section>
         <details class="google-form-guide">
@@ -1241,6 +1247,15 @@
     </main>
   </div>
   <div id="printBatch" aria-hidden="true"></div>
+  <dialog id="cloudCodeDialog">
+    <h2>학생별 수강신청 안내문 메일머지</h2>
+    <p>학생마다 별도 안내문을 출력합니다. 인쇄 창에서 PDF로 저장할 수도 있습니다.</p>
+    <label for="cloudPrintClass">출력할 반</label>
+    <select id="cloudPrintClass"><option value="">전체</option></select>
+    <button class="button" id="cloudCodePrint" type="button">선택한 반 전체 인쇄</button>
+    <button class="button" id="cloudCodeClose" type="button">닫기</button>
+    <div id="cloudCodePreview"></div>
+  </dialog>
 
   <script id="driveServerTemplate" type="text/plain">
 function initializeCourseServer() {
@@ -3948,7 +3963,7 @@ function courseClient_() {
     }
 
     function showStudentApplicationEntry() {
-      if (window.location.hash === "#student") {
+      if (window.location.hash === "#student" || new URLSearchParams(window.location.hash.slice(1)).has("event")) {
         $(".workspace").classList.add("hidden");
         $("#supabaseStudentEntry").classList.remove("hidden");
         document.title = "학생 수강신청";
