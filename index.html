@@ -1044,6 +1044,25 @@
         </div>
         <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
         <div class="application-tools">
+          <label class="file-button" for="applicationRosterInput">학생 명렬 업로드 · 온라인 신청 설정 만들기</label>
+          <input class="hidden" id="applicationRosterInput" type="file" accept=".xlsx">
+          <button class="button" id="downloadDriveServer" type="button">온라인 신청 서버 코드(.gs)</button>
+        </div>
+        <p class="note">편제표를 먼저 불러온 뒤 학생 명렬(현재 학년·반·번호·이름)을 업로드하세요. 온라인 신청 설정 JSON이 저장됩니다. 아래 안내에 따라 Apps Script를 배포하고 관리자 페이지에 이 설정을 올리면 학생용 신청 페이지가 준비됩니다. 명렬 업로드만으로 기존 신청 결과를 덮어쓰지 않습니다.</p>
+        <details class="google-form-guide">
+          <summary>구글드라이브 기반 온라인 수강신청 설정</summary>
+          <ol>
+            <li>`온라인 신청 서버 코드(.gs)`를 내려받아 script.google.com의 새 프로젝트에 붙여넣습니다. 신청 차수마다 새 프로젝트를 사용하세요.</li>
+            <li>함수 `initializeCourseServer`를 선택해 실행하고 권한을 승인합니다. 실행 로그에 관리자 키가 표시됩니다. 이 키는 비밀번호이므로 학생에게 공유하지 마세요.</li>
+            <li>`배포 → 새 배포 → 웹 앱`에서 실행 사용자는 `나`, 액세스 권한은 `모든 사용자`로 설정합니다. 학교 정책에 따라 이 설정이 차단될 수 있습니다.</li>
+            <li>배포된 /exec 주소 뒤에 `?admin=관리자키`를 붙여 관리자 페이지를 엽니다. 명렬 업로드로 저장한 `온라인_수강신청_설정.json`을 이 페이지에 업로드합니다.</li>
+            <li>관리자 페이지에서 `학생별 신청 코드 저장`을 누르고 각 학생에게 본인 코드만 전달합니다. 학생에게는 /exec 주소(관리자 키 제외)를 공유합니다.</li>
+            <li>학생은 코드로 본인 정보를 확인하고 신청합니다. 같은 코드로 다시 신청하면 해당 학생의 신청만 수정됩니다. 전체 명렬이나 다른 학생의 신청 결과는 공개되지 않습니다.</li>
+            <li>관리자 페이지에서 `신청 마감` 후 `신청 결과 저장`으로 JSON을 내려받고, 이 프로그램에서 같은 차수를 선택한 뒤 `신청 파일 취합하기`로 불러옵니다.</li>
+          </ol>
+        </details>
+        <p class="privacy-note"><b aria-hidden="true">●</b><span>온라인 설정 JSON·학생별 코드·관리자 키는 개인정보와 접근 권한을 포함합니다. GitHub에 올리거나 전체 학생에게 공유하지 마세요. 설정 업로드와 신청 제출은 배포한 관리자 계정의 비공개 스프레드시트에 저장됩니다.</span></p>
+        <div class="application-tools">
           <button class="button" id="downloadApplicationForm" type="button">학생용 신청 양식 만들기</button>
           <label class="file-button" for="applicationFilesInput">신청 파일 취합하기</label>
           <input class="hidden" id="applicationFilesInput" type="file" accept=".json" multiple>
@@ -1153,6 +1172,235 @@
   </div>
   <div id="printBatch" aria-hidden="true"></div>
 
+  <script id="driveServerTemplate" type="text/plain">
+function initializeCourseServer() {
+  var props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('ADMIN_KEY')) {
+    props.setProperty('ADMIN_KEY', Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, ''));
+  }
+  Logger.log('관리자 키 (학생에게 공유 금지): ' + props.getProperty('ADMIN_KEY'));
+}
+function requireAdmin_(key) {
+  var expected = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
+  if (!expected || key !== expected) throw new Error('관리자 인증에 실패했습니다.');
+}
+function database_() {
+  var id = PropertiesService.getScriptProperties().getProperty('DATABASE_ID');
+  if (!id) throw new Error('관리자가 신청 설정을 먼저 업로드해야 합니다.');
+  return SpreadsheetApp.openById(id);
+}
+function config_(db) {
+  return JSON.parse(db.getSheetByName('설정').getRange(1, 1).getValue());
+}
+function withLock_(action) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try { return action(); } finally { lock.releaseLock(); }
+}
+function textCell_(value) {
+  var text = String(value);
+  return /^[=+\-@']/.test(text) ? "'" + text : text;
+}
+function uploadCourseSetup(key, raw) {
+  requireAdmin_(key);
+  return withLock_(function() {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('DATABASE_ID')) throw new Error('이미 설정되었습니다. 다른 차수는 새 Apps Script 프로젝트로 배포하세요.');
+    var data = JSON.parse(raw);
+    if (data.type !== 'course-application-setup' || !/^[123]$/.test(String(data.round)) ||
+        !Array.isArray(data.roster) || !data.roster.length || data.roster.length > 10000 ||
+        !data.subjects || !Array.isArray(data.subjects['2']) || !Array.isArray(data.subjects['3'])) {
+      throw new Error('이 프로그램에서 생성한 온라인 신청 설정 JSON을 선택하세요.');
+    }
+    var seen = {};
+    var rows = data.roster.map(function(s) {
+      if (!/^[12]$/.test(String(s.grade)) || !/^[1-9]\d*$/.test(String(s.classroom)) ||
+          !/^[1-9]\d*$/.test(String(s.number)) || typeof s.name !== 'string' || !s.name.trim() ||
+          !data.subjects[String(Number(s.grade) + 1)].length) throw new Error('명렬 또는 해당 학년 과목이 잘못되었습니다.');
+      var identity = [s.grade, s.classroom, s.number].join(':');
+      if (seen[identity]) throw new Error('학년·반·번호가 중복됩니다.');
+      seen[identity] = true;
+      return [Utilities.getUuid().replace(/-/g, ''), String(s.grade), String(s.classroom), String(s.number), textCell_(s.name.trim())];
+    });
+    ['2', '3'].forEach(function(g) {
+      var names = {};
+      data.subjects[g].forEach(function(c) {
+        if (!c || typeof c.subject !== 'string' || !c.subject.trim() || names[c.subject] ||
+            !Number.isFinite(c.credit) || c.credit < 0) throw new Error('신청 과목 설정이 잘못되었습니다.');
+        names[c.subject] = true;
+      });
+    });
+    var cfg = {schoolName: String(data.schoolName || ''), schoolYear: String(data.schoolYear || ''),
+      round: String(data.round), subjects: data.subjects};
+    var configJson = JSON.stringify(cfg);
+    if (configJson.length > 45000) throw new Error('과목 설정이 너무 큽니다. 과목 수를 줄여 주세요.');
+    var db = SpreadsheetApp.create(cfg.schoolYear + '학년도 ' + cfg.round + '차 수강신청');
+    var settings = db.getSheets()[0].setName('설정');
+    settings.getRange(1, 1).setNumberFormat('@').setValue(configJson);
+    var roster = db.insertSheet('명렬');
+    roster.getRange(1, 1, 1, 5).setValues([['신청코드', '현재학년', '반', '번호', '이름']]);
+    roster.getRange(2, 1, rows.length, 5).setNumberFormat('@').setValues(rows);
+    db.insertSheet('신청').appendRow(['신청코드', '수정시각', '선택과목JSON']);
+    props.setProperty('DATABASE_ID', db.getId());
+    props.setProperty('APPLICATION_OPEN', 'true');
+    return '설정 완료: ' + rows.length + '명 · ' + cfg.round + '차. 스프레드시트: ' + db.getUrl();
+  });
+}
+function student_(db, code) {
+  if (typeof code !== 'string' || !/^[a-f0-9]{32}$/.test(code)) throw new Error('신청 코드를 확인하세요.');
+  var rows = db.getSheetByName('명렬').getDataRange().getDisplayValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] === code) return {grade: rows[i][1], classroom: rows[i][2], number: rows[i][3], name: rows[i][4]};
+  }
+  throw new Error('신청 코드를 확인하세요.');
+}
+function getStudentApplication(code) {
+  var db = database_();
+  var student = student_(db, code);
+  var cfg = config_(db);
+  var selections = [];
+  var rows = db.getSheetByName('신청').getDataRange().getValues();
+  rows.slice(1).forEach(function(r) { if (r[0] === code) selections = JSON.parse(r[2]); });
+  return {student: student, schoolName: cfg.schoolName, schoolYear: cfg.schoolYear, round: cfg.round,
+    courses: cfg.subjects[String(Number(student.grade) + 1)], selections: selections,
+    open: PropertiesService.getScriptProperties().getProperty('APPLICATION_OPEN') === 'true'};
+}
+function saveStudentApplication(code, selections) {
+  return withLock_(function() {
+    if (PropertiesService.getScriptProperties().getProperty('APPLICATION_OPEN') !== 'true') throw new Error('수강신청이 마감되었습니다.');
+    var db = database_();
+    var student = student_(db, code);
+    var allowed = config_(db).subjects[String(Number(student.grade) + 1)].map(function(c) { return c.subject; });
+    if (!Array.isArray(selections) || !selections.length || selections.length > allowed.length ||
+        selections.some(function(s, i) { return allowed.indexOf(s) < 0 || selections.indexOf(s) !== i; })) {
+      throw new Error('신청 가능한 과목을 1개 이상 선택하세요.');
+    }
+    var sheet = db.getSheetByName('신청');
+    var rows = sheet.getDataRange().getValues();
+    var row = rows.length + 1;
+    for (var i = 1; i < rows.length; i++) if (rows[i][0] === code) { row = i + 1; break; }
+    sheet.getRange(row, 1, 1, 3).setValues([[code, new Date(), JSON.stringify(selections)]]);
+    return '신청이 저장되었습니다. 다시 제출하면 기존 신청이 수정됩니다.';
+  });
+}
+function setApplicationOpen(key, open) {
+  requireAdmin_(key);
+  if (typeof open !== 'boolean') throw new Error('마감 설정이 잘못되었습니다.');
+  return withLock_(function() {
+    database_();
+    PropertiesService.getScriptProperties().setProperty('APPLICATION_OPEN', String(open));
+    return open ? '수강신청을 다시 열었습니다.' : '수강신청을 마감했습니다.';
+  });
+}
+function exportCourseData(key, kind) {
+  requireAdmin_(key);
+  return withLock_(function() {
+    var db = database_();
+    var cfg = config_(db);
+    var rows = db.getSheetByName('명렬').getDataRange().getDisplayValues().slice(1);
+    if (kind === 'codes') return JSON.stringify({students: rows.map(function(r) {
+      return {grade: r[1], classroom: r[2], number: r[3], name: r[4], code: r[0]};
+    })}, null, 2);
+    if (kind !== 'results') throw new Error('알 수 없는 다운로드 유형입니다.');
+    var byCode = {};
+    db.getSheetByName('신청').getDataRange().getValues().slice(1).forEach(function(r) { byCode[r[0]] = JSON.parse(r[2]); });
+    return JSON.stringify({type: 'course-application-results', round: cfg.round,
+      entries: rows.filter(function(r) { return byCode[r[0]]; }).map(function(r) {
+        return {type: 'course-application', grade: r[1], classroom: r[2], number: r[3], name: r[4], selections: byCode[r[0]]};
+      })}, null, 2);
+  });
+}
+function doGet(e) {
+  var key = e && e.parameter && e.parameter.admin || '';
+  if (key) requireAdmin_(key);
+  var html = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>온라인 수강신청</title><style>body{font-family:sans-serif;max-width:720px;margin:24px auto;padding:16px;background:#f2f5fb}' +
+    'button,input{padding:10px;margin:6px}label{display:block;padding:8px}button{cursor:pointer}#message{white-space:pre-wrap}fieldset{margin:12px 0}</style></head>' +
+    '<body><h1>온라인 수강신청</h1><main id="app"></main><p id="message" role="status" aria-live="polite"></p>' +
+    '<script>var ADMIN_KEY=' + JSON.stringify(key).replace(/</g, '\\u003c') + ';(' + courseClient_.toString() + ')();</scr' + 'ipt></body></html>';
+  return HtmlService.createHtmlOutput(html);
+}
+function courseClient_() {
+  var app = document.getElementById('app'), message = document.getElementById('message');
+  var busy = false;
+  function call(name, args, done) {
+    if (busy) return;
+    busy = true;
+    app.querySelectorAll('button').forEach(function(b) { b.disabled = true; });
+    message.textContent = '처리 중…';
+    var runner = google.script.run.withSuccessHandler(function(value) {
+      busy = false;
+      app.querySelectorAll('button').forEach(function(b) { b.disabled = false; });
+      message.textContent = '';
+      done(value);
+    }).withFailureHandler(function(err) {
+      busy = false;
+      app.querySelectorAll('button').forEach(function(b) { b.disabled = false; });
+      message.textContent = err.message || '처리에 실패했습니다.';
+    });
+    runner[name].apply(runner, args);
+  }
+  function button(text, action) {
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = text; b.onclick = action; app.appendChild(b);
+  }
+  function download(text, filename) {
+    var a = document.createElement('a'), url = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+    a.href = url; a.download = filename; a.click(); setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  }
+  if (ADMIN_KEY) {
+    app.textContent = '관리자 전용: 학생에게는 관리자 키가 없는 /exec 주소와 본인 신청 코드만 전달하세요. 명렬은 1회만 설정할 수 있습니다.';
+    var file = document.createElement('input'); file.type = 'file'; file.accept = '.json'; app.appendChild(file);
+    button('온라인 신청 설정 업로드', function() {
+      if (!file.files[0]) { message.textContent = '설정 JSON 파일을 선택하세요.'; return; }
+      file.files[0].text().then(function(raw) {
+        call('uploadCourseSetup', [ADMIN_KEY, raw], function(v) { message.textContent = v; });
+      }).catch(function(err) { message.textContent = '파일 읽기 실패: ' + err.message; });
+    });
+    button('학생별 신청 코드 저장', function() {
+      call('exportCourseData', [ADMIN_KEY, 'codes'], function(v) { download(v, '학생별_신청코드.json'); });
+    });
+    button('신청 마감', function() { call('setApplicationOpen', [ADMIN_KEY, false], function(v) { message.textContent = v; }); });
+    button('신청 다시 열기', function() { call('setApplicationOpen', [ADMIN_KEY, true], function(v) { message.textContent = v; }); });
+    button('신청 결과 저장', function() {
+      call('exportCourseData', [ADMIN_KEY, 'results'], function(v) { download(v, '온라인_수강신청_결과.json'); });
+    });
+    return;
+  }
+  var code = document.createElement('input'); code.type = 'password'; code.placeholder = '개별 신청 코드';
+  code.setAttribute('aria-label', '개별 신청 코드'); code.autocomplete = 'off'; app.appendChild(code);
+  var activeCode = '', choices = document.createElement('section'), info = document.createElement('p');
+  button('본인 확인', function() {
+    choices.replaceChildren(); activeCode = ''; info.textContent = '';
+    var entered = code.value.trim();
+    call('getStudentApplication', [entered], function(data) {
+      activeCode = entered;
+      var s = data.student;
+      info.textContent = data.schoolYear + '학년도 ' + data.schoolName + ' ' + data.round + '차 · ' +
+        s.grade + '학년 ' + s.classroom + '반 ' + s.number + '번 ' + s.name + ' (신청 대상: ' + (Number(s.grade) + 1) + '학년)';
+      var semesters = {};
+      data.courses.forEach(function(c) {
+        var semester = c.semester || '학기 미정';
+        if (!semesters[semester]) {
+          var group = document.createElement('fieldset'), title = document.createElement('legend');
+          title.textContent = semester === '학기 미정' ? semester : semester + '학기';
+          group.appendChild(title); choices.appendChild(group); semesters[semester] = group;
+        }
+        var label = document.createElement('label'), box = document.createElement('input');
+        box.type = 'checkbox'; box.value = c.subject; box.checked = data.selections.indexOf(c.subject) >= 0; box.disabled = !data.open;
+        label.appendChild(box); label.appendChild(document.createTextNode(c.subject + ' · ' + c.credit + '학점'));
+        semesters[semester].appendChild(label);
+      });
+      if (!data.open) message.textContent = '수강신청이 마감되었습니다. 기존 신청만 확인할 수 있습니다.';
+    });
+  });
+  app.appendChild(info); app.appendChild(choices);
+  button('신청 저장 / 수정', function() {
+    if (!activeCode || code.value.trim() !== activeCode) { message.textContent = '먼저 본인 확인을 해주세요.'; return; }
+    var selected = Array.from(choices.querySelectorAll('input:checked')).map(function(b) { return b.value; });
+    call('saveStudentApplication', [activeCode, selected], function(v) { message.textContent = v; });
+  });
+}
+  </script>
   <script>
     "use strict";
     const NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -3551,6 +3799,79 @@
       status.textContent = `학생용 신청 양식을 저장했습니다. (선택과목 ${total}개)`;
     }
 
+    function parseApplicationRoster(sheets) {
+      const students = [];
+      const identities = new Set();
+      for (const sheet of sheets) {
+        const compact = (value) => String(value ?? "").replace(/\s+/g, "");
+        const headerIndex = sheet.rows.findIndex((row) =>
+          row.some((value) => /^(이름|성명|학생명)$/.test(compact(value))) &&
+          row.some((value) => compact(value) === "반") &&
+          row.some((value) => /^(번호|출석번호)$/.test(compact(value))));
+        if (headerIndex < 0) continue;
+        const header = sheet.rows[headerIndex].map(compact);
+        const gradeColumn = header.indexOf("학년");
+        const classroomColumn = header.indexOf("반");
+        const numberColumn = header.findIndex((value) => /^(번호|출석번호)$/.test(value));
+        const nameColumn = header.findIndex((value) => /^(이름|성명|학생명)$/.test(value));
+        const sheetGrade = String(sheet.name).match(/([123])\s*학년/)?.[1] || "";
+        for (let index = headerIndex + 1; index < sheet.rows.length; index++) {
+          const row = sheet.rows[index];
+          const name = String(row[nameColumn] ?? "").trim();
+          if (!name) continue;
+          const grade = compact(gradeColumn >= 0 ? row[gradeColumn] : sheetGrade).replace(/학년$/, "");
+          const classroom = compact(row[classroomColumn]).replace(/반$/, "");
+          const number = compact(row[numberColumn]).replace(/번$/, "");
+          const location = `${sheet.name} ${index + 1}행`;
+          if (!/^[12]$/.test(grade) || !/^[1-9]\d*$/.test(classroom) || !/^[1-9]\d*$/.test(number)) {
+            throw new Error(`${location}: 현재 학년(1·2학년), 반, 번호를 확인하세요. 학년 열이 없으면 시트명을 '1학년' 또는 '2학년'으로 지정하세요.`);
+          }
+          const identity = `${grade}:${classroom}:${number}`;
+          if (identities.has(identity)) throw new Error(`${location}: 학년·반·번호가 중복됩니다 (${identity}).`);
+          identities.add(identity);
+          students.push({ grade, classroom, number, name });
+        }
+      }
+      if (!students.length) throw new Error("학생 명렬에서 학년·반·번호·이름 머리글과 학생을 찾지 못했습니다.");
+      return students;
+    }
+
+    function downloadTextFile(text, filename, type) {
+      const url = URL.createObjectURL(new Blob([text], { type }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function handleApplicationRoster(file) {
+      if (!file) return;
+      try {
+        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식으로 선택하세요.");
+        const subjects = selectedApplicationSubjects();
+        if (!subjects || !subjects["2"].length && !subjects["3"].length) {
+          throw new Error("1단계에서 편제표를 먼저 불러오고 신청 받을 과목을 선택하세요.");
+        }
+        const round = state.currentRound;
+        const schoolName = String($("#schoolName").value || "").trim();
+        const schoolYear = String($("#schoolYear").value || "").trim();
+        const roster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
+        for (const student of roster) {
+          if (!subjects[String(Number(student.grade) + 1)].length) {
+            throw new Error(`현재 ${student.grade}학년이 신청할 ${Number(student.grade) + 1}학년 과목이 없습니다. 편제표와 과목 체크 상태를 확인하세요.`);
+          }
+        }
+        const setup = { type: "course-application-setup", round, schoolName, schoolYear, subjects, roster };
+        downloadTextFile(JSON.stringify(setup, null, 2), "온라인_수강신청_설정.json", "application/json");
+        status.style.color = "#287956";
+        status.textContent = `${round}차 온라인 신청 설정(${roster.length}명)을 저장했습니다. Apps Script 관리자 페이지에 업로드하세요. 기존 신청 결과는 변경하지 않았습니다.`;
+      } catch (error) {
+        status.style.color = "#a44939";
+        status.textContent = error instanceof Error ? error.message : "학생 명렬을 처리하지 못했습니다.";
+      }
+    }
+
     // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
     function applyMergedApplications(entries, sourceLabel) {
       const merged = mergeApplications(entries);
@@ -3587,21 +3908,30 @@
       for (const file of files) {
         try {
           const parsed = JSON.parse(await file.text());
-          if (parsed && (parsed.type === "course-application" || Array.isArray(parsed.selections))) entries.push(parsed);
+          if (parsed?.type === "course-application-results") {
+            if (String(parsed.round) !== state.currentRound) {
+              throw new Error(`${file.name}: ${parsed.round}차 결과입니다. 해당 차수로 전환한 뒤 다시 불러오세요.`);
+            }
+            if (!Array.isArray(parsed.entries)) throw new Error(`${file.name}: 신청 결과 형식이 잘못되었습니다.`);
+            entries.push(...parsed.entries);
+          }
+          else if (parsed && (parsed.type === "course-application" || Array.isArray(parsed.selections))) entries.push(parsed);
           else failures.push(file.name);
         } catch (error) {
-          failures.push(file.name);
+          failures.push(`${file.name}: ${error instanceof Error ? error.message : "파일 읽기 실패"}`);
         }
       }
       if (!entries.length) {
         status.style.color = "#a44939";
-        status.textContent = "읽을 수 있는 신청 파일이 없습니다. 학생용 신청 양식이 저장한 .json 파일인지 확인하세요.";
+        status.textContent = failures.length
+          ? `읽을 수 있는 신청 파일이 없습니다. ${failures[0]}`
+          : "신청 결과가 비어 있습니다. 학생 신청이 저장된 결과 JSON을 선택하세요.";
         return;
       }
       applyMergedApplications(entries, "온라인 신청 취합");
       if (failures.length) {
         status.style.color = "#a44939";
-        status.textContent += ` 읽지 못한 파일 ${failures.length}개.`;
+        status.textContent += ` 읽지 못한 파일 ${failures.length}개 (${failures[0]}).`;
       }
     }
 
@@ -4868,6 +5198,15 @@
     });
     $("#downloadRetakeList").addEventListener("click", downloadRetakeList);
     $("#downloadApplicationForm").addEventListener("click", downloadApplicationForm);
+    $("#applicationRosterInput").addEventListener("change", (event) => {
+      handleApplicationRoster(event.target.files[0]);
+      event.target.value = "";
+    });
+    $("#downloadDriveServer").addEventListener("click", () => {
+      downloadTextFile($("#driveServerTemplate").textContent.trim(), "온라인_수강신청_서버.gs", "text/plain;charset=utf-8");
+      status.style.color = "#287956";
+      status.textContent = "서버 코드를 저장했습니다. Apps Script 새 프로젝트에 붙여넣고 온라인 수강신청 설정 안내를 따라 배포하세요.";
+    });
     $("#applicationSubjectList").addEventListener("change", (event) => {
       const box = event.target.closest("[data-app-subject]");
       if (!box) return;

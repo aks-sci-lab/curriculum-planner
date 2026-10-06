@@ -11,3 +11,8 @@ Desktop.ini
 # 에디터
 .vscode/
 .idea/
+
+# Online application exports contain student data and access codes
+온라인_수강신청_설정*.json
+학생별_신청코드*.json
+온라인_수강신청_결과*.json
