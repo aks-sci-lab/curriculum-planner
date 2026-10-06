@@ -3601,11 +3601,11 @@ function courseClient_() {
       if (columns.subject < 0) return null;
       const contexts = importedPlanCourseContexts(layout, columns);
       const result = { "1": [], "2": [], "3": [] };
-      const seen = new Set();
+      const seen = new Map();
       for (const context of contexts) {
         if (!String(context.division || "").replace(/\s+/g, "").includes("학생선택교육과정")) continue;
         // 과목명 앞뒤의 표기 기호(*★☆■)와 교차집중 표시는 신청 양식에서 제외한다.
-        const subject = context.subject.replace(/↔/g, " ").replace(/^[*★☆■\s]+|[*★☆■\s]+$/g, "").trim();
+        const subject = context.subject.replace(/↔/g, " ").replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim();
         if (!subject || subject.includes("과목명") || subject.includes("세부과목")) continue;
         // 공통/일반/진로/융합은 과목명이 아니라 선택과목의 분류이므로 과목명으로 들어온 경우 제외한다.
         if (["공통", "일반", "진로", "융합"].includes(subject.replace(/\s+/g, ""))) continue;
@@ -3620,6 +3620,15 @@ function courseClient_() {
           if (!value || /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
           const grade = Math.floor(index / 2) + 1;
           const sem = String((index % 2) + 1);
+          if (/학년/.test(value)) {
+            const notedGrade = value.match(/([123])\s*학년/)?.[1];
+            const notedSemesters = value.match(/([12](?:\s*[,·]\s*[12])*)\s*학기/)?.[1];
+            if (notedGrade && notedSemesters) {
+              const semesters = notedSemesters.split(/[,·]/).map((part) => part.trim());
+              byGrade.set(Number(notedGrade), { semesters, hours: [] });
+            }
+            return;
+          }
           if (!byGrade.has(grade)) byGrade.set(grade, { semesters: [], hours: [] });
           byGrade.get(grade).semesters.push(sem);
           byGrade.get(grade).hours.push(value);
@@ -3634,17 +3643,26 @@ function courseClient_() {
           : 0;
         for (const [grade, info] of byGrade) {
           if (grade !== 2 && grade !== 3) continue;
-          const key = `${grade}:${subject}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          result[String(grade)].push({
-            subject,
-            area: context.area.replace(/↔/g, " ").trim(),
-            type,
-            semester: info.semesters.join("·"),
-            hours: info.hours.join("+"),
-            credit
-          });
+          for (const name of subject.split(/[,，]/).map((part) =>
+            part.replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim()).filter(Boolean)) {
+            const key = `${grade}:${name}`;
+            const existing = seen.get(key);
+            if (existing) {
+              existing.semester = [...new Set([...existing.semester.split("·"), ...info.semesters])]
+                .filter(Boolean).sort().join("·");
+              continue;
+            }
+            const item = {
+              subject: name,
+              area: context.area.replace(/↔/g, " ").trim(),
+              type,
+              semester: info.semesters.join("·"),
+              hours: info.hours.join("+"),
+              credit
+            };
+            seen.set(key, item);
+            result[String(grade)].push(item);
+          }
         }
       }
       return result;
@@ -4589,7 +4607,9 @@ function courseClient_() {
         /(?:^|[^0-9])3-2(?:$|[^0-9])|3학년.*2학기|2학기.*3학년/
       ];
       const baseCredit = find([/기준학점/, /기준시수/]);
-      const subject = find([/과목명/, /세부과목/]);
+      // 병합 머리글 '세부과목'은 분류 열과 과목명 열을 함께 덮으므로 오른쪽 열을 사용한다.
+      const subject = labels.reduce((found, label, column) =>
+        /과목명|세부과목/.test(label) ? column : found, -1);
       const explicitDivision = find([/교육과정구분/, /과정구분/]);
       const genericDivision = labels.findIndex((label) => /^구분/.test(label));
       const division = explicitDivision >= 0

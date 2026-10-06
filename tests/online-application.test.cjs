@@ -151,6 +151,40 @@ test("application subjects include every student-choice course in promoted grade
   assert.deepEqual(result["3"].map((c) => c.subject), ["과학"]);
 });
 
+test("merged subject header uses actual course names and splits course lists by promoted semester", () => {
+  const layout = {
+    rows: [
+      ["구분", "교과(군)", "세부과목", "", "기준학점", "운영학점", "1학년", "", "2학년", "", "3학년", ""],
+      ["", "", "", "", "", "", "1학기", "2학기", "1학기", "2학기", "1학기", "2학기"],
+      ["학교 지정 교육과정", "국어", "일반", "문학", 4, 4, "", "", 4],
+      ["학생 선택\n교육과정", "사회", "일반", "세계사, 사회와 문화", 4, 4, "", "", "택3"],
+      ["", "과학", "일반", "물리학, 화학", 4, 4, "", "", 4],
+      ["", "영어", "융합", "미디어 영어, 세계 문화와 영어", 4, 4, "", "", "", 4],
+      ["", "과학", "융합", "물리학 실험＊", 4, 3, "공동,소인수/2학년/1,2학기/3학점(순증)"],
+      ["", "국어", "진로", "주제 탐구 독서", 4, 4, "", "", "", "", "", 4],
+    ],
+    mergedRanges: ["A1:A2", "B1:B2", "C1:D2", "E1:E2", "F1:F2",
+      "G1:H1", "I1:J1", "K1:L1", "A4:A8", "G7:L7"],
+  };
+  const ctx = vm.createContext({ state: { curriculumImportedLayout: layout } });
+  for (const name of ["columnIndex", "expandCurriculumLayoutRows", "importedPlanColumnMap",
+    "importedPlanCoveredCells", "curriculumSelectionType", "importedPlanCourseContexts", "collectApplicationSubjects"]) {
+    const start = frontend.indexOf(`function ${name}(`);
+    const next = frontend.indexOf("\n    function ", start + 1);
+    vm.runInContext(frontend.slice(start, next), ctx);
+  }
+  const columns = plain(ctx.importedPlanColumnMap(layout));
+  assert.equal(columns.subject, 3);
+  assert.equal(columns.division, 0);
+  assert.deepEqual(columns.semesters, [6, 7, 8, 9, 10, 11]);
+  const subjects = plain(ctx.collectApplicationSubjects());
+  assert.deepEqual(subjects["2"].map((c) => c.subject),
+    ["세계사", "사회와 문화", "물리학", "화학", "미디어 영어", "세계 문화와 영어", "물리학 실험"]);
+  assert.equal(subjects["2"].find((c) => c.subject === "물리학 실험").semester, "1·2");
+  assert.deepEqual(subjects["3"].map((c) => c.subject), ["주제 탐구 독서"]);
+  assert.equal(subjects["3"][0].semester, "2");
+});
+
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
   const subjects = setup().subjects;
   const existing = [{ name: "기존학생" }];
