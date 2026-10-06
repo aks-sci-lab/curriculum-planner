@@ -6,7 +6,7 @@ const { test } = require("node:test");
 const { randomUUID } = require("node:crypto");
 
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
-const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).filter((source) => source.trim());
 const frontend = scripts[1];
 function functionSource(start, end) {
   return frontend.slice(frontend.indexOf(start), frontend.indexOf(end));
@@ -72,7 +72,13 @@ function server() {
       },
       openById: (id) => books.get(id),
     },
-    HtmlService: { createHtmlOutput: (content) => content },
+    HtmlService: {
+      XFrameOptionsMode: { ALLOWALL: "ALLOWALL" },
+      createHtmlOutput: (content) => ({
+        content, frameMode: "DEFAULT",
+        setXFrameOptionsMode(mode) { this.frameMode = mode; return this; },
+      }),
+    },
   });
   vm.runInContext(scripts[0], context);
   context.initializeCourseServer();
@@ -203,13 +209,66 @@ test("student reads only own grade, saves, updates, closes and exports into exis
 test("student web HTML includes no administrator key or roster; invalid admin is rejected", () => {
   const s = server(), c = s.context;
   c.uploadCourseSetup(s.key, JSON.stringify(setup()));
-  const content = c.doGet({ parameter: {} });
+  const output = c.doGet({ parameter: {} });
+  const content = output.content;
+  assert.equal(output.frameMode, "ALLOWALL");
   assert.ok(!content.includes(s.key));
   assert.ok(!content.includes("가상학생1"));
   const clientScript = content.match(/<script>([\s\S]*?)<\/script>/)[1];
   new vm.Script(clientScript);
   assert.throws(() => c.doGet({ parameter: { admin: "wrong" } }), /인증/);
-  assert.ok(c.doGet({ parameter: { admin: s.key } }).includes(s.key));
+  const admin = c.doGet({ parameter: { admin: s.key } });
+  assert.ok(admin.content.includes(s.key));
+  assert.equal(admin.frameMode, "DEFAULT");
+});
+
+test("school link carries only a validated server endpoint and rejects secrets or foreign hosts", () => {
+  const ctx = vm.createContext({ URL, URLSearchParams });
+  vm.runInContext(functionSource("function normalizeApplicationServerUrl(", "function showStudentApplicationEntry("), ctx);
+  const endpoint = "https://script.google.com/macros/s/Abc_123-xyz/exec";
+  const link = new URL(ctx.buildSchoolApplicationLink(endpoint, "https://school.example/app/?admin=secret#old"));
+  assert.equal(link.origin, "https://school.example");
+  assert.equal(link.search, "");
+  assert.equal(new URLSearchParams(link.hash.slice(1)).get("apply"), endpoint);
+  assert.ok(!link.href.includes("secret"));
+  for (const bad of [
+    endpoint + "?admin=secret", endpoint + "#key", endpoint.replace("/exec", "/dev"),
+    endpoint.replace("https:", "http:"), endpoint.replace("script.google.com", "evil.example"),
+    endpoint.replace("script.google.com", "script.google.com.evil.example"),
+    endpoint.replace("script.google.com", "user@script.google.com"),
+    "javascript:alert(1)", "not a url",
+  ]) assert.throws(() => ctx.normalizeApplicationServerUrl(bad));
+  assert.throws(() => ctx.buildSchoolApplicationLink(endpoint, "file:///C:/app/index.html"), /게시된 웹사이트/);
+});
+
+test("student entry hides administrator workspace and invalid link never loads a frame", () => {
+  const endpoint = "https://script.google.com/macros/s/Abc123/exec";
+  const elements = {};
+  function element(selector) {
+    if (!elements[selector]) {
+      const classes = new Set(selector === ".workspace" ? [] : ["hidden"]);
+      elements[selector] = {
+        classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
+      };
+    }
+    return elements[selector];
+  }
+  const ctx = vm.createContext({
+    URL, URLSearchParams, document: { title: "" }, $: element,
+    window: { location: { hash: "" } },
+  });
+  vm.runInContext(functionSource("function normalizeApplicationServerUrl(", "async function handleApplicationRoster("), ctx);
+  assert.equal(ctx.showStudentApplicationEntry(), false);
+  ctx.window.location.hash = "#" + new URLSearchParams({ apply: endpoint });
+  assert.equal(ctx.showStudentApplicationEntry(), true);
+  assert.equal(element(".workspace").classList.contains("hidden"), true);
+  assert.equal(element("#studentApplicationFrame").src, endpoint);
+  assert.equal(element("#studentApplicationFallback").href, endpoint);
+  delete elements["#studentApplicationFrame"];
+  ctx.window.location.hash = "#apply=https%3A%2F%2Fevil.example";
+  assert.equal(ctx.showStudentApplicationEntry(), true);
+  assert.equal(element("#studentApplicationFrame").src, undefined);
+  assert.match(element("#studentEntryError").textContent, /Apps Script|管理者|관리자/);
 });
 
 test("result bundle import checks round and reports empty results without changing records", async () => {
