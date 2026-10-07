@@ -161,7 +161,7 @@ test("merged subject header uses actual course names and splits course lists by 
       ["학생 선택\n교육과정", "사회", "일반", "세계사, 사회와 문화", 4, 4, "", "", "택3"],
       ["", "과학", "일반", "물리학, 화학", 4, 4, "", "", 4],
       ["", "영어", "융합", "미디어 영어, 세계 문화와 영어", 4, 4, "", "", "", 4],
-      ["", "과학", "융합", "물리학 실험＊", 4, 3, "공동,소인수/2학년/1,2학기/3학점(순증)"],
+      ["", "과학", "융합", "물리학 실험＊", 4, 3, "2학년/1,2학기/3학점"],
       ["", "국어", "진로", "주제 탐구 독서", 4, 4, "", "", "", "", "", 4],
     ],
     mergedRanges: ["A1:A2", "B1:B2", "C1:D2", "E1:E2", "F1:F2",
@@ -188,6 +188,61 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.equal(subjects["2"].find((c)=>c.subject==="세계사").semesterColors["1"],"#E2EFD9");
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학").semesterColors["1"],"#E2EFD9");
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학 실험").semesterColors["2"],"#D6DCE4");
+});
+
+test("joint and small-enrollment courses are excluded from new applications, not historical imports", () => {
+  const contexts = [
+    {subject:"일반 과목",division:"학생선택교육과정",detail:"융합",selectionType:"융합선택",
+      row:[3,3,""],grade:"2",area:"과학"},
+    {subject:"공동체와 인간",division:"학생선택교육과정",detail:"일반",selectionType:"일반선택",
+      row:[3,3,""],grade:"2",area:"사회"},
+    {subject:"공동 과목",division:"학생선택교육과정",detail:"진로",selectionType:"진로선택",
+      row:[3,3,"공 동 교육과정"],grade:"2",area:"과학"},
+    {subject:"소인수 과목",division:"학생선택교육과정",detail:"진로",selectionType:"진로선택",
+      row:[3,"소인수/2학년/1학기/3학점",""],grade:"2",area:"과학"},
+    {subject:"공동 과목 2",division:"학생선택교육과정",detail:"일반",selectionType:"일반선택",
+      row:[3,"공동/2학년/1학기/3학점",""],grade:"2",area:"과학"},
+  ];
+  const ctx = vm.createContext({
+    state:{curriculumImportedLayout:{}},
+    importedPlanColumnMap:()=>({subject:0,opCredit:0,semesters:[-1,-1,1,-1,-1,-1]}),
+    importedPlanCourseContexts:()=>contexts,curriculumCellFill:()=>"",
+  });
+  vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("),ctx);
+  assert.deepEqual(plain(ctx.selectedApplicationSubjects()["2"].map((c)=>c.subject)),["일반 과목","공동체와 인간"]);
+  assert.equal(ctx.collectApplicationSubjects({includeExcluded:true})["2"].length,5);
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
+  const historical=ctx.mergeApplications([{grade:"1",classroom:"1",number:"1",name:"가상",selections:["소인수 과목"]}]);
+  assert.deepEqual(plain(historical.errors),[]);
+  assert.equal(historical.students[0].selections[0].name,"소인수 과목");
+});
+
+test("student course classification labels leave selection identities unchanged", () => {
+  const ctx=vm.createContext({});
+  vm.runInContext(functionSource("function curriculumSelectionType(", "function importedPlanCourseContexts("),ctx);
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
+  for (const [type,label] of [["융합선택","융합"],["진로선택","진로"],["일반선택","일반"]]) {
+    const course={subject:"물리학 실험",type};
+    assert.equal(ctx.applicationCourseLabel(course),`물리학 실험(${label})`);
+    assert.equal(course.subject,"물리학 실험");
+  }
+  assert.equal(ctx.applicationCourseLabel({subject:"수학"}),"수학");
+});
+
+test("Google Form classified labels map back to original course names and accept older results", () => {
+  const ctx=vm.createContext({});
+  vm.runInContext(functionSource("function curriculumSelectionType(", "function importedPlanCourseContexts("),ctx);
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
+  vm.runInContext(functionSource("function splitGoogleFormSelections(", "async function handleGoogleFormsFile("),ctx);
+  const subjects={"2":[{subject:"물리학 실험",type:"융합선택"},{subject:"경제",type:"진로선택"}]};
+  const result=ctx.parseGoogleFormsRows([
+    ["현재 학년","반","번호","이름","2학년 1학기 선택과목"],
+    ["1학년","1","1","가상1","물리학 실험(융합), 경제(진로)"],
+    ["1학년","1","2","가상2","물리학 실험, 경제"],
+  ],subjects);
+  assert.deepEqual(plain(result.map((entry)=>entry.selections)),[
+    ["물리학 실험","경제"],["물리학 실험","경제"]
+  ]);
 });
 
 test("Excel style fills resolve RGB, theme, tint, indexed and uncolored cells", async () => {

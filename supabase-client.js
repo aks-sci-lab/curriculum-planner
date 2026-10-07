@@ -315,7 +315,7 @@
           const label = document.createElement("label"); label.className = "application-subject";
           const box = document.createElement("input"); box.type = "checkbox"; box.value = subject;
           box.dataset.credit = course.credit; box.checked = data.selections.includes(subject); box.disabled = !data.open;
-          label.append(box, document.createTextNode(`${subject} · ${course.credit}학점`)); fieldset.appendChild(label);
+          label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`)); fieldset.appendChild(label);
         }
         choices.appendChild(fieldset);
       }
@@ -339,7 +339,7 @@
       box.dataset.credit = course.credit;
       box.checked = data.selections.includes(course.subject);
       box.disabled = !data.open;
-      label.append(box, document.createTextNode(`${course.subject} · ${course.credit}학점`));
+      label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`));
       semesters.get(semester).appendChild(label);
     }
     }

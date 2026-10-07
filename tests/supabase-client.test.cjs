@@ -85,6 +85,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     selectedApplicationSubjects: () => ({ "2": [{ subject: "수학", credit: 3 }], "3": [] }),
     getCourseApplicationGroups: () => [{id:"g1",grade:"2",name:"수학",count:1,courses:["수학"]}],
     getGroupedApplicationSubjects: () => ({ "2": [{subject:"수학",credit:3,semester:"1"}],"3":[] }),
+    applicationCourseLabel: (course) => `${course.subject}${course.type ? `(${course.type.replace(/선택$/,"")})` : ""}`,
     parseWorkbook: async () => [],
     parseApplicationRoster: () => [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     downloadTextFile: (text, name) => downloads.push({ data: JSON.parse(text), name }),
@@ -118,7 +119,7 @@ test("student flow uses public RPC only, displays own data and submits selection
   const data = {
     student: { grade: "1", classroom: "2", number: "3", name: "가상학생" },
     schoolName: "가상학교", schoolYear: "2026", round: "2", open: true,
-    courses: [{ subject: "수학", credit: 3 }], selections: [], submittedAt: null,
+    courses: [{ subject: "수학", credit: 3, type: "일반선택" }], selections: [], submittedAt: null,
   };
   f.respond = async (request) => ({ data: request.url.endsWith("get_course_application") ? data : { message: "저장 완료" } });
   f.elements.cloudStudentCode.value = "a".repeat(32);
@@ -126,6 +127,7 @@ test("student flow uses public RPC only, displays own data and submits selection
   assert.match(f.elements.cloudStudentTitle.textContent, /가상학교 2차/);
   assert.match(f.elements.cloudStudentIdentity.textContent, /가상학생/);
   const box = f.elements.cloudStudentChoices.children[0].children[1].children[0];
+  assert.equal(f.elements.cloudStudentChoices.children[0].children[1].children[1].textContent,"수학(일반) · 3학점");
   box.checked = true;
   await f.fire("cloudStudentChoices", "change");
   assert.match(f.elements.cloudStudentSummary.textContent, /1개 · 3학점/);
@@ -322,12 +324,14 @@ test("teacher log controls send the exact server cutoff and optional student id"
     const f=fixture({href:`https://school.example/app/#event=${id}`});
     f.respond=async(r)=>({data:r.url.endsWith("get_scoped_course_application")?{
       student:{grade:"1",classroom:"1",number:"1",name:"가상"},schoolName:"학교",schoolYear:"2026",round:"1",open:true,
-      courses:[{subject:"A",credit:3},{subject:"B",credit:4}],selections:[],
+      courses:[{subject:"A",credit:3,type:"융합선택"},{subject:"B",credit:4,type:"진로선택"}],selections:[],
       groups:[{id:"g",name:"교과",count:1,courses:["A","B"]}],
     }:{message:"저장"}});
     f.elements.cloudStudentCode.value="123456";
     await f.fire("cloudStudentLogin","submit");
     const fieldset=f.elements.cloudStudentChoices.children[0];
+    assert.equal(fieldset.children[1].children[1].textContent,"A(융합) · 3학점");
+    assert.equal(fieldset.children[2].children[1].textContent,"B(진로) · 4학점");
     assert.match(fieldset.children[0].textContent,/0\/1/);
     fieldset.children[1].children[0].checked=true;
     fieldset.children[2].children[0].checked=true;
@@ -441,4 +445,9 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   f.elements.applicationResultsTab.listeners.click();
   assert.equal(f.elements.applicationGroupsPanel.classList.contains("hidden"),true);
   assert.equal(f.elements.applicationResultsPanel.classList.contains("hidden"),false);
+  subjects["2"]=[{subject:"C",semester:"2",semesterColors:{}}];
+  ctx.renderCourseGroups();
+  groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3"));
+  assert.equal(groups.length,1);
+  assert.equal(groups[0].grade,"3");
 });

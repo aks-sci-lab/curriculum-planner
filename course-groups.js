@@ -70,14 +70,18 @@ var getGroupedApplicationSubjects;
     groups = groups.filter((g) => scopes.has(`${g.grade}:${g.semester}`));
     seeded = new Set([...seeded].filter((id) => available.has(id)));
     const assigned = new Set();
+    const removedGroups = new Set();
     for (const group of groups) {
+      const previousSize = group.courses.length;
       group.courses = group.courses.filter((name) => {
         const id = `${group.grade}:${group.semester}:${name}`;
         if (!available.has(id) || assigned.has(id)) return false;
         assigned.add(id);
         return true;
       });
+      if (previousSize && !group.courses.length) removedGroups.add(group.id);
     }
+    groups = groups.filter((group) => !removedGroups.has(group.id));
     for (const [id,course] of available) {
       if (assigned.has(id) || !course.fill || seeded.has(id)) continue;
       let group = groups.find((g) => g.grade===course.grade && g.semester===course.semester && g.fill===course.fill);

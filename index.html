@@ -1074,7 +1074,7 @@
         </div>
         <section class="application-subject-box" id="applicationGroupsPanel" role="tabpanel" aria-labelledby="applicationGroupsTab">
           <details>
-          <summary class="application-subject-title">신청 받을 전체 과목 확인 (학생선택교육과정 · 자동 반영)</summary>
+          <summary class="application-subject-title">신청 받을 과목 확인 (학생선택교육과정 · 공동교육과정·소인수 제외)</summary>
           <div id="applicationSubjectList" class="application-subject-list"></div>
           </details>
           <h3>수강신청 선택 그룹 설정</h3>
@@ -1499,7 +1499,8 @@ function courseClient_() {
         }
         var label = document.createElement('label'), box = document.createElement('input');
         box.type = 'checkbox'; box.value = c.subject; box.checked = data.selections.indexOf(c.subject) >= 0; box.disabled = !data.open;
-        label.appendChild(box); label.appendChild(document.createTextNode(c.subject + ' · ' + c.credit + '학점'));
+        var classification = String(c.type || '').replace(/선택$/, '');
+        label.appendChild(box); label.appendChild(document.createTextNode(c.subject + (classification ? '(' + classification + ')' : '') + ' · ' + c.credit + '학점'));
         semesters[semester].appendChild(label);
       });
       if (!data.open) message.textContent = '수강신청이 마감되었습니다. 기존 신청만 확인할 수 있습니다.';
@@ -3698,8 +3699,8 @@ function courseClient_() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
-    // 학생선택교육과정 중 진급 학년에 편제된 전체 과목을 추출한다.
-    function collectApplicationSubjects() {
+    // 기존 신청 결과를 읽을 때는 제외 대상 과목도 매핑할 수 있도록 유지한다.
+    function collectApplicationSubjects({ includeExcluded = false } = {}) {
       const layout = state.curriculumImportedLayout;
       if (!layout) return null;
       const columns = importedPlanColumnMap(layout);
@@ -3709,6 +3710,9 @@ function courseClient_() {
       const seen = new Map();
       for (const context of contexts) {
         if (!String(context.division || "").replace(/\s+/g, "").includes("학생선택교육과정")) continue;
+        const rowText = [context.division, context.detail, context.subject, ...context.row]
+          .map((value) => String(value ?? "").replace(/\s+/g, "")).join(" ");
+        if (!includeExcluded && /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
         // 과목명 앞뒤의 표기 기호(*★☆■)와 교차집중 표시는 신청 양식에서 제외한다.
         const subject = context.subject.replace(/↔/g, " ").replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim();
         if (!subject || subject.includes("과목명") || subject.includes("세부과목")) continue;
@@ -3779,6 +3783,11 @@ function courseClient_() {
 
     function selectedApplicationSubjects() {
       return collectApplicationSubjects();
+    }
+
+    function applicationCourseLabel(course) {
+      const classification = curriculumSelectionType(course.type).replace(/선택$/, "");
+      return `${course.subject}${classification ? `(${classification})` : ""}`;
     }
 
     function renderApplicationSubjects() {
@@ -3869,7 +3878,7 @@ function courseClient_() {
         "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
         "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
         "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
-        "areas[a].forEach(function(c){html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\"><span>'+esc(c.subject)+'</span><span class=\"meta\">'+esc(c.type||'')+(c.credit?' · '+c.credit+'학점':'')+'</span></label>';});",
+        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
         "});});",
         "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
         "updateSummary();",
@@ -3903,7 +3912,7 @@ function courseClient_() {
 
     // 학생 신청 파일(JSON)들을 명단(학생·과목 구조)으로 합친다.
     function mergeApplications(entries) {
-      const subjects = collectApplicationSubjects() || { "1": [], "2": [], "3": [] };
+      const subjects = collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
       const nameCount = new Map();
       for (const grade of ["1", "2", "3"]) {
         for (const item of subjects[grade] || []) {
@@ -4226,7 +4235,7 @@ function courseClient_() {
         "      bySemester[key].push(course);",
         "    });",
         "    Object.keys(bySemester).sort().forEach(function (semester) {",
-        "      var names = bySemester[semester].map(function (course) { return course.subject; });",
+        "      var names = bySemester[semester].map(function (course) { var classification = String(course.type || '').replace(/선택$/, ''); return course.subject + (classification ? '(' + classification + ')' : ''); });",
         "      var title = grade + '학년 ' + (semester === '0' ? '학기 미정' : semester + '학기') + ' 선택과목';",
         "      form.addCheckboxItem().setTitle(title).setChoiceValues(names)",
         "        .setHelpText('이 학기에 들을 과목을 모두 선택하세요. (중복 선택 가능)');",
@@ -4295,11 +4304,16 @@ function courseClient_() {
         const name = String(row?.[nameColumn] ?? "").trim();
         if (!grade || !name) continue;
         const targetGrade = String(Number(grade) + 1);
-        const knownNames = new Set((subjects?.[targetGrade] || []).map((item) => item.subject));
+        const subjectByLabel = new Map();
+        for (const course of subjects?.[targetGrade] || []) {
+          subjectByLabel.set(course.subject, course.subject);
+          subjectByLabel.set(applicationCourseLabel(course), course.subject);
+        }
+        const knownNames = new Set(subjectByLabel.keys());
         const selections = [];
         for (const item of questionColumns) {
           if (item.grade !== targetGrade) continue;
-          selections.push(...splitGoogleFormSelections(row[item.column], knownNames));
+          selections.push(...splitGoogleFormSelections(row[item.column], knownNames).map((label) => subjectByLabel.get(label)));
         }
         entries.push({
           type: "course-application",
@@ -4318,7 +4332,7 @@ function courseClient_() {
       status.textContent = "";
       try {
         const sheets = await parseWorkbook(await file.arrayBuffer());
-        const subjects = collectApplicationSubjects();
+        const subjects = collectApplicationSubjects({ includeExcluded: true });
         const entries = parseGoogleFormsRows(sheets[0].rows, subjects);
         if (!entries.length) {
           status.style.color = "#a44939";
