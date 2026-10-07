@@ -1117,8 +1117,10 @@
             <p id="cloudTeacherAccount"></p>
             <button class="button" id="cloudTeacherLogout" type="button">로그아웃</button>
             <p class="note">업로드마다 별도 신청이 생성됩니다. 학교·차수별 링크와 6자리 코드를 안내문으로 출력해 개별 전달하세요. 기존 신청은 전체 학생 코드 재발급으로 6자리로 전환할 수 있습니다. 이전 코드는 모두 무효화되며 신청 결과는 유지됩니다.</p>
-            <label class="file-button" for="cloudRosterInput">학생 명렬 업로드 · 수강신청 생성</label>
+            <label class="file-button" for="cloudRosterInput">① 학생 명렬 업로드 · 신청 학년 확인</label>
             <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
+            <p id="cloudRosterSummary" role="status">명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.</p>
+            <button class="button" id="cloudCreateEvent" type="button" disabled>② 그룹 설정 완료 · 수강신청 생성</button>
             <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
             <button class="button" id="cloudPrintCodes" type="button">학생 코드 메일머지 출력창</button>
             <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>

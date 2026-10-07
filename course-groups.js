@@ -2,6 +2,7 @@
 var renderCourseGroups;
 var getCourseApplicationGroups;
 var getGroupedApplicationSubjects;
+var setApplicationTargetGrades;
 (() => {
   const workspaceTabs = ["Groups", "Online", "Results", "Legacy"]
     .map((name) => document.getElementById(`application${name}Tab`));
@@ -33,6 +34,12 @@ var getGroupedApplicationSubjects;
   const selected = new Set();
   let query = "";
   let activeScope = "";
+  let targetGrades = ["2", "3"];
+  setApplicationTargetGrades = (grades) => {
+    targetGrades = [...new Set(grades.map(String))];
+    selected.clear();
+    renderCourseGroups();
+  };
   let seeded = new Set();
   getGroupedApplicationSubjects = () => {
     const subjects = selectedApplicationSubjects();
@@ -144,7 +151,7 @@ var getGroupedApplicationSubjects;
       if (!window.confirm("현재 그룹 배치와 선택 수를 지우고 편제표 색상으로 다시 구성할까요?")) return;
       groups=[];seeded.clear();selected.clear();renderCourseGroups();
     }));
-    const scopes=[...new Set([...available.values()].map((c)=>`${c.grade}:${c.semester}`))].sort();
+    const scopes=[...new Set([...available.values()].filter((c)=>targetGrades.includes(c.grade)).map((c)=>`${c.grade}:${c.semester}`))].sort();
     if (!scopes.includes(activeScope)) activeScope=scopes[0];
     const tabs=document.createElement("div");tabs.className="group-scope-tabs"; tabs.setAttribute("role","tablist");
     tabs.setAttribute("aria-label","학년·학기 선택");
@@ -224,24 +231,26 @@ var getGroupedApplicationSubjects;
       }
     }
   };
-  getCourseApplicationGroups = () => {
+  getCourseApplicationGroups = (grades = targetGrades) => {
     sync();
+    const relevantGroups = groups.filter((g) => grades.includes(g.grade));
     for (const [id, course] of available) {
+      if (!grades.includes(course.grade)) continue;
       if (!groups.some((g) => g.grade === course.grade && g.semester===course.semester && g.courses.includes(course.subject))) {
         throw new Error(`${course.grade}학년 ${course.semester==="0"?"학기 미정":course.semester+"학기"} ${course.subject}: 미분류 과목을 그룹에 배치하세요.`);
       }
     }
-    for (const group of groups) {
+    for (const group of relevantGroups) {
       if (!group.courses.length) throw new Error(`${group.name}: 빈 그룹에 과목을 배치하거나 그룹을 삭제하세요.`);
       if (!group.name || !Number.isInteger(group.count) || group.count < 0 || group.count > group.courses.length) {
         throw new Error(`${group.grade}학년 ${group.name}: 선택 수를 0~${group.courses.length} 정수로 직접 지정하세요.`);
       }
     }
-    for (const grade of ["2", "3"]) {
-      const active = groups.filter((g) => g.grade === grade);
+    for (const grade of grades) {
+      const active = relevantGroups.filter((g) => g.grade === grade);
       if (active.length && !active.some((g) => g.count > 0)) throw new Error(`${grade}학년은 최소 1과목 이상 선택하도록 지정하세요.`);
     }
-    return JSON.parse(JSON.stringify(groups));
+    return JSON.parse(JSON.stringify(relevantGroups));
   };
   renderCourseGroups();
 })();

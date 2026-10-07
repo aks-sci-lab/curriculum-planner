@@ -84,6 +84,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     state: { currentRound: "2" },
     selectedApplicationSubjects: () => ({ "2": [{ subject: "수학", credit: 3 }], "3": [] }),
     getCourseApplicationGroups: () => [{id:"g1",grade:"2",name:"수학",count:1,courses:["수학"]}],
+    setApplicationTargetGrades: (grades) => { fixtureData.targetGrades = grades; },
     getGroupedApplicationSubjects: () => ({ "2": [{subject:"수학",credit:3,semester:"1"}],"3":[] }),
     applicationCourseLabel: (course) => `${course.subject}${course.type ? `(${course.type.replace(/선택$/,"")})` : ""}`,
     parseWorkbook: async () => [],
@@ -213,10 +214,16 @@ test("teacher Google PKCE login, roster creation and logout do not persist crede
   f.elements.schoolYear.value = "2026";
   f.elements.cloudRosterInput.files = [{ name: "roster.xlsx", arrayBuffer: async () => new ArrayBuffer(0) }];
   await f.fire("cloudRosterInput", "change");
+  assert.equal(f.downloads.length, 0);
+  assert.deepEqual([...f.targetGrades], ["2"]);
+  assert.equal(f.elements.cloudCreateEvent.disabled, false);
+  await f.fire("cloudCreateEvent", "click");
   assert.equal(f.downloads.length, 1);
   assert.equal(f.downloads[0].data.students[0].code, "b".repeat(32));
   assert.equal(f.elements.cloudDownloadCodes.disabled, false);
   assert.match(f.elements.cloudTeacherMessage.textContent, /신청을 생성/);
+  const created=f.requests.find((request)=>request.url.endsWith("create_course_event"));
+  assert.deepEqual(created.body.p_setup.subjects["3"],[]);
   await f.fire("cloudTeacherLogout", "click");
   assert.equal(f.elements.cloudDownloadCodes.disabled, true);
   assert.match(f.elements.cloudTeacherMessage.textContent, /로그아웃/);
@@ -368,7 +375,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
     const f=fixture();
     const storage=new Map();
     const subjects={"2":[{subject:"A",semester:"1",area:"사회"},{subject:"B",semester:"1",area:"사회"},
-      {subject:"C",semester:"1",area:"과학"}],"3":[]};
+      {subject:"C",semester:"1",area:"과학"}],"3":[{subject:"3학년 과목",semester:"1"}]};
     const ctx=vm.createContext({
       document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
         createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
@@ -377,6 +384,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
       crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
+    ctx.setApplicationTargetGrades(["2"]);
     assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
     const editor=f.elements.courseGroupEditor;
     const grid=()=>editor.children.find((e)=>e.className==="course-group-grid");
@@ -395,6 +403,8 @@ test("teacher log controls send the exact server cutoff and optional student id"
     const groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
     assert.equal(groups[0].count,2);
     assert.deepEqual(groups[0].courses,["A","B","C"]);
+    assert.equal(editor.children.find((e)=>e.className==="group-scope-tabs").children.length,1);
+    assert.throws(()=>ctx.getCourseApplicationGroups(["2","3"]),/미분류/);
     count.value="4";count.onchange();
     assert.throws(()=>ctx.getCourseApplicationGroups(),/選択|선택 수/);
     assert.ok(storage.size);
@@ -469,4 +479,14 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3"));
   assert.equal(groups.length,1);
   assert.equal(groups[0].grade,"3");
+  ctx.setApplicationTargetGrades(["3"]);
+  const scopedTabs=editor.children.find((e)=>e.className==="group-scope-tabs");
+  assert.equal(scopedTabs.children.length,1);
+  assert.match(scopedTabs.children[0].textContent,/3학년/);
+  assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
+  const scopedGrid=editor.children.find((e)=>e.className==="course-group-grid");
+  const count=scopedGrid.children[1].children[2].children[0];
+  count.value="1";count.onchange();
+  assert.equal(ctx.getCourseApplicationGroups().length,1);
+  assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");
 });

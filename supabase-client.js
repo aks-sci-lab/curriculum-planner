@@ -90,6 +90,7 @@
       byId("cloudRosterInput").disabled = false;
       byId("cloudDownloadCodes").disabled = !latestCodes;
       byId("cloudPrintCodes").disabled = false;
+      byId("cloudCreateEvent").disabled = !pendingRoster || !session;
     }
   }
 
@@ -222,6 +223,9 @@
     await request("/auth/v1/logout", { authenticated: true });
     session = null;
     latestCodes = null;
+    pendingRoster = null;
+    setApplicationTargetGrades(["2", "3"]);
+    byId("cloudRosterSummary").textContent = "명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.";
     byId("cloudEventList").replaceChildren();
     byId("cloudTeacherControls").classList.add("hidden");
     byId("cloudTeacherLogin").classList.remove("hidden");
@@ -231,25 +235,52 @@
     await refreshEvents();
     byId("cloudTeacherMessage").textContent = "수강신청 목록을 새로 불러왔습니다.";
   }));
+  let pendingRoster = null;
   byId("cloudRosterInput").addEventListener("change", (event) => {
     const file = event.target.files[0];
     event.target.value = "";
     if (!file) return;
     teacherAction(async () => {
+      pendingRoster = null;
+      byId("cloudCreateEvent").disabled = true;
+      byId("cloudRosterSummary").textContent = "선택한 명렬을 확인합니다. 실패하면 명렬을 다시 업로드하세요.";
       if (!session) throw new Error("교사 로그인이 필요합니다.");
+      if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
+      const roster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
+      const grades = [...new Set(roster.map((student) => String(Number(student.grade) + 1)))].sort();
+      const subjects = getGroupedApplicationSubjects();
+      if (!subjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
+      for (const grade of grades) {
+        if (!subjects[grade]?.length) throw new Error(`${grade}학년 학생선택교육과정 과목을 찾지 못했습니다. 편제표를 확인하세요.`);
+      }
+      setApplicationTargetGrades(grades);
+      pendingRoster = roster;
+      byId("cloudCreateEvent").disabled = false;
+      byId("cloudRosterSummary").textContent = `${file.name} · ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만`;
+      byId("applicationGroupsTab").click();
+      byId("cloudTeacherMessage").textContent = "해당 학년의 그룹·선택 수를 설정한 뒤 온라인 신청 관리 탭에서 수강신청 생성을 누르세요.";
+      byId("courseGroupMessage").textContent = `명렬 기준 ${grades.map((g) => `${g}학년`).join(", ")} 그룹만 설정하세요. 설정 후 온라인 신청 관리 탭에서 신청을 생성합니다.`;
+    });
+  });
+  byId("cloudCreateEvent").addEventListener("click", () => {
+    teacherAction(async () => {
+      if (!session) throw new Error("교사 로그인이 필요합니다.");
+      if (!pendingRoster) throw new Error("학생 명렬을 먼저 업로드하세요.");
       if (latestCodes && !window.confirm("이전에 생성한 학생 코드를 저장했나요? 새 신청을 생성하면 이전 코드 다운로드 버튼은 대체됩니다.")) {
         byId("cloudTeacherMessage").textContent = "생성을 취소했습니다. 이전 코드를 먼저 저장하세요.";
         return;
       }
-      if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
-      const subjects = getGroupedApplicationSubjects();
-      if (!subjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
+      const allSubjects = getGroupedApplicationSubjects();
+      if (!allSubjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
+      const grades = [...new Set(pendingRoster.map((student) => String(Number(student.grade) + 1)))];
+      const subjects = { "1": [], "2": [], "3": [] };
+      for (const grade of grades) subjects[grade] = allSubjects[grade] || [];
       const setup = {
         type: "course-application-setup",
         schoolName: byId("schoolName").value.trim(), schoolYear: byId("schoolYear").value.trim(),
         round: state.currentRound, subjects,
-        groups: getCourseApplicationGroups(),
-        roster: parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())),
+        groups: getCourseApplicationGroups(grades),
+        roster: pendingRoster,
       };
       for (const student of setup.roster) {
         const targetGrade = String(Number(student.grade) + 1);
