@@ -274,7 +274,10 @@ test("student flow uses public RPC only, displays own data and submits selection
   const data = {
     student: { grade: "1", classroom: "2", number: "3", name: "가상학생" },
     schoolName: "가상학교", schoolYear: "2026", round: "2", open: true,
-    courses: [{ subject: "수학", credit: 3, type: "일반선택" }], selections: [], submittedAt: null,
+    courses: [
+      { subject: "수학", credit: 3, type: "일반선택" },
+      { subject: "과학", credit: 3, type: "일반선택" },
+    ], selections: [], submittedAt: null,
   };
   f.respond = async (request) => ({ data: request.url.endsWith("get_course_application") ? data : { message: "저장 완료" } });
   f.elements.cloudStudentCode.value = "a".repeat(32);
@@ -285,7 +288,16 @@ test("student flow uses public RPC only, displays own data and submits selection
   assert.equal(f.elements.cloudStudentChoices.children[0].children[1].children[1].textContent,"수학(일반) · 3학점");
   box.checked = true;
   await f.fire("cloudStudentChoices", "change");
-  assert.match(f.elements.cloudStudentSummary.textContent, /1개 · 3학점/);
+  assert.match(f.elements.cloudStudentTotal.textContent, /1개 · 신청 3학점/);
+  assert.equal(f.elements.cloudStudentCore.textContent, "국·영·수 3학점 · 100%");
+  assert.equal(f.elements.cloudStudentCoreFill.style.width, "100%");
+  const scienceBox = f.elements.cloudStudentChoices.children[0].children[2].children[0];
+  scienceBox.checked = true;
+  await f.fire("cloudStudentChoices", "change");
+  assert.equal(f.elements.cloudStudentCore.textContent, "국·영·수 3학점 · 50%");
+  assert.equal(f.elements.cloudStudentCoreFill.style.width, "50%");
+  scienceBox.checked = false;
+  await f.fire("cloudStudentChoices", "change");
   await f.fire("cloudStudentApplication", "submit");
   assert.equal(f.elements.cloudStudentMessage.textContent, "저장 완료");
   assert.deepEqual(f.requests[1].body.p_selections, ["수학"]);

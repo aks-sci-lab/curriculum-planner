@@ -96,6 +96,25 @@
       })[character]);
     }
 
+    function isCoreCourse(course) {
+      const area = String(course?.area || course?.category || "").replace(/\s+/g, "");
+      if (/국어|영어|수학/.test(area)) return true;
+      const subject = String(course?.subject || course?.name || "").replace(/\s+/g, "");
+      return /^(국어|화법과작문|독서와작문|문학|언어와매체|영어|영어회화|영어독해와작문|수학|대수|미적분|확률과통계|기하|경제수학|인공지능수학)/.test(subject);
+    }
+
+    let toastTimer = null;
+    function showAppToast(message, kind = "success") {
+      const toast = document.getElementById("appToast");
+      if (!toast) return;
+      toast.textContent = message;
+      toast.classList.toggle("error", kind === "error");
+      toast.classList.add("visible");
+      if (toastTimer !== null) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("visible"), 3000);
+    }
+    window.showAppToast = showAppToast;
+
     function normalizeCurriculumDetail(value) {
       const raw = String(value ?? "").trim();
       const compact = raw.replace(/\s+/g, "");
@@ -1589,6 +1608,7 @@
       persistState();
       status.style.color = "#596780";
       status.textContent = "편제표의 직전 변경을 실행취소했습니다.";
+      showAppToast("편제표 수정을 실행취소했습니다.");
     }
 
     function curriculumFilterValues(layout) {
@@ -1817,6 +1837,13 @@
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
               <td class="course-cell">${escapeHtml(course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
+      const coreCredits = student.selections.reduce((sum, course) =>
+        sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
+      const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
+      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+        <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
+      </div>` : "";
       return `<article class="${printMode ? "print-page" : "preview-paper"}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
@@ -1826,6 +1853,7 @@
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
             <tbody>${body}</tbody>
           </table>
+          ${gauge}
           <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
           <div class="paper-signature">
             <div>${escapeHtml($("#confirmDate").value || "　　　년　　월　　일")}</div>
@@ -1938,7 +1966,18 @@
         state.classOverrides, state.semesterAssignments, state.groupAssignments
       );
       let atRiskCount = 0;
-      $("#aggregateContent").innerHTML = aggregate.reports.map(({ summary, semesters }) => {
+      const allCourses = aggregate.reports.flatMap((report) => report.semesters.flatMap((semester) =>
+        semester.groups.flatMap((group) => group.courses)));
+      const totalStudents = aggregate.reports.reduce((sum, report) => sum + report.summary.students, 0);
+      const totalClasses = aggregate.reports.reduce((sum, report) => sum + report.semesters
+        .reduce((semesterSum, semester) => semesterSum + semester.groups
+          .reduce((groupSum, group) => groupSum + group.totalClasses, 0), 0), 0);
+      $("#aggregateContent").innerHTML = `<div class="aggregate-overview" aria-label="집계 요약">
+        <div class="aggregate-overview-card"><span>신청 학생</span><strong>${totalStudents}명</strong></div>
+        <div class="aggregate-overview-card"><span>집계 과목</span><strong>${allCourses.length}과목</strong></div>
+        <div class="aggregate-overview-card"><span>개설 학급 합계</span><strong>${totalClasses}학급</strong></div>
+        <div class="aggregate-overview-card risk"><span>개설 기준 미달</span><strong data-aggregate-risk-count>집계 중</strong></div>
+      </div>` + aggregate.reports.map(({ summary, semesters }) => {
         const semesterTables = semesters.map((semester) => {
           const maxCourses = Math.max(...semester.groups.map((group) => group.courses.length));
           const rows = semester.groups.map((group) => {
@@ -1951,7 +1990,13 @@
             const paddingCells = Array.from({ length: maxCourses - group.courses.length }, () => "<th></th>").join("");
             const totalCell = `<th class="aggregate-total" rowspan="5">총 학급수<br><strong>${group.totalClasses}</strong></th>`;
             const metricRows = [
-              ["인원 수", (course) => course.enrollment],
+              ["인원 수", (course) => {
+                const percent = summary.openingLimit > 0
+                  ? Math.round(course.enrollment / summary.openingLimit * 100) : 0;
+                const width = Math.max(0, Math.min(100, percent));
+                const met = course.enrollment >= summary.openingLimit;
+                return `<span class="aggregate-enrollment"><span class="aggregate-enrollment-value">${course.enrollment}명${met ? "" : " · 기준 미달"}</span><span class="aggregate-progress-track ${met ? "met" : "below"}" role="img" aria-label="개설 기준의 ${percent}%"><span style="width:${width}%"></span></span></span>`;
+              }],
               ["인원수/분반기준", (course) => course.enrollmentPerDivision.toFixed(2)],
               ["개설 학급수", (course) => `<input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(course.name)} 개설 학급수" data-grade="${escapeHtml(summary.grade)}" data-course-column="${course.column}">`],
               ["학급당 학생수", (course) => course.averageClassSize.toFixed(2)]
@@ -1960,6 +2005,9 @@
               const blanks = Array.from({ length: maxCourses - group.courses.length }, () => "<td></td>").join("");
               return `<tr><th class="aggregate-row-label">${label}</th>${values}${blanks}</tr>`;
             }).join("");
+            const riskCount = $("#aggregateContent").querySelectorAll(".aggregate-subject.at-risk").length;
+            const riskSummary = $("#aggregateContent").querySelector("[data-aggregate-risk-count]");
+            if (riskSummary) riskSummary.textContent = `${riskCount}과목`;
             return `<table class="aggregate-sheet-table"><caption>${escapeHtml(group.category)}</caption><tbody><tr><th class="aggregate-row-label">과목</th>${headerCells}${paddingCells}${totalCell}</tr>${metricRows}</tbody></table>`;
           }).join("");
           return `<h3 class="aggregate-semester">${escapeHtml(semester.name)}</h3><div class="aggregate-sheet-wrap">${rows}</div>`;
@@ -2288,11 +2336,18 @@
         "#targetInfo{font-size:14px;font-weight:700;color:#2f4f9f;margin:18px 0 8px;}",
         ".semester{margin:16px 0 6px;font-size:15px;font-weight:700;}",
         ".area{margin:10px 0 4px;font-size:13px;font-weight:700;color:#50607b;}",
-        ".course{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e0e6f2;border-radius:8px;padding:9px 12px;margin-bottom:6px;font-size:14px;}",
-        ".course input{width:18px;height:18px;}",
+        ".course{display:flex;align-items:center;gap:10px;min-height:48px;background:#fff;border:1px solid #d7dfed;border-radius:10px;padding:10px 12px;margin-bottom:7px;font-size:14px;cursor:pointer;}",
+        ".course:has(input:checked){border:2px solid #3b68e8;padding:9px 11px;background:#eef3ff;}",
+        ".course input{width:20px;height:20px;accent-color:#3b68e8;}",
         ".meta{margin-left:auto;font-size:11px;color:#7a879e;}",
-        ".summary{position:sticky;bottom:0;background:#eef3ff;border:1px solid #c8d6f7;border-radius:10px;padding:10px 14px;margin-top:16px;font-weight:700;font-size:14px;color:#2f4f9f;}",
-        "#submitBtn{width:100%;margin-top:12px;padding:14px;border:0;border-radius:10px;background:#2f4f9f;color:#fff;font-size:16px;font-weight:700;cursor:pointer;}",
+        ".action-bar{position:sticky;bottom:0;margin:14px -4px -4px;padding:12px;border:1px solid #c8d6f7;border-radius:12px;background:#fffffff2;box-shadow:0 -6px 18px #1b31501c;backdrop-filter:blur(10px);}",
+        ".summary{display:grid;gap:7px;font-weight:700;font-size:14px;color:#2f4f9f;}",
+        ".summary-values{display:flex;justify-content:space-between;gap:8px;}",
+        ".summary-values strong{color:#5b45b0;}",
+        ".gauge{height:8px;overflow:hidden;border-radius:99px;background:#e4eaf5;}",
+        ".gauge span{display:block;height:100%;border-radius:inherit;background:#6c55c7;}",
+        "#submitBtn{width:100%;min-height:48px;margin-top:10px;padding:14px;border:0;border-radius:10px;background:#2f4f9f;color:#fff;font-size:16px;font-weight:700;cursor:pointer;}",
+        "@media(max-width:480px){.wrap{padding:18px 12px calc(90px + env(safe-area-inset-bottom));}.id-panel{gap:8px}.field{flex:1 1 42%}.field input,.field select{width:100%}.course{font-size:14px}.action-bar{bottom:env(safe-area-inset-bottom);}}",
         ".note{margin-top:10px;font-size:12px;color:#60708a;line-height:1.6;}",
         ".error{color:#b3261e;font-size:13px;font-weight:700;}",
         "</style></head><body>",
@@ -2307,8 +2362,8 @@
         "</section>",
         '<p id="targetInfo"></p>',
         '<div id="courseList"></div>',
-        '<div class="summary" id="summary">선택한 과목: 0개 · 0학점</div>',
-        '<button id="submitBtn" type="button">신청 파일 저장</button>',
+        '<div class="action-bar"><div class="summary" id="summary"><div class="summary-values"><span id="summaryTotal">선택한 과목: 0개 · 0학점</span><strong id="summaryCore">국·영·수 0%</strong></div><div class="gauge" role="progressbar" aria-label="신청 학점 중 국어·영어·수학 과목 비율" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="summaryGauge"></span></div></div>',
+        '<button id="submitBtn" type="button">신청 파일 저장</button></div>',
         '<p class="note">저장된 신청 파일(.json)을 담임선생님께 제출하세요. 이 페이지는 인터넷 연결 없이도 동작하며, 입력한 내용은 파일로만 저장됩니다.</p>',
         '<p class="error" id="errorMsg"></p>',
         "</main>",
@@ -2316,6 +2371,7 @@
         `var COURSES = ${dataJson};`,
         "var gradeSel=document.getElementById('grade');",
         "function targetGrade(){return String(Number(gradeSel.value)+1);}",
+        "function isCore(c){var a=String(c.area||c.category||'').replace(/\\s+/g,'');if(/국어|영어|수학/.test(a))return true;return /^(국어|화법과작문|독서와작문|문학|언어와매체|영어|영어회화|영어독해와작문|수학|대수|미적분|확률과통계|기하|경제수학|인공지능수학)/.test(String(c.subject||'').replace(/\\s+/g,''));}",
         "function esc(v){return String(v==null?'':v).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}",
         "function render(){",
         "var tg=targetGrade();var list=COURSES[tg]||[];",
@@ -2325,7 +2381,7 @@
         "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
         "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
         "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
-        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
+        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
         "});});",
         "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
         "updateSummary();",
@@ -2334,7 +2390,10 @@
         "function selectedCourses(){return Array.prototype.slice.call(document.querySelectorAll('#courseList input:checked'));}",
         "function updateSummary(){",
         "var sel=selectedCourses();var credits=sel.reduce(function(t,box){return t+(Number(box.dataset.credit)||0);},0);",
-        "document.getElementById('summary').textContent='선택한 과목: '+sel.length+'개 · '+credits+'학점';",
+        "var core=sel.reduce(function(t,box){return t+(box.dataset.core==='1'?(Number(box.dataset.credit)||0):0);},0);var percent=credits?Math.round(core/credits*100):0;",
+        "document.getElementById('summaryTotal').textContent='선택한 과목: '+sel.length+'개 · '+credits+'학점';",
+        "document.getElementById('summaryCore').textContent='국·영·수 '+core+'학점 · '+percent+'%';",
+        "var gauge=document.getElementById('summaryGauge');gauge.style.width=percent+'%';gauge.parentElement.setAttribute('aria-valuenow',String(percent));",
         "}",
         "gradeSel.addEventListener('change',render);render();",
         "document.getElementById('submitBtn').addEventListener('click',function(){",
@@ -2351,7 +2410,7 @@
         "a.download='수강신청_'+gradeSel.value+'학년_'+classroom+'반_'+number+'번_'+name+'.json';a.click();",
         "setTimeout(function(){URL.revokeObjectURL(a.href);},1000);",
         "err.textContent='';",
-        "document.getElementById('summary').textContent='신청 파일을 저장했습니다. 파일을 담임선생님께 제출하세요.';",
+        "document.getElementById('summaryTotal').textContent='신청 파일을 저장했습니다. 파일을 담임선생님께 제출하세요.';",
         "});",
         "<\/script></body></html>"
       ].join("\n");
@@ -3852,10 +3911,60 @@
     $("#curriculumPlanWrap").addEventListener("focusin", (event) => {
       const cell = event.target.closest("[contenteditable='true'][data-source-row][data-source-column]");
       if (!cell || !state.curriculumImportedLayout) return;
+      $("#curriculumPlanWrap").querySelectorAll(".keyboard-current").forEach((item) => item.classList.remove("keyboard-current"));
+      cell.classList.add("keyboard-current");
       state.curriculumSelectedRow = Number(cell.dataset.sourceRow);
       state.curriculumSelectedColumn = Number(cell.dataset.sourceColumn);
       state.curriculumEditBefore = curriculumSnapshot();
       state.curriculumEditUndoRecorded = false;
+    });
+    $("#curriculumPlanWrap").addEventListener("keydown", (event) => {
+      const cell = event.target.closest("[contenteditable='true'][data-source-row][data-source-column]");
+      if (!cell) return;
+      const cells = [...$("#curriculumPlanWrap").querySelectorAll(".curriculum-source-table td[contenteditable='true']")];
+      const currentIndex = cells.indexOf(cell);
+      if (currentIndex < 0) return;
+      let target = null;
+      if (event.key === "Tab") {
+        target = cells[currentIndex + (event.shiftKey ? -1 : 1)];
+      } else if (event.key === "Enter") {
+        target = cells.filter((item) => Number(item.dataset.sourceColumn) === Number(cell.dataset.sourceColumn) &&
+          Number(item.dataset.sourceRow) > Number(cell.dataset.sourceRow))
+          .sort((a, b) => Number(a.dataset.sourceRow) - Number(b.dataset.sourceRow))[0];
+      } else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+        const selection = window.getSelection?.();
+        const anchor = selection?.anchorNode;
+        const offset = selection?.anchorOffset ?? 0;
+        const length = anchor?.textContent?.length ?? 0;
+        if (anchor && cell.contains(anchor) && selection.isCollapsed &&
+            ((event.key === "ArrowLeft" && offset > 0) ||
+             (event.key === "ArrowRight" && offset < length) ||
+             (event.key === "ArrowUp" && offset > 0) ||
+             (event.key === "ArrowDown" && offset < length))) return;
+        const row = Number(cell.dataset.sourceRow);
+        const column = Number(cell.dataset.sourceColumn);
+        const candidates = cells.filter((item) => item !== cell).map((item) => ({
+          item, row: Number(item.dataset.sourceRow), column: Number(item.dataset.sourceColumn)
+        }));
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          const direction = event.key === "ArrowLeft" ? -1 : 1;
+          target = candidates.filter((item) => item.row === row && (item.column - column) * direction > 0)
+            .sort((a, b) => Math.abs(a.column-column) - Math.abs(b.column-column))[0]?.item;
+        } else {
+          const direction = event.key === "ArrowUp" ? -1 : 1;
+          target = candidates.filter((item) => item.column === column && (item.row - row) * direction > 0)
+            .sort((a, b) => Math.abs(a.row-row) - Math.abs(b.row-row))[0]?.item;
+        }
+      }
+      if (!target) return;
+      event.preventDefault();
+      const row = target.dataset.sourceRow;
+      const column = target.dataset.sourceColumn;
+      cell.blur();
+      setTimeout(() => {
+        const next = $(`#curriculumPlanWrap [data-source-row="${row}"][data-source-column="${column}"]`);
+        next?.focus();
+      }, 20);
     });
     $("#curriculumPlanWrap").addEventListener("input", (event) => {
       const cell = event.target.closest("[contenteditable='true'][data-source-row][data-source-column]");
@@ -3958,6 +4067,12 @@
       renderAggregate();
       persistState();
     });
+    document.addEventListener("scroll", (event) => {
+      const wrap = event.target.closest?.(".aggregate-sheet-wrap");
+      if (!wrap) return;
+      wrap.classList.toggle("is-scrolled-x", wrap.scrollLeft > 0);
+      wrap.classList.toggle("is-scrolled-y", wrap.scrollTop > 0);
+    }, true);
     $("#semesterClassifier").addEventListener("click", (event) => {
       const card = event.target.closest("[data-drag-course-column]");
       if (card) {
@@ -4006,6 +4121,15 @@
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", courseColumn);
+        if (typeof event.dataTransfer.setDragImage === "function") {
+          const badge = document.createElement("div");
+          const count = state.selectedCourseColumns.includes(courseColumn) ? state.selectedCourseColumns.length : 1;
+          badge.className = "course-drag-image";
+          badge.textContent = `${card.querySelector("span")?.textContent || "과목"}${count > 1 ? ` 외 ${count - 1}과목` : ""}`;
+          document.body.appendChild(badge);
+          event.dataTransfer.setDragImage(badge, 10, 10);
+          setTimeout(() => badge.remove(), 250);
+        }
       }
     });
     $("#semesterClassifier").addEventListener("dragend", (event) => {

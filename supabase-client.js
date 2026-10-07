@@ -777,6 +777,13 @@ var updateApplicationGradeControls;
     }
   }
 
+  function isCoreApplicationCourse(course) {
+    const area = String(course?.area || course?.category || "").replace(/\s+/g, "");
+    if (/국어|영어|수학/.test(area)) return true;
+    const subject = String(course?.subject || course?.name || "").replace(/\s+/g, "");
+    return /^(국어|화법과작문|독서와작문|문학|언어와매체|영어|영어회화|영어독해와작문|수학|대수|미적분|확률과통계|기하|경제수학|인공지능수학)/.test(subject);
+  }
+
   function renderStudentApplication(data) {
     studentSemesterIndex = 0;
     byId("cloudStudentCourses").classList.remove("hidden");
@@ -805,7 +812,8 @@ var updateApplicationGradeControls;
           if (!course) throw new Error("그룹 과목 설정이 잘못되었습니다.");
           const label = document.createElement("label"); label.className = "application-subject";
           const box = document.createElement("input"); box.type = "checkbox"; box.value = subject;
-          box.dataset.credit = course.credit; box.checked = data.selections.includes(subject); box.disabled = !data.open;
+          box.dataset.credit = course.credit; box.dataset.core = String(isCoreApplicationCourse(course));
+          box.checked = data.selections.includes(subject); box.disabled = !data.open;
           label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`)); fieldset.appendChild(label);
         }
         choices.appendChild(fieldset);
@@ -829,6 +837,7 @@ var updateApplicationGradeControls;
       box.type = "checkbox";
       box.value = course.subject;
       box.dataset.credit = course.credit;
+      box.dataset.core = String(isCoreApplicationCourse(course));
       box.checked = data.selections.includes(course.subject);
       box.disabled = !data.open;
       label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`));
@@ -880,7 +889,14 @@ var updateApplicationGradeControls;
   });
   function updateSummary() {
     const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")];
-    byId("cloudStudentSummary").textContent = `선택 ${selected.length}개 · ${selected.reduce((total, b) => total + Number(b.dataset.credit), 0)}학점`;
+    const credits = selected.reduce((total, box) => total + (Number(box.dataset.credit) || 0), 0);
+    const coreCredits = selected.reduce((total, box) =>
+      total + (box.dataset.core === "true" ? Number(box.dataset.credit) || 0 : 0), 0);
+    const corePercent = credits ? Math.round(coreCredits / credits * 100) : 0;
+    byId("cloudStudentTotal").textContent = `선택 ${selected.length}개 · 신청 ${credits}학점`;
+    byId("cloudStudentCore").textContent = `국·영·수 ${coreCredits}학점 · ${corePercent}%`;
+    byId("cloudStudentCoreFill").style.width = `${corePercent}%`;
+    byId("cloudStudentCoreTrack").setAttribute("aria-valuenow", String(corePercent));
     for (const fieldset of byId("cloudStudentChoices").querySelectorAll("fieldset[data-group]")) {
       const count = fieldset.querySelectorAll("input:checked").length;
       const group = application.groups.find((g) => g.id === fieldset.dataset.group);
@@ -942,12 +958,16 @@ var updateApplicationGradeControls;
       }
       if (previewMode) {
         byId("cloudStudentMessage").textContent = "미리보기 제출 완료 · 실제 신청은 저장되지 않습니다.";
+        window.showAppToast?.("미리보기 제출을 확인했습니다. 실제 신청은 저장되지 않았습니다.");
         return;
       }
       const result = eventId
         ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
         : await rpc("save_course_application", { p_code: code, p_selections: selected });
-      if (activeCode === code) byId("cloudStudentMessage").textContent = result.message;
+      if (activeCode === code) {
+        byId("cloudStudentMessage").textContent = result.message;
+        window.showAppToast?.(result.message);
+      }
     });
   });
     async function showHistory(event, parent) {

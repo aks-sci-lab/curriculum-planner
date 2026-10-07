@@ -272,6 +272,7 @@ test("generated Google Form routes each current grade to only its promoted-grade
       FormApp:{create:()=>form,PageNavigationType:{SUBMIT:"submit"},DestinationType:{SPREADSHEET:"sheet"}},
       SpreadsheetApp:{create:()=>({getId:()=>"sheet",getUrl:()=>"url"})},Logger:{log(){}},
     });
+
     vm.runInContext(generator.buildAppsScriptCode(subjects),ctx);
     ctx.createCourseApplicationForm();
     assert.equal(gradeItem.choices.length,pages.length);
@@ -284,6 +285,27 @@ test("generated Google Form routes each current grade to only its promoted-grade
       if (nextPage) assert.equal(nextPage.navigation,"submit");
     }
   }
+});
+
+test("generated offline student form shows total credits and the math, English, Korean credit share", () => {
+  const source = functionSource("function buildApplicationPageHtml(", "// 학생 신청 파일(JSON)들을 명단");
+  const context = vm.createContext({
+    $: (selector) => ({ value: selector === "#schoolName" ? "가상학교" : "2026" }),
+    xmlEscape: (value) => String(value),
+  });
+  vm.runInContext(source, context);
+  const html = context.buildApplicationPageHtml({
+    "2": [
+      { subject: "수학", area: "수학", credit: 3, semester: "1" },
+      { subject: "생명과학", area: "과학", credit: 3, semester: "1" },
+    ],
+    "3": [],
+  });
+  assert.match(html, /신청 학점 중 국어·영어·수학 과목 비율/);
+  assert.match(html, /국·영·수/);
+  assert.match(html, /summaryGauge/);
+  assert.match(html, /position:sticky;bottom:0/);
+  assert.match(html, /data-core=/);
 });
 
 test("Excel style fills resolve RGB, theme, tint, indexed and uncolored cells", async () => {
