@@ -547,6 +547,47 @@ test("developer results replace only the chosen grade and retain courses, settin
   assert.deepEqual(plain(state),previous);
 });
 
+test("workflow phase tabs route follow-up actions to the correct round and keep shared menus available", () => {
+  const elements=new Map();
+  const element=()=>({attributes:{},hidden:false,textContent:"",
+    setAttribute(name,value){this.attributes[name]=value;},
+    classList:{toggle(){}},querySelector(){return element();}});
+  const buttons=[...html.matchAll(/<button[^>]*data-workflow-step="(\d+)"([^>]*)>/g)].map((match)=>({
+    ...element(),dataset:{workflowStep:match[1],stepPhase:match[2].match(/data-step-phase="([^"]+)"/)?.[1]}
+  }));
+  for (const button of buttons) button.classList.toggle=(name,value)=>{button.hidden=value;};
+  const workflowSteps={...element(),querySelectorAll:()=>buttons};
+  const state={workflowStep:3,currentRound:"1"};
+  let saved=0;
+  const ctx=vm.createContext({state,workflowSteps,
+    $:(id)=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);},
+    renderCurriculumStep(){},renderRoundStatus(){},renderApplicationSubjects(){},
+    renderClosurePanel:(round)=>{ctx.closureRound=round;},renderRetakePanel(){},
+    switchRound:(round)=>{state.currentRound=round;},persistState:()=>{saved++;}});
+  vm.runInContext(functionSource("function renderWorkflowLayout(", "function switchRound("),ctx);
+  ctx.renderWorkflowLayout();
+  assert.equal(elements.get("#workflowInitialTab").attributes["aria-selected"],"true");
+  ctx.switchWorkflowPhase("followup");
+  assert.equal(state.workflowStep,5);
+  assert.equal(ctx.closureRound,"1");
+  assert.equal(elements.get("#workflowFollowupTab").attributes["aria-selected"],"true");
+  assert.ok(buttons.filter((b)=>b.dataset.stepPhase==="initial").every((b)=>b.hidden));
+  assert.ok(buttons.filter((b)=>b.dataset.stepPhase==="followup").every((b)=>!b.hidden));
+  ctx.switchWorkflowStep(2);
+  assert.equal(state.currentRound,"2");
+  assert.equal(state.workflowPhase,"followup");
+  ctx.switchWorkflowStep(6);
+  assert.equal(state.currentRound,"2");
+  ctx.switchWorkflowStep(7);
+  assert.equal(ctx.closureRound,"2");
+  ctx.switchWorkflowPhase("initial");
+  assert.equal(state.currentRound,"1");
+  ctx.switchWorkflowStep(3);
+  assert.equal(state.workflowPhase,"initial");
+  assert.ok(buttons.filter((b)=>!b.dataset.stepPhase).every((b)=>!b.hidden));
+  assert.ok(saved>0);
+});
+
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
   const subjects = setup().subjects;
   const existing = [{ name: "기존학생" }];

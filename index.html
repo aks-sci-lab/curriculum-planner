@@ -109,6 +109,8 @@
       margin: 0 0 14px;
       align-items: start;
     }
+    .certificate-controls { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    .certificate-preview-column { min-width: 0; }
     .main-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 2px 2px 18px; }
     .main-heading h1 { margin: 0 0 5px; font-size: 21px; letter-spacing: -.5px; }
     .main-heading p { margin: 0; color: var(--muted); font-size: 12px; }
@@ -1035,14 +1037,20 @@
       </div>
       <section class="panel workflow-panel" aria-label="업무 흐름">
         <h2 class="panel-heading">업무 흐름도</h2>
-        <div class="workflow-steps" id="workflowSteps">
+        <div class="group-scope-tabs" role="tablist" aria-label="수강신청 진행 단계">
+          <button class="button" id="workflowInitialTab" type="button" role="tab" aria-selected="true" aria-controls="workflowSteps" data-workflow-phase="initial">1차 신청</button>
+          <button class="button" id="workflowFollowupTab" type="button" role="tab" aria-selected="false" aria-controls="workflowSteps" tabindex="-1" data-workflow-phase="followup">2차 신청·개설 확정</button>
+        </div>
+        <div class="workflow-steps" id="workflowSteps" role="tabpanel" aria-labelledby="workflowInitialTab">
           <button class="workflow-step-button" type="button" data-workflow-step="1">1. 교육과정 편제표 작성</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="2">2. 학년별 수강신청</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="3">3. 수강신청 확인서 발급</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="4">4. 수강신청 집계표 생성</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="5">5. 폐강 검토 및 2차 수강신청</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="6">6. 2차 수강신청 확인서 발급</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="7">7. 개설/폐강 과목 확정</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="2" data-step-phase="initial">1차 신청 · 학년별 수강신청</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="3" data-step-phase="initial">1차 수강신청 확인서 발급</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="4" data-step-phase="initial">1차 수강신청 집계표</button>
+          <button class="workflow-step-button hidden" type="button" data-workflow-step="5" data-step-phase="followup">① 폐강 검토 (1차 결과)</button>
+          <button class="workflow-step-button hidden" type="button" data-workflow-step="2" data-step-phase="followup">② 2차 수강신청</button>
+          <button class="workflow-step-button hidden" type="button" data-workflow-step="6" data-step-phase="followup">③ 2차 수강신청 확인서 발급</button>
+          <button class="workflow-step-button hidden" type="button" data-workflow-step="4" data-step-phase="followup">2차 수강신청 집계표</button>
+          <button class="workflow-step-button hidden" type="button" data-workflow-step="7" data-step-phase="followup">④ 개설/폐강 과목 확정</button>
           <button class="workflow-step-button" type="button" data-workflow-step="8">8. 3차 수강신청 대상자</button>
           <button class="workflow-step-button" type="button" data-workflow-step="9">9. 시간표용 그룹화</button>
           <button class="workflow-step-button" type="button" data-workflow-step="10">10. 시간표 작성</button>
@@ -1185,6 +1193,7 @@
       <section id="certificatePanel" class="hidden">
         <div class="certificate-round-line"><span class="count-pill" id="certificateRoundBadge">1차</span><span class="note-inline">차수는 2단계에서 전환할 수 있습니다.</span></div>
         <div class="certificate-setup-grid">
+          <div class="certificate-controls">
           <section class="panel settings-panel">
             <h2 class="panel-heading">확인서 기본 정보</h2>
             <p class="panel-subtitle">인쇄물에 표시할 정보를 필요에 맞게 수정하세요.</p>
@@ -1206,6 +1215,7 @@
             </div>
           </section>
         </div>
+        <div class="certificate-preview-column">
         <div class="main-heading">
           <div><h1>수강 신청 확인서</h1><p id="previewSubheading">엑셀 파일을 불러와 확인서를 작성하세요.</p></div>
           <div class="toolbar">
@@ -1220,6 +1230,8 @@
             <span>왼쪽에서 수강 신청 결과 엑셀을 불러오면 학생별 확인서가 표시됩니다.</span>
           </div>
         </section>
+        </div>
+        </div>
       </section>
       <section class="panel aggregate-panel hidden" id="aggregatePanel">
         <div class="roster-header">
@@ -1709,6 +1721,7 @@ function courseClient_() {
           curriculumBundleName: state.curriculumBundleName,
           curriculumBundlePick: state.curriculumBundlePick,
           workflowStep: state.workflowStep,
+          workflowPhase: state.workflowPhase,
           openingPercent: $("#openingPercent").value,
           divisionPercent: $("#divisionPercent").value,
           schoolYear: $("#schoolYear").value,
@@ -1728,12 +1741,23 @@ function courseClient_() {
 
     function renderWorkflowLayout() {
       const step = Number(state.workflowStep) || 3;
+      const phase = [5,6,7].includes(step) ? "followup" : step === 3 ? "initial" :
+        state.workflowPhase || "initial";
+      state.workflowPhase = phase;
       renderCurriculumStep();
       renderRoundStatus();
       renderApplicationSubjects();
       for (const button of workflowSteps.querySelectorAll("[data-workflow-step]")) {
-        button.setAttribute("aria-current", Number(button.dataset.workflowStep) === step ? "step" : "false");
+        const visible = !button.dataset.stepPhase || button.dataset.stepPhase === phase;
+        button.classList.toggle("hidden", !visible);
+        button.setAttribute("aria-current", visible && Number(button.dataset.workflowStep) === step ? "step" : "false");
       }
+      for (const [id, value] of [["workflowInitialTab","initial"],["workflowFollowupTab","followup"]]) {
+        $("#" + id).setAttribute("aria-selected", String(phase === value));
+        $("#" + id).setAttribute("tabindex", phase === value ? "0" : "-1");
+      }
+      workflowSteps.setAttribute("aria-labelledby", phase === "followup" ? "workflowFollowupTab" : "workflowInitialTab");
+      $("#workflowStep2Panel").querySelector("h3").textContent = `${phase === "followup" ? "2차" : "1차"} · 학년별 수강신청`;
       $("#workflowStep1Panel").classList.toggle("hidden", step !== 1);
       $("#workflowStep2Panel").classList.toggle("hidden", step !== 2);
       $("#workflowStep10Panel").classList.toggle("hidden", step !== 10);
@@ -1749,11 +1773,20 @@ function courseClient_() {
     function switchWorkflowStep(step, skipPersist = false) {
       const next = Number(step);
       state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(next) ? next : 3;
+      if ([5,6,7].includes(state.workflowStep)) state.workflowPhase = "followup";
+      if (state.workflowStep === 3) state.workflowPhase = "initial";
       // 단계와 연동된 차수를 자동 선택한다. 5단계=1차, 6·7단계=2차, 8단계=3차.
-      const stepRound = { 5: "1", 6: "2", 7: "2", 8: "3" }[state.workflowStep];
+      const stepRound = { 3: "1", 5: "1", 6: "2", 7: "2", 8: "3" }[state.workflowStep] ||
+        ([2,4].includes(state.workflowStep) ? (state.workflowPhase === "followup" ? "2" : "1") : null);
       if (stepRound && stepRound !== state.currentRound) switchRound(stepRound, true);
       renderWorkflowLayout();
       if (!skipPersist) persistState();
+    }
+
+    function switchWorkflowPhase(phase) {
+      if (!["initial", "followup"].includes(phase)) return;
+      state.workflowPhase = phase;
+      switchWorkflowStep(phase === "followup" ? 5 : 2);
     }
 
     // 차수를 전환한다. 현재 활성 데이터를 rounds에 저장하고 대상 차수 데이터를 활성화한다.
@@ -1978,6 +2011,8 @@ function courseClient_() {
         state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(Number(saved.workflowStep))
           ? Number(saved.workflowStep)
           : 3;
+        state.workflowPhase = ["initial", "followup"].includes(saved.workflowPhase) ? saved.workflowPhase :
+          ([5,6,7].includes(state.workflowStep) || ([2,4].includes(state.workflowStep) && state.currentRound === "2") ? "followup" : "initial");
 
         $("#fileName").textContent = state.fileName || "불러온 파일 없음";
         $("#openingPercent").value = saved.openingPercent || "90";
@@ -3657,7 +3692,7 @@ function courseClient_() {
     // 폐강 검토(5단계: 1차 기준)와 개설/폐강 확정(7단계: 2차 기준) 패널을 그린다.
     function renderClosurePanel(round) {
       const data = state.rounds?.[round];
-      $("#closureTitle").textContent = round === "1" ? "폐강 검토 및 2차 수강신청" : "개설/폐강 과목 확정";
+      $("#closureTitle").textContent = round === "1" ? "폐강 검토 (1차 결과)" : "개설/폐강 과목 확정";
       const description = $("#closureDescription");
       const content = $("#closureContent");
       if (!data) {
@@ -3666,7 +3701,7 @@ function courseClient_() {
         return;
       }
       description.textContent = round === "1"
-        ? "1차 결과 기준입니다. 신청 인원이 개설기준보다 적은 과목은 폐강 예정으로 표시됩니다. 과목별로 폐강/개설을 정한 뒤 2단계에서 2차 명단을 불러오세요."
+        ? "1차 결과 기준입니다. 신청 인원이 개설기준보다 적은 과목은 폐강 예정으로 표시됩니다. 검토를 마치면 같은 탭의 ‘② 2차 수강신청’에서 온라인 신청을 생성하거나 결과를 불러오세요."
         : "2차 결과 기준으로 개설/폐강을 최종 확정합니다. 폐강으로 확정된 과목은 8단계의 3차 수강신청 대상자 명단에 반영됩니다.";
       const openingPercent = Number($("#openingPercent").value) || 90;
       const divisionPercent = Number($("#divisionPercent").value) || 110;
@@ -5690,8 +5725,20 @@ function courseClient_() {
     workflowSteps.addEventListener("click", (event) => {
       const button = event.target.closest("[data-workflow-step]");
       if (!button) return;
+      if (button.dataset.stepPhase) state.workflowPhase = button.dataset.stepPhase;
       switchWorkflowStep(button.dataset.workflowStep);
     });
+    for (const id of ["workflowInitialTab", "workflowFollowupTab"]) {
+      $("#" + id).addEventListener("click", (event) => switchWorkflowPhase(event.currentTarget.dataset.workflowPhase));
+      $("#" + id).addEventListener("keydown", (event) => {
+        const phase = event.key === "Home" ? "initial" : event.key === "End" ? "followup" :
+          ["ArrowLeft", "ArrowRight"].includes(event.key) ? (state.workflowPhase === "followup" ? "initial" : "followup") : null;
+        if (!phase) return;
+        event.preventDefault();
+        switchWorkflowPhase(phase);
+        $(phase === "followup" ? "#workflowFollowupTab" : "#workflowInitialTab").focus();
+      });
+    }
     $("#roundSelector").addEventListener("click", (event) => {
       const tab = event.target.closest("[data-round]");
       if (!tab) return;
