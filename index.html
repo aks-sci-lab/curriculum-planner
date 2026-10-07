@@ -240,6 +240,10 @@
     #aggregatePanel,
     .status { grid-column: 2; }
     .curriculum-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .curriculum-heading-row { display: flex; align-items: center; gap: 14px; overflow-x: auto; padding-bottom: 8px; }
+    .curriculum-heading-row > * { flex-shrink: 0; }
+    .curriculum-heading-row h3, .curriculum-heading-row .note, .curriculum-heading-row .curriculum-toolbar { margin: 0; }
+    .curriculum-heading-row .curriculum-toolbar { flex-wrap: nowrap; }
     .curriculum-filename { color: #63728a; font-size: 11px; }
     .curriculum-builder {
       display: grid;
@@ -1047,14 +1051,17 @@
     </aside>
     <main class="main">
       <section class="workflow-step-panel hidden" id="workflowStep1Panel">
+        <div class="curriculum-heading-row">
         <h3>1단계 · 교육과정 편제표 작성</h3>
         <p class="note">교육과정 목록과 편제표를 불러와 과목을 편성하고, 편제표 셀을 직접 수정할 수 있습니다.</p>
         <div class="curriculum-toolbar">
           <label class="file-button" for="curriculumInput">저장된 교육과정 불러오기</label>
           <label class="file-button" for="curriculumPlanInput">편제표 불러오기</label>
           <button class="button" id="clearCurriculumPlan" type="button">편제표 초기화</button>
+          <button class="button" id="exportCurriculumPlan" type="button">편제표 엑셀 내보내기</button>
           <input class="hidden" id="curriculumInput" type="file" accept=".xlsx">
           <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx">
+        </div>
         </div>
         <div class="curriculum-filename" id="curriculumFileName">저장된 교육과정 목록 없음</div>
         <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
@@ -2091,6 +2098,14 @@ function courseClient_() {
         const rows = [];
         const rowHeights = {};
         const cellFills = {};
+        const formulas = {};
+        const sharedFormulas = new Map();
+        for (const cell of sheet.getElementsByTagNameNS(NS_MAIN, "c")) {
+          const formula = cell.getElementsByTagNameNS(NS_MAIN, "f")[0];
+          if (formula?.getAttribute("t") === "shared" && formula.textContent) {
+            sharedFormulas.set(formula.getAttribute("si"), {formula:formula.textContent, ref:cell.getAttribute("r")});
+          }
+        }
         for (const rowNode of sheet.getElementsByTagNameNS(NS_MAIN, "row")) {
           const rowNumber = Number(rowNode.getAttribute("r")) - 1;
           const height = Number(rowNode.getAttribute("ht"));
@@ -2101,6 +2116,14 @@ function courseClient_() {
             const fill = fillStyles[Number(cell.getAttribute("s") || 0)];
             if (fill) cellFills[`${rowNumber}:${index}`] = fill;
             const type = cell.getAttribute("t");
+            const formula = cell.getElementsByTagNameNS(NS_MAIN, "f")[0];
+            if (formula && includeLayout) {
+              const master = sharedFormulas.get(formula.getAttribute("si"));
+              if (formula.getAttribute("t") === "shared" && !formula.textContent && master) {
+                formulas[`${rowNumber}:${index}`] = shiftPlanFormula(master.formula,
+                  rowNumber - (Number(master.ref.match(/\d+/)[0])-1), index-columnIndex(master.ref), null, true);
+              } else formulas[`${rowNumber}:${index}`] = formula.textContent;
+            }
             let value = "";
             if (type === "inlineStr") {
               value = [...cell.getElementsByTagNameNS(NS_MAIN, "t")].map((text) => text.textContent).join("");
@@ -2151,7 +2174,7 @@ function courseClient_() {
         sheets.push({
           name: sheetNode.getAttribute("name"),
           rows,
-          ...(includeLayout ? { layout: { mergedRanges, columnWidths, rowHeights, cellFills } } : {})
+          ...(includeLayout ? { layout: { mergedRanges, columnWidths, rowHeights, cellFills, formulas, sheetPath } } : {})
         });
       }
       return sheets;
@@ -4638,7 +4661,7 @@ function courseClient_() {
     function createXlsxBlob(files) {
       const encoder = new TextEncoder();
       const fileEntries = Object.entries(files).map(([name, content]) => ({
-        name: encoder.encode(name), data: encoder.encode(content)
+        name: encoder.encode(name), data: content instanceof Uint8Array ? content : encoder.encode(content)
       }));
       const localParts = [];
       const centralParts = [];
@@ -5076,6 +5099,7 @@ function courseClient_() {
         const [row,column]=key.split(":").map(Number);
         return [`${row>=insertionRow?row+1:row}:${column}`,color];
       }));
+      if (typeof insertPlanFormulaRow === "function") insertPlanFormulaRow(layout, nextLayout, insertionRow);
       return nextLayout;
     }
 
@@ -5190,6 +5214,16 @@ function courseClient_() {
         });
       return {
         sheetName: sheet.name,
+        sourceRowOffset: minRow,
+        sourceColumnOffset: minColumn,
+        sheetPath: sheet.layout?.sheetPath,
+        originalRowCount: rows.length,
+        rowInsertions: [],
+        formulas: Object.fromEntries(Object.entries(sheet.layout?.formulas || {}).flatMap(([key, formula]) => {
+          const [row, column] = key.split(":").map(Number);
+          return row >= minRow && row <= maxRow && column >= minColumn && column <= maxColumn
+            ? [[`${row-minRow}:${column-minColumn}`, shiftPlanFormula(formula, -minRow, -minColumn)]] : [];
+        })),
         rows,
         mergedRanges,
         cellFills: Object.fromEntries(Object.entries(sheet.layout?.cellFills || {}).flatMap(([key, color]) => {
@@ -5273,6 +5307,8 @@ function courseClient_() {
             if (plan.length) break;
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
+          importedLayout.archiveId = await storeCurriculumArchive(reader.result);
+          if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
           recordCurriculumUndo();
           state.curriculumMutationRevision += 1;
           state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
@@ -5409,6 +5445,16 @@ function courseClient_() {
       if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndexValue)) return;
       state.curriculumImportedLayout.rows[rowIndex] = state.curriculumImportedLayout.rows[rowIndex] || [];
       state.curriculumImportedLayout.rows[rowIndex][columnIndexValue] = cell.innerText.replace(/\r\n?/g, "\n");
+      if (state.curriculumImportedLayout.formulas) delete state.curriculumImportedLayout.formulas[`${rowIndex}:${columnIndexValue}`];
+      try {
+        recalculatePlanFormulas(state.curriculumImportedLayout);
+        for (const [key] of Object.entries(state.curriculumImportedLayout.formulas || {})) {
+          const [row, column] = key.split(":");
+          const target = $(`#curriculumPlanWrap [data-source-row="${row}"][data-source-column="${column}"]`);
+          if (target) target.textContent = state.curriculumImportedLayout.rows[Number(row)][Number(column)];
+        }
+        status.textContent = "편제표 수정 내용과 소계를 반영했습니다.";
+      } catch (error) { status.textContent = `소계 계산 실패: ${error.message}`; }
       persistState();
     });
     $("#curriculumPlanWrap").addEventListener("focusout", (event) => {
@@ -5420,6 +5466,7 @@ function courseClient_() {
       setTimeout(() => {
         if (mutationRevision !== state.curriculumMutationRevision) return;
         try {
+          recalculatePlanFormulas(state.curriculumImportedLayout);
           const rows = expandCurriculumLayoutRows(state.curriculumImportedLayout);
           const plan = createCurriculumPlanRecords(
             rows,
@@ -5637,6 +5684,7 @@ function courseClient_() {
     if (!showStudentApplicationEntry()) restorePersistedState();
   </script>
   <script src="course-groups.js" defer></script>
+  <script src="curriculum-workbook.js" defer></script>
   <script src="vendor/qrcode.js" defer></script>
   <script src="supabase-client.js" defer></script>
 </body>
