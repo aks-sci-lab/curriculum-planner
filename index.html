@@ -917,9 +917,28 @@
     }
     @media print { #cloudCodeDialog, #cloudCodeDialog::backdrop { display: none !important; } }
     .course-history { max-height: 500px; overflow: auto; padding: 12px; background: #f2f5fb; }
-    .course-group-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; margin-top:12px; }
-    .course-group-grid fieldset { min-width:0; max-height:480px; overflow:auto; border:1px solid #cad5e5; border-radius:8px; padding:12px; }
-    .course-group-grid input[type=number] { width:70px; }
+    #courseGroupEditor { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    #courseGroupEditor > h4, #courseGroupEditor > .group-scope-tabs, #courseGroupEditor > .course-group-grid { flex-basis:100%; min-width:0; }
+    #courseGroupEditor > h4 { margin:4px 0; }
+    #courseGroupEditor > .group-scope-tabs { margin:4px 0; }
+    #courseGroupEditor input:not([type=checkbox]), #courseGroupEditor select {
+      box-sizing:border-box; min-height:36px; padding:7px 10px; border:1px solid #cad5e5;
+      border-radius:7px; font:inherit; color:inherit; background:#fff; min-width:0; max-width:100%;
+    }
+    #courseGroupEditor > input { flex:1 1 220px; max-width:360px; }
+    #courseGroupEditor > select { flex:0 1 220px; }
+    .course-group-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:14px; margin-top:4px; align-items:start; }
+    .course-group-grid fieldset { min-width:0; margin:0; max-height:480px; overflow:auto; border:1px solid #cad5e5; border-radius:8px; padding:12px; background:#fff; }
+    .course-group-grid legend { padding:0 5px; font-weight:700; font-size:13px; }
+    .course-group-grid .course-group-name { display:grid; grid-template-columns:52px minmax(0,1fr); align-items:center; gap:8px; margin-bottom:8px; font-size:12px; }
+    .course-group-grid .course-group-count { display:grid; grid-template-columns:minmax(0,1fr) 100px; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; }
+    .course-group-grid input[type=number] { width:100%; }
+    .course-group-grid .course-group-name input { width:100%; }
+    .course-group-grid .button { margin:0 6px 8px 0; padding:7px 10px; font-size:11px; white-space:normal; }
+    .course-group-grid .application-subject { padding:7px 2px; gap:8px; line-height:1.5; overflow-wrap:anywhere; }
+    .course-group-grid .application-subject input { flex-shrink:0; }
+    .course-group-grid .course-group-empty { grid-column:1 / -1; padding:8px 12px; background:#f6f8fc; }
+    .course-group-grid .course-group-empty .button { margin:0; }
     .group-scope-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
     .group-scope-tabs [aria-selected=true] { background:#244ba0; color:white; }
     #printBatch { display: none; }
@@ -5783,9 +5802,9 @@ function courseClient_() {
     window.addEventListener("hashchange", () => window.location.reload());
     if (!showStudentApplicationEntry()) restorePersistedState();
   </script>
-  <script src="course-groups.js?v=20261007-grade-menus-2" defer></script>
-  <script src="curriculum-workbook.js?v=20261007-grade-menus-2" defer></script>
+  <script src="course-groups.js?v=20261007-group-layout" defer></script>
+  <script src="curriculum-workbook.js?v=20261007-group-layout" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261007-grade-menus-2" defer></script>
+  <script src="supabase-client.js?v=20261007-group-layout" defer></script>
 </body>
 </html>

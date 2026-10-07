@@ -170,6 +170,11 @@ test("grade menus scope groups and rebuild colors without removing the other gra
   }});
   assert.equal(f.renderedGrade,"1");
   assert.equal(f.elements.applicationGrade1Tab["aria-selected"],"true");
+  const grid=f.elements.courseGroupEditor.children.find((child)=>child.className==="course-group-grid");
+  assert.equal(grid.children[0].className,"course-group-empty");
+  assert.equal(grid.children[0].children.find((child)=>child.textContent==="표시 과목 전체 선택").disabled,true);
+  assert.equal(grid.children[1].children[1].className,"course-group-name");
+  assert.equal(grid.children[1].children[2].className,"course-group-count");
   const tabs=f.elements.courseGroupEditor.children.find((child)=>child.className==="group-scope-tabs");
   assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
   f.elements.courseGroupEditor.children.find((child)=>child.textContent==="편제표 색상으로 다시 구성").onclick();

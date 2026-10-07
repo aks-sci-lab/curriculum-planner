@@ -212,15 +212,18 @@ var switchApplicationMenuGrade;
       const grid=document.createElement("div");grid.className="course-group-grid";container.appendChild(grid);
       for (const group of buckets) {
         const panel = document.createElement("fieldset");
+        panel.className = !group.id && !group.courses.length ? "course-group-empty" : "course-group-card";
         if (group.fill) panel.style.borderTop=`6px solid ${group.fill}`;
         const legend = document.createElement("legend");
         legend.textContent = `${group.name} (${group.courses.length}과목)`; panel.appendChild(legend);
         if (group.id) {
           const nameLabel = document.createElement("label"); nameLabel.textContent = "그룹명 ";
+          nameLabel.className = "course-group-name";
           const input = document.createElement("input"); input.value = group.name; input.maxLength = 100;
           input.onchange = () => { group.name = input.value.trim(); persist(); };
           nameLabel.appendChild(input); panel.appendChild(nameLabel);
-          const countLabel = document.createElement("label"); countLabel.textContent = " 정확히 선택할 과목 수 ";
+          const countLabel = document.createElement("label"); countLabel.textContent = "선택할 과목 수 (정확히)";
+          countLabel.className = "course-group-count";
           const count = document.createElement("input"); count.type = "number"; count.min = "0"; count.max = String(group.courses.length);
           count.placeholder = "직접 지정"; count.value = group.count ?? "";
           count.onchange = () => { group.count = count.value === "" ? null : Number(count.value); persist(); };
@@ -233,10 +236,12 @@ var switchApplicationMenuGrade;
         } else grid.appendChild(panel);
         const visible = group.courses.map((subject) => available.get(`${grade}:${semester}:${subject}`))
           .filter((c) => !query || `${c.subject} ${c.area}`.includes(query));
-        panel.appendChild(button("표시 과목 전체 선택", () => {
+        const selectVisible = button("표시 과목 전체 선택", () => {
           for (const c of visible) selected.add(`${grade}:${semester}:${c.subject}`);
           renderCourseGroups(); message.textContent = `${selected.size}과목 선택됨`;
-        }));
+        });
+        selectVisible.disabled = !visible.length;
+        panel.appendChild(selectVisible);
         for (const course of visible) panel.appendChild(courseRow(course));
       }
     }
