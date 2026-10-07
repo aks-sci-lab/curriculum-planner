@@ -6,7 +6,7 @@ create table public.course_events (
   owner_id uuid not null references auth.users(id) on delete cascade,
   school_name text not null check (length(school_name) between 1 and 100),
   school_year text not null check (school_year ~ '^[0-9]{4}$'),
-  round text not null check (round in ('1', '2', '3')),
+  round text not null check (round ~ '^[1-9][0-9]{0,8}$'),
   subjects jsonb not null,
   is_open boolean not null default true,
   created_at timestamptz not null default now()
@@ -46,7 +46,7 @@ declare
 begin
   if v_owner is null then raise exception '교사 로그인이 필요합니다.'; end if;
   if coalesce(p_setup->>'type', '') <> 'course-application-setup' or
-     coalesce(p_setup->>'round', '') not in ('1', '2', '3') or
+     coalesce(p_setup->>'round', '') !~ '^[1-9][0-9]{0,8}$' or
      coalesce(p_setup->>'schoolName', '') = '' or
      coalesce(p_setup->>'schoolYear', '') !~ '^[0-9]{4}$' or
      coalesce(jsonb_typeof(p_setup->'roster'), '') <> 'array' or

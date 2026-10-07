@@ -1056,23 +1056,13 @@
       </div>
       <section class="panel workflow-panel" aria-label="업무 흐름">
         <h2 class="panel-heading">업무 흐름도</h2>
-        <div class="group-scope-tabs" role="tablist" aria-label="수강신청 진행 단계">
-          <button class="button" id="workflowInitialTab" type="button" role="tab" aria-selected="true" aria-controls="workflowSteps" data-workflow-phase="initial">1차 신청</button>
-          <button class="button" id="workflowFollowupTab" type="button" role="tab" aria-selected="false" aria-controls="workflowSteps" tabindex="-1" data-workflow-phase="followup">2차 신청·개설 확정</button>
-        </div>
-        <div class="workflow-steps" id="workflowSteps" role="tabpanel" aria-labelledby="workflowInitialTab">
-          <button class="workflow-step-button" type="button" data-workflow-step="1">1. 교육과정 편제표 작성</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="2" data-step-phase="initial">1차 신청 · 학년별 수강신청</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="3" data-step-phase="initial">1차 수강신청 확인서 발급</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="4" data-step-phase="initial">1차 수강신청 집계표</button>
-          <button class="workflow-step-button hidden" type="button" data-workflow-step="5" data-step-phase="followup">① 폐강 검토 (1차 결과)</button>
-          <button class="workflow-step-button hidden" type="button" data-workflow-step="2" data-step-phase="followup">② 2차 수강신청</button>
-          <button class="workflow-step-button hidden" type="button" data-workflow-step="6" data-step-phase="followup">③ 2차 수강신청 확인서 발급</button>
-          <button class="workflow-step-button hidden" type="button" data-workflow-step="4" data-step-phase="followup">2차 수강신청 집계표</button>
-          <button class="workflow-step-button hidden" type="button" data-workflow-step="7" data-step-phase="followup">④ 개설/폐강 과목 확정</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="8">8. 3차 수강신청 대상자</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="9">9. 시간표용 그룹화</button>
-          <button class="workflow-step-button" type="button" data-workflow-step="10">10. 시간표 작성</button>
+        <div class="workflow-steps" id="workflowSteps">
+          <button class="workflow-step-button" type="button" data-workflow-step="1">1. 편제표 수정</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="2">2. 학년별 수강신청</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="3">3. 학년별 확인서 발급</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="4">4. 학년별 집계표</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="5">5. 이동수업 반편성</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="6">6. 시간표 작성</button>
         </div>
       </section>
     </aside>
@@ -1126,7 +1116,7 @@
       </section>
       <section class="workflow-step-panel hidden" id="workflowStep2Panel">
         <h3>2단계 · 학년별 수강신청</h3>
-        <p class="note">1학년은 2학년 때 들을 과목, 2학년은 3학년 때 들을 과목을 신청받은 결과 파일(.xlsx)을 차수별로 불러옵니다. 차수를 선택한 뒤 명단을 올리면 해당 차수에 저장되며, 1차 결과를 보관한 채 2차·3차를 추가로 불러와 전환해 볼 수 있습니다.</p>
+        <p class="note">1학년은 2학년 때 들을 과목, 2학년은 3학년 때 들을 과목을 신청받습니다. 기본 1차에서 시작하며 필요할 때 차수를 추가해 결과를 분리해서 관리합니다.</p>
         <div class="group-scope-tabs" role="tablist" aria-label="수강신청 현재 학년 선택">
           <button class="button" id="applicationGrade1Tab" role="tab" aria-selected="true" aria-controls="applicationGradeWorkspace" type="button">1학년 → 2학년 수강신청</button>
           <button class="button" id="applicationGrade2Tab" role="tab" aria-selected="false" aria-controls="applicationGradeWorkspace" tabindex="-1" type="button">2학년 → 3학년 수강신청</button>
@@ -1150,12 +1140,9 @@
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
         <p class="note">온라인 신청 결과는 자동으로 집계표에 연동됩니다. 차수를 선택해 해당 결과를 확인하세요.</p>
-        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하며 다른 학년은 유지합니다. 확인서·집계표는 회차별 두 학년 데이터를 함께 사용하며, 회차 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
-        <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택">
-          <button class="round-tab" type="button" role="tab" data-round="1" aria-selected="true">1차</button>
-          <button class="round-tab" type="button" role="tab" data-round="2" aria-selected="false">2차</button>
-          <button class="round-tab" type="button" role="tab" data-round="3" aria-selected="false">3차</button>
-        </div>
+        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하며 다른 학년은 유지합니다. 확인서·집계표는 차수별 두 학년 데이터를 함께 사용하며, 차수 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
+        <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택"></div>
+        <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
         <div id="developerResultUpload" class="hidden">
         <p class="note">개발자 전용 · 선택한 학년·차수의 결과 엑셀을 업로드하면 해당 학년만 교체해 확인서·집계표에 반영합니다. 다른 학년은 유지됩니다. 온라인 연동 차수는 먼저 연동을 해제하세요.</p>
         <div class="dropzone" id="dropzone">
@@ -1168,26 +1155,27 @@
         </div>
         <div class="file-name" id="fileName">불러온 파일 없음</div>
         <div style="margin-top:10px">
-          <button class="button" id="resetData" type="button">선택한 회차 데이터 삭제 (두 학년 전체)</button>
+          <button class="button" id="resetData" type="button">선택한 차수 데이터 삭제 (두 학년 전체)</button>
         </div>
         <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
         </div>
         <div class="round-status-list" id="roundStatusList"></div>
         </section>
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
-          <h3>온라인 수강신청 · Supabase</h3>
-          <p class="note">교사는 구글 로그인 후 명렬을 업로드하면 신청이 생성됩니다. 학생은 이 웹사이트의 공통 학생 입구에서 개인 코드만 입력합니다. 명렬과 신청은 공통 서버에 저장되며 각 교사는 본인이 생성한 신청만 관리할 수 있습니다. 이메일 인증번호나 SMTP 설정은 필요 없습니다.</p>
+          <h3>온라인 신청 관리</h3>
+          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달</p>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
           </div>
           <div class="hidden" id="cloudTeacherControls">
             <p id="cloudTeacherAccount"></p>
             <button class="button" id="cloudTeacherLogout" type="button">로그아웃</button>
-            <p class="note">업로드마다 별도 신청이 생성됩니다. 학교·차수별 링크와 6자리 코드를 안내문으로 출력해 개별 전달하세요. 기존 신청은 전체 학생 코드 재발급으로 6자리로 전환할 수 있습니다. 이전 코드는 모두 무효화되며 신청 결과는 유지됩니다.</p>
+            <p class="note">신청을 생성한 뒤 학생별 코드를 저장하고 안내문을 전달하세요.</p>
             <label class="file-button" for="cloudRosterInput">① 학생 명렬 업로드 · 신청 학년 확인</label>
             <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
             <p id="cloudRosterSummary" role="status">명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.</p>
             <button class="button" id="cloudCreateEvent" type="button" disabled>② 그룹 설정 완료 · 수강신청 생성</button>
+            <button class="button" id="cloudPreviewStudent" type="button">학생 화면 미리보기</button>
             <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
             <button class="button" id="cloudPrintCodes" type="button">학생 코드 메일머지 출력창</button>
             <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>
@@ -1198,14 +1186,10 @@
             <p id="cloudSyncStatus" role="status" aria-live="polite">연동된 신청은 로그인 중 30초마다 집계표에 반영됩니다.</p>
           </div>
           <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
-          <details class="google-form-guide">
-            <summary>최초 운영자 설정 (교사별 Apps Script 배포 불필요)</summary>
-            <p class="note">신규 설치는 Supabase SQL Editor에서 setup.sql → upgrade-codes-history.sql → upgrade-selection-groups.sql → upgrade-semester-groups.sql 순서로 실행하세요(supabase 폴더). 기존 설치는 아직 실행하지 않은 업데이트만 한 번 실행합니다. Google 로그인 제공자 연결도 필요하며 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요.</p>
-          </details>
         </section>
         </div>
       </section>
-      <section class="workflow-placeholder hidden" id="workflowStep10Panel">
+      <section class="workflow-placeholder hidden" id="workflowStep6Panel">
         시간표 작성 단계입니다. 교시/교실 제약 기반 시간표 편성 화면을 여기에 확장할 수 있도록 구조를 준비했습니다.
       </section>
 
@@ -1218,7 +1202,7 @@
             <p class="panel-subtitle">인쇄물에 표시할 정보를 필요에 맞게 수정하세요.</p>
             <div class="settings-grid">
               <div class="field"><label for="schoolYear">학년도</label><input id="schoolYear" type="number" value="2026" min="2000" max="2100"></div>
-              <div class="field"><label for="round">신청 차수</label><input id="round" type="text" value="3차"></div>
+              <div class="field"><label for="round">신청 차수</label><input id="round" type="text" value="1차"></div>
               <div class="field field-wide"><label for="confirmDate">확인 날짜</label><input id="confirmDate" type="text" value="2026. 9. 28."></div>
               <div class="field field-wide"><label for="schoolName">학교명</label><input id="schoolName" type="text" value="천상고등학교"></div>
             </div>
@@ -1261,7 +1245,7 @@
           <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
           <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
         </div>
-        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 과목 그룹화는 9단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
+        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 이동수업 반편성은 5단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
         <div class="aggregate-content" id="aggregateContent"></div>
       </section>
       <section class="panel hidden" id="closurePanel">
@@ -1272,15 +1256,15 @@
       </section>
       <section class="panel hidden" id="retakePanel">
         <div class="roster-header">
-          <div><h2 class="panel-heading">3차 수강신청 대상자</h2><p class="panel-subtitle" id="retakeDescription">폐강이 확정된 과목을 신청한 학생 명단입니다.</p></div>
+          <div><h2 class="panel-heading">다음 차수 수강신청 대상자</h2><p class="panel-subtitle" id="retakeDescription">폐강이 확정된 과목을 신청한 학생 명단입니다.</p></div>
           <button class="button button-primary" id="downloadRetakeList" type="button">대상자 명단 엑셀 다운로드</button>
         </div>
-        <p class="aggregate-note">3차 수강신청 결과 파일은 2단계에서 3차를 선택해 불러오세요.</p>
+        <p class="aggregate-note" id="retakeNextRoundNote">다음 차수 결과는 2단계에서 차수를 추가한 뒤 불러오세요.</p>
         <div class="aggregate-content" id="retakeContent"></div>
       </section>
       <section class="panel hidden" id="classifierPanel">
         <div class="roster-header">
-          <div><h2 class="panel-heading">시간표용 그룹화</h2><p class="panel-subtitle">새 그룹을 만든 뒤 과목 카드를 드래그해 분류합니다.</p></div>
+          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">새 반을 만든 뒤 과목 카드를 드래그해 이동수업 그룹으로 편성합니다.</p></div>
         </div>
         <div class="semester-classifier" id="semesterClassifier"></div>
       </section>
@@ -1288,6 +1272,10 @@
     </main>
   </div>
   <div id="printBatch" aria-hidden="true"></div>
+  <dialog id="cloudStudentPreviewDialog" style="width:min(850px, calc(100vw - 40px));max-height:90vh;overflow:auto">
+    <div class="main-heading"><div><h2>학생 화면 미리보기</h2><p>가상 학생으로 확인합니다. 선택·제출 내용은 저장되지 않습니다.</p></div><button class="button" id="cloudStudentPreviewClose" type="button">닫기</button></div>
+    <div id="cloudStudentPreviewContent"></div>
+  </dialog>
   <dialog id="cloudCodeDialog">
     <h2>학생별 수강신청 안내문 메일머지</h2>
     <p>학생마다 별도 안내문을 출력합니다. 인쇄 창에서 PDF로 저장할 수도 있습니다.</p>
@@ -1333,7 +1321,7 @@ function uploadCourseSetup(key, raw) {
     var props = PropertiesService.getScriptProperties();
     if (props.getProperty('DATABASE_ID')) throw new Error('이미 설정되었습니다. 다른 차수는 새 Apps Script 프로젝트로 배포하세요.');
     var data = JSON.parse(raw);
-    if (data.type !== 'course-application-setup' || !/^[123]$/.test(String(data.round)) ||
+    if (data.type !== 'course-application-setup' || !/^[1-9][0-9]{0,8}$/.test(String(data.round)) ||
         !Array.isArray(data.roster) || !data.roster.length || data.roster.length > 10000 ||
         !data.subjects || !Array.isArray(data.subjects['2']) || !Array.isArray(data.subjects['3'])) {
       throw new Error('이 프로그램에서 생성한 온라인 신청 설정 JSON을 선택하세요.');
@@ -1567,10 +1555,10 @@ function courseClient_() {
       curriculumSelectedRow: null,
       curriculumSelectedColumn: null,
       curriculumPlanFilters: { grade: "", division: "", area: "", detail: "", query: "" },
-      workflowStep: 3,
+      workflowStep: 1,
       currentRound: "1",
-      rounds: { "1": null, "2": null, "3": null },
-      roundClosures: { "1": {}, "2": {} },
+      rounds: { "1": null },
+      roundClosures: { "1": {} },
       applicationImportRevision: 0,
     };
     const STORAGE_KEY = "course-certificate-studio-v1";
@@ -1693,7 +1681,7 @@ function courseClient_() {
 
     // 현재 활성 차수 데이터를 rounds에 동기화한다.
     function syncActiveRound() {
-      if (!state.rounds || typeof state.rounds !== "object") state.rounds = { "1": null, "2": null, "3": null };
+      if (!state.rounds || typeof state.rounds !== "object") state.rounds = { "1": null };
       if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
         state.rounds[state.currentRound] = {
           fileName: state.fileName,
@@ -1740,7 +1728,6 @@ function courseClient_() {
           curriculumBundleName: state.curriculumBundleName,
           curriculumBundlePick: state.curriculumBundlePick,
           workflowStep: state.workflowStep,
-          workflowPhase: state.workflowPhase,
           openingPercent: $("#openingPercent").value,
           divisionPercent: $("#divisionPercent").value,
           schoolYear: $("#schoolYear").value,
@@ -1760,57 +1747,54 @@ function courseClient_() {
 
     function renderWorkflowLayout() {
       const step = Number(state.workflowStep) || 3;
-      const phase = [5,6,7].includes(step) ? "followup" : step === 3 ? "initial" :
-        state.workflowPhase || "initial";
-      state.workflowPhase = phase;
       renderCurriculumStep();
       renderRoundStatus();
       renderApplicationSubjects();
       for (const button of workflowSteps.querySelectorAll("[data-workflow-step]")) {
-        const visible = !button.dataset.stepPhase || button.dataset.stepPhase === phase;
-        button.classList.toggle("hidden", !visible);
-        button.setAttribute("aria-current", visible && Number(button.dataset.workflowStep) === step ? "step" : "false");
+        button.setAttribute("aria-current", Number(button.dataset.workflowStep) === step ? "step" : "false");
       }
-      for (const [id, value] of [["workflowInitialTab","initial"],["workflowFollowupTab","followup"]]) {
-        $("#" + id).setAttribute("aria-selected", String(phase === value));
-        $("#" + id).setAttribute("tabindex", phase === value ? "0" : "-1");
-      }
-      workflowSteps.setAttribute("aria-labelledby", phase === "followup" ? "workflowFollowupTab" : "workflowInitialTab");
-      $("#workflowStep2Panel").querySelector("h3").textContent = `${phase === "followup" ? "2차" : "1차"} · 학년별 수강신청`;
+      $("#workflowStep2Panel").querySelector("h3").textContent = "2단계 · 학년별 수강신청";
       $("#workflowStep1Panel").classList.toggle("hidden", step !== 1);
       $("#workflowStep2Panel").classList.toggle("hidden", step !== 2);
-      $("#workflowStep10Panel").classList.toggle("hidden", step !== 10);
-      $("#certificatePanel").classList.toggle("hidden", !(step === 3 || step === 6));
+      $("#workflowStep6Panel").classList.toggle("hidden", step !== 6);
+      $("#certificatePanel").classList.toggle("hidden", step !== 3);
       $("#aggregatePanel").classList.toggle("hidden", step !== 4);
-      $("#closurePanel").classList.toggle("hidden", !(step === 5 || step === 7));
-      $("#retakePanel").classList.toggle("hidden", step !== 8);
-      $("#classifierPanel").classList.toggle("hidden", step !== 9);
-      if (step === 5 || step === 7) renderClosurePanel(step === 5 ? "1" : "2");
-      if (step === 8) renderRetakePanel();
+      $("#closurePanel").classList.toggle("hidden", step !== 4);
+      $("#retakePanel").classList.toggle("hidden", step !== 4);
+      $("#classifierPanel").classList.toggle("hidden", step !== 5);
+      if (step === 4) {
+        renderClosurePanel(state.currentRound);
+        renderRetakePanel();
+      }
     }
 
     function switchWorkflowStep(step, skipPersist = false) {
       const next = Number(step);
-      state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(next) ? next : 3;
-      if ([5,6,7].includes(state.workflowStep)) state.workflowPhase = "followup";
-      if (state.workflowStep === 3) state.workflowPhase = "initial";
-      // 단계와 연동된 차수를 자동 선택한다. 5단계=1차, 6·7단계=2차, 8단계=3차.
-      const stepRound = { 3: "1", 5: "1", 6: "2", 7: "2", 8: "3" }[state.workflowStep] ||
-        ([2,4].includes(state.workflowStep) ? (state.workflowPhase === "followup" ? "2" : "1") : null);
-      if (stepRound && stepRound !== state.currentRound) switchRound(stepRound, true);
+      state.workflowStep = [1, 2, 3, 4, 5, 6].includes(next) ? next : 1;
       renderWorkflowLayout();
       if (!skipPersist) persistState();
     }
 
-    function switchWorkflowPhase(phase) {
-      if (!["initial", "followup"].includes(phase)) return;
-      state.workflowPhase = phase;
-      switchWorkflowStep(phase === "followup" ? 5 : 2);
+    function applicationRoundNumbers() {
+      const rounds = new Set(["1", ...Object.keys(state.rounds || {})]);
+      return [...rounds].filter((round) => /^[1-9]\d{0,8}$/.test(round) && Number.isSafeInteger(Number(round)))
+        .sort((a, b) => Number(a) - Number(b));
+    }
+
+    function addApplicationRound() {
+      const rounds = applicationRoundNumbers();
+      const nextNumber = Math.max(...rounds.map(Number)) + 1;
+      if (!Number.isSafeInteger(nextNumber) || nextNumber > 999999999) throw new Error("추가할 차수 번호가 너무 큽니다.");
+      const next = String(nextNumber);
+      state.rounds[next] = null;
+      state.roundClosures[next] = {};
+      switchRound(next);
     }
 
     // 차수를 전환한다. 현재 활성 데이터를 rounds에 저장하고 대상 차수 데이터를 활성화한다.
     function switchRound(round, skipRender = false) {
-      const next = ["1", "2", "3"].includes(String(round)) ? String(round) : "1";
+      const next = String(round);
+      if (!/^[1-9]\d{0,8}$/.test(next) || !Object.hasOwn(state.rounds || {}, next)) return;
       if (next === state.currentRound) return;
       syncActiveRound();
       state.currentRound = next;
@@ -1873,8 +1857,8 @@ function courseClient_() {
       state.fileName = "";
       state.classOverrides = {};
       state.currentRound = "1";
-      state.rounds = { "1": null, "2": null, "3": null };
-      state.roundClosures = { "1": {}, "2": {} };
+      state.rounds = { "1": null };
+      state.roundClosures = { "1": {} };
       state.semesterAssignments = {};
       state.customGroupNames = [];
       state.groupAssignments = {};
@@ -1900,7 +1884,7 @@ function courseClient_() {
       state.curriculumSelectedRow = null;
       state.curriculumSelectedColumn = null;
       state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
-      state.workflowStep = 3;
+      state.workflowStep = 1;
       $("#fileName").textContent = "불러온 파일 없음";
       $("#round").value = "1차";
       $("#closureContent").innerHTML = "";
@@ -1931,7 +1915,7 @@ function courseClient_() {
       const curriculumInput = $("#curriculumInput");
       if (curriculumInput) curriculumInput.value = "";
       renderPreview();
-      state.workflowStep = 3;
+      state.workflowStep = 1;
       renderWorkflowLayout();
       if (clearSaved) clearPersistedState();
     }
@@ -1950,6 +1934,7 @@ function courseClient_() {
           if (!data || !Array.isArray(data.students) || !data.students.length) return null;
           return {
             fileName: String(data.fileName || ""),
+            gradeFiles: data.gradeFiles && typeof data.gradeFiles === "object" ? data.gradeFiles : {},
             students: data.students,
             courses: normalizeCourses(Array.isArray(data.courses) ? data.courses : []),
             classOverrides: data.classOverrides && typeof data.classOverrides === "object" ? data.classOverrides : {},
@@ -1959,25 +1944,21 @@ function courseClient_() {
           };
         };
         if (saved.rounds && typeof saved.rounds === "object") {
-          state.rounds = {
-            "1": normalizeRoundData(saved.rounds["1"]),
-            "2": normalizeRoundData(saved.rounds["2"]),
-            "3": normalizeRoundData(saved.rounds["3"])
-          };
+          state.rounds = Object.fromEntries(Object.entries(saved.rounds)
+            .filter(([round]) => /^[1-9]\d{0,8}$/.test(round))
+            .map(([round, data]) => [round, normalizeRoundData(data)]));
+          if (!state.rounds["1"]) state.rounds["1"] = null;
         } else {
-          state.rounds = {
-            "1": normalizeRoundData({ fileName: saved.fileName, students: saved.students, courses: saved.courses, classOverrides: saved.classOverrides }),
-            "2": null,
-            "3": null
-          };
+          state.rounds = { "1": normalizeRoundData({ fileName: saved.fileName, students: saved.students, courses: saved.courses, classOverrides: saved.classOverrides }) };
         }
-        state.currentRound = ["1", "2", "3"].includes(String(saved.currentRound)) ? String(saved.currentRound) : "1";
+        const savedRound = String(saved.currentRound || "1");
+        if (!/^[1-9]\d{0,8}$/.test(savedRound) || !Number.isSafeInteger(Number(savedRound))) throw new Error("invalid");
+        state.currentRound = savedRound;
+        if (!Object.hasOwn(state.rounds, state.currentRound)) state.rounds[state.currentRound] = null;
         state.roundClosures = saved.roundClosures && typeof saved.roundClosures === "object"
-          ? {
-            "1": saved.roundClosures["1"] && typeof saved.roundClosures["1"] === "object" ? saved.roundClosures["1"] : {},
-            "2": saved.roundClosures["2"] && typeof saved.roundClosures["2"] === "object" ? saved.roundClosures["2"] : {}
-          }
-          : { "1": {}, "2": {} };
+          ? Object.fromEntries(applicationRoundNumbers().map((round) =>
+            [round, saved.roundClosures[round] && typeof saved.roundClosures[round] === "object" ? saved.roundClosures[round] : {}]))
+          : Object.fromEntries(applicationRoundNumbers().map((round) => [round, {}]));
         const activeRound = state.rounds[state.currentRound];
         state.students = activeRound ? activeRound.students : [];
         state.courses = activeRound ? activeRound.courses : [];
@@ -2027,11 +2008,8 @@ function courseClient_() {
         state.curriculumBundlePick = Math.max(1, Number(saved.curriculumBundlePick) || 1);
         state.selectedCourseColumns = [];
         state.lastSelectedCourseColumn = null;
-        state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(Number(saved.workflowStep))
-          ? Number(saved.workflowStep)
-          : 3;
-        state.workflowPhase = ["initial", "followup"].includes(saved.workflowPhase) ? saved.workflowPhase :
-          ([5,6,7].includes(state.workflowStep) || ([2,4].includes(state.workflowStep) && state.currentRound === "2") ? "followup" : "initial");
+        const savedStep = Number(saved.workflowStep);
+        state.workflowStep = ({1:1, 2:2, 3:3, 4:4, 5:4, 6:3, 7:4, 8:4, 9:5, 10:6})[savedStep] || 1;
 
         $("#fileName").textContent = state.fileName || "불러온 파일 없음";
         $("#openingPercent").value = saved.openingPercent || "90";
@@ -3667,7 +3645,7 @@ function courseClient_() {
         }).join("");
         const displayGrade = Number(summary.grade) + 1;
         return `<section class="aggregate-grade">
-          <h3 class="aggregate-grade-heading">${displayGrade}학년(현${summary.grade}학년) 수강신청결과(${escapeHtml($("#round").value || "3차")})<span class="aggregate-grade-date">${escapeHtml($("#confirmDate").value)}</span></h3>
+          <h3 class="aggregate-grade-heading">${displayGrade}학년(현${summary.grade}학년) 수강신청결과(${escapeHtml($("#round").value || "1차")})<span class="aggregate-grade-date">${escapeHtml($("#confirmDate").value)}</span></h3>
           <div class="aggregate-kpis">
             <div class="aggregate-kpi"><span class="aggregate-kpi-label">총학생수</span><span class="aggregate-kpi-value">${summary.students}</span></div>
             <div class="aggregate-kpi"><span class="aggregate-kpi-label">학급당 학생수</span><span class="aggregate-kpi-value">${summary.averageClassSize.toFixed(2)}</span></div>
@@ -3685,16 +3663,16 @@ function courseClient_() {
 
     // 차수 탭·배지·차수별 보관 현황을 동기화한다.
     function renderRoundStatus() {
-      for (const tab of document.querySelectorAll("#roundSelector [data-round]")) {
-        tab.setAttribute("aria-selected", tab.dataset.round === state.currentRound ? "true" : "false");
-      }
+      $("#roundSelector").innerHTML = applicationRoundNumbers().map((round) =>
+        `<button class="round-tab" type="button" role="tab" data-round="${round}" aria-selected="${round === state.currentRound}">${round}차</button>`
+      ).join("");
       const badge = $("#certificateRoundBadge");
       if (badge) badge.textContent = `${state.currentRound}차`;
       const aggregateBadge = $("#aggregateRoundBadge");
       if (aggregateBadge) aggregateBadge.textContent = `${state.currentRound}차`;
       const list = $("#roundStatusList");
       if (!list) return;
-      list.innerHTML = ["1", "2", "3"].map((round) => {
+      list.innerHTML = applicationRoundNumbers().map((round) => {
         const data = state.rounds?.[round];
         const students = data?.students.filter((student) => String(student.grade) === (state.applicationMenuGrade || "1")) || [];
         const info = data
@@ -3708,10 +3686,10 @@ function courseClient_() {
       }).join("");
     }
 
-    // 폐강 검토(5단계: 1차 기준)와 개설/폐강 확정(7단계: 2차 기준) 패널을 그린다.
+    // 현재 차수의 개설·폐강 검토를 집계표와 함께 표시한다.
     function renderClosurePanel(round) {
       const data = state.rounds?.[round];
-      $("#closureTitle").textContent = round === "1" ? "폐강 검토 (1차 결과)" : "개설/폐강 과목 확정";
+      $("#closureTitle").textContent = `${round}차 개설/폐강 검토`;
       const description = $("#closureDescription");
       const content = $("#closureContent");
       if (!data) {
@@ -3719,9 +3697,7 @@ function courseClient_() {
         content.innerHTML = "";
         return;
       }
-      description.textContent = round === "1"
-        ? "1차 결과 기준입니다. 신청 인원이 개설기준보다 적은 과목은 폐강 예정으로 표시됩니다. 검토를 마치면 같은 탭의 ‘② 2차 수강신청’에서 온라인 신청을 생성하거나 결과를 불러오세요."
-        : "2차 결과 기준으로 개설/폐강을 최종 확정합니다. 폐강으로 확정된 과목은 8단계의 3차 수강신청 대상자 명단에 반영됩니다.";
+      description.textContent = `${round}차 결과 기준입니다. 개설기준과 자동 판정을 참고해 과목별 개설/폐강 여부를 검토하세요.`;
       const openingPercent = Number($("#openingPercent").value) || 90;
       const divisionPercent = Number($("#divisionPercent").value) || 110;
       const aggregate = aggregateRecords(
@@ -3758,22 +3734,34 @@ function courseClient_() {
       }).join("");
     }
 
-    // 폐강 확정 과목을 신청한 3차 수강신청 대상자를 계산한다. 2차 확정이 우선이고, 없으면 1차 확정을 사용한다.
+    // 등록된 차수별 폐강 결정을 종합해 마지막 신청 명단의 대상을 계산한다.
     function retakeTargets() {
-      const sourceRound = state.rounds?.["2"] ? "2" : "1";
+      const rounds = applicationRoundNumbers();
+      const sourceRound = [...rounds].reverse().find((round) => state.rounds?.[round]) || "1";
       const data = state.rounds?.[sourceRound] || null;
-      // 최종 확정은 2차가 우선한다. 2차 데이터가 없으면 1차 확정만 사용한다.
-      const closures = sourceRound === "2"
-        ? { ...(state.roundClosures["1"] || {}), ...(state.roundClosures["2"] || {}) }
-        : { ...(state.roundClosures["1"] || {}) };
-      const closedKeys = new Set(Object.entries(closures)
+      const decisions = new Map();
+      for (const round of rounds) {
+        const roundData = state.rounds?.[round];
+        for (const [key, verdict] of Object.entries(state.roundClosures?.[round] || {})) {
+          if (verdict !== "open" && verdict !== "closed") continue;
+          const separator = key.indexOf(":");
+          if (separator < 1 || !roundData) continue;
+          const grade = key.slice(0, separator);
+          const column = key.slice(separator + 1);
+          const course = roundData.courses.find((item) =>
+            String(item.column) === column &&
+            (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === grade));
+          if (course) decisions.set(`${grade}:${course.name}`, verdict);
+        }
+      }
+      const closedKeys = new Set([...decisions]
         .filter(([, value]) => value === "closed")
         .map(([key]) => key));
       const rows = [];
       if (data) {
         for (const student of data.students) {
           const closedCourses = student.selections.filter((selection) =>
-            closedKeys.has(`${student.grade}:${selection.column}`));
+            closedKeys.has(`${student.grade}:${selection.name}`));
           if (closedCourses.length) {
             rows.push({ student, courses: closedCourses.map((selection) => selection.name) });
           }
@@ -3784,8 +3772,11 @@ function courseClient_() {
 
     function renderRetakePanel() {
       const { sourceRound, data, rows, closedCount } = retakeTargets();
+      const nextRound = String(Number(sourceRound) + 1);
       const description = $("#retakeDescription");
       const content = $("#retakeContent");
+      $("#retakePanel h2").textContent = `${nextRound}차 수강신청 대상자`;
+      $("#retakeNextRoundNote").textContent = `${nextRound}차 결과는 2단계에서 차수를 추가한 뒤 불러오세요.`;
       $("#downloadRetakeList").disabled = !rows.length;
       if (!data) {
         description.textContent = "수강신청 데이터가 없습니다. 2단계에서 명단을 불러오세요.";
@@ -3793,7 +3784,7 @@ function courseClient_() {
         return;
       }
       if (!closedCount) {
-        description.textContent = "폐강으로 확정된 과목이 없습니다. 5·7단계에서 폐강을 확정하세요.";
+        description.textContent = "폐강으로 확정된 과목이 없습니다. 4단계 집계표 아래에서 개설/폐강을 검토하세요.";
         content.innerHTML = "";
         return;
       }
@@ -3820,7 +3811,7 @@ function courseClient_() {
       const workbook = createXlsxBlob({
         "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
         "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-        "xl/workbook.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="3차 대상자" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${nextRound}차 대상자" sheetId="1" r:id="rId1"/></sheets></workbook>`,
         "xl/_rels/workbook.xml.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
         "xl/worksheets/sheet1.xml": sheetXml,
         "xl/styles.xml": createStylesXml()
@@ -3828,7 +3819,7 @@ function courseClient_() {
       const link = document.createElement("a");
       const url = URL.createObjectURL(workbook);
       link.href = url;
-      link.download = `3차_수강신청_대상자(${sourceRound}차_기준).xlsx`;
+      link.download = `${Number(sourceRound) + 1}차_수강신청_대상자(${sourceRound}차_기준).xlsx`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
@@ -4286,9 +4277,14 @@ function courseClient_() {
 
     // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
     function applyCloudApplicationResults(round, entries, subjects) {
-      if (!["1", "2", "3"].includes(String(round))) throw new Error("연동할 신청 차수를 확인하세요.");
+      round = String(round);
+      if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
       const merged = mergeApplications(entries, subjects);
       if (merged.errors.length) throw new Error(`집계표 연동 실패: ${merged.errors[0]}`);
+      state.rounds ||= {"1":null};
+      state.rounds[round] ||= null;
+      state.roundClosures ||= {};
+      state.roundClosures[round] ||= {};
       syncActiveRound();
       const previous = state.rounds[round];
       const data = {
@@ -4387,7 +4383,7 @@ function courseClient_() {
         state[key] = Object.fromEntries(Object.entries(state[key] || {}).filter(([column]) => otherColumns.has(column)));
       }
       state.customGroupNames ||= [];
-      state.rounds ||= {"1":null,"2":null,"3":null};
+      state.rounds ||= {"1":null};
       const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
       state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
       state.fileName = Object.entries(gradeFiles).map(([g,name]) => `${g}학년: ${name}`).join(" / ");
@@ -4643,7 +4639,7 @@ function courseClient_() {
         if (semesterIndex === 0) {
           row = addRow(34);
           const futureGrade = Number(summary.grade) + 1;
-          setCell(row, 0, `${futureGrade}학년(현${summary.grade}학년) 수강신청결과(${$("#round").value || "3차"})`, 1);
+          setCell(row, 0, `${futureGrade}학년(현${summary.grade}학년) 수강신청결과(${$("#round").value || "1차"})`, 1);
           merge(0, row, lastColumn - 1, row);
           setCell(row, lastColumn, shortDate, 10);
 
@@ -4887,7 +4883,7 @@ function courseClient_() {
         try {
           const sheets = await parseWorkbook(reader.result);
           if (!isDeveloperAccount()) throw new Error("개발자 계정으로 다시 로그인하세요.");
-          if (state.currentRound !== uploadRound) throw new Error("파일을 읽는 중 회차가 바뀌었습니다. 해당 회차에서 다시 업로드하세요.");
+          if (state.currentRound !== uploadRound) throw new Error("파일을 읽는 중 차수가 바뀌었습니다. 해당 차수에서 다시 업로드하세요.");
           if ((state.applicationMenuGrade || "1") !== uploadGrade) throw new Error("파일을 읽는 중 학년 메뉴가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
           if (state.applicationImportRevision !== importRevision) throw new Error("파일을 읽는 중 데이터가 삭제되었습니다. 다시 업로드하세요.");
           if (sheets[0]?.rows[0]?.[0] === "차수" && sheets[0].rows[0][5] === "선택과목") {
@@ -5744,24 +5740,23 @@ function courseClient_() {
     workflowSteps.addEventListener("click", (event) => {
       const button = event.target.closest("[data-workflow-step]");
       if (!button) return;
-      if (button.dataset.stepPhase) state.workflowPhase = button.dataset.stepPhase;
       switchWorkflowStep(button.dataset.workflowStep);
     });
-    for (const id of ["workflowInitialTab", "workflowFollowupTab"]) {
-      $("#" + id).addEventListener("click", (event) => switchWorkflowPhase(event.currentTarget.dataset.workflowPhase));
-      $("#" + id).addEventListener("keydown", (event) => {
-        const phase = event.key === "Home" ? "initial" : event.key === "End" ? "followup" :
-          ["ArrowLeft", "ArrowRight"].includes(event.key) ? (state.workflowPhase === "followup" ? "initial" : "followup") : null;
-        if (!phase) return;
-        event.preventDefault();
-        switchWorkflowPhase(phase);
-        $(phase === "followup" ? "#workflowFollowupTab" : "#workflowInitialTab").focus();
-      });
-    }
     $("#roundSelector").addEventListener("click", (event) => {
       const tab = event.target.closest("[data-round]");
       if (!tab) return;
       switchRound(tab.dataset.round);
+    });
+    $("#addApplicationRound").addEventListener("click", () => {
+      try {
+        if (typeof requireTeacherLogin !== "function" || !requireTeacherLogin()) return;
+        addApplicationRound();
+        status.style.color = "#287956";
+        status.textContent = `${state.currentRound}를 추가했습니다.`;
+      } catch (error) {
+        status.style.color = "#a44939";
+        status.textContent = error instanceof Error ? error.message : "차수를 추가하지 못했습니다.";
+      }
     });
     $("#roundStatusList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-view-round]");
@@ -5778,18 +5773,18 @@ function courseClient_() {
       else delete state.roundClosures[round][key];
       persistState();
       renderAggregate();
-      if (Number(state.workflowStep) === 8) renderRetakePanel();
+      if (Number(state.workflowStep) === 4) renderRetakePanel();
     });
     $("#downloadRetakeList").addEventListener("click", downloadRetakeList);
     resetDataButton.addEventListener("click", () => {
       if (typeof requireTeacherLogin !== "function" || !requireTeacherLogin()) return;
-      if (!window.confirm(`${state.currentRound}차의 명단·신청 결과·폐강 검토만 삭제할까요? 편제표와 다른 회차는 유지하며 서버 신청은 삭제하지 않습니다. 자동 연동은 해제됩니다.`)) return;
+      if (!window.confirm(`${state.currentRound}차의 명단·신청 결과·폐강 검토만 삭제할까요? 편제표와 다른 차수는 유지하며 서버 신청은 삭제하지 않습니다. 자동 연동은 해제됩니다.`)) return;
       try {
         if (typeof unlinkApplicationRound === "function") unlinkApplicationRound(state.currentRound);
         clearApplicationRound();
         status.style.color = "#596780";
-        status.textContent = `${state.currentRound}차 데이터만 삭제했습니다. 편제표와 다른 회차는 유지됩니다.`;
-      } catch (error) { status.textContent = `회차 삭제 실패: ${error.message}`; }
+        status.textContent = `${state.currentRound}차 데이터만 삭제했습니다. 편제표와 다른 차수는 유지됩니다.`;
+      } catch (error) { status.textContent = `차수 삭제 실패: ${error.message}`; }
     });
     dropzone.addEventListener("dragover", (event) => { event.preventDefault(); dropzone.classList.add("dragover"); });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
@@ -5802,9 +5797,9 @@ function courseClient_() {
     window.addEventListener("hashchange", () => window.location.reload());
     if (!showStudentApplicationEntry()) restorePersistedState();
   </script>
-  <script src="course-groups.js?v=20261007-group-layout" defer></script>
-  <script src="curriculum-workbook.js?v=20261007-group-layout" defer></script>
+  <script src="course-groups.js?v=20261007-student-preview" defer></script>
+  <script src="curriculum-workbook.js?v=20261007-student-preview" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261007-group-layout" defer></script>
+  <script src="supabase-client.js?v=20261007-student-preview" defer></script>
 </body>
 </html>

@@ -547,45 +547,76 @@ test("developer results replace only the chosen grade and retain courses, settin
   assert.deepEqual(plain(state),previous);
 });
 
-test("workflow phase tabs route follow-up actions to the correct round and keep shared menus available", () => {
+test("six workflow menus reveal their matching panels without changing the selected round", () => {
   const elements=new Map();
   const element=()=>({attributes:{},hidden:false,textContent:"",
     setAttribute(name,value){this.attributes[name]=value;},
-    classList:{toggle(){}},querySelector(){return element();}});
+    classList:{states:{},toggle(name,value){this.states[name]=value;}},querySelector(){return element();}});
   const buttons=[...html.matchAll(/<button[^>]*data-workflow-step="(\d+)"([^>]*)>/g)].map((match)=>({
-    ...element(),dataset:{workflowStep:match[1],stepPhase:match[2].match(/data-step-phase="([^"]+)"/)?.[1]}
+    ...element(),dataset:{workflowStep:match[1]}
   }));
   for (const button of buttons) button.classList.toggle=(name,value)=>{button.hidden=value;};
   const workflowSteps={...element(),querySelectorAll:()=>buttons};
-  const state={workflowStep:3,currentRound:"1"};
+  const state={workflowStep:1,currentRound:"4"};
   let saved=0;
   const ctx=vm.createContext({state,workflowSteps,
     $:(id)=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);},
     renderCurriculumStep(){},renderRoundStatus(){},renderApplicationSubjects(){},
     renderClosurePanel:(round)=>{ctx.closureRound=round;},renderRetakePanel(){},
-    switchRound:(round)=>{state.currentRound=round;},persistState:()=>{saved++;}});
+    persistState:()=>{saved++;}});
   vm.runInContext(functionSource("function renderWorkflowLayout(", "function switchRound("),ctx);
   ctx.renderWorkflowLayout();
-  assert.equal(elements.get("#workflowInitialTab").attributes["aria-selected"],"true");
-  ctx.switchWorkflowPhase("followup");
-  assert.equal(state.workflowStep,5);
-  assert.equal(ctx.closureRound,"1");
-  assert.equal(elements.get("#workflowFollowupTab").attributes["aria-selected"],"true");
-  assert.ok(buttons.filter((b)=>b.dataset.stepPhase==="initial").every((b)=>b.hidden));
-  assert.ok(buttons.filter((b)=>b.dataset.stepPhase==="followup").every((b)=>!b.hidden));
-  ctx.switchWorkflowStep(2);
-  assert.equal(state.currentRound,"2");
-  assert.equal(state.workflowPhase,"followup");
-  ctx.switchWorkflowStep(6);
-  assert.equal(state.currentRound,"2");
-  ctx.switchWorkflowStep(7);
-  assert.equal(ctx.closureRound,"2");
-  ctx.switchWorkflowPhase("initial");
-  assert.equal(state.currentRound,"1");
+  assert.equal(buttons.length,6);
+  assert.equal(elements.get("#workflowStep1Panel").classList.states.hidden,false);
   ctx.switchWorkflowStep(3);
-  assert.equal(state.workflowPhase,"initial");
-  assert.ok(buttons.filter((b)=>!b.dataset.stepPhase).every((b)=>!b.hidden));
+  assert.equal(elements.get("#certificatePanel").classList.states.hidden,false);
+  ctx.switchWorkflowStep(4);
+  assert.equal(elements.get("#aggregatePanel").classList.states.hidden,false);
+  assert.equal(elements.get("#closurePanel").classList.states.hidden,false);
+  assert.equal(elements.get("#retakePanel").classList.states.hidden,false);
+  assert.equal(ctx.closureRound,"4");
+  ctx.switchWorkflowStep(5);
+  assert.equal(elements.get("#classifierPanel").classList.states.hidden,false);
+  ctx.switchWorkflowStep(6);
+  assert.equal(elements.get("#workflowStep6Panel").classList.states.hidden,false);
+  assert.equal(state.currentRound,"4");
   assert.ok(saved>0);
+});
+
+test("application rounds start at one and can be added sequentially beyond three", () => {
+  const state={rounds:{"1":null,"3":{students:[{id:"preserved"}]}},roundClosures:{"1":{}},currentRound:"1"};
+  const ctx=vm.createContext({state,switchRound:(round)=>{state.currentRound=round;}});
+  vm.runInContext(functionSource("function applicationRoundNumbers(", "function switchRound("),ctx);
+  assert.deepEqual(Array.from(ctx.applicationRoundNumbers()),["1","3"]);
+  ctx.addApplicationRound();
+  assert.deepEqual(Array.from(ctx.applicationRoundNumbers()),["1","3","4"]);
+  assert.equal(state.currentRound,"4");
+  assert.deepEqual(plain(state.roundClosures["4"]),{});
+  assert.equal(state.rounds["3"].students[0].id,"preserved");
+});
+
+test("retake decisions follow course names when column IDs change between rounds", () => {
+  const state={
+    rounds:{
+      "1":{courses:[{column:"old-a",name:"미적분",applicationCurrentGrade:"1"}]},
+      "2":{courses:[
+        {column:"new-a",name:"미적분",applicationCurrentGrade:"1"},
+        {column:"new-b",name:"기하",applicationCurrentGrade:"1"}
+      ],students:[{grade:"1",selections:[
+        {column:"new-a",name:"미적분"},{column:"new-b",name:"기하"}
+      ]}]}
+    },
+    roundClosures:{
+      "1":{"1:old-a":"closed"},
+      "2":{"1:new-a":"open","1:new-b":"closed"}
+    }
+  };
+  const ctx=vm.createContext({state,applicationRoundNumbers:()=>["1","2"]});
+  vm.runInContext(functionSource("function retakeTargets(", "function renderRetakePanel("),ctx);
+  const result=ctx.retakeTargets();
+  assert.equal(result.sourceRound,"2");
+  assert.equal(result.rows.length,1);
+  assert.deepEqual(Array.from(result.rows[0].courses),["기하"]);
 });
 
 test("roster upload exports selected subjects and round without overwriting application results", async () => {

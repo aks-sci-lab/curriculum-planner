@@ -17,7 +17,11 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
       insert into auth.users values('11111111-1111-1111-1111-111111111111'),
         ('22222222-2222-2222-2222-222222222222');
     `);
-    await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "setup.sql"), "utf8"));
+    const legacySetup = fs.readFileSync(path.join(__dirname, "..", "supabase", "setup.sql"), "utf8")
+      .replaceAll("round ~ '^[1-9][0-9]{0,8}$'", "round in ('1', '2', '3')")
+      .replaceAll("coalesce(p_setup->>'round', '') !~ '^[1-9][0-9]{0,8}$'",
+        "coalesce(p_setup->>'round', '') not in ('1', '2', '3')");
+    await db.exec(legacySetup);
     const owner = "11111111-1111-1111-1111-111111111111";
     async function as(role, user = "") {
       await db.exec(`reset role; set role ${role}`);
@@ -117,7 +121,9 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
     await assert.rejects(() => create(), /선택 수/);
     await db.exec("reset role");
     await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "upgrade-semester-groups.sql"), "utf8"));
+    await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "upgrade-application-rounds.sql"), "utf8"));
     await as("authenticated",owner);
+    setup.round="4";
     setup.subjects["2"]=[
       {subject:"수학 (1학기)",semester:"1",credit:3},
       {subject:"수학 (2학기)",semester:"2",credit:3}
@@ -127,6 +133,10 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
       {id:"s2",grade:"2",semester:"2",name:"수학",count:1,courses:["수학 (2학기)"]}
     ];
     const semesters=await create();
+    assert.equal((await db.query("select round from public.course_events where id=$1::uuid",[semesters.id])).rows[0].round,"4");
+    setup.round="1000000000";
+    await assert.rejects(()=>create(),/round|차수|신청 설정/i);
+    setup.round="4";
     setup.groups[0].courses.push("수학 (2학기)");
     await assert.rejects(()=>create(),/다른 학기/);
     await as("anon");

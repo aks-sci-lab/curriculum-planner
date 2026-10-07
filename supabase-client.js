@@ -48,6 +48,8 @@ var updateApplicationGradeControls;
     latestCodes = null;
     printingCodes = null;
     byId("cloudCodeDialog").close();
+    byId("cloudStudentPreviewDialog").close();
+    closeStudentPreview();
     byId("cloudCodePreview").replaceChildren();
     byId("printBatch").replaceChildren();
     pendingRoster = null;
@@ -107,6 +109,7 @@ var updateApplicationGradeControls;
   let latestCodes = null;
   let activeCode = "";
   let application = null;
+  let previewMode = false;
   let studentSemesters = [];
   let studentSemesterIndex = 0;
   let teacherBusy = false;
@@ -149,7 +152,7 @@ var updateApplicationGradeControls;
         credentials: "omit", cache: "no-store",
       });
     } catch (error) {
-      throw new Error("Supabase 서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요.");
+      throw new Error("신청 서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요.");
     }
     const text = await response.text();
     let result;
@@ -160,7 +163,7 @@ var updateApplicationGradeControls;
     }
     if (!response.ok) {
       if (result?.code === "PGRST202" || result?.code === "42P01") {
-        throw new Error("Supabase 설정이 필요합니다. 최초 설치: setup.sql → upgrade-codes-history.sql → upgrade-selection-groups.sql 순서로 SQL Editor에서 실행하세요. 기존 설치는 아직 실행하지 않은 업데이트만 실행하세요.");
+        throw new Error("신청 서버 설정이 필요합니다. 운영자에게 문의하세요.");
       }
       throw new Error(result?.message || result?.msg || result?.error_description || "서버 요청에 실패했습니다.");
     }
@@ -229,6 +232,43 @@ var updateApplicationGradeControls;
     syncSnapshots.delete(String(round));
     byId("cloudSyncStatus").textContent = `${round}차 자동 연동을 해제했습니다. 서버 신청은 유지됩니다.`;
   };
+
+  function openStudentPreview(event = null) {
+    const currentGrade = state.applicationMenuGrade || "1";
+    const grade = String(Number(currentGrade) + 1);
+    const subjects = event?.subjects || getGroupedApplicationSubjects();
+    const courses = subjects?.[grade];
+    if (!courses?.length) throw new Error(`${grade}학년 신청 과목이 없습니다. 편제표를 확인하세요.`);
+    const groups = (event ? event.groups : getCourseApplicationGroups([grade]))?.filter((group) => group.grade === grade) || [];
+    application = {
+      student: {grade:currentGrade,classroom:"1",number:"1",name:"미리보기 학생"},
+      schoolName:event?.school_name || byId("schoolName").value,
+      schoolYear:event?.school_year || byId("schoolYear").value,
+      round:event?.round || state.currentRound,open:true,courses,groups,selections:[],submittedAt:null
+    };
+    previewMode = true;
+    activeCode = "preview";
+    const panel = byId("supabaseStudentEntry");
+    byId("cloudStudentPreviewContent").appendChild(panel);
+    panel.classList.remove("hidden");
+    byId("cloudStudentLogin").classList.add("hidden");
+    renderStudentApplication(application);
+    byId("cloudStudentPreviewDialog").showModal();
+  }
+  function closeStudentPreview() {
+    if (!previewMode) return;
+    previewMode = false;
+    application = null;
+    activeCode = "";
+    const panel = byId("supabaseStudentEntry");
+    byId("cloudStudentChoices").replaceChildren();
+    panel.classList.add("hidden");
+    byId("cloudStudentLogin").classList.remove("hidden");
+    document.body.appendChild(panel);
+  }
+  byId("cloudPreviewStudent").addEventListener("click", () => teacherAction(async () => openStudentPreview()));
+  byId("cloudStudentPreviewClose").addEventListener("click", () => byId("cloudStudentPreviewDialog").close());
+  byId("cloudStudentPreviewDialog").addEventListener("close", closeStudentPreview);
 
   function syncLinkedResults() {
     if (syncTask) return syncTask.then(() => syncLinkedResults());
@@ -326,7 +366,7 @@ var updateApplicationGradeControls;
   }
 
   async function refreshEvents() {
-    const events = await request("/rest/v1/course_events?select=id,school_name,school_year,round,is_open,created_at,subjects&order=created_at.desc", {
+    const events = await request("/rest/v1/course_events?select=id,school_name,school_year,round,is_open,created_at,subjects,groups&order=created_at.desc", {
       method: "GET", authenticated: true,
     });
     knownEvents = events;
@@ -353,6 +393,9 @@ var updateApplicationGradeControls;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       section.appendChild(link);
+      section.appendChild(button("학생 화면 미리보기", () => teacherAction(async () => {
+        openStudentPreview(event);
+      })));
       section.appendChild(button(linkedEvents.has(event.id) ? "집계표 연동 해제" : "집계표 연동", () => teacherAction(async () => {
         if (linkedEvents.has(event.id)) {
           linkedEvents.delete(event.id);
@@ -746,6 +789,10 @@ var updateApplicationGradeControls;
       for (const group of application.groups || []) {
         const count = selected.filter((name) => group.courses.includes(name)).length;
         if (count !== group.count) throw new Error(`${group.name}: 정확히 ${group.count}과목을 선택하세요 (현재 ${count}개).`);
+      }
+      if (previewMode) {
+        byId("cloudStudentMessage").textContent = "미리보기 제출 완료 · 실제 신청은 저장되지 않습니다.";
+        return;
       }
       const result = eventId
         ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })

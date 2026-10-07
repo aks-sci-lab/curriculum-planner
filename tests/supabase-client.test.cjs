@@ -67,6 +67,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
   const history = [];
   const context = vm.createContext({
     document: {
+      body: new Element("body"),
       getElementById: (id) => {
         assert.ok(elements[id], `Missing HTML element ${id}`);
         return elements[id];
@@ -200,6 +201,24 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
   assert.equal(new Set(versions).size,1);
 });
 
+test("teacher student preview uses real selection flow without submitting to server and restores on close", async () => {
+  const f=fixture();
+  await f.fire("cloudPreviewStudent","click");
+  assert.equal(f.elements.cloudStudentPreviewDialog.open,true);
+  assert.match(f.elements.cloudStudentIdentity.textContent,/미리보기 학생/);
+  const box=f.elements.cloudStudentChoices.children[0].children[1].children[0];
+  box.checked=true;
+  await f.fire("cloudStudentChoices","change");
+  await f.fire("cloudStudentApplication","submit");
+  assert.match(f.elements.cloudStudentMessage.textContent,/실제 신청은 저장되지/);
+  assert.equal(f.requests.length,0);
+  await f.fire("cloudStudentPreviewClose","click");
+  await f.fire("cloudStudentPreviewDialog","close");
+  assert.equal(f.elements.supabaseStudentEntry.classList.contains("hidden"),true);
+  assert.equal(f.elements.cloudStudentLogin.classList.contains("hidden"),false);
+  assert.equal(f.elements.cloudStudentChoices.children.length,0);
+});
+
 test("grade menus filter online events, roster uploads and preserve each grade's draft", async () => {
   const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
     access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,user:{email:"teacher@example.invalid"}
@@ -267,7 +286,7 @@ test("closed applications disable submission and setup errors are explicit", asy
   f.elements.cloudStudentCode.value = "a".repeat(32);
   f.respond = async () => ({ ok: false, data: { code: "PGRST202" } });
   await f.fire("cloudStudentLogin", "submit");
-  assert.match(f.elements.cloudStudentMessage.textContent, /setup.sql/);
+  assert.match(f.elements.cloudStudentMessage.textContent, /운영자/);
   f.respond = async () => ({ data: {
     student: { grade: "1", classroom: "1", number: "1", name: "가상학생" },
     schoolName: "가상학교", schoolYear: "2026", round: "1", open: false,
