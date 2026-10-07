@@ -1128,6 +1128,7 @@
             <button class="button" id="cloudRefreshEvents" type="button">내 수강신청 새로고침</button>
             <p>공통 학생 입구: <a id="cloudStudentLink" href="#student">학생 수강신청</a></p>
             <div id="cloudEventList"></div>
+            <p id="cloudSyncStatus" role="status" aria-live="polite">연동된 신청은 로그인 중 30초마다 집계표에 반영됩니다.</p>
           </div>
           <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
           <details class="google-form-guide">
@@ -1678,7 +1679,7 @@ function courseClient_() {
     // 현재 활성 차수 데이터를 rounds에 동기화한다.
     function syncActiveRound() {
       if (!state.rounds || typeof state.rounds !== "object") state.rounds = { "1": null, "2": null, "3": null };
-      if (state.students.length) {
+      if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
         state.rounds[state.currentRound] = {
           fileName: state.fileName,
           students: state.students,
@@ -3913,8 +3914,8 @@ function courseClient_() {
     }
 
     // 학생 신청 파일(JSON)들을 명단(학생·과목 구조)으로 합친다.
-    function mergeApplications(entries) {
-      const subjects = collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
+    function mergeApplications(entries, applicationSubjects = null) {
+      const subjects = applicationSubjects || collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
       const nameCount = new Map();
       for (const grade of ["1", "2", "3"]) {
         for (const item of subjects[grade] || []) {
@@ -4132,6 +4133,37 @@ function courseClient_() {
     }
 
     // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
+    function applyCloudApplicationResults(round, entries, subjects) {
+      if (!["1", "2", "3"].includes(String(round))) throw new Error("연동할 신청 차수를 확인하세요.");
+      const merged = mergeApplications(entries, subjects);
+      if (merged.errors.length) throw new Error(`집계표 연동 실패: ${merged.errors[0]}`);
+      syncActiveRound();
+      const previous = state.rounds[round];
+      const data = {
+        students: merged.students, courses: merged.courses,
+        classOverrides: previous?.classOverrides || {},
+        fileName: `온라인 자동 연동 ${merged.students.length}명`
+      };
+      state.rounds[round] = data;
+      if (String(round) === state.currentRound) {
+        state.students = data.students;
+        state.courses = data.courses;
+        state.classOverrides = data.classOverrides;
+        state.fileName = data.fileName;
+        if (!state.students.some((student) => student.id === state.selectedId)) state.selectedId = state.students[0]?.id || null;
+        $("#fileName").textContent = state.fileName;
+        $("#searchInput").disabled = !state.students.length;
+        $("#classFilter").disabled = !state.students.length;
+        applyClassFilterOptions(state.students);
+        renderRoster();
+        renderPreview();
+        renderSemesterClassifier();
+        renderAggregate();
+      }
+      renderRoundStatus();
+      persistState();
+    }
+
     function applyMergedApplications(entries, sourceLabel) {
       const merged = mergeApplications(entries);
       if (!merged.students.length) {

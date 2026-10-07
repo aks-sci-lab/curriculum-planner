@@ -20,7 +20,13 @@ class Element {
   }
   addEventListener(type, callback) { this.listeners[type] = callback; }
   appendChild(child) { child.parent = this; this.children.push(child); }
-  append(...children) { this.children.push(...children); }
+  append(...children) { children.forEach((child)=>this.appendChild(child)); }
+  closest(selector) {
+    for (let element=this;element;element=element.parent) {
+      if (selector==="fieldset[data-group]" && element.tag==="fieldset" && element.dataset.group) return element;
+    }
+    return null;
+  }
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   getAttribute(name) { return this[name]; }
@@ -36,7 +42,8 @@ class Element {
   querySelectorAll(selector) {
     const result = [];
     const visit = (element) => {
-      if (selector === "button" && element.tag === "button" ||
+      if (selector === "input" && element.tag === "input" ||
+          selector === "button" && element.tag === "button" ||
           selector === "fieldset[data-group]" && element.tag === "fieldset" && element.dataset.group ||
           selector === "input:checked" && element.tag === "input" && element.checked) result.push(element);
       element.children.forEach(visit);
@@ -74,11 +81,17 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       setItem: (key, value) => storage.set(key, value),
       removeItem: (key) => storage.delete(key),
     },
+    localStorage: {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+    },
     window: {
       location: { href, assign: (url) => redirects.push(url) },
       history: { replaceState: (state, title, url) => history.push(url) },
       confirm: () => true,
       print: () => { fixtureData.printed = true; },
+      setInterval: (callback) => { fixtureData.poll = callback; return 1; },
+      clearInterval: () => { fixtureData.poll = null; },
     },
     switchWorkflowStep: (step) => { fixtureData.step = step; },
     state: { currentRound: "2" },
@@ -87,6 +100,10 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     setApplicationTargetGrades: (grades) => { fixtureData.targetGrades = grades; },
     getGroupedApplicationSubjects: () => ({ "2": [{subject:"수학",credit:3,semester:"1"}],"3":[] }),
     applicationCourseLabel: (course) => `${course.subject}${course.type ? `(${course.type.replace(/선택$/,"")})` : ""}`,
+    applyCloudApplicationResults: (round,entries,subjects) => {
+      fixtureData.synced = {round,entries,subjects};
+      fixtureData.syncCalls.push(fixtureData.synced);
+    },
     parseWorkbook: async () => [],
     parseApplicationRoster: () => [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     downloadTextFile: (text, name) => downloads.push({ data: JSON.parse(text), name }),
@@ -101,7 +118,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
   });
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history,
+    elements, requests, downloads, storage, redirects, history, syncCalls: [],
     respond: respond || (async () => ({ data: [] })),
     async settle() {
       for (let i = 0; i < 20; i++) await new Promise(setImmediate);
@@ -198,8 +215,13 @@ test("teacher Google PKCE login, roster creation and logout do not persist crede
       access_token: "test-token", refresh_token: "test-refresh", expires_in: 3600, user: { email: "teacher@example.invalid" },
     } };
     if (r.url.endsWith("create_course_event")) return { data: {
-      id: "event-id", students: [{ grade: "1", classroom: "1", number: "1", name: "가상학생", code: "b".repeat(32) }],
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", students: [{ grade: "1", classroom: "1", number: "1", name: "가상학생", code: "b".repeat(32) }],
     } };
+    if (r.url.includes("/course_events?")) return {data:[{
+      id:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",round:"2",school_name:"가상학교",school_year:"2026",created_at:"2026-01-01",
+      subjects:{"2":[{subject:"수학",credit:3,semester:"1"}],"3":[]}
+    }]};
+    if (r.body?.p_action==="export") return {data:{entries:[]}};
     return { data: [] };
   };
   const f = fixture({ href: "https://school.example/app/?code=test-code", storage: start.storage, respond });
@@ -224,6 +246,8 @@ test("teacher Google PKCE login, roster creation and logout do not persist crede
   assert.match(f.elements.cloudTeacherMessage.textContent, /신청을 생성/);
   const created=f.requests.find((request)=>request.url.endsWith("create_course_event"));
   assert.deepEqual(created.body.p_setup.subjects["3"],[]);
+  assert.equal(f.synced.round,"2");
+  assert.equal(f.synced.entries.length,0);
   await f.fire("cloudTeacherLogout", "click");
   assert.equal(f.elements.cloudDownloadCodes.disabled, true);
   assert.match(f.elements.cloudTeacherMessage.textContent, /로그아웃/);
@@ -424,6 +448,79 @@ test("print button stays available on later visits and loads saved codes without
   await f.fire("cloudPrintCodes","click");
   assert.equal(f.elements.cloudCodeDialog.open,true);
   assert.equal(f.requests.length,0);
+});
+
+test("student group limit disables unchecked choices and re-enables them after deselection", async () => {
+  const f=fixture({href:"https://school.example/app/#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"});
+  f.respond=async()=>({data:{
+    student:{grade:"1",classroom:"1",number:"1",name:"가상"},open:true,schoolName:"학교",
+    courses:[{subject:"A",credit:3},{subject:"B",credit:3},{subject:"C",credit:3}],
+    selections:[],groups:[{id:"g",name:"그룹",count:1,courses:["A","B"]},
+      {id:"zero",name:"선택 안 함",count:0,courses:["C"]}],
+  }});
+  f.elements.cloudStudentCode.value="123456";
+  await f.fire("cloudStudentLogin","submit");
+  const [a,b,c]=f.elements.cloudStudentChoices.querySelectorAll("input");
+  assert.equal(c.disabled,true);
+  a.checked=true;
+  f.elements.cloudStudentChoices.listeners.change({target:a});
+  assert.equal(a.disabled,false);
+  assert.equal(b.disabled,true);
+  b.checked=true; // Also reject programmatic over-selection at the change handler.
+  f.elements.cloudStudentChoices.listeners.change({target:b});
+  assert.equal(b.checked,false);
+  assert.match(f.elements.cloudStudentMessage.textContent,/최대 1/);
+  a.checked=false;
+  f.elements.cloudStudentChoices.listeners.change({target:a});
+  assert.equal(b.disabled,false);
+});
+
+test("linked online results sync without files, include both grades and stop on logout", async () => {
+  const ids=["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"];
+  const storage=new Map([
+    ["curriculum-google-pkce",JSON.stringify({verifier:"a".repeat(43),createdAt:Date.now()})],
+    ["curriculum-cloud-links:teacher@example.invalid",JSON.stringify(ids)],
+  ]);
+  const subjects=[{"2":[{subject:"A",semester:"1",credit:3}],"3":[]},
+    {"2":[],"3":[{subject:"B",semester:"2",credit:4}]}];
+  let entries=[
+    [{grade:"1",classroom:"1",number:"1",name:"가상1",selections:["A"]}],
+    [{grade:"2",classroom:"1",number:"1",name:"가상2",selections:["B"]}],
+  ];
+  let fail=false;
+  const f=fixture({href:"https://school.example/app/?code=code",storage,respond:async(r)=>{
+    if(r.url.endsWith("grant_type=pkce")) return {data:{
+      access_token:"token",refresh_token:"refresh",expires_in:3600,user:{email:"teacher@example.invalid"}
+    }};
+    if(r.url.includes("/course_events?")) return {data:ids.map((id,index)=>({
+      id,round:"1",school_name:"학교",school_year:"2026",created_at:"2026-01-01",subjects:subjects[index]
+    }))};
+    if(r.body?.p_action==="export") return fail?{ok:false,data:{message:"연결 실패"}}:
+      {data:{entries:entries[ids.indexOf(r.body.p_event)]}};
+    return {data:{message:"완료"}};
+  }});
+  await f.settle();
+  assert.equal(f.synced.round,"1");
+  assert.equal(f.synced.entries.length,2);
+  assert.equal(f.synced.subjects["3"][0].subject,"B");
+  assert.equal(f.downloads.length,0);
+  const before=f.syncCalls.length;
+  f.poll(); await f.settle();
+  assert.equal(f.syncCalls.length,before); // Unchanged snapshots don't repaint the page.
+  entries[0]=[];
+  f.poll(); await f.settle();
+  assert.equal(f.synced.entries.length,1);
+  fail=true;
+  f.poll(); await f.settle();
+  assert.match(f.elements.cloudSyncStatus.textContent,/자동 연동 실패.*연결 실패/);
+  assert.equal(f.synced.entries.length,1);
+  fail=false;
+  entries[0]=[{...entries[1][0],name:"중복"}];
+  f.poll(); await f.settle();
+  assert.match(f.elements.cloudSyncStatus.textContent,/동일 학생/);
+  assert.equal(f.synced.entries.length,1);
+  await f.fire("cloudTeacherLogout","click");
+  assert.equal(f.poll,null);
 });
 
 test("color groups are semester scoped, editable and retain unassigned courses after reload", () => {

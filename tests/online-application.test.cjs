@@ -338,6 +338,37 @@ test("semester-qualified result imports retain separate courses, credits and sem
   assert.deepEqual(plain(legacy.errors),[]);
 });
 
+test("cloud aggregation updates its own round, clears rollback results and preserves overrides", () => {
+  const state={currentRound:"2",rounds:{"1":{students:[],classOverrides:{"app0":2}},
+    "2":{students:[{id:"existing"}],courses:[]}},students:[{id:"existing"}],courses:[]};
+  let saves=0,renders=0;
+  const elements=new Map();
+  const ctx=vm.createContext({state,$:(id)=>{
+    if(!elements.has(id)) elements.set(id,{textContent:"",disabled:false});
+    return elements.get(id);
+  },syncActiveRound(){},persistState(){saves++;},renderRoundStatus(){},
+    applyClassFilterOptions(){},renderRoster(){renders++;},renderPreview(){},
+    renderSemesterClassifier(){},renderAggregate(){},
+  });
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
+  vm.runInContext(functionSource("function applyCloudApplicationResults(", "function applyMergedApplications("),ctx);
+  const subjects={"2":[{subject:"A",semester:"1",credit:3}],"3":[]};
+  const entries=[{grade:"1",classroom:"1",number:"1",name:"가상",selections:["A"]}];
+  ctx.applyCloudApplicationResults("1",entries,subjects);
+  assert.equal(state.currentRound,"2");
+  assert.equal(state.students[0].id,"existing");
+  assert.equal(state.rounds["1"].students[0].totalCredits,3);
+  assert.equal(state.rounds["1"].classOverrides.app0,2);
+  state.currentRound="1";
+  ctx.applyCloudApplicationResults("1",[],subjects);
+  assert.equal(state.students.length,0);
+  assert.equal(state.rounds["1"].students.length,0);
+  assert.equal(renders,1);
+  assert.equal(saves,2);
+  assert.throws(()=>ctx.applyCloudApplicationResults("1",[{...entries[0],selections:["unknown"]}],subjects),/연동 실패/);
+  assert.equal(saves,2);
+});
+
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
   const subjects = setup().subjects;
   const existing = [{ name: "기존학생" }];

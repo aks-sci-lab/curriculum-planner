@@ -12,6 +12,12 @@
   let teacherBusy = false;
   let studentBusy = false;
   let printingCodes = null;
+  let linkedEvents = new Set();
+  let knownEvents = [];
+  let syncTimer = null;
+  let syncTask = null;
+  let syncRevision = 0;
+  const syncSnapshots = new Map();
   const eventId = new URLSearchParams(new URL(window.location.href).hash.slice(1)).get("event");
   const validEvent = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
@@ -70,6 +76,81 @@
     byId("cloudTeacherAccount").textContent = `${value.user.email} · 이 탭을 닫으면 로그아웃됩니다.`;
     byId("cloudTeacherLogin").classList.add("hidden");
     byId("cloudTeacherControls").classList.remove("hidden");
+    const saved = localStorage.getItem(`curriculum-cloud-links:${value.user.id || value.user.email}`);
+    const ids = saved ? JSON.parse(saved) : [];
+    if (!Array.isArray(ids) || ids.some((id) => !validEvent.test(id))) throw new Error("저장된 집계표 연동 설정 형식이 잘못되었습니다.");
+    linkedEvents = new Set(ids);
+    if (syncTimer === null) syncTimer = window.setInterval(() => {
+      if (!teacherBusy && session && linkedEvents.size) {
+        syncLinkedResults().catch((error) => { byId("cloudSyncStatus").textContent = `자동 연동 실패: ${error.message}`; });
+      }
+    }, 30000);
+  }
+
+  function saveLinkedEvents() {
+    syncRevision++;
+    localStorage.setItem(`curriculum-cloud-links:${session.user.id || session.user.email}`, JSON.stringify([...linkedEvents]));
+  }
+
+  function syncLinkedResults() {
+    if (syncTask) return syncTask.then(() => syncLinkedResults());
+    syncTask = updateLinkedResults().finally(() => { syncTask = null; });
+    return syncTask;
+  }
+
+  async function updateLinkedResults() {
+    if (!session) return;
+    const owner = session.user.id || session.user.email;
+    const revision = syncRevision;
+    const linked = knownEvents.filter((event) => linkedEvents.has(event.id));
+    const rounds = [...new Set(linked.map((event) => String(event.round)))];
+    for (const round of rounds) {
+      const events = linked.filter((event) => String(event.round) === round);
+      if (events.some((event) => event.school_name !== events[0].school_name || event.school_year !== events[0].school_year)) {
+        throw new Error(`${round}차에 다른 학교·학년도의 신청이 연동되어 있습니다. 연동을 해제하세요.`);
+      }
+      const subjects = { "1": [], "2": [], "3": [] };
+      const entries = [];
+      const identities = new Set();
+      for (const event of events) {
+        const result = await rpc("manage_course_event", { p_event: event.id, p_action: "export" }, true);
+        for (const grade of ["2", "3"]) {
+          for (const course of event.subjects[grade] || []) {
+            const existing = subjects[grade].find((item) => item.subject === course.subject);
+            if (existing && JSON.stringify(existing) !== JSON.stringify(course)) throw new Error(`${round}차 ${course.subject}: 연동 신청의 편제표가 다릅니다.`);
+            if (!existing) subjects[grade].push(course);
+          }
+        }
+        for (const entry of result.entries) {
+          const identity = `${entry.grade}:${entry.classroom}:${entry.number}`;
+          if (identities.has(identity)) throw new Error(`${round}차 ${identity}: 여러 신청에 동일 학생이 있습니다. 중복 신청의 연동을 해제하세요.`);
+          identities.add(identity);
+          entries.push(entry);
+        }
+      }
+      if (!session || (session.user.id || session.user.email) !== owner || revision !== syncRevision) return;
+      const snapshot = JSON.stringify({ entries, subjects });
+      if (syncSnapshots.get(round) !== snapshot) {
+        applyCloudApplicationResults(round, entries, subjects);
+        syncSnapshots.set(round, snapshot);
+      }
+    }
+    byId("cloudSyncStatus").textContent = linked.length
+      ? `집계표 자동 연동 ${linked.length}개 신청 · 최근 갱신 ${new Date().toLocaleTimeString("ko-KR")} · 로그인 중 30초마다 갱신`
+      : "집계표 연동 신청 없음";
+  }
+
+  async function linkEvent(event) {
+    const sameRound = knownEvents.filter((item) => linkedEvents.has(item.id) && String(item.round) === String(event.round));
+    if (sameRound.some((item) => item.school_name !== event.school_name || item.school_year !== event.school_year)) {
+      throw new Error("같은 차수에는 같은 학교·학년도의 신청만 연동할 수 있습니다. 기존 연동을 먼저 해제하세요.");
+    }
+    if (!sameRound.length && state.rounds?.[event.round]?.students?.length &&
+      !window.confirm(`${event.round}차의 기존 로컬 명단을 온라인 신청 결과로 대체할까요?`)) return;
+    linkedEvents.add(event.id);
+    saveLinkedEvents();
+    syncSnapshots.delete(String(event.round));
+    await syncLinkedResults();
   }
 
   async function teacherAction(action) {
@@ -104,9 +185,10 @@
   }
 
   async function refreshEvents() {
-    const events = await request("/rest/v1/course_events?select=id,school_name,school_year,round,is_open,created_at&order=created_at.desc", {
+    const events = await request("/rest/v1/course_events?select=id,school_name,school_year,round,is_open,created_at,subjects&order=created_at.desc", {
       method: "GET", authenticated: true,
     });
+    knownEvents = events;
     const list = byId("cloudEventList");
     list.replaceChildren();
     if (!events.length) list.textContent = "생성한 수강신청이 없습니다.";
@@ -121,6 +203,15 @@
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       section.appendChild(link);
+      section.appendChild(button(linkedEvents.has(event.id) ? "집계표 연동 해제" : "집계표 연동", () => teacherAction(async () => {
+        if (linkedEvents.has(event.id)) {
+          linkedEvents.delete(event.id);
+          saveLinkedEvents();
+          syncSnapshots.delete(String(event.round));
+          await syncLinkedResults();
+        } else await linkEvent(event);
+        await refreshEvents();
+      })));
       section.appendChild(button("신청 로그 · 롤백", () => teacherAction(async () => {
         await showHistory(event, section);
         byId("cloudTeacherMessage").textContent = "이력의 복원 버튼은 해당 기록 시각 직전 상태로 되돌립니다.";
@@ -128,12 +219,13 @@
       section.appendChild(button(event.is_open ? "신청 마감" : "다시 열기", () => teacherAction(async () => {
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: event.is_open ? "close" : "open" }, true);
         await refreshEvents();
+        await syncLinkedResults();
         byId("cloudTeacherMessage").textContent = result.message;
       })));
       section.appendChild(button("신청 결과 저장", () => teacherAction(async () => {
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: "export" }, true);
         downloadTextFile(JSON.stringify(result, null, 2), `온라인_수강신청_결과_${event.round}차.json`, "application/json");
-        byId("cloudTeacherMessage").textContent = `${result.entries.length}명 결과를 저장했습니다. 같은 차수의 신청 파일 취합하기로 불러오세요.`;
+        byId("cloudTeacherMessage").textContent = `${result.entries.length}명 결과를 백업 파일로 저장했습니다. 집계표 연동 신청은 파일 업로드 없이 자동 반영됩니다.`;
       })));
       section.appendChild(button("전체 학생 코드 재발급", () => teacherAction(async () => {
         if (!window.confirm("모든 학생의 기존 코드가 무효화됩니다. 신청 결과는 유지됩니다. 전체 코드를 재발급할까요?")) {
@@ -151,11 +243,14 @@
         }
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: "delete" }, true);
         if (latestCodes?.id === event.id) latestCodes = null;
+        linkedEvents.delete(event.id);
+        saveLinkedEvents();
         await refreshEvents();
         byId("cloudTeacherMessage").textContent = result.message;
       })));
       list.appendChild(section);
     }
+    await syncLinkedResults();
   }
 
   function base64Url(bytes) {
@@ -224,6 +319,13 @@
     session = null;
     latestCodes = null;
     pendingRoster = null;
+    if (syncTimer !== null) window.clearInterval(syncTimer);
+    syncTimer = null;
+    linkedEvents.clear();
+    syncRevision++;
+    knownEvents = [];
+    syncSnapshots.clear();
+    byId("cloudSyncStatus").textContent = "로그인하면 집계표 자동 연동을 재개합니다.";
     setApplicationTargetGrades(["2", "3"]);
     byId("cloudRosterSummary").textContent = "명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.";
     byId("cloudEventList").replaceChildren();
@@ -293,6 +395,10 @@
       byId("cloudTeacherMessage").textContent = `${setup.round}차 신청을 생성했습니다 (${latestCodes.students.length}명). 학생 코드를 반드시 저장하고 개별 전달하세요.`;
       // Keep the successful creation and its codes visible even if refreshing the list fails.
       try {
+        await refreshEvents();
+        const created = knownEvents.find((event) => event.id === latestCodes.id);
+        if (!created) throw new Error("생성한 신청을 목록에서 찾지 못했습니다. 새로고침 후 집계표 연동을 누르세요.");
+        await linkEvent(created);
         await refreshEvents();
       } catch (error) {
         byId("cloudTeacherMessage").textContent += ` 목록 갱신 실패: ${error.message}. 신청은 생성되었으므로 재업로드하지 말고 새로고침을 누르세요.`;
@@ -388,9 +494,20 @@
       const count = fieldset.querySelectorAll("input:checked").length;
       const group = application.groups.find((g) => g.id === fieldset.dataset.group);
       fieldset.querySelector("legend").textContent = `${group.name} · ${count}/${group.count}과목 선택`;
+      for (const box of fieldset.querySelectorAll("input")) {
+        box.disabled = !application.open || (!box.checked && count >= Number(group.count));
+      }
     }
   }
-  byId("cloudStudentChoices").addEventListener("change", updateSummary);
+  byId("cloudStudentChoices").addEventListener("change", (event) => {
+    const box = event.target;
+    const fieldset = box?.closest?.("fieldset[data-group]");
+    if (fieldset && box.checked && fieldset.querySelectorAll("input:checked").length > Number(fieldset.dataset.count)) {
+      box.checked = false;
+      byId("cloudStudentMessage").textContent = `이 그룹은 최대 ${fieldset.dataset.count}과목만 선택할 수 있습니다. 기존 선택을 해제한 뒤 변경하세요.`;
+    }
+    updateSummary();
+  });
   byId("cloudStudentCode").addEventListener("input", () => {
     activeCode = "";
     application = null;
@@ -458,6 +575,7 @@
           return;
         }
         const result = await rpc("rollback_course_event", { p_event: event.id, p_before: before, p_student: student }, true);
+        await syncLinkedResults();
         await showHistory(event, parent);
         byId("cloudTeacherMessage").textContent = result.message;
       }
