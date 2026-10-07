@@ -57,6 +57,7 @@ var updateApplicationGradeControls;
     if (syncTimer !== null) window.clearInterval(syncTimer);
     if (idleTimer !== null) window.clearInterval(idleTimer);
     idleTimer = syncTimer = null;
+    stopRealtimeSubscription();
     linkedEvents.clear();
     syncRevision++;
     knownEvents = [];
@@ -121,6 +122,14 @@ var updateApplicationGradeControls;
   let syncTimer = null;
   let syncTask = null;
   let syncRevision = 0;
+  let realtimeSocket = null;
+  let realtimeHeartbeatTimer = null;
+  let realtimeReconnectTimer = null;
+  let realtimeReconnectAttempt = 0;
+  let realtimeRef = 0;
+  let realtimeHeartbeatRef = null;
+  let realtimeConnected = false;
+  let realtimeSessionToken = "";
   const syncSnapshots = new Map();
   const eventId = new URLSearchParams(new URL(window.location.href).hash.slice(1)).get("event");
   const validEvent = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -211,8 +220,9 @@ var updateApplicationGradeControls;
     const ids = saved ? JSON.parse(saved) : [];
     if (!Array.isArray(ids) || ids.some((id) => !validEvent.test(id))) throw new Error("저장된 집계표 연동 설정 형식이 잘못되었습니다.");
     linkedEvents = new Set(ids);
+    startRealtimeSubscription();
     if (syncTimer === null) syncTimer = window.setInterval(() => {
-      if (!teacherBusy && session && linkedEvents.size) {
+      if (!teacherBusy && session && linkedEvents.size && !realtimeConnected) {
         syncLinkedResults().catch((error) => { byId("cloudSyncStatus").textContent = `자동 연동 실패: ${error.message}`; });
       }
     }, 30000);
@@ -221,6 +231,7 @@ var updateApplicationGradeControls;
   function saveLinkedEvents() {
     syncRevision++;
     localStorage.setItem(`curriculum-cloud-links:${session.user.id || session.user.email}`, JSON.stringify([...linkedEvents]));
+    startRealtimeSubscription();
   }
   unlinkApplicationRound = (round) => {
     if (!session || expireIfIdle()) throw new Error("교사 로그인이 필요합니다.");
@@ -276,6 +287,145 @@ var updateApplicationGradeControls;
     return syncTask;
   }
 
+  function stopRealtimeSubscription() {
+    realtimeConnected = false;
+    realtimeSessionToken = "";
+    realtimeReconnectAttempt = 0;
+    realtimeHeartbeatRef = null;
+    if (realtimeHeartbeatTimer !== null) window.clearInterval(realtimeHeartbeatTimer);
+    if (realtimeReconnectTimer !== null) window.clearTimeout(realtimeReconnectTimer);
+    realtimeHeartbeatTimer = realtimeReconnectTimer = null;
+    const socket = realtimeSocket;
+    realtimeSocket = null;
+    if (socket) {
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
+      socket.onopen = null;
+      socket.close();
+    }
+  }
+
+  function scheduleRealtimeReconnect() {
+    if (realtimeReconnectTimer !== null || !session || !linkedEvents.size) return;
+    const delay = Math.min(30000, 1000 * 2 ** Math.min(realtimeReconnectAttempt++, 5));
+    realtimeReconnectTimer = window.setTimeout(() => {
+      realtimeReconnectTimer = null;
+      startRealtimeSubscription();
+    }, delay);
+  }
+
+  function startRealtimeSubscription() {
+    if (!session || !linkedEvents.size) {
+      stopRealtimeSubscription();
+      return;
+    }
+    if (!session.user.id || typeof WebSocket === "undefined") return;
+    if (realtimeSocket && realtimeSessionToken === session.access_token) return;
+    if (realtimeSessionToken && realtimeSessionToken !== session.access_token) stopRealtimeSubscription();
+    const ownerId = session.user.id;
+    const accessToken = session.access_token;
+    const topic = "realtime:public:course_events";
+    const url = PROJECT_URL.replace(/^http/, "ws") +
+      `/realtime/v1/websocket?apikey=${encodeURIComponent(PUBLIC_KEY)}&vsn=1.0.0`;
+    let socket;
+    try {
+      socket = new WebSocket(url);
+    } catch (error) {
+      scheduleRealtimeReconnect();
+      return;
+    }
+    realtimeSocket = socket;
+    realtimeSessionToken = accessToken;
+    socket.onopen = () => {
+      if (realtimeSocket !== socket || !session || session.access_token !== accessToken) {
+        socket.close();
+        return;
+      }
+      const ref = String(++realtimeRef);
+      socket.joinRef = ref;
+      socket.send(JSON.stringify([ref, ref, topic, "phx_join", {
+        config: {
+          broadcast: { ack: false, self: false },
+          presence: { key: "", enabled: false },
+          postgres_changes: [{
+            event: "UPDATE", schema: "public", table: "course_events",
+            filter: `owner_id=eq.${ownerId}`
+          }],
+          private: false
+        },
+        access_token: accessToken
+      }]));
+    };
+    socket.onmessage = (message) => {
+      let decoded;
+      try {
+        decoded = JSON.parse(message.data);
+      } catch (error) {
+        byId("cloudSyncStatus").textContent = "실시간 연동 서버 응답을 읽지 못했습니다.";
+        socket.close();
+        return;
+      }
+      if (!Array.isArray(decoded) || decoded.length < 5) {
+        byId("cloudSyncStatus").textContent = "실시간 연동 서버 응답 형식이 올바르지 않습니다.";
+        socket.close();
+        return;
+      }
+      const [joinRef, ref, messageTopic, event, payload] = decoded;
+      if (messageTopic === "phoenix" && event === "phx_reply" && ref === realtimeHeartbeatRef) {
+        realtimeHeartbeatRef = null;
+        return;
+      }
+      if (messageTopic !== topic) return;
+      if (event === "phx_reply" && ref === socket.joinRef) {
+        if (payload?.status !== "ok") {
+          byId("cloudSyncStatus").textContent = "실시간 연동 구독에 실패해 자동 재연결을 시도합니다.";
+          socket.close();
+          return;
+        }
+        realtimeConnected = true;
+        realtimeReconnectAttempt = 0;
+        realtimeHeartbeatTimer = window.setInterval(() => {
+          if (realtimeSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
+          if (realtimeHeartbeatRef) {
+            socket.close();
+            return;
+          }
+          const heartbeatRef = String(++realtimeRef);
+          realtimeHeartbeatRef = heartbeatRef;
+          socket.send(JSON.stringify([null, heartbeatRef, "phoenix", "heartbeat", {}]));
+        }, 25000);
+        byId("cloudSyncStatus").textContent = "실시간 연동 연결됨 · 신청 변경을 기다리는 중";
+        syncLinkedResults().catch((error) => {
+          byId("cloudSyncStatus").textContent = `자동 연동 실패: ${error.message}`;
+        });
+      } else if (event === "postgres_changes") {
+        const changedEventId = payload?.data?.record?.id || payload?.data?.new?.id;
+        if (!changedEventId || linkedEvents.has(changedEventId)) {
+          syncLinkedResults().catch((error) => {
+            byId("cloudSyncStatus").textContent = `자동 연동 실패: ${error.message}`;
+          });
+        }
+      } else if (event === "phx_error" || event === "phx_close") {
+        realtimeConnected = false;
+        socket.close();
+      }
+    };
+    socket.onerror = () => socket.close();
+    socket.onclose = () => {
+      if (realtimeSocket !== socket) return;
+      realtimeSocket = null;
+      realtimeConnected = false;
+      realtimeHeartbeatRef = null;
+      if (realtimeHeartbeatTimer !== null) window.clearInterval(realtimeHeartbeatTimer);
+      realtimeHeartbeatTimer = null;
+      if (session && linkedEvents.size) {
+        byId("cloudSyncStatus").textContent = "실시간 연동이 끊겨 자동 재연결 중입니다.";
+        scheduleRealtimeReconnect();
+      }
+    };
+  }
+
   async function updateLinkedResults() {
     if (!session) return;
     const owner = session.user.id || session.user.email;
@@ -314,7 +464,7 @@ var updateApplicationGradeControls;
       }
     }
     byId("cloudSyncStatus").textContent = linked.length
-      ? `집계표 자동 연동 ${linked.length}개 신청 · 최근 갱신 ${new Date().toLocaleTimeString("ko-KR")} · 로그인 중 30초마다 갱신`
+      ? `집계표 자동 연동 ${linked.length}개 신청 · 최근 갱신 ${new Date().toLocaleTimeString("ko-KR")} · ${realtimeConnected ? "실시간" : "연결 전 30초 간격"}`
       : "집계표 연동 신청 없음";
   }
 
@@ -366,7 +516,7 @@ var updateApplicationGradeControls;
   }
 
   async function refreshEvents() {
-    const events = await request("/rest/v1/course_events?select=id,school_name,school_year,round,is_open,created_at,subjects,groups&order=created_at.desc", {
+    const events = await request("/rest/v1/course_events?select=id,school_name,school_year,round,is_open,created_at,subjects,groups:selection_groups&order=created_at.desc", {
       method: "GET", authenticated: true,
     });
     knownEvents = events;
@@ -952,7 +1102,11 @@ var updateApplicationGradeControls;
       return;
     }
     setSession(saved.session, saved.lastActivity);
-    await refreshEvents();
+    try {
+      await refreshEvents();
+    } catch (error) {
+      byId("cloudTeacherMessage").textContent = `목록 갱신 실패: ${error.message} 신청 목록 새로고침을 다시 눌러주세요.`;
+    }
   }
   initializeTeacherSession().catch((error) => {
     clearTeacherSession(`로그인 처리 실패: ${error.message}`);

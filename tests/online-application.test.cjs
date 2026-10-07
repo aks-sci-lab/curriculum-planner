@@ -7,7 +7,8 @@ const { randomUUID } = require("node:crypto");
 
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).filter((source) => source.trim());
-const frontend = scripts[1];
+const frontend = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+const workbookParser = fs.readFileSync(path.join(__dirname, "..", "xlsx-parser.js"), "utf8");
 function functionSource(start, end) {
   return frontend.slice(frontend.indexOf(start), frontend.indexOf(end));
 }
@@ -100,8 +101,9 @@ function setup() {
 }
 
 test("all embedded scripts parse", () => {
-  assert.equal(scripts.length, 2);
   scripts.forEach((source) => new vm.Script(source));
+  new vm.Script(frontend);
+  new vm.Script(workbookParser);
 });
 
 test("roster supports aliases, sheet grades and multiple sheets", () => {
@@ -306,7 +308,10 @@ test("Excel style fills resolve RGB, theme, tint, indexed and uncolored cells", 
     node("accent1",{},[node("srgbClr",{val:"E2EFD9"})])
   ])]);
   const ctx=vm.createContext({NS_MAIN:"m",readZipEntry:async(b,d,p)=>p.includes("styles")?styles:theme,parseXml:(n)=>n});
-  vm.runInContext(functionSource("async function readWorkbookFillStyles(", "function isSelected("),ctx);
+  vm.runInContext(workbookParser.slice(
+    workbookParser.indexOf("async function readWorkbookFillStyles("),
+    workbookParser.indexOf("\n    }", workbookParser.indexOf("async function readWorkbookFillStyles(")) + 6
+  ),ctx);
   assert.deepEqual(plain(await ctx.readWorkbookFillStyles(null,null)),["","#E2EFD9","#E2EFD9","#CCFFCC","","#F1F7EC"]);
 });
 

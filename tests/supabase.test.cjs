@@ -41,6 +41,12 @@ test("Supabase schema validates settings, isolates teachers and supports code-on
     const manage = (id, action) => db.query("select public.manage_course_event($1::uuid, $2) as result", [id, action]);
     const get = (code) => db.query("select public.get_course_application($1) as result", [code]);
     const save = (code, selections) => db.query("select public.save_course_application($1, $2::jsonb) as result", [code, JSON.stringify(selections)]);
+    const resultRevision = async () => {
+      await db.exec("reset role");
+      const value = (await db.query("select result_revision from public.course_events where id = $1", [event.id])).rows[0].result_revision;
+      await as("anon");
+      return value;
+    };
     await as("authenticated", teacher1);
     const malformed = [
       { ...setup, roster: [] }, { ...setup, roster: null }, { ...setup, round: null },
@@ -77,7 +83,11 @@ test("Supabase schema validates settings, isolates teachers and supports code-on
       await assert.rejects(() => save(code, selections));
     }
     await save(code, ["수학"]);
+    assert.equal(await resultRevision(), 1);
     await save(code, ["국어"]);
+    assert.equal(await resultRevision(), 2);
+    await save(code, ["국어"]);
+    assert.equal(await resultRevision(), 2);
     assert.deepEqual((await get(code)).rows[0].result.selections, ["국어"]);
     assert.deepEqual((await get(event.students[1].code)).rows[0].result.selections, []);
     await as("authenticated", teacher1);

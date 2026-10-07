@@ -53,7 +53,7 @@ class Element {
   }
 }
 
-function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects } = {}) {
+function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects, WebSocketClass } = {}) {
   const elements = {};
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) elements[match[2]] = new Element(match[1]);
@@ -65,6 +65,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
   const downloads = [];
   const redirects = [];
   const history = [];
+  const sockets = [];
   const context = vm.createContext({
     document: {
       body: new Element("body"),
@@ -97,10 +98,18 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       print: () => { fixtureData.printed = true; },
       addEventListener: (name, callback) => { fixtureData.activity[name] = callback; },
       setInterval: (callback, delay) => {
-        if (delay === 30000) fixtureData.poll = callback; else fixtureData.idle = callback;
+        if (delay === 30000) fixtureData.poll = callback;
+        else if (delay === 25000) fixtureData.heartbeat = callback;
+        else fixtureData.idle = callback;
         return delay;
       },
-      clearInterval: (id) => { if (id===30000) fixtureData.poll = null; else fixtureData.idle = null; },
+      clearInterval: (id) => {
+        if (id===30000) fixtureData.poll = null;
+        else if (id===25000) fixtureData.heartbeat = null;
+        else fixtureData.idle = null;
+      },
+      setTimeout: (callback, delay) => { fixtureData.reconnect = {callback,delay}; return delay; },
+      clearTimeout: (id) => { if (fixtureData.reconnect?.delay===id) fixtureData.reconnect = null; },
     },
     switchWorkflowStep: (step) => { fixtureData.step = step; },
     state: { currentRound: "2" },
@@ -129,8 +138,14 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       return { ok: response.ok !== false, text: async () => JSON.stringify(response.data) };
     },
   });
+  if (WebSocketClass) {
+    context.WebSocket = class extends WebSocketClass {
+      constructor(url) { super(url); sockets.push(this); }
+    };
+    context.WebSocket.OPEN = WebSocketClass.OPEN;
+  }
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[],
+    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets,
     subjects: subjects || { "2": [{subject:"수학",credit:3,semester:"1"}], "3": [] },
     roster: [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     respond: respond || (async () => ({ data: [] })),
@@ -141,6 +156,8 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       elements[id].listeners[type]({ preventDefault() {}, target: elements[id] });
       for (let i = 0; i < 10; i++) await new Promise(setImmediate);
     },
+    openRealtime() { sockets[sockets.length-1]?.open(); },
+    notifyRealtime(id) { sockets[sockets.length-1]?.notify(id); },
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor", "qrcode.js"), "utf8"), context);
   const generateQR=context.qrcode;
@@ -193,7 +210,7 @@ test("grade menus scope groups and rebuild colors without removing the other gra
 
 test("grade menu deployment loads versioned application scripts to bypass stale caches", () => {
   const html=fs.readFileSync(path.join(__dirname,"..","index.html"),"utf8");
-  const versions=["course-groups","curriculum-workbook","supabase-client"].map((name)=>{
+  const versions=["app","xlsx-parser","course-groups","curriculum-workbook","supabase-client"].map((name)=>{
     const match=html.match(new RegExp(`src="${name}\\.js\\?v=([^"]+)"`));
     assert.ok(match,`${name} must have a deployment version`);
     return match[1];
@@ -346,6 +363,8 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   };
   const f = fixture({ href: "https://school.example/app/?code=test-code", storage: start.storage, respond });
   await f.settle();
+  const eventListRequest = f.requests.find((request) => request.url.includes("/course_events?"));
+  assert.ok(eventListRequest.url.includes("groups:selection_groups"));
   assert.equal(f.requests[0].body.auth_code, "test-code");
   assert.equal(f.requests[0].body.code_verifier, pending.verifier);
   assert.equal(f.requests[1].options.headers.Authorization, "Bearer test-token");
@@ -398,6 +417,30 @@ test("teacher session survives reload, gates uploads and expires after five idle
   await expired.settle();
   assert.equal(expired.elements.curriculumGoogleLogin.disabled,false);
   assert.equal(expired.requests.length,0);
+});
+
+test("list refresh failure preserves the restored login across reloads and allows retry", async () => {
+  const key = "curriculum-teacher-session-v1";
+  const storage = new Map([[key, JSON.stringify({
+    lastActivity: Date.now(),
+    session: {access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,
+      user:{email:"teacher@example.invalid"}}
+  })]]);
+  const respond = async () => ({ok:false,data:{message:"column course_events.groups does not exist"}});
+  const first = fixture({storage,respond});
+  await first.settle();
+  assert.equal(storage.has(key), true);
+  assert.equal(first.elements.teacherWorkspace.classList.contains("hidden"), false);
+  assert.match(first.elements.cloudTeacherMessage.textContent, /목록 갱신 실패/);
+  const reloaded = fixture({storage,respond});
+  await reloaded.settle();
+  assert.equal(storage.has(key), true);
+  assert.equal(reloaded.elements.curriculumGoogleLogin.disabled, true);
+  assert.equal(reloaded.elements.teacherLoginGate.classList.contains("hidden"), true);
+  reloaded.respond = async () => ({data:[]});
+  await reloaded.fire("cloudRefreshEvents", "click");
+  assert.match(reloaded.elements.cloudTeacherMessage.textContent, /목록을 새로 불러왔습니다/);
+  assert.equal(storage.has(key), true);
 });
 
 test("normal teacher does not get developer Excel upload controls", async () => {
@@ -714,6 +757,77 @@ test("student group limit disables unchecked choices and re-enables them after d
   a.checked=false;
   f.elements.cloudStudentChoices.listeners.change({target:a});
   assert.equal(b.disabled,false);
+});
+
+test("Realtime updates linked results on student submissions and falls back to polling only while disconnected", async () => {
+  const ownerId="cccccccc-cccc-cccc-cccc-cccccccccccc";
+  const eventId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const otherEventId="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const storage=new Map([
+    ["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
+      access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,
+      user:{id:ownerId,email:"teacher@example.invalid"}
+    }})],
+    [`curriculum-cloud-links:${ownerId}`,JSON.stringify([eventId])]
+  ]);
+  class MockWebSocket {
+    static OPEN=1;
+    constructor(url) { this.url=url; this.readyState=0; this.sent=[]; }
+    open() { this.readyState=MockWebSocket.OPEN; this.onopen?.(); }
+    send(message) {
+      const frame=JSON.parse(message);
+      this.sent.push(frame);
+      if(frame[3]==="phx_join") this.onmessage?.({data:JSON.stringify([
+        frame[0],frame[1],frame[2],"phx_reply",{status:"ok",response:{}}
+      ])});
+    }
+    notify(id) {
+      this.onmessage?.({data:JSON.stringify([null,null,"realtime:public:course_events","postgres_changes",{
+        data:{record:{id}}
+      }])});
+    }
+    close() { this.readyState=3; this.onclose?.(); }
+  }
+  let exportCount=0;
+  const f=fixture({storage,WebSocketClass:MockWebSocket,respond:async(request)=>{
+    if(request.url.includes("/course_events?")) return {data:[{
+      id:eventId,round:"1",school_name:"학교",school_year:"2026",created_at:"2026-01-01",
+      subjects:{"2":[{subject:"수학",credit:3}],"3":[]}
+    }]};
+    if(request.body?.p_action==="export") {
+      exportCount++;
+      return {data:{entries:[{grade:"1",classroom:"1",number:"1",name:"가상학생",selections:["수학"]}]}};
+    }
+    return {data:[]};
+  }});
+  await f.settle();
+  assert.equal(f.sockets.length,1);
+  f.openRealtime();
+  await f.settle();
+  assert.equal(f.sockets[0].sent[0][3],"phx_join");
+  assert.equal(f.sockets[0].sent[0][4].config.postgres_changes[0].filter,`owner_id=eq.${ownerId}`);
+  assert.equal(f.elements.cloudSyncStatus.textContent.includes("실시간"),true);
+  assert.ok(exportCount>0);
+  const previous=exportCount;
+  f.poll();
+  await f.settle();
+  assert.equal(exportCount,previous);
+  f.notifyRealtime(otherEventId);
+  await f.settle();
+  assert.equal(exportCount,previous);
+  f.notifyRealtime(eventId);
+  await f.settle();
+  assert.ok(exportCount>previous);
+  assert.equal(typeof f.heartbeat,"function");
+  const beforeDisconnect=exportCount;
+  f.sockets[0].close();
+  f.poll();
+  await f.settle();
+  assert.ok(exportCount>beforeDisconnect);
+  assert.ok(f.reconnect);
+  await f.fire("cloudTeacherLogout","click");
+  assert.equal(f.sockets[0].readyState,3);
+  assert.equal(f.poll,null);
 });
 
 test("linked online results sync without files, include both grades and stop on logout", async () => {

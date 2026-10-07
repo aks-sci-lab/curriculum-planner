@@ -8,6 +8,7 @@ create table public.course_events (
   school_year text not null check (school_year ~ '^[0-9]{4}$'),
   round text not null check (round ~ '^[1-9][0-9]{0,8}$'),
   subjects jsonb not null,
+  result_revision bigint not null default 0,
   is_open boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -26,12 +27,43 @@ create table public.course_students (
   unique (event_id, grade, classroom, number)
 );
 
+create function public.bump_course_event_result_revision()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  update public.course_events
+  set result_revision = result_revision + 1
+  where id = new.event_id;
+  return new;
+end;
+$$;
+revoke all on function public.bump_course_event_result_revision() from public, anon, authenticated;
+create trigger course_student_result_revision
+after update of selections on public.course_students
+for each row when (old.selections is distinct from new.selections)
+execute function public.bump_course_event_result_revision();
+
 alter table public.course_events enable row level security;
 alter table public.course_students enable row level security;
 revoke all on public.course_events, public.course_students from anon, authenticated;
 grant select on public.course_events to authenticated;
 create policy own_events on public.course_events for select to authenticated
   using (owner_id = (select auth.uid()));
+
+do $$
+begin
+  if to_regclass('pg_catalog.pg_publication') is not null and to_regnamespace('realtime') is not null then
+    if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+      raise exception 'Supabase Realtime publication is missing.';
+    end if;
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'course_events'
+    ) then
+      alter publication supabase_realtime add table public.course_events;
+    end if;
+  end if;
+end;
+$$;
 
 create function public.create_course_event(p_setup jsonb)
 returns jsonb language plpgsql security definer set search_path = '' as $$
