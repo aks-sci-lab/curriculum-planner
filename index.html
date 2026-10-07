@@ -1123,17 +1123,17 @@
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
         <p class="note">온라인 신청 결과는 자동으로 집계표에 연동됩니다. 차수를 선택해 해당 결과를 확인하세요.</p>
-        <p class="note">아래 보관 인원은 선택한 학년 기준입니다. 확인서·집계표와 결과 엑셀 업로드는 회차별 두 학년 통합 데이터를 사용하며, 회차 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
+        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하며 다른 학년은 유지합니다. 확인서·집계표는 회차별 두 학년 데이터를 함께 사용하며, 회차 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
         <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택">
           <button class="round-tab" type="button" role="tab" data-round="1" aria-selected="true">1차</button>
           <button class="round-tab" type="button" role="tab" data-round="2" aria-selected="false">2차</button>
           <button class="round-tab" type="button" role="tab" data-round="3" aria-selected="false">3차</button>
         </div>
         <div id="developerResultUpload" class="hidden">
-        <p class="note">개발자 전용 · 선택한 차수의 수강신청 결과 엑셀을 업로드하면 확인서·집계표에 반영됩니다. 온라인 연동 차수는 먼저 연동을 해제하세요.</p>
+        <p class="note">개발자 전용 · 선택한 학년·차수의 결과 엑셀을 업로드하면 해당 학년만 교체해 확인서·집계표에 반영합니다. 다른 학년은 유지됩니다. 온라인 연동 차수는 먼저 연동을 해제하세요.</p>
         <div class="dropzone" id="dropzone">
           <div class="upload-icon" aria-hidden="true">↑</div>
-          <strong>선택한 차수의 학생별 신청 명단을 여기에 놓으세요</strong>
+          <strong>선택한 학년·차수의 학생별 신청 명단을 여기에 놓으세요</strong>
           <span>예시 형식 확인 또는 지난번 학생 명단 선택</span>
           <label class="file-button" for="rosterInput">학생 명단 선택</label>
           <a class="file-button" href="선택과목 수강신청결과 예시.xlsx" download>예시 엑셀 다운로드</a>
@@ -1666,6 +1666,7 @@ function courseClient_() {
       if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
         state.rounds[state.currentRound] = {
           fileName: state.fileName,
+          gradeFiles: state.rounds[state.currentRound]?.gradeFiles || {},
           students: state.students,
           courses: state.courses,
           classOverrides: state.classOverrides,
@@ -3643,7 +3644,7 @@ function courseClient_() {
         const data = state.rounds?.[round];
         const students = data?.students.filter((student) => String(student.grade) === (state.applicationMenuGrade || "1")) || [];
         const info = data
-          ? `${escapeHtml(data.fileName || "이전 파일")} · 현재 ${state.applicationMenuGrade || "1"}학년 ${students.length}명`
+          ? `${escapeHtml(data.gradeFiles?.[state.applicationMenuGrade || "1"] || data.fileName || "이전 파일")} · 현재 ${state.applicationMenuGrade || "1"}학년 ${students.length}명`
           : "불러온 명단 없음";
         const current = round === state.currentRound ? " · 현재 보기" : "";
         const button = data && round !== state.currentRound
@@ -4007,6 +4008,7 @@ function courseClient_() {
           const displayName = nameCount.get(item.subject) > 1 ? `${item.subject}(${grade}학년)` : item.subject;
           const course = {
             column: `app${courses.length}`,
+            applicationCurrentGrade: String(Number(grade) - 1),
             name: displayName,
             credits: item.credit || 0,
             semesterKey: String(item.semester || "").match(/[12]/)?.[0] || "",
@@ -4298,6 +4300,58 @@ function courseClient_() {
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
         (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
+    }
+
+    function storeDeveloperGradeResults(data, sourceLabel, grade) {
+      grade = String(grade);
+      const students = data.students.filter((student) => String(student.grade) === grade);
+      if (!students.length) throw new Error(`현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
+      const courses = normalizeCourses(data.courses.filter((course) =>
+        !course.applicationCurrentGrade || course.applicationCurrentGrade === grade));
+      const otherStudents = state.students.filter((student) => String(student.grade) !== grade);
+      const otherColumns = new Set(otherStudents.flatMap((student) => student.selections.map((course) => course.column)));
+      const otherCourses = state.courses.filter((course) =>
+        course.applicationCurrentGrade ? course.applicationCurrentGrade !== grade : otherColumns.has(course.column));
+      for (const course of otherCourses) otherColumns.add(course.column);
+      const occupied = new Set([...otherCourses.map((course) => String(course.column)),
+        ...Object.keys(state.classOverrides || {}), ...Object.keys(state.semesterAssignments || {}),
+        ...Object.keys(state.groupAssignments || {})]);
+      const remapped = new Map();
+      courses.forEach((course, index) => {
+        let column = `developer-${grade}-${index}`;
+        while (occupied.has(column)) column += "-";
+        occupied.add(column);
+        remapped.set(course.column, {...course, column, applicationCurrentGrade:grade});
+      });
+      const nextStudents = students.map((student) => ({
+        ...student, selections: student.selections.map((course) => ({...course, column: remapped.get(course.column).column}))
+      }));
+      state.students = [...otherStudents, ...nextStudents].sort((a,b) =>
+        Number(a.grade)-Number(b.grade) || Number(a.classroom)-Number(b.classroom) || Number(a.number)-Number(b.number));
+      state.courses = [...otherCourses, ...remapped.values()];
+      for (const key of ["classOverrides", "semesterAssignments", "groupAssignments"]) {
+        state[key] = Object.fromEntries(Object.entries(state[key] || {}).filter(([column]) => otherColumns.has(column)));
+      }
+      state.customGroupNames ||= [];
+      state.rounds ||= {"1":null,"2":null,"3":null};
+      const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
+      state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
+      state.fileName = Object.entries(gradeFiles).map(([g,name]) => `${g}학년: ${name}`).join(" / ");
+      state.selectedId = nextStudents[0].id;
+      state.selectedCourseColumns = [];
+      state.lastSelectedCourseColumn = null;
+      $("#fileName").textContent = state.fileName;
+      $("#round").value = `${state.currentRound}차`;
+      applyClassFilterOptions(state.students);
+      $("#searchInput").disabled = false;
+      $("#classFilter").disabled = false;
+      $("#studentCount").textContent = `${state.students.length} / ${state.students.length}명`;
+      renderRoster();
+      renderPreview();
+      renderSemesterClassifier();
+      renderAggregate();
+      persistState();
+      renderRoundStatus();
     }
 
     async function handleApplicationFiles(fileList) {
@@ -4771,6 +4825,7 @@ function courseClient_() {
         return;
       }
       const uploadRound = state.currentRound;
+      const uploadGrade = state.applicationMenuGrade || "1";
       const importRevision = state.applicationImportRevision;
       const reader = new FileReader();
       reader.onerror = () => { status.textContent = "파일을 읽지 못했습니다. 다시 선택해 주세요."; };
@@ -4779,6 +4834,7 @@ function courseClient_() {
           const sheets = await parseWorkbook(reader.result);
           if (!isDeveloperAccount()) throw new Error("개발자 계정으로 다시 로그인하세요.");
           if (state.currentRound !== uploadRound) throw new Error("파일을 읽는 중 회차가 바뀌었습니다. 해당 회차에서 다시 업로드하세요.");
+          if ((state.applicationMenuGrade || "1") !== uploadGrade) throw new Error("파일을 읽는 중 학년 메뉴가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
           if (state.applicationImportRevision !== importRevision) throw new Error("파일을 읽는 중 데이터가 삭제되었습니다. 다시 업로드하세요.");
           if (sheets[0]?.rows[0]?.[0] === "차수" && sheets[0].rows[0][5] === "선택과목") {
             const header = ["차수", "학년", "반", "번호", "성명", "선택과목"];
@@ -4787,7 +4843,9 @@ function courseClient_() {
             if (!rows.length) throw new Error("신청 결과가 비어 있습니다.");
             if (rows.some((row) => String(row[0]) !== state.currentRound)) throw new Error("업로드한 엑셀의 차수와 현재 선택한 차수가 다릅니다.");
             const subjects = collectApplicationSubjects({ includeExcluded: true });
-            const entries = rows.map((row) => ({
+            const gradeRows = rows.filter((row) => String(row[1]) === uploadGrade);
+            if (!gradeRows.length) throw new Error(`현재 ${uploadGrade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
+            const entries = gradeRows.map((row) => ({
               grade:String(row[1]), classroom:String(row[2]), number:String(row[3]), name:String(row[4]),
               selections: splitGoogleFormSelections(row[5], new Set([
                 ...(subjects?.[String(Number(row[1])+1)] || []).map((course) => course.subject),
@@ -4797,35 +4855,20 @@ function courseClient_() {
             }));
             const merged = mergeApplications(entries);
             if (merged.errors.length) throw new Error(merged.errors.join("\n"));
-            applyMergedApplications(entries, file.name);
+            const unclassified = classifyApplicationRecords(merged);
+            storeDeveloperGradeResults(merged, file.name, uploadGrade);
+            status.style.color = "#287956";
+            status.textContent = `${state.currentRound}차 현재 ${uploadGrade}학년 ${entries.length}명 저장 · 다른 학년 데이터는 유지됩니다.` +
+              (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}` : "");
             return;
           }
           const data = createRecords(sheets[0].rows);
+          data.students = data.students.filter((student) => String(student.grade) === uploadGrade);
+          if (!data.students.length) throw new Error(`현재 ${uploadGrade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
           const unclassified = classifyApplicationRecords(data);
-          $("#fileName").textContent = file.name;
-          state.students = data.students;
-          state.courses = normalizeCourses(data.courses);
-          state.classOverrides = {};
-          state.semesterAssignments = {};
-          state.customGroupNames = [];
-          state.groupAssignments = {};
-          state.selectedCourseColumns = [];
-          state.lastSelectedCourseColumn = null;
-          state.fileName = file.name;
-          state.selectedId = data.students[0].id;
-          $("#round").value = `${state.currentRound}차`;
-          applyClassFilterOptions(data.students);
-          $("#searchInput").disabled = false;
-          $("#classFilter").disabled = false;
-          $("#studentCount").textContent = `${data.students.length} / ${data.students.length}명`;
-          renderRoster();
-          renderPreview();
-          renderSemesterClassifier();
-          renderAggregate();
-          renderRoundStatus();
-          persistState();
+          storeDeveloperGradeResults(data, file.name, uploadGrade);
           status.style.color = "#287956";
-          status.textContent = `${state.currentRound}차 수강신청: ${data.students.length}명, 과목 ${data.courses.length}개를 불러왔습니다.` +
+          status.textContent = `${state.currentRound}차 현재 ${uploadGrade}학년 ${data.students.length}명 저장 · 다른 학년 데이터는 유지됩니다.` +
             (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
         } catch (error) {
           const message = error instanceof Error ? error.message : "파일을 처리하는 중 오류가 발생했습니다.";

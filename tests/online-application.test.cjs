@@ -454,9 +454,9 @@ test("developer result Excel imports both layouts and rejects invalid or expired
     FileReader:class { readAsArrayBuffer(){completion=this.onload();} },
     parseWorkbook:async()=>workbook,
     collectApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1",credit:3}],"3":[]}),
-    mergeApplications:()=>({errors:[]}),
-    applyMergedApplications:(entries)=>{imported=plain(entries);},
-    createRecords:()=>({students:[{id:"wide"}],courses:[]}),
+    mergeApplications:(entries)=>{imported=plain(entries);return {errors:[],students:entries,courses:[]};},
+    storeDeveloperGradeResults:(data)=>{state.students=data.students;persisted++;},
+    createRecords:()=>({students:[{id:"wide",grade:"1"}],courses:[]}),
     classifyApplicationRecords:()=>[],
     normalizeCourses:(courses)=>courses,
     applyClassFilterOptions(){}, renderRoster(){},renderPreview(){},renderSemesterClassifier(){},
@@ -467,6 +467,7 @@ test("developer result Excel imports both layouts and rejects invalid or expired
   workbook=[{rows:[["차수","학년","반","번호","성명","선택과목"],["2","1","1","1","가상","수학"]]}];
   ctx.handleWorkbook({name:"results.xlsx"}); await completion;
   assert.deepEqual(imported[0].selections,["수학"]);
+  state.students=existing;
   imported=null;
   workbook[0].rows[1][5]="수학, 알 수 없는 과목";
   ctx.handleWorkbook({name:"results.xlsx"}); await completion;
@@ -476,16 +477,74 @@ test("developer result Excel imports both layouts and rejects invalid or expired
   workbook=[{rows:[["과목별 결과"]]}];
   ctx.handleWorkbook({name:"wide.xlsx"}); await completion;
   assert.equal(state.students[0].id,"wide");
-  assert.equal(persisted,1);
+  assert.equal(persisted,2);
+  state.applicationMenuGrade="2";
+  ctx.handleWorkbook({name:"wrong-grade.xlsx"}); await completion;
+  assert.match(status.textContent,/현재 2학년 학생이 없는/);
+  assert.equal(persisted,2);
+  state.applicationMenuGrade="1";
+  workbook=[{rows:[["차수","학년","반","번호","성명","선택과목"],
+    ["2","1","1","1","가상","수학"],["2","2","1","1","다른 학년","다른 과목"]]}];
+  ctx.handleWorkbook({name:"mixed.xlsx"}); await completion;
+  assert.equal(imported.length,1);
+  assert.equal(imported[0].grade,"1");
+  assert.equal(persisted,3);
+  ctx.parseWorkbook=async()=>{state.applicationMenuGrade="2";return workbook;};
+  ctx.handleWorkbook({name:"changed-grade.xlsx"}); await completion;
+  assert.match(status.textContent,/학년 메뉴가 바뀌었/);
+  assert.equal(persisted,3);
+  state.applicationMenuGrade="1";
   developer=false;
   ctx.handleWorkbook({name:"forbidden.xlsx"});
   assert.match(status.textContent,/개발자 계정/);
-  assert.equal(persisted,1);
+  assert.equal(persisted,3);
   developer=true;
   ctx.parseWorkbook=async()=>{developer=false;return workbook;};
   ctx.handleWorkbook({name:"expired.xlsx"}); await completion;
   assert.match(status.textContent,/다시 로그인/);
-  assert.equal(persisted,1);
+  assert.equal(persisted,3);
+});
+
+test("developer results replace only the chosen grade and retain courses, settings and round storage", () => {
+  const state={currentRound:"1",students:[],courses:[],rounds:{"1":null,"2":{students:[{id:"other-round"}]}}};
+  const ctx=vm.createContext({
+    state,$:()=>({}),normalizeCourses:(courses)=>courses,
+    applyClassFilterOptions(){},renderRoster(){},renderPreview(){},renderSemesterClassifier(){},renderAggregate(){},
+    renderRoundStatus(){},
+    persistState(){ctx.syncActiveRound();},
+  });
+  vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
+  vm.runInContext(functionSource("function storeDeveloperGradeResults(", "async function handleApplicationFiles("),ctx);
+  const data=(grade,name)=>({
+    courses:[{column:4,name:"공통 이름",credits:3},{column:5,name:"미신청 과목",credits:3}],
+    students:[{id:`${grade}-${name}`,grade,name,classroom:"1",number:"1",totalCredits:3,
+      selections:[{column:4,name:"공통 이름",credits:3}]}]
+  });
+  ctx.storeDeveloperGradeResults(data("1","첫학생"),"1학년.xlsx","1");
+  const firstColumn=state.students[0].selections[0].column;
+  state.classOverrides[firstColumn]=2;
+  state.semesterAssignments[firstColumn]="1";
+  state.groupAssignments[firstColumn]="유지할 그룹";
+  ctx.storeDeveloperGradeResults(data("2","둘째학생"),"2학년.xlsx","2");
+  assert.deepEqual(plain(state.students.map((s)=>s.grade)),["1","2"]);
+  assert.equal(state.courses.length,4); // Keep zero-enrollment courses in aggregate reports.
+  assert.equal(new Set(state.courses.map((course)=>course.column)).size,4);
+  assert.equal(state.classOverrides[firstColumn],2);
+  assert.equal(state.groupAssignments[firstColumn],"유지할 그룹");
+  const secondColumn=state.students[1].selections[0].column;
+  state.classOverrides[secondColumn]=3;
+  ctx.storeDeveloperGradeResults(data("1","새학생"),"1학년_수정.xlsx","1");
+  assert.deepEqual(plain(state.students.map((s)=>s.name)),["새학생","둘째학생"]);
+  assert.equal(state.classOverrides[firstColumn],undefined);
+  assert.equal(state.classOverrides[secondColumn],3);
+  assert.equal(state.courses.length,4);
+  assert.deepEqual(plain(state.rounds["1"].gradeFiles),{"1":"1학년_수정.xlsx","2":"2학년.xlsx"});
+  const restored=plain(state.rounds["1"]);
+  assert.deepEqual(restored.students.map((s)=>s.grade),["1","2"]);
+  assert.equal(state.rounds["2"].students[0].id,"other-round");
+  const previous=plain(state);
+  assert.throws(()=>ctx.storeDeveloperGradeResults(data("2","잘못된학년"),"wrong.xlsx","1"),/학생이 없는/);
+  assert.deepEqual(plain(state),previous);
 });
 
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
