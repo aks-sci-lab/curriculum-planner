@@ -295,13 +295,16 @@
 
   function renderStudentApplication(data) {
     byId("cloudStudentCourses").classList.remove("hidden");
-    byId("cloudStudentTitle").textContent = `${data.schoolYear}학년도 ${data.schoolName} ${data.round}차 수강신청`;
     const s = data.student;
+    if (!["1", "2"].includes(String(s.grade))) throw new Error("신청 가능한 현재 학년은 1·2학년입니다. 교사에게 명렬 확인을 요청하세요.");
+    const targetGrade = String(Number(s.grade) + 1);
+    byId("cloudStudentTitle").textContent = `${data.schoolYear}학년도 ${data.schoolName} ${data.round}차 · ${targetGrade}학년 수강신청`;
     byId("cloudStudentIdentity").textContent = `${s.grade}학년 ${s.classroom}반 ${s.number}번 ${s.name} · 신청 대상: ${Number(s.grade) + 1}학년`;
     const choices = byId("cloudStudentChoices");
     choices.replaceChildren();
     if (data.groups?.length) {
       for (const group of data.groups) {
+        if (group.grade && String(group.grade) !== targetGrade) throw new Error("신청 대상 학년의 그룹 설정이 잘못되었습니다. 교사에게 확인을 요청하세요.");
         const fieldset = document.createElement("fieldset");
         fieldset.dataset.group = group.id;
         fieldset.dataset.count = group.count;

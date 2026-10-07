@@ -124,7 +124,7 @@ test("student flow uses public RPC only, displays own data and submits selection
   f.respond = async (request) => ({ data: request.url.endsWith("get_course_application") ? data : { message: "저장 완료" } });
   f.elements.cloudStudentCode.value = "a".repeat(32);
   await f.fire("cloudStudentLogin", "submit");
-  assert.match(f.elements.cloudStudentTitle.textContent, /가상학교 2차/);
+  assert.match(f.elements.cloudStudentTitle.textContent, /가상학교 2차 · 2학년 수강신청/);
   assert.match(f.elements.cloudStudentIdentity.textContent, /가상학생/);
   const box = f.elements.cloudStudentChoices.children[0].children[1].children[0];
   assert.equal(f.elements.cloudStudentChoices.children[0].children[1].children[1].textContent,"수학(일반) · 3학점");
@@ -157,6 +157,25 @@ test("closed applications disable submission and setup errors are explicit", asy
   await f.fire("cloudStudentLogin", "submit");
   assert.equal(f.elements.cloudStudentSave.disabled, true);
   assert.match(f.elements.cloudStudentMessage.textContent, /마감/);
+});
+
+test("code login fixes promoted grade from roster and does not expose a grade switch", async () => {
+  for (const grade of ["1","2"]) {
+    const targetGrade=String(Number(grade)+1);
+    const f=fixture({href:"https://school.example/app/#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"});
+    f.respond=async()=>({data:{
+      student:{grade,classroom:"1",number:"1",name:"가상"},
+      schoolName:"학교",schoolYear:"2026",round:"1",open:true,
+      courses:[{subject:`${targetGrade}학년 과목`,credit:3}],selections:[],
+      groups:[{id:"group",grade:targetGrade,name:"그룹",count:1,courses:[`${targetGrade}학년 과목`]}],
+    }});
+    f.elements.cloudStudentCode.value="123456";
+    await f.fire("cloudStudentLogin","submit");
+    assert.match(f.elements.cloudStudentTitle.textContent,new RegExp(`${targetGrade}학년 수강신청`));
+    assert.match(f.elements.cloudStudentIdentity.textContent,new RegExp(`신청 대상: ${targetGrade}학년`));
+    const boxes=f.elements.cloudStudentChoices.children[0].children.filter((item)=>item.tag==="label");
+    assert.deepEqual(boxes.map((item)=>item.children[0].value),[`${targetGrade}학년 과목`]);
+  }
 });
 
 test("teacher Google PKCE login, roster creation and logout do not persist credentials", async () => {

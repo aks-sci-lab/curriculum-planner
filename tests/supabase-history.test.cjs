@@ -139,5 +139,21 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
     await as("authenticated",owner);
     const results=(await db.query("select public.manage_course_event($1::uuid,'export') r",[semesters.id])).rows[0].r;
     assert.deepEqual(results.entries[0].selections,["수학 (1학기)","수학 (2학기)"]);
+    setup.subjects["3"]=[{subject:"3학년 과학",semester:"1",credit:3}];
+    setup.groups.push({id:"grade3",grade:"3",semester:"1",name:"과학",count:1,courses:["3학년 과학"]});
+    setup.groups[0].courses=["수학 (1학기)"];
+    setup.roster[1].grade="2";
+    const gradeScoped=await create();
+    await as("anon");
+    for (const [index,names] of [[0,["수학 (1학기)","수학 (2학기)"]],[1,["3학년 과학"]]]) {
+      const student=gradeScoped.students[index];
+      const data=await get(gradeScoped.id,student.code);
+      assert.deepEqual(data.courses.map((course)=>course.subject),names);
+      assert.ok(data.groups.every((group)=>group.grade===String(Number(student.grade)+1)));
+      const submit=(choices)=>db.query("select public.save_scoped_course_application($1::uuid,$2,$3::jsonb)",
+        [gradeScoped.id,student.code,JSON.stringify(choices)]);
+      await submit(names);
+      await assert.rejects(()=>submit([...names,index===0?"3학년 과학":"수학 (1학기)"]),/신청 가능한 과목/);
+    }
   } finally { await db.close(); }
 });

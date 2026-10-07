@@ -245,6 +245,45 @@ test("Google Form classified labels map back to original course names and accept
   ]);
 });
 
+test("generated Google Form routes each current grade to only its promoted-grade section", () => {
+  const generator=vm.createContext({$:(selector)=>({value:selector==="#schoolName"?"가상학교":"2026"})});
+  vm.runInContext(functionSource("function buildAppsScriptCode(", "function splitGoogleFormSelections("),generator);
+  for (const subjects of [setup().subjects,{"2":setup().subjects["2"],"3":[]}]) {
+    const pages=[],items=[];
+    const gradeItem={setTitle(){return this;},setRequired(){return this;},
+      createChoice:(label,page)=>({label,page}),setChoices(choices){this.choices=choices;}};
+    const form={
+      setDescription(){},setLimitOneResponsePerUser(){},setDestination(){},
+      addMultipleChoiceItem:()=>gradeItem,
+      addTextItem:()=>({setTitle(){return this;},setRequired(){return this;}}),
+      addPageBreakItem(){
+        const page={setTitle(title){this.title=title;return this;},setGoToPage(target){this.navigation=target;return this;}};
+        pages.push(page);return page;
+      },
+      addCheckboxItem(){
+        const item={page:pages.at(-1),setTitle(){return this;},setChoiceValues(values){this.values=values;return this;},
+          setHelpText(){return this;}};
+        items.push(item);return item;
+      },getPublishedUrl:()=>"https://example.invalid/form",
+    };
+    const ctx=vm.createContext({
+      FormApp:{create:()=>form,PageNavigationType:{SUBMIT:"submit"},DestinationType:{SPREADSHEET:"sheet"}},
+      SpreadsheetApp:{create:()=>({getId:()=>"sheet",getUrl:()=>"url"})},Logger:{log(){}},
+    });
+    vm.runInContext(generator.buildAppsScriptCode(subjects),ctx);
+    ctx.createCourseApplicationForm();
+    assert.equal(gradeItem.choices.length,pages.length);
+    for (const choice of gradeItem.choices) {
+      const target=String(Number(choice.label[0])+1);
+      assert.equal(choice.page.title,`${target}학년 선택과목`);
+      assert.deepEqual(plain(items.filter((item)=>item.page===choice.page).flatMap((item)=>item.values)),
+        subjects[target].map((course)=>course.subject));
+      const nextPage=pages[pages.indexOf(choice.page)+1];
+      if (nextPage) assert.equal(nextPage.navigation,"submit");
+    }
+  }
+});
+
 test("Excel style fills resolve RGB, theme, tint, indexed and uncolored cells", async () => {
   function node(tag,attributes={},children=[]) {
     return {children,textContent:"",
