@@ -115,5 +115,29 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
     setup.groups[0].courses=["A","B"];
     setup.groups[0].count=3;
     await assert.rejects(() => create(), /선택 수/);
+    await db.exec("reset role");
+    await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "upgrade-semester-groups.sql"), "utf8"));
+    await as("authenticated",owner);
+    setup.subjects["2"]=[
+      {subject:"수학 (1학기)",semester:"1",credit:3},
+      {subject:"수학 (2학기)",semester:"2",credit:3}
+    ];
+    setup.groups=[
+      {id:"s1",grade:"2",semester:"1",name:"수학",count:1,courses:["수학 (1학기)"]},
+      {id:"s2",grade:"2",semester:"2",name:"수학",count:1,courses:["수학 (2학기)"]}
+    ];
+    const semesters=await create();
+    setup.groups[0].courses.push("수학 (2학기)");
+    await assert.rejects(()=>create(),/다른 학기/);
+    await as("anon");
+    const semesterSave=(choices)=>db.query("select public.save_scoped_course_application($1::uuid,$2,$3::jsonb)",
+      [semesters.id,semesters.students[0].code,JSON.stringify(choices)]);
+    await assert.rejects(()=>semesterSave(["수학 (1학기)"]),/정확히 1/);
+    await semesterSave(["수학 (1학기)","수학 (2학기)"]);
+    // Existing events retain their original group schema and saved selections.
+    assert.deepEqual((await get(grouped.id,grouped.students[0].code)).selections,["B"]);
+    await as("authenticated",owner);
+    const results=(await db.query("select public.manage_course_event($1::uuid,'export') r",[semesters.id])).rows[0].r;
+    assert.deepEqual(results.entries[0].selections,["수학 (1학기)","수학 (2학기)"]);
   } finally { await db.close(); }
 });

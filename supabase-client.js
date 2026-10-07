@@ -242,7 +242,7 @@
         return;
       }
       if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
-      const subjects = selectedApplicationSubjects();
+      const subjects = getGroupedApplicationSubjects();
       if (!subjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
       const setup = {
         type: "course-application-setup",
@@ -306,7 +306,8 @@
         fieldset.dataset.group = group.id;
         fieldset.dataset.count = group.count;
         const legend = document.createElement("legend");
-        legend.textContent = `${group.name} · 정확히 ${group.count}과목 선택`;
+        const semester = group.semester ? (group.semester==="0"?"학기 미정":`${group.semester}학기`) : "";
+        legend.textContent = `${semester ? semester+" · " : ""}${group.name} · 정확히 ${group.count}과목 선택`;
         fieldset.appendChild(legend);
         for (const subject of group.courses) {
           const course = data.courses.find((c) => c.subject === subject);

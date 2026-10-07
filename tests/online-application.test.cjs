@@ -142,6 +142,7 @@ test("application subjects include every student-choice course in promoted grade
     state: { curriculumImportedLayout: {}, applicationExcluded: { "2:수학": true } },
     importedPlanColumnMap: () => ({ subject: 0, opCredit: 0, baseCredit: -1, semesters: [1, 2, 3, 4, 5, 6] }),
     importedPlanCourseContexts: () => contexts,
+    curriculumCellFill: () => "",
   });
   vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("), ctx);
   const result = plain(ctx.selectedApplicationSubjects());
@@ -165,10 +166,11 @@ test("merged subject header uses actual course names and splits course lists by 
     ],
     mergedRanges: ["A1:A2", "B1:B2", "C1:D2", "E1:E2", "F1:F2",
       "G1:H1", "I1:J1", "K1:L1", "A4:A8", "G7:L7"],
+    cellFills: {"3:8":"#E2EFD9","4:8":"#E2EFD9","5:9":"#E2EFD9","6:6":"#D6DCE4"},
   };
   const ctx = vm.createContext({ state: { curriculumImportedLayout: layout } });
   for (const name of ["columnIndex", "expandCurriculumLayoutRows", "importedPlanColumnMap",
-    "importedPlanCoveredCells", "curriculumSelectionType", "importedPlanCourseContexts", "collectApplicationSubjects"]) {
+    "importedPlanCoveredCells", "curriculumSelectionType", "importedPlanCourseContexts", "curriculumCellFill", "collectApplicationSubjects"]) {
     const start = frontend.indexOf(`function ${name}(`);
     const next = frontend.indexOf("\n    function ", start + 1);
     vm.runInContext(frontend.slice(start, next), ctx);
@@ -183,6 +185,63 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.equal(subjects["2"].find((c) => c.subject === "물리학 실험").semester, "1·2");
   assert.deepEqual(subjects["3"].map((c) => c.subject), ["주제 탐구 독서"]);
   assert.equal(subjects["3"][0].semester, "2");
+  assert.equal(subjects["2"].find((c)=>c.subject==="세계사").semesterColors["1"],"#E2EFD9");
+  assert.equal(subjects["2"].find((c)=>c.subject==="물리학").semesterColors["1"],"#E2EFD9");
+  assert.equal(subjects["2"].find((c)=>c.subject==="물리학 실험").semesterColors["2"],"#D6DCE4");
+});
+
+test("Excel style fills resolve RGB, theme, tint, indexed and uncolored cells", async () => {
+  function node(tag,attributes={},children=[]) {
+    return {children,textContent:"",
+      getAttribute:(name)=>attributes[name] ?? null,hasAttribute:(name)=>name in attributes,
+      getElementsByTagNameNS(ns,name) {
+        return children.flatMap((c)=>[...(c.tag===name?[c]:[]),...c.getElementsByTagNameNS(ns,name)]);
+      },tag};
+  }
+  const fill=(attributes,type="solid")=>node("fill",{},[node("patternFill",{patternType:type},[node("fgColor",attributes)])]);
+  const styles=node("styleSheet",{},[
+    node("fills",{},[fill({},"none"),fill({rgb:"FFE2EFD9"}),fill({theme:"4"}),
+      fill({indexed:"42"}),fill({theme:"0"}),fill({theme:"4",tint:"0.5"})]),
+    node("cellXfs",{},Array.from({length:6},(_,fillId)=>node("xf",{fillId:String(fillId)})))
+  ]);
+  const theme=node("theme",{},[node("clrScheme",{},[
+    node("dk1",{},[node("sysClr",{lastClr:"000000"})]),
+    node("lt1",{},[node("srgbClr",{val:"FFFFFF"})]),
+    node("dk2",{},[node("srgbClr",{val:"445566"})]),
+    node("lt2",{},[node("srgbClr",{val:"EEEEEE"})]),
+    node("accent1",{},[node("srgbClr",{val:"E2EFD9"})])
+  ])]);
+  const ctx=vm.createContext({NS_MAIN:"m",readZipEntry:async(b,d,p)=>p.includes("styles")?styles:theme,parseXml:(n)=>n});
+  vm.runInContext(functionSource("async function readWorkbookFillStyles(", "function isSelected("),ctx);
+  assert.deepEqual(plain(await ctx.readWorkbookFillStyles(null,null)),["","#E2EFD9","#E2EFD9","#CCFFCC","","#F1F7EC"]);
+});
+
+test("cell fill positions survive layout cropping and inserted rows", () => {
+  const ctx=vm.createContext({});
+  for (const name of ["columnIndex","cropCurriculumSheet","insertImportedPlanLayoutRow","curriculumCellFill"]) {
+    const start=frontend.indexOf(`function ${name}(`),next=frontend.indexOf("\n    function ",start+1);
+    vm.runInContext(frontend.slice(start,next),ctx);
+  }
+  const cropped=ctx.cropCurriculumSheet({name:"표",rows:[[],["","과목","학기"],["","A",3],["","B",""]],
+    layout:{cellFills:{"2:2":"#E2EFD9"},mergedRanges:["C3:C4"],columnWidths:[],rowHeights:{}}});
+  assert.equal(cropped.cellFills["1:1"],"#E2EFD9");
+  assert.equal(ctx.curriculumCellFill(cropped,2,1),"#E2EFD9");
+  const inserted=ctx.insertImportedPlanLayoutRow(cropped,1,["",""]);
+  assert.equal(inserted.cellFills["2:1"],"#E2EFD9");
+  assert.equal(ctx.curriculumCellFill(inserted,3,1),"#E2EFD9");
+});
+
+test("semester-qualified result imports retain separate courses, credits and semester keys", () => {
+  const ctx=vm.createContext({collectApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1·2",credit:3,area:"수학"}],"3":[]})});
+  vm.runInContext(functionSource("function mergeApplications(","function downloadApplicationForm("),ctx);
+  const common={grade:"1",classroom:"1",number:"1",name:"가상"};
+  const result=ctx.mergeApplications([{...common,selections:["수학 (1학기)","수학 (2학기)"]}]);
+  assert.deepEqual(plain(result.errors),[]);
+  assert.deepEqual(plain(result.students[0].selections.map((c)=>c.semesterKey)),["1","2"]);
+  assert.equal(result.students[0].totalCredits,6);
+  const legacy=ctx.mergeApplications([{...common,selections:["수학"]}]);
+  assert.equal(legacy.courses.length,1);
+  assert.deepEqual(plain(legacy.errors),[]);
 });
 
 test("roster upload exports selected subjects and round without overwriting application results", async () => {

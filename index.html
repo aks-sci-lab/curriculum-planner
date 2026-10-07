@@ -901,6 +901,11 @@
     #cloudCodePreview .print-page { padding: 20px; margin-top: 12px; border: 1px solid #d7deed; }
     @media print { #cloudCodeDialog, #cloudCodeDialog::backdrop { display: none !important; } }
     .course-history { max-height: 500px; overflow: auto; padding: 12px; background: #f2f5fb; }
+    .course-group-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; margin-top:12px; }
+    .course-group-grid fieldset { min-width:0; max-height:480px; overflow:auto; border:1px solid #cad5e5; border-radius:8px; padding:12px; }
+    .course-group-grid input[type=number] { width:70px; }
+    .group-scope-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+    .group-scope-tabs [aria-selected=true] { background:#244ba0; color:white; }
     #printBatch { display: none; }
     @media (max-width: 980px) {
       .workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
@@ -1061,6 +1066,23 @@
       <section class="workflow-step-panel hidden" id="workflowStep2Panel">
         <h3>2단계 · 학년별 수강신청</h3>
         <p class="note">1학년은 2학년 때 들을 과목, 2학년은 3학년 때 들을 과목을 신청받은 결과 파일(.xlsx)을 차수별로 불러옵니다. 차수를 선택한 뒤 명단을 올리면 해당 차수에 저장되며, 1차 결과를 보관한 채 2차·3차를 추가로 불러와 전환해 볼 수 있습니다.</p>
+        <div class="group-scope-tabs" id="applicationWorkspaceTabs" role="tablist" aria-label="수강신청 작업">
+          <button class="button" id="applicationGroupsTab" role="tab" aria-selected="true" aria-controls="applicationGroupsPanel" type="button">① 과목·그룹 설정</button>
+          <button class="button" id="applicationOnlineTab" role="tab" aria-selected="false" aria-controls="supabaseTeacherPanel" type="button">② 온라인 신청 관리</button>
+          <button class="button" id="applicationResultsTab" role="tab" aria-selected="false" aria-controls="applicationResultsPanel" type="button">③ 결과 불러오기</button>
+          <button class="button" id="applicationLegacyTab" role="tab" aria-selected="false" aria-controls="applicationLegacyPanel" type="button">다른 신청 방식</button>
+        </div>
+        <section class="application-subject-box" id="applicationGroupsPanel" role="tabpanel" aria-labelledby="applicationGroupsTab">
+          <details>
+          <summary class="application-subject-title">신청 받을 전체 과목 확인 (학생선택교육과정 · 자동 반영)</summary>
+          <div id="applicationSubjectList" class="application-subject-list"></div>
+          </details>
+          <h3>수강신청 선택 그룹 설정</h3>
+          <p class="note">같은 학기 열의 같은 배경색으로 선택 그룹을 구성합니다. 색 없는 과목은 학기별 미분류에서 편집·배치하세요. 선택 수는 직접 지정하며 다른 학기의 그룹으로 이동할 수 없습니다. 이전 그룹 설정은 학기별로 새로 지정해야 합니다. 색상 정보가 없는 기존 편제표는 다시 업로드한 뒤 색상으로 다시 구성하세요.</p>
+          <div id="courseGroupEditor"></div>
+          <p id="courseGroupMessage" role="status"></p>
+        </section>
+        <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
         <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택">
           <button class="round-tab" type="button" role="tab" data-round="1" aria-selected="true">1차</button>
           <button class="round-tab" type="button" role="tab" data-round="2" aria-selected="false">2차</button>
@@ -1079,7 +1101,13 @@
           <button class="button" id="resetData" type="button">불러온 데이터 초기화</button>
         </div>
         <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
-        <section class="application-subject-box" id="supabaseTeacherPanel">
+        <div class="application-tools">
+          <label class="file-button" for="applicationFilesInput">신청 파일 취합하기</label>
+          <input class="hidden" id="applicationFilesInput" type="file" accept=".json" multiple>
+        </div>
+        <div class="round-status-list" id="roundStatusList"></div>
+        </section>
+        <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
           <h3>온라인 수강신청 · Supabase</h3>
           <p class="note">교사는 구글 로그인 후 명렬을 업로드하면 신청이 생성됩니다. 학생은 이 웹사이트의 공통 학생 입구에서 개인 코드만 입력합니다. 명렬과 신청은 공통 서버에 저장되며 각 교사는 본인이 생성한 신청만 관리할 수 있습니다. 이메일 인증번호나 SMTP 설정은 필요 없습니다.</p>
           <div id="cloudTeacherLogin">
@@ -1102,9 +1130,10 @@
           <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
           <details class="google-form-guide">
             <summary>최초 운영자 설정 (교사별 Apps Script 배포 불필요)</summary>
-            <p class="note">신규 설치는 Supabase SQL Editor에서 `supabase/setup.sql` 다음 `supabase/upgrade-codes-history.sql`을 실행하세요. 기존 설치는 업데이트 파일만 한 번 실행합니다. Google 로그인 제공자 연결도 필요하며 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요.</p>
+            <p class="note">신규 설치는 Supabase SQL Editor에서 setup.sql → upgrade-codes-history.sql → upgrade-selection-groups.sql → upgrade-semester-groups.sql 순서로 실행하세요(supabase 폴더). 기존 설치는 아직 실행하지 않은 업데이트만 한 번 실행합니다. Google 로그인 제공자 연결도 필요하며 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요.</p>
           </details>
         </section>
+        <section class="hidden" id="applicationLegacyPanel" role="tabpanel" aria-labelledby="applicationLegacyTab">
         <details class="google-form-guide">
           <summary>기존 Apps Script 방식 (이전 신청 호환용)</summary>
         <div class="application-tools">
@@ -1141,8 +1170,6 @@
         </details>
         <div class="application-tools">
           <button class="button" id="downloadApplicationForm" type="button">학생용 신청 양식 만들기</button>
-          <label class="file-button" for="applicationFilesInput">신청 파일 취합하기</label>
-          <input class="hidden" id="applicationFilesInput" type="file" accept=".json" multiple>
         </div>
         <p class="note">`학생용 신청 양식 만들기`는 1단계 편제표의 선택과목으로 만든 학생용 웹페이지(.html)를보냅니다. 이 파일을 학생에게 배포(학교 홈페이지·LMS·메일)하면 학생이 과목을 고른 뒤 신청 파일(.json)을 저장합니다. 학생들의 신청 파일을 모아 `신청 파일 취합하기`로 올리면 현재 차수 명단이 완성됩니다.</p>
         <div class="application-tools">
@@ -1163,15 +1190,7 @@
             <li>학교 구글 계정(Workspace)을 쓰는 경우 생성 코드 맨 위의 `CONFIG.requireSchoolLogin`을 true로 바꾸면 로그인한 학생만 응답할 수 있고, `CONFIG.adminEmails`에 이메일을 넣으면 응답 시트를 다른 관리자와 공동 관리할 수 있습니다.</li>
           </ol>
         </details>
-        <div class="application-subject-box">
-          <p class="application-subject-title">신청 받을 과목 (학생선택교육과정 중 진급 학년에 편제된 전체 과목 · 자동 반영)</p>
-          <div id="applicationSubjectList" class="application-subject-list"></div>
-          <h3>수강신청 선택 그룹 설정</h3>
-          <p class="note">그룹과 선택 수는 자동 지정하지 않습니다. 그룹명을 입력해 그룹을 만든 뒤 미분류 과목을 여러 개 체크하고 일괄 이동하세요. 그룹마다 정확히 선택할 과목 수를 직접 입력합니다. 검색·표시 과목 전체 선택을 지원하며 모든 과목을 배치한 뒤 신청을 생성하세요. 새 Supabase 신청에 적용되며 시간표용 그룹화와 별개입니다.</p>
-          <div id="courseGroupEditor"></div>
-          <p id="courseGroupMessage" role="status"></p>
-        </div>
-        <div class="round-status-list" id="roundStatusList"></div>
+        </section>
       </section>
       <section class="workflow-placeholder hidden" id="workflowStep10Panel">
         시간표 작성 단계입니다. 교시/교실 제약 기반 시간표 편성 화면을 여기에 확장할 수 있도록 구조를 준비했습니다.
@@ -2048,6 +2067,7 @@ function courseClient_() {
             [...item.getElementsByTagNameNS(NS_MAIN, "t")].map((text) => text.textContent).join(""))
         : [];
       const relationNodes = [...relationships.getElementsByTagNameNS(NS_PACKAGE_REL, "Relationship")];
+      const fillStyles = includeLayout ? await readWorkbookFillStyles(buffer, directory) : [];
       const sheets = [];
       for (const sheetNode of sheetNodes) {
         const relationId = sheetNode.getAttributeNS(NS_REL, "id");
@@ -2061,6 +2081,7 @@ function courseClient_() {
         if (!sheet) throw new Error(`'${sheetNode.getAttribute("name")}' 시트를 찾지 못했습니다.`);
         const rows = [];
         const rowHeights = {};
+        const cellFills = {};
         for (const rowNode of sheet.getElementsByTagNameNS(NS_MAIN, "row")) {
           const rowNumber = Number(rowNode.getAttribute("r")) - 1;
           const height = Number(rowNode.getAttribute("ht"));
@@ -2068,6 +2089,8 @@ function courseClient_() {
           const row = rows[rowNumber] || [];
           for (const cell of rowNode.getElementsByTagNameNS(NS_MAIN, "c")) {
             const index = columnIndex(cell.getAttribute("r"));
+            const fill = fillStyles[Number(cell.getAttribute("s") || 0)];
+            if (fill) cellFills[`${rowNumber}:${index}`] = fill;
             const type = cell.getAttribute("t");
             let value = "";
             if (type === "inlineStr") {
@@ -2119,10 +2142,70 @@ function courseClient_() {
         sheets.push({
           name: sheetNode.getAttribute("name"),
           rows,
-          ...(includeLayout ? { layout: { mergedRanges, columnWidths, rowHeights } } : {})
+          ...(includeLayout ? { layout: { mergedRanges, columnWidths, rowHeights, cellFills } } : {})
         });
       }
       return sheets;
+    }
+
+    async function readWorkbookFillStyles(buffer, directory) {
+      const bytes = await readZipEntry(buffer, directory, "xl/styles.xml");
+      if (!bytes) return [];
+      const styles = parseXml(bytes, "셀 색상");
+      const themeBytes = await readZipEntry(buffer, directory, "xl/theme/theme1.xml");
+      const theme = themeBytes ? parseXml(themeBytes, "테마 색상") : null;
+      const themeColors = [];
+      if (theme) {
+        const scheme = theme.getElementsByTagNameNS("*", "clrScheme")[0];
+        for (const color of scheme?.children || []) {
+          const node = color.children[0];
+          themeColors.push(node?.getAttribute("lastClr") || node?.getAttribute("val") || "");
+        }
+        [themeColors[0], themeColors[1]] = [themeColors[1], themeColors[0]];
+        [themeColors[2], themeColors[3]] = [themeColors[3], themeColors[2]];
+      }
+      const indexed = ["000000","FFFFFF","FF0000","00FF00","0000FF","FFFF00","FF00FF","00FFFF",
+        "000000","FFFFFF","FF0000","00FF00","0000FF","FFFF00","FF00FF","00FFFF",
+        "800000","008000","000080","808000","800080","008080","C0C0C0","808080",
+        "9999FF","993366","FFFFCC","CCFFFF","660066","FF8080","0066CC","CCCCFF",
+        "000080","FF00FF","FFFF00","00FFFF","800080","800000","008080","0000FF",
+        "00CCFF","CCFFFF","CCFFCC","FFFF99","99CCFF","FF99CC","CC99FF","FFCC99",
+        "3366FF","33CCCC","99CC00","FFCC00","FF9900","FF6600","666699","969696",
+        "003366","339966","003300","333300","993300","993366","333399","333333"];
+      const customIndexed = styles.getElementsByTagNameNS(NS_MAIN, "indexedColors")[0];
+      if (customIndexed) [...customIndexed.children].forEach((color,index)=>{
+        indexed[index]=color.getAttribute("rgb")?.slice(-6) || indexed[index];
+      });
+      const fills = [...(styles.getElementsByTagNameNS(NS_MAIN, "fills")[0]?.children || [])].map((fill) => {
+        const pattern = fill.getElementsByTagNameNS(NS_MAIN, "patternFill")[0];
+        if (pattern?.getAttribute("patternType") !== "solid") return "";
+        const color = pattern.getElementsByTagNameNS(NS_MAIN, "fgColor")[0];
+        if (!color || color.getAttribute("auto") === "1") return "";
+        let rgb = color.getAttribute("rgb")?.slice(-6) ||
+          (color.hasAttribute("theme") ? themeColors[Number(color.getAttribute("theme"))] : "") ||
+          (color.hasAttribute("indexed") ? indexed[Number(color.getAttribute("indexed"))] : "");
+        if (!/^[a-f0-9]{6}$/i.test(rgb)) return "";
+        const tint = Number(color.getAttribute("tint") || 0);
+        if (tint) rgb = rgb.match(/../g).map((part) => {
+          const value = parseInt(part, 16);
+          return Math.round(tint < 0 ? value * (1 + tint) : value + (255 - value) * tint).toString(16).padStart(2,"0");
+        }).join("");
+        return rgb.toUpperCase() === "FFFFFF" ? "" : `#${rgb.toUpperCase()}`;
+      });
+      return [...(styles.getElementsByTagNameNS(NS_MAIN, "cellXfs")[0]?.children || [])]
+        .map((xf) => fills[Number(xf.getAttribute("fillId") || 0)] || "");
+    }
+
+    function curriculumCellFill(layout, row, column) {
+      const direct = layout.cellFills?.[`${row}:${column}`];
+      if (direct) return direct;
+      for (const ref of layout.mergedRanges || []) {
+        const [a,b=a] = ref.split(":");
+        const r1=Number(a.match(/\d+/)[0])-1, r2=Number(b.match(/\d+/)[0])-1;
+        const c1=columnIndex(a),c2=columnIndex(b);
+        if (row>=r1 && row<=r2 && column>=c1 && column<=c2) return layout.cellFills?.[`${r1}:${c1}`] || "";
+      }
+      return "";
     }
 
     function isSelected(value) {
@@ -2744,15 +2827,17 @@ function courseClient_() {
           const merge = mergeAt.get(`${rowIndex}:${column}`);
           if (!merge && covered.has(`${rowIndex}:${column}`)) continue;
           const sourceRow = merge ? merge.startRow : rowIndex;
+          const fill = curriculumCellFill(layout, sourceRow, column);
+          const fillStyle = /^#[0-9A-F]{6}$/i.test(fill) ? ` style="background-color:${fill}"` : "";
           const value = String((merge ? rows[merge.startRow] : row)?.[column] ?? "");
           if (!merge && !value) {
-            cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${rowIndex}" data-source-column="${column}"></td>`);
+            cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${rowIndex}" data-source-column="${column}"${fillStyle}></td>`);
             continue;
           }
           const span = merge
             ? ` rowspan="${merge.rowSpan}" colspan="${merge.endColumn - merge.startColumn + 1}"`
             : "";
-          cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${sourceRow}" data-source-column="${column}"${span}>${escapeHtml(value)}</td>`);
+          cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${sourceRow}" data-source-column="${column}"${span}${fillStyle}>${escapeHtml(value)}</td>`);
         }
         return `<tr${hasHeader ? ' class="curriculum-source-header"' : ""}${rowStyle}>${cells.join("")}</tr>`;
       }).join("");
@@ -3670,6 +3755,8 @@ function courseClient_() {
             if (existing) {
               existing.semester = [...new Set([...existing.semester.split("·"), ...info.semesters])]
                 .filter(Boolean).sort().join("·");
+              for (const sem of info.semesters) existing.semesterColors[sem] =
+                curriculumCellFill(layout, context.rowIndex, columns.semesters[(grade-1)*2+Number(sem)-1]);
               continue;
             }
             const item = {
@@ -3677,6 +3764,8 @@ function courseClient_() {
               area: context.area.replace(/↔/g, " ").trim(),
               type,
               semester: info.semesters.join("·"),
+              semesterColors: Object.fromEntries(info.semesters.map((sem) =>
+                [sem, curriculumCellFill(layout, context.rowIndex, columns.semesters[(grade-1)*2+Number(sem)-1])])),
               hours: info.hours.join("+"),
               credit
             };
@@ -3714,9 +3803,9 @@ function courseClient_() {
             const meta = [item.type, item.area, item.credit ? `${item.credit}학점` : ""].filter(Boolean).join(" · ");
             return `<div class="application-subject"><span>${escapeHtml(item.subject)}</span><span class="application-subject-meta">${escapeHtml(meta)}</span></div>`;
           }).join("");
-          if (typeof renderCourseGroups === "function") renderCourseGroups();
           return `<div class="application-semester">${semester === "0" ? "학기 미정" : `${semester}학기`}</div>${items}`;
         }).join("");
+        if (typeof renderCourseGroups === "function") renderCourseGroups();
         return `<div class="application-grade">${grade}학년 과목(현재 ${Number(grade) - 1}학년이 신청)</div>${semesterHtml}`;
       }).join("");
     }
@@ -3836,6 +3925,15 @@ function courseClient_() {
           };
           courses.push(course);
           courseByGradeName.set(`${grade}:${item.subject}`, course);
+          const semesters = String(item.semester || "").split("·");
+          if (semesters.length > 1) for (const semester of semesters) {
+            const subject = `${item.subject} (${semester}학기)`;
+            if (!entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(subject))) continue;
+            const semesterCourse = { ...course, column:`app${courses.length}`,
+              name: nameCount.get(item.subject)>1 ? `${subject}(${grade}학년)` : subject, semesterKey:semester };
+            courses.push(semesterCourse);
+            courseByGradeName.set(`${grade}:${subject}`,semesterCourse);
+          }
         }
       }
       const students = [];
@@ -4817,6 +4915,10 @@ function courseClient_() {
         ]))
       };
       nextLayout.rows.splice(insertionRow, 0, newRow);
+      nextLayout.cellFills=Object.fromEntries(Object.entries(layout.cellFills || {}).map(([key,color])=>{
+        const [row,column]=key.split(":").map(Number);
+        return [`${row>=insertionRow?row+1:row}:${column}`,color];
+      }));
       return nextLayout;
     }
 
@@ -4933,6 +5035,11 @@ function courseClient_() {
         sheetName: sheet.name,
         rows,
         mergedRanges,
+        cellFills: Object.fromEntries(Object.entries(sheet.layout?.cellFills || {}).flatMap(([key, color]) => {
+          const [row,column]=key.split(":").map(Number);
+          return row>=minRow && row<=maxRow && column>=minColumn && column<=maxColumn
+            ? [[`${row-minRow}:${column-minColumn}`,color]] : [];
+        })),
         columnWidths: (sheet.layout?.columnWidths || []).slice(minColumn, maxColumn + 1),
         rowHeights: Object.fromEntries(Object.entries(sheet.layout?.rowHeights || {})
           .filter(([row]) => Number(row) >= minRow && Number(row) <= maxRow)
