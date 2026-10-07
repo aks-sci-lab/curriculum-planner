@@ -1092,7 +1092,7 @@
             <label class="file-button" for="cloudRosterInput">학생 명렬 업로드 · 수강신청 생성</label>
             <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
             <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
-            <button class="button" id="cloudPrintCodes" type="button" disabled>학생 코드 메일머지 출력창</button>
+            <button class="button" id="cloudPrintCodes" type="button">학생 코드 메일머지 출력창</button>
             <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>
             <input class="hidden" id="cloudCodeFile" type="file" accept=".json">
             <button class="button" id="cloudRefreshEvents" type="button">내 수강신청 새로고침</button>
@@ -1167,7 +1167,7 @@
           <p class="application-subject-title">신청 받을 과목 (학생선택교육과정 중 진급 학년에 편제된 전체 과목 · 자동 반영)</p>
           <div id="applicationSubjectList" class="application-subject-list"></div>
           <h3>수강신청 선택 그룹 설정</h3>
-          <p class="note">진급 학년·학기·교과군으로 자동 그룹화합니다. 각 그룹에서 학생이 정확히 선택할 과목 수를 입력하세요. 과목 옆 이동 메뉴로 다른 그룹에 옮길 수 있습니다. 이 설정은 새 Supabase 수강신청 생성 시 적용되며 시간표용 그룹화와는 별개입니다.</p>
+          <p class="note">그룹과 선택 수는 자동 지정하지 않습니다. 그룹명을 입력해 그룹을 만든 뒤 미분류 과목을 여러 개 체크하고 일괄 이동하세요. 그룹마다 정확히 선택할 과목 수를 직접 입력합니다. 검색·표시 과목 전체 선택을 지원하며 모든 과목을 배치한 뒤 신청을 생성하세요. 새 Supabase 신청에 적용되며 시간표용 그룹화와 별개입니다.</p>
           <div id="courseGroupEditor"></div>
           <p id="courseGroupMessage" role="status"></p>
         </div>

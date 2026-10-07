@@ -89,7 +89,7 @@
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
       byId("cloudRosterInput").disabled = false;
       byId("cloudDownloadCodes").disabled = !latestCodes;
-      byId("cloudPrintCodes").disabled = !latestCodes;
+      byId("cloudPrintCodes").disabled = false;
     }
   }
 
@@ -493,13 +493,20 @@
       byId("cloudCodeDialog").showModal();
     }
     byId("cloudPrintCodes").addEventListener("click", () => teacherAction(async () => {
+      if (!latestCodes) {
+        byId("cloudTeacherMessage").textContent = "이전 로그인에서 저장한 학생별 코드 JSON을 선택하세요. 재발급 없이 기존 코드로 출력합니다.";
+        byId("cloudCodeFile").click();
+        return;
+      }
       openCodes(latestCodes);
       byId("cloudTeacherMessage").textContent = "메일머지 출력창을 열었습니다.";
     }));
     byId("cloudCodeFile").addEventListener("change", (event) => {
       const file = event.target.files[0]; event.target.value = "";
       if (file) teacherAction(async () => {
-        openCodes(JSON.parse(await file.text()));
+        const data = JSON.parse(await file.text());
+        openCodes(data);
+        latestCodes = data;
         byId("cloudTeacherMessage").textContent = "저장한 코드 파일의 출력창을 열었습니다.";
       });
     });

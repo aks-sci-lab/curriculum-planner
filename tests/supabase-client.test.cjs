@@ -24,6 +24,8 @@ class Element {
   setAttribute(name, value) { this[name] = value; }
   showModal() { this.open = true; }
   close() { this.open = false; }
+  click() { this.clicked = true; }
+  focus() { this.focused = true; }
   querySelector(selector) {
     return this.children.find((child) => selector === ".course-history" && child.className === "course-history" ||
       selector === "legend" && child.tag === "legend") || null;
@@ -332,31 +334,53 @@ test("teacher log controls send the exact server cutoff and optional student id"
     assert.equal(f.requests.length,2);
   });
 
-  test("group editor auto groups and allows cross-group movement without losing courses", () => {
+  test("group editor starts unassigned and requires manual groups and counts", () => {
     const f=fixture();
     const storage=new Map();
     const subjects={"2":[{subject:"A",semester:"1",area:"사회"},{subject:"B",semester:"1",area:"사회"},
       {subject:"C",semester:"2",area:"과학"}],"3":[]};
     const ctx=vm.createContext({
-      document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag)},
+      document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
+        createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
+      window:{confirm:()=>true},
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
       crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
-    let groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
-    assert.equal(groups.length,2);
-    assert.deepEqual(groups[0].courses,["A","B"]);
-    const panel=f.elements.courseGroupEditor.children.find((e)=>e.tag==="fieldset");
-    const count=panel.children[2].children[0];
+    assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
+    const editor=f.elements.courseGroupEditor;
+    assert.equal(editor.children.filter((e)=>e.tag==="fieldset").length,1);
+    editor.children.find((e)=>e.placeholder?.startsWith("새 그룹명")).value="사회·과학";
+    editor.children.find((e)=>e.textContent==="그룹 만들기").onclick();
+    let panels=editor.children.filter((e)=>e.tag==="fieldset");
+    panels[0].children.find((e)=>e.textContent==="표시 과목 전체 선택").onclick();
+    const destination=editor.children.find((e)=>e.tag==="select");
+    destination.value=destination.children[1].value;
+    editor.children.find((e)=>e.textContent==="선택 과목 일괄 이동").onclick();
+    assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
+    panels=editor.children.filter((e)=>e.tag==="fieldset");
+    const count=panels[1].children[2].children[0];
     count.value="2";count.onchange();
-    assert.equal(ctx.getCourseApplicationGroups()[0].count,2);
-    count.value="3";count.onchange();
-    assert.throws(()=>ctx.getCourseApplicationGroups(),/선택 수/);
-    count.value="1";count.onchange();
-    const move=panel.children[3].children[0];
-    move.value=groups[1].id;move.onchange();
-    groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
-    assert.deepEqual(groups[0].courses,["B"]);
-    assert.deepEqual(groups[1].courses,["C","A"]);
+    const groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
+    assert.equal(groups[0].count,2);
+    assert.deepEqual(groups[0].courses,["A","B","C"]);
+    count.value="4";count.onchange();
+    assert.throws(()=>ctx.getCourseApplicationGroups(),/選択|선택 수/);
     assert.ok(storage.size);
   });
+
+test("print button stays available on later visits and loads saved codes without reissuing", async () => {
+  const f=fixture();
+  await f.fire("cloudPrintCodes","click");
+  assert.equal(f.elements.cloudCodeFile.clicked,true);
+  assert.equal(f.elements.cloudPrintCodes.disabled,false);
+  f.elements.cloudCodeFile.files=[{text:async()=>JSON.stringify({
+    id:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    students:[{grade:"1",classroom:"1",number:"1",name:"가상",code:"123456"}],
+  })}];
+  await f.fire("cloudCodeFile","change");
+  await f.fire("cloudCodeClose","click");
+  await f.fire("cloudPrintCodes","click");
+  assert.equal(f.elements.cloudCodeDialog.open,true);
+  assert.equal(f.requests.length,0);
+});
