@@ -53,7 +53,7 @@ class Element {
   }
 }
 
-function fixture({ href = "https://school.example/app/", storage = new Map(), respond } = {}) {
+function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects } = {}) {
   const elements = {};
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) elements[match[2]] = new Element(match[1]);
@@ -103,17 +103,19 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
     switchWorkflowStep: (step) => { fixtureData.step = step; },
     state: { currentRound: "2" },
-    selectedApplicationSubjects: () => ({ "2": [{ subject: "수학", credit: 3 }], "3": [] }),
+    selectedApplicationSubjects: () => fixtureData.subjects,
+    renderApplicationSubjects: () => { fixtureData.renderedGrade = context.state.applicationMenuGrade; },
+    renderRoundStatus: () => {},
     getCourseApplicationGroups: () => [{id:"g1",grade:"2",name:"수학",count:1,courses:["수학"]}],
     setApplicationTargetGrades: (grades) => { fixtureData.targetGrades = grades; },
-    getGroupedApplicationSubjects: () => ({ "2": [{subject:"수학",credit:3,semester:"1"}],"3":[] }),
+    getGroupedApplicationSubjects: () => fixtureData.subjects,
     applicationCourseLabel: (course) => `${course.subject}${course.type ? `(${course.type.replace(/선택$/,"")})` : ""}`,
     applyCloudApplicationResults: (round,entries,subjects) => {
       fixtureData.synced = {round,entries,subjects};
       fixtureData.syncCalls.push(fixtureData.synced);
     },
     parseWorkbook: async () => fixtureData.workbook || [],
-    parseApplicationRoster: () => [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
+    parseApplicationRoster: () => fixtureData.roster,
     downloadTextFile: (text, name) => downloads.push({ data: JSON.parse(text), name }),
     downloadRowsXlsx: (rows,name) => downloads.push({rows:JSON.parse(JSON.stringify(rows)),name}),
     escapeHtml: (value) => String(value).replace(/[&<>"']/g, (c) => ({
@@ -128,6 +130,8 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
   });
   const fixtureData = {
     elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[],
+    subjects: subjects || { "2": [{subject:"수학",credit:3,semester:"1"}], "3": [] },
+    roster: [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     respond: respond || (async () => ({ data: [] })),
     async settle() {
       for (let i = 0; i < 20; i++) await new Promise(setImmediate);
@@ -144,10 +148,70 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     qr.addData=(text,...options)=>{fixtureData.qrLinks.push(text);return addData(text,...options);};
     return qr;
   };
+  if (menus) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "course-groups.js"), "utf8"), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "supabase-client.js"), "utf8"), context);
   fixtureData.unlinkRound=(round)=>context.unlinkApplicationRound(round);
+  fixtureData.setGrade=(grade)=>{
+    if (menus) context.switchApplicationMenuGrade(grade);
+    else { context.state.applicationMenuGrade=grade; context.updateApplicationGradeControls(); }
+  };
+  fixtureData.groupSettings=()=>context.getApplicationGroupSettings();
   return fixtureData;
 }
+
+test("grade menus scope groups and rebuild colors without removing the other grade", async () => {
+  const key = "curriculum-color-semester-groups-v3";
+  const storage = new Map([[key, JSON.stringify([
+    {id:"g2",grade:"2",semester:"1",name:"2학년 보관",count:1,courses:["수학"]},
+    {id:"g3",grade:"3",semester:"1",name:"3학년 보관",count:1,courses:["영어"]}
+  ])]]);
+  const f=fixture({storage,menus:true,subjects:{
+    "2":[{subject:"수학",semester:"1",credit:3}], "3":[{subject:"영어",semester:"1",credit:3}]
+  }});
+  assert.equal(f.renderedGrade,"1");
+  assert.equal(f.elements.applicationGrade1Tab["aria-selected"],"true");
+  const tabs=f.elements.courseGroupEditor.children.find((child)=>child.className==="group-scope-tabs");
+  assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
+  f.elements.courseGroupEditor.children.find((child)=>child.textContent==="편제표 색상으로 다시 구성").onclick();
+  assert.ok(f.groupSettings().some((group)=>group.grade==="3" && group.name==="3학년 보관"));
+  f.elements.applicationGrade1Tab.listeners.keydown({key:"ArrowRight",preventDefault(){}});
+  assert.equal(f.renderedGrade,"2");
+  assert.equal(f.elements.applicationGrade2Tab.focused,true);
+  assert.equal(f.elements.applicationGradeWorkspace["aria-labelledby"],"applicationGrade2Tab");
+});
+
+test("grade menus filter online events, roster uploads and preserve each grade's draft", async () => {
+  const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
+    access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,user:{email:"teacher@example.invalid"}
+  }})]]);
+  const events=["2","3"].map((grade,index)=>({
+    id:`aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa${index}`,school_name:"학교",school_year:"2026",
+    round:"1",created_at:"2026-01-01",subjects:{[grade]:[{subject:"수학",credit:3}]}
+  }));
+  const f=fixture({storage,respond:async(request)=>({data:request.url.includes("/course_events?")?events:[]})});
+  await f.settle();
+  assert.equal(f.elements.cloudEventList.children.length,1);
+  assert.match(f.elements.cloudEventList.children[0].children[0].textContent,/현재 1학년/);
+  f.subjects["3"]=[{subject:"영어",credit:3,semester:"1"}];
+  f.roster.push({grade:"2",classroom:"1",number:"1",name:"2학년 학생"});
+  const upload=()=>{f.elements.cloudRosterInput.files=[{name:"명렬.xlsx",arrayBuffer:async()=>new ArrayBuffer(0)}];return f.fire("cloudRosterInput","change");};
+  await upload();
+  assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명.*다른 학년 1명 제외/);
+  const first=f.elements.cloudRosterSummary.textContent;
+  f.setGrade("2");
+  assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  assert.equal(f.elements.cloudEventList.children.length,1);
+  assert.match(f.elements.cloudEventList.children[0].children[0].textContent,/현재 2학년/);
+  await upload();
+  assert.match(f.elements.cloudRosterSummary.textContent,/현재 2학년 1명/);
+  f.setGrade("1");
+  assert.equal(f.elements.cloudRosterSummary.textContent,first);
+  assert.equal(f.elements.cloudCreateEvent.disabled,false);
+  f.roster=[{grade:"2",classroom:"1",number:"1",name:"다른 학년"}];
+  await upload();
+  assert.match(f.elements.cloudTeacherMessage.textContent,/현재 1학년 학생이 없는 명렬/);
+  assert.equal(f.elements.cloudCreateEvent.disabled,true);
+});
 
 test("student flow uses public RPC only, displays own data and submits selections", async () => {
   const f = fixture();
@@ -474,6 +538,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
       } };
       if (request.url.includes("/course_events?")) return { data: [{
         id, school_name: "학교", school_year: "2026", round: "1", is_open: true, created_at: cutoff,
+        subjects: {"2":[{subject:"수학",credit:3}],"3":[]},
       }] };
       if (request.url.endsWith("course_event_history")) return { data: {
         startedAt: "2026-10-06T08:00:00Z",
@@ -542,6 +607,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
       window:{confirm:()=>true},
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
       crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
+      state:{},renderApplicationSubjects:()=>{},renderRoundStatus:()=>{},
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
     ctx.setApplicationTargetGrades(["2"]);
@@ -672,6 +738,7 @@ test("color groups are semester scoped, editable and retain unassigned courses a
         createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
       window:{confirm:()=>true},crypto:webcrypto,
       selectedApplicationSubjects:()=>subjects,
+      state:{},renderApplicationSubjects:()=>{},renderRoundStatus:()=>{},
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}});
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
     return ctx;

@@ -1100,6 +1100,12 @@
       <section class="workflow-step-panel hidden" id="workflowStep2Panel">
         <h3>2단계 · 학년별 수강신청</h3>
         <p class="note">1학년은 2학년 때 들을 과목, 2학년은 3학년 때 들을 과목을 신청받은 결과 파일(.xlsx)을 차수별로 불러옵니다. 차수를 선택한 뒤 명단을 올리면 해당 차수에 저장되며, 1차 결과를 보관한 채 2차·3차를 추가로 불러와 전환해 볼 수 있습니다.</p>
+        <div class="group-scope-tabs" role="tablist" aria-label="수강신청 현재 학년 선택">
+          <button class="button" id="applicationGrade1Tab" role="tab" aria-selected="true" aria-controls="applicationGradeWorkspace" type="button">1학년 → 2학년 수강신청</button>
+          <button class="button" id="applicationGrade2Tab" role="tab" aria-selected="false" aria-controls="applicationGradeWorkspace" tabindex="-1" type="button">2학년 → 3학년 수강신청</button>
+        </div>
+        <div id="applicationGradeWorkspace" role="tabpanel" aria-labelledby="applicationGrade1Tab">
+        <p class="note" id="applicationGradeDescription">현재 1학년 학생의 2학년 과목·그룹과 온라인 신청을 관리합니다.</p>
         <div class="group-scope-tabs" id="applicationWorkspaceTabs" role="tablist" aria-label="수강신청 작업">
           <button class="button" id="applicationGroupsTab" role="tab" aria-selected="true" aria-controls="applicationGroupsPanel" type="button">① 과목·그룹 설정</button>
           <button class="button" id="applicationOnlineTab" role="tab" aria-selected="false" aria-controls="supabaseTeacherPanel" type="button">② 온라인 신청 관리</button>
@@ -1117,6 +1123,7 @@
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
         <p class="note">온라인 신청 결과는 자동으로 집계표에 연동됩니다. 차수를 선택해 해당 결과를 확인하세요.</p>
+        <p class="note">아래 보관 인원은 선택한 학년 기준입니다. 확인서·집계표와 결과 엑셀 업로드는 회차별 두 학년 통합 데이터를 사용하며, 회차 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
         <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택">
           <button class="round-tab" type="button" role="tab" data-round="1" aria-selected="true">1차</button>
           <button class="round-tab" type="button" role="tab" data-round="2" aria-selected="false">2차</button>
@@ -1134,7 +1141,7 @@
         </div>
         <div class="file-name" id="fileName">불러온 파일 없음</div>
         <div style="margin-top:10px">
-          <button class="button" id="resetData" type="button">선택한 회차 데이터 삭제</button>
+          <button class="button" id="resetData" type="button">선택한 회차 데이터 삭제 (두 학년 전체)</button>
         </div>
         <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
         </div>
@@ -1169,6 +1176,7 @@
             <p class="note">신규 설치는 Supabase SQL Editor에서 setup.sql → upgrade-codes-history.sql → upgrade-selection-groups.sql → upgrade-semester-groups.sql 순서로 실행하세요(supabase 폴더). 기존 설치는 아직 실행하지 않은 업데이트만 한 번 실행합니다. Google 로그인 제공자 연결도 필요하며 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요.</p>
           </details>
         </section>
+        </div>
       </section>
       <section class="workflow-placeholder hidden" id="workflowStep10Panel">
         시간표 작성 단계입니다. 교시/교실 제약 기반 시간표 편성 화면을 여기에 확장할 수 있도록 구조를 준비했습니다.
@@ -3633,8 +3641,9 @@ function courseClient_() {
       if (!list) return;
       list.innerHTML = ["1", "2", "3"].map((round) => {
         const data = state.rounds?.[round];
+        const students = data?.students.filter((student) => String(student.grade) === (state.applicationMenuGrade || "1")) || [];
         const info = data
-          ? `${escapeHtml(data.fileName || "이전 파일")} · ${data.students.length}명`
+          ? `${escapeHtml(data.fileName || "이전 파일")} · 현재 ${state.applicationMenuGrade || "1"}학년 ${students.length}명`
           : "불러온 명단 없음";
         const current = round === state.currentRound ? " · 현재 보기" : "";
         const button = data && round !== state.currentRound
@@ -3870,7 +3879,7 @@ function courseClient_() {
         if (typeof renderCourseGroups === "function") renderCourseGroups();
         return;
       }
-      container.innerHTML = ["2", "3"].filter((grade) => subjects[grade].length).map((grade) => {
+      container.innerHTML = [String(Number(state.applicationMenuGrade || "1") + 1)].filter((grade) => subjects[grade].length).map((grade) => {
         const bySemester = new Map();
         for (const item of subjects[grade]) {
           const key = item.semester || "0";
@@ -3884,9 +3893,10 @@ function courseClient_() {
           }).join("");
           return `<div class="application-semester">${semester === "0" ? "학기 미정" : `${semester}학기`}</div>${items}`;
         }).join("");
-        if (typeof renderCourseGroups === "function") renderCourseGroups();
         return `<div class="application-grade">${grade}학년 과목(현재 ${Number(grade) - 1}학년이 신청)</div>${semesterHtml}`;
       }).join("");
+      if (!container.innerHTML) container.innerHTML = `<div class="curriculum-empty">${Number(state.applicationMenuGrade || "1") + 1}학년 학생선택교육과정 과목이 없습니다. 편제표를 확인하세요.</div>`;
+      if (typeof renderCourseGroups === "function") renderCourseGroups();
     }
 
     // 학생용 수강신청 웹페이지(독립 실행 HTML)를 만든다.

@@ -4,6 +4,7 @@ var getCourseApplicationGroups;
 var getGroupedApplicationSubjects;
 var setApplicationTargetGrades;
 var getApplicationGroupSettings;
+var switchApplicationMenuGrade;
 (() => {
   const workspaceTabs = ["Groups", "Online", "Results"]
     .map((name) => document.getElementById(`application${name}Tab`));
@@ -35,7 +36,7 @@ var getApplicationGroupSettings;
   const selected = new Set();
   let query = "";
   let activeScope = "";
-  let targetGrades = ["2", "3"];
+  let targetGrades = ["2"];
   setApplicationTargetGrades = (grades) => {
     targetGrades = [...new Set(grades.map(String))];
     selected.clear();
@@ -155,8 +156,10 @@ var getApplicationGroupSettings;
     search.onchange = () => { query = search.value.trim(); renderCourseGroups(); };
     container.appendChild(search);
     container.appendChild(button("편제표 색상으로 다시 구성",()=>{
-      if (!window.confirm("현재 그룹 배치와 선택 수를 지우고 편제표 색상으로 다시 구성할까요?")) return;
-      groups=[];seeded.clear();selected.clear();renderCourseGroups();
+      if (!window.confirm(`${targetGrades.join("·")}학년 과목의 그룹 배치와 선택 수를 지우고 편제표 색상으로 다시 구성할까요? 다른 학년은 유지됩니다.`)) return;
+      groups=groups.filter((group)=>!targetGrades.includes(group.grade));
+      seeded=new Set([...seeded].filter((id)=>!targetGrades.includes(id.split(":")[0])));
+      selected.clear();renderCourseGroups();
     }));
     const scopes=[...new Set([...available.values()].filter((c)=>targetGrades.includes(c.grade)).map((c)=>`${c.grade}:${c.semester}`))].sort();
     if (!scopes.includes(activeScope)) activeScope=scopes[0];
@@ -259,5 +262,34 @@ var getApplicationGroupSettings;
     }
     return JSON.parse(JSON.stringify(relevantGroups));
   };
-  renderCourseGroups();
+  const gradeTabs = ["1", "2"].map((grade) => document.getElementById(`applicationGrade${grade}Tab`));
+  switchApplicationMenuGrade = (grade, focus = false) => {
+    grade = String(grade);
+    const index = ["1", "2"].indexOf(grade);
+    if (index < 0 || gradeTabs[index].disabled) return;
+    state.applicationMenuGrade = grade;
+    gradeTabs.forEach((tab, i) => {
+      tab.setAttribute("aria-selected", String(i === index));
+      tab.setAttribute("tabindex", i === index ? "0" : "-1");
+    });
+    document.getElementById("applicationGradeWorkspace").setAttribute("aria-labelledby", `applicationGrade${grade}Tab`);
+    document.getElementById("applicationGradeDescription").textContent =
+      `현재 ${grade}학년 학생의 ${Number(grade) + 1}학년 과목·그룹과 온라인 신청을 관리합니다.`;
+    setApplicationTargetGrades([String(Number(grade) + 1)]);
+    renderApplicationSubjects();
+    renderRoundStatus();
+    if (typeof updateApplicationGradeControls === "function") updateApplicationGradeControls();
+    if (focus) gradeTabs[index].focus();
+  };
+  gradeTabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => switchApplicationMenuGrade(String(index + 1)));
+    tab.addEventListener("keydown", (event) => {
+      const next = event.key === "ArrowRight" || event.key === "ArrowLeft" ? 1 - index :
+        event.key === "Home" ? 0 : event.key === "End" ? 1 : null;
+      if (next === null) return;
+      event.preventDefault();
+      switchApplicationMenuGrade(String(next + 1), true);
+    });
+  });
+  switchApplicationMenuGrade(state.applicationMenuGrade || "1");
 })();

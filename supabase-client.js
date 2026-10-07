@@ -2,6 +2,7 @@
 var requireTeacherLogin;
 var isDeveloperAccount;
 var unlinkApplicationRound;
+var updateApplicationGradeControls;
 
 (() => {
   const PROJECT_URL = "https://hapfkdkbhnqpfjdepozv.supabase.co";
@@ -14,6 +15,8 @@ var unlinkApplicationRound;
   let lastActivity = 0;
   let idleTimer = null;
   let pendingRoster = null;
+  const gradeDrafts = new Map();
+  let controlsGrade = state.applicationMenuGrade || "1";
   isDeveloperAccount = () => !!session && session.user.email.toLowerCase() === "lany0665@gmail.com" && Date.now() - lastActivity < IDLE_MS;
   requireTeacherLogin = () => {
     if (session && Date.now() - lastActivity < IDLE_MS) return true;
@@ -48,6 +51,7 @@ var unlinkApplicationRound;
     byId("cloudCodePreview").replaceChildren();
     byId("printBatch").replaceChildren();
     pendingRoster = null;
+    gradeDrafts.clear();
     if (syncTimer !== null) window.clearInterval(syncTimer);
     if (idleTimer !== null) window.clearInterval(idleTimer);
     idleTimer = syncTimer = null;
@@ -57,8 +61,8 @@ var unlinkApplicationRound;
     eventsLoaded = false;
     syncSnapshots.clear();
     updateAccountControls();
-    setApplicationTargetGrades(["2", "3"]);
-    byId("cloudRosterSummary").textContent = "명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.";
+    setApplicationTargetGrades([String(Number(state.applicationMenuGrade || "1") + 1)]);
+    byId("cloudRosterSummary").textContent = `현재 ${state.applicationMenuGrade || "1"}학년 명렬을 업로드하세요.`;
     byId("cloudEventList").replaceChildren();
     byId("cloudTeacherControls").classList.add("hidden");
     byId("cloudTeacherLogin").classList.remove("hidden");
@@ -290,7 +294,8 @@ var unlinkApplicationRound;
   async function teacherAction(action) {
     if (teacherBusy) return;
     teacherBusy = true;
-    const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button")];
+    const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button"),
+      byId("applicationGrade1Tab"), byId("applicationGrade2Tab")];
     const previous = buttons.map((button) => button.disabled);
     buttons.forEach((button) => { button.disabled = true; });
     byId("cloudRosterInput").disabled = true;
@@ -326,13 +331,21 @@ var unlinkApplicationRound;
     });
     knownEvents = events;
     eventsLoaded = true;
+    renderGradeEvents();
+    await syncLinkedResults();
+  }
+
+  function renderGradeEvents() {
+    const grade = String(Number(state.applicationMenuGrade || "1") + 1);
+    const events = knownEvents.filter((event) => event.subjects?.[grade]?.length);
     const list = byId("cloudEventList");
     list.replaceChildren();
-    if (!events.length) list.textContent = "생성한 수강신청이 없습니다.";
+    if (!events.length) list.textContent = `현재 ${Number(grade) - 1}학년의 수강신청이 없습니다.`;
     for (const event of events) {
       const section = document.createElement("section");
       const title = document.createElement("p");
-      title.textContent = `${event.school_year} ${event.school_name} ${event.round}차 · ${event.is_open ? "접수 중" : "마감"} · ${new Date(event.created_at).toLocaleString("ko-KR")}`;
+      const mixed = event.subjects["2"]?.length && event.subjects["3"]?.length;
+      title.textContent = `${event.school_year} ${event.school_name} ${event.round}차 · ${mixed ? "1·2학년 통합 신청 (관리 작업은 두 학년에 적용)" : `현재 ${Number(grade) - 1}학년 → ${grade}학년 신청`} · ${event.is_open ? "접수 중" : "마감"} · ${new Date(event.created_at).toLocaleString("ko-KR")}`;
       section.appendChild(title);
       const link = document.createElement("a");
       link.href = eventLink(event.id);
@@ -387,8 +400,23 @@ var unlinkApplicationRound;
       })));
       list.appendChild(section);
     }
-    await syncLinkedResults();
   }
+
+  updateApplicationGradeControls = () => {
+    const grade = state.applicationMenuGrade || "1";
+    if (grade !== controlsGrade) {
+      gradeDrafts.set(controlsGrade, { roster: pendingRoster, codes: latestCodes, summary: byId("cloudRosterSummary").textContent });
+      const draft = gradeDrafts.get(grade);
+      pendingRoster = draft?.roster || null;
+      latestCodes = draft?.codes || null;
+      byId("cloudRosterSummary").textContent = draft?.summary || `현재 ${grade}학년 명렬을 업로드하세요.`;
+      byId("cloudTeacherMessage").textContent = "";
+      controlsGrade = grade;
+    }
+    byId("cloudCreateEvent").disabled = !pendingRoster || !session;
+    byId("cloudDownloadCodes").disabled = !latestCodes;
+    renderGradeEvents();
+  };
 
   function base64Url(bytes) {
     return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -469,7 +497,10 @@ var unlinkApplicationRound;
       byId("cloudRosterSummary").textContent = "선택한 명렬을 확인합니다. 실패하면 명렬을 다시 업로드하세요.";
       if (!session) throw new Error("교사 로그인이 필요합니다.");
       if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
-      const roster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
+      const allRoster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
+      const currentGrade = state.applicationMenuGrade || "1";
+      const roster = allRoster.filter((student) => String(student.grade) === currentGrade);
+      if (!roster.length) throw new Error(`현재 ${currentGrade}학년 학생이 없는 명렬입니다. 해당 학년 메뉴에서 업로드하세요.`);
       const grades = [...new Set(roster.map((student) => String(Number(student.grade) + 1)))].sort();
       const subjects = getGroupedApplicationSubjects();
       if (!subjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
@@ -479,7 +510,8 @@ var unlinkApplicationRound;
       setApplicationTargetGrades(grades);
       pendingRoster = roster;
       byId("cloudCreateEvent").disabled = false;
-      byId("cloudRosterSummary").textContent = `${file.name} · ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만`;
+      byId("cloudRosterSummary").textContent = `${file.name} · 현재 ${currentGrade}학년 ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만` +
+        (allRoster.length > roster.length ? ` · 다른 학년 ${allRoster.length - roster.length}명 제외 (해당 학년 메뉴에서 별도 업로드)` : "");
       byId("applicationGroupsTab").click();
       byId("cloudTeacherMessage").textContent = "해당 학년의 그룹·선택 수를 설정한 뒤 온라인 신청 관리 탭에서 수강신청 생성을 누르세요.";
       byId("courseGroupMessage").textContent = `명렬 기준 ${grades.map((g) => `${g}학년`).join(", ")} 그룹만 설정하세요. 설정 후 온라인 신청 관리 탭에서 신청을 생성합니다.`;
