@@ -145,6 +145,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     return qr;
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "supabase-client.js"), "utf8"), context);
+  fixtureData.unlinkRound=(round)=>context.unlinkApplicationRound(round);
   return fixtureData;
 }
 
@@ -723,34 +724,53 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");
 });
 
-test("uncolored plan selections create persistent semester-scoped groups shared with online setup", () => {
-  const f=fixture(),storage=new Map();
-  const subjects={"2":[{subject:"A",semester:"1·2"},{subject:"B",semester:"1"}],
-    "3":[{subject:"C",semester:"1"}]};
-  const load=()=>{
-    const ctx=vm.createContext({
-      document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
-        createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
-      window:{confirm:()=>true},crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
-      localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}});
-    vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
-    return ctx;
-  };
-  let ctx=load();
-  assert.equal(ctx.getPlanApplicationGroups().length,0);
-  assert.throws(()=>ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["A (2학기)"],name:"잘못된 학기",count:1}),/같은 학년·학기/);
-  assert.throws(()=>ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["B"],name:"선택",count:2}),/0~1/);
-  ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["A (1학기)","B"],name:"수학 선택",count:1});
-  ctx.assignPlanApplicationGroup({grade:"2",semester:"2",courses:["A (2학기)"],name:"2학기 선택",count:1});
-  ctx.assignPlanApplicationGroup({grade:"3",semester:"1",courses:["C"],name:"3학년 선택",count:1});
-  const groups=ctx.getCourseApplicationGroups();
-  assert.equal(groups.length,3);
-  assert.deepEqual(JSON.parse(JSON.stringify(groups[0].courses)),["A (1학기)","B"]);
-  assert.throws(()=>ctx.assignPlanApplicationGroup({grade:"2",semester:"2",courses:["A (2학기)"],targetId:groups[0].id}),/같은 학년·학기/);
-  ctx=load();
-  assert.equal(ctx.getCourseApplicationGroups()[0].name,"수학 선택");
-  ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["B"],targetId:""});
-  assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
-  ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["B"],targetId:groups[0].id});
-  assert.equal(ctx.getCourseApplicationGroups()[0].count,1);
+test("student chooses first semester before second and saves both selections together", async () => {
+  const f=fixture();
+  const data={student:{grade:"1",classroom:"1",number:"1",name:"가상"},schoolName:"학교",schoolYear:"2026",round:"1",
+    open:true,selections:[],courses:[{subject:"B",semester:"2",credit:3},{subject:"A",semester:"1",credit:3}],
+    groups:[{id:"g2",grade:"2",semester:"2",name:"2학기 선택",count:1,courses:["B"]},
+      {id:"g1",grade:"2",semester:"1",name:"1학기 선택",count:1,courses:["A"]}]};
+  f.respond=async(r)=>({data:r.url.includes("get_course_application")?data:{message:"저장 완료"}});
+  f.elements.cloudStudentCode.value="a".repeat(32);
+  await f.fire("cloudStudentLogin","submit");
+  const [second,first]=f.elements.cloudStudentChoices.children;
+  assert.equal(first.classList.contains("hidden"),false);
+  assert.equal(second.classList.contains("hidden"),true);
+  await f.fire("cloudStudentNext","click");
+  assert.match(f.elements.cloudStudentMessage.textContent,/선택 수/);
+  await f.fire("cloudStudentApplication","submit");
+  assert.equal(f.requests.length,1);
+  first.querySelectorAll("input")[0].checked=true;
+  await f.fire("cloudStudentNext","click");
+  assert.equal(second.classList.contains("hidden"),false);
+  assert.equal(first.classList.contains("hidden"),true);
+  second.querySelectorAll("input")[0].checked=true;
+  await f.fire("cloudStudentPrevious","click");
+  assert.equal(first.querySelectorAll("input")[0].checked,true);
+  await f.fire("cloudStudentNext","click");
+  await f.fire("cloudStudentApplication","submit");
+  assert.deepEqual(f.requests[1].body.p_selections,["B","A"]);
+});
+
+test("deleting a round unlinks only its online events and prevents an in-flight result from restoring it", async () => {
+  const ids=["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"];
+  const key="curriculum-cloud-links:teacher@example.invalid";
+  const storage=new Map([[key,JSON.stringify(ids)],["curriculum-teacher-session-v1",JSON.stringify({
+    lastActivity:Date.now(),session:{access_token:"token",refresh_token:"refresh",expires_in:3600,user:{email:"teacher@example.invalid"}}
+  })]]);
+  let finish;
+  const f=fixture({storage,respond:async(r)=>{
+    if(r.url.includes("/course_events?"))return {data:ids.map((id,i)=>({id,round:String(i+1),
+      school_name:"학교",school_year:"2026",subjects:{"2":[],"3":[]}}))};
+    if(r.body?.p_action==="export")return new Promise((resolve)=>{finish=resolve;});
+    return {data:[]};
+  }});
+  await f.settle();
+  // The exposed round unlink helper is the one used by the local reset button.
+  f.unlinkRound("1");
+  finish({data:{entries:[]}});
+  await f.settle();
+  assert.deepEqual(JSON.parse(storage.get(key)),[ids[1]]);
+  assert.equal(f.syncCalls.length,0);
+  assert.ok(!f.requests.some((r)=>r.body?.p_action==="delete"));
 });

@@ -386,6 +386,63 @@ test("Excel data export uses text cells for codes and formula-like input", () =>
   assert.ok(!files["xl/worksheets/sheet1.xml"].includes("<f>"));
 });
 
+test("uploaded courses resolve application groups by promoted grade and explicit semester without guessing", () => {
+  let groups=[
+    {grade:"2",semester:"1",name:"과학 선택",courses:["물리학","실험 (1학기)"]},
+    {grade:"2",semester:"2",name:"2학기 선택",courses:["실험 (2학기)"]},
+    {grade:"3",semester:"2",name:"3학년 선택",courses:["물리학"]},
+  ];
+  const ctx=vm.createContext({getApplicationGroupSettings:()=>groups,
+    parseSemesterFromCourseName:(name)=>String(name).match(/([12])학기/)?.[1]||"",
+    state:{groupAssignments:{},semesterAssignments:{}},
+    resolveSemesterKey:(c)=>c.semesterKey||"",
+    resolveCourseCategoryForOutput:()=>"미분류"});
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
+  assert.equal(ctx.courseGroupLabel({name:"물리학(진로)",column:4},"1"),"1학기 과학 선택");
+  assert.equal(ctx.courseGroupLabel({name:"물리학",column:4},"2"),"2학기 3학년 선택");
+  assert.equal(ctx.applicationGroupForCourse({name:"실험"},"1"),null);
+  assert.equal(ctx.applicationGroupForCourse({name:"없는 과목"},"1"),null);
+  assert.equal(ctx.applicationGroupForCourse({name:"물리학(3학년)"},"1"),null);
+  assert.equal(ctx.courseGroupLabel({name:"실험 (2학기)",column:5},"1"),"2학기 2학기 선택");
+  const course={name:"물리학",column:4};
+  const data={courses:[course],students:[{grade:"1",selections:[{...course}]}]};
+  assert.deepEqual([...ctx.classifyApplicationRecords(data)],[]);
+  assert.equal(data.students[0].selections[0].applicationGroups["1"].name,"과학 선택");
+  groups=[];
+  assert.equal(ctx.courseGroupLabel(data.students[0].selections[0],"1"),"1학기 과학 선택");
+  ctx.state.groupAssignments["4"]="manual";
+  assert.equal(ctx.courseGroupLabel(course,"1"),"미분류");
+});
+
+test("round deletion retains curriculum, other rounds and their classification settings", () => {
+  const other={students:[{id:"other"}],courses:[{column:3}],fileName:"other.xlsx",classOverrides:{3:2},
+    semesterAssignments:{3:"2"},groupAssignments:{3:"2학기 보존"},customGroupNames:["보존"]};
+  const plan=[{subject:"보존할 편제표"}],layout={rows:[["보존"]]};
+  const state={currentRound:"1",rounds:{"1":{students:[{id:"delete"}]},"2":other,"3":null},
+    roundClosures:{"1":{closed:"closed"},"2":{keep:"open"}},students:[{id:"delete"}],courses:[],
+    fileName:"delete.xlsx",classOverrides:{},semesterAssignments:{},groupAssignments:{},customGroupNames:[],
+    curriculumPlan:plan,curriculumImportedLayout:layout,applicationImportRevision:0};
+  const elements=new Map();let saves=0;
+  const ctx=vm.createContext({state,$:(id)=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+    applyClassFilterOptions(){},renderRoster(){},renderPreview(){},renderSemesterClassifier(){},
+    renderAggregate(){},renderRoundStatus(){},renderWorkflowLayout(){},persistState(){saves++;}});
+  vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
+  vm.runInContext(functionSource("function switchRound(", "function resetWorkspace("),ctx);
+  ctx.clearApplicationRound();
+  assert.equal(state.rounds["1"],null);
+  assert.equal(state.rounds["2"],other);
+  assert.equal(state.curriculumPlan,plan);
+  assert.equal(state.curriculumImportedLayout,layout);
+  assert.deepEqual(state.roundClosures["2"],{keep:"open"});
+  assert.equal(state.currentRound,"1");
+  assert.equal(state.students.length,0);
+  ctx.switchRound("2");
+  assert.equal(state.students[0].id,"other");
+  assert.equal(state.groupAssignments["3"],"2학기 보존");
+  assert.equal(state.semesterAssignments["3"],"2");
+  assert.equal(saves,2);
+});
+
 test("developer result Excel imports both layouts and rejects invalid or expired uploads without clearing data", async () => {
   let developer = true, completion, workbook, imported, persisted = 0;
   const existing = [{id:"existing"}];
@@ -400,6 +457,7 @@ test("developer result Excel imports both layouts and rejects invalid or expired
     mergeApplications:()=>({errors:[]}),
     applyMergedApplications:(entries)=>{imported=plain(entries);},
     createRecords:()=>({students:[{id:"wide"}],courses:[]}),
+    classifyApplicationRecords:()=>[],
     normalizeCourses:(courses)=>courses,
     applyClassFilterOptions(){}, renderRoster(){},renderPreview(){},renderSemesterClassifier(){},
     renderAggregate(){},renderRoundStatus(){},persistState(){persisted++;},

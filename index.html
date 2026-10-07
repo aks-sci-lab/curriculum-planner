@@ -896,14 +896,6 @@
     .teacher-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; background: white; border-bottom: 1px solid #d7deed; }
     .teacher-account { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
     .login-gate { margin: 80px auto; max-width: 540px; padding: 32px; text-align: center; background: white; border: 1px solid #d7deed; border-radius: 14px; }
-    .plan-group-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px; background: #f4f7ff; border-bottom: 1px solid #d7deed; }
-    .plan-group-toolbar input, .plan-group-toolbar select { padding: 7px; border: 1px solid #c9d4ea; border-radius: 6px; }
-    .plan-group-toolbar input[type="number"] { width: 85px; }
-    #curriculumPlanWrap td.plan-group-cell { box-shadow: inset 0 -4px var(--group-color, transparent); }
-    #curriculumPlanWrap.group-selecting td { user-select: none; }
-    #curriculumPlanWrap.group-selecting td.plan-group-cell { cursor: pointer; }
-    #curriculumPlanWrap td.plan-group-selected { outline: 3px solid #3464e8; outline-offset: -3px; background: #e4edff !important; }
-    .plan-group-badge { display: block; font-size: 10px; font-weight: 600; color: #32456b; white-space: normal; pointer-events: none; }
     .student-entry { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
     .student-entry h1 { font-size: 22px; }
     .student-entry iframe { display: block; width: 100%; min-height: 78vh; border: 1px solid #d7deed; border-radius: 12px; background: white; }
@@ -1022,8 +1014,11 @@
       <h2 id="cloudStudentTitle"></h2>
       <p id="cloudStudentIdentity"></p>
       <form id="cloudStudentApplication">
+        <p id="cloudStudentSemesterStatus" role="status" aria-live="polite"></p>
         <div id="cloudStudentChoices"></div>
         <p id="cloudStudentSummary"></p>
+        <button class="button hidden" id="cloudStudentPrevious" type="button">이전 학기</button>
+        <button class="button hidden" id="cloudStudentNext" type="button">다음 학기</button>
         <button class="button" id="cloudStudentSave" type="submit">신청 저장 / 수정</button>
       </form>
     </section>
@@ -1074,19 +1069,6 @@
           </section>
           <section class="curriculum-box curriculum-import-box" id="curriculumPlanDropZone">
             <h4>불러온 편제표 <span class="curriculum-edit-hint">셀을 클릭해 내용 수정</span></h4>
-            <div class="plan-group-toolbar">
-              <button class="button" id="planGroupMode" type="button" aria-pressed="false">선택과목 그룹 편성</button>
-              <span id="planGroupSelectionStatus" role="status">그룹 편성 모드에서 같은 학기의 셀을 클릭하거나 Shift로 범위를 선택하세요.</span>
-            </div>
-            <div class="plan-group-toolbar hidden" id="planGroupActions">
-              <input id="planGroupName" type="text" maxlength="100" placeholder="새 그룹명" aria-label="편제표 새 선택과목 그룹명">
-              <input id="planGroupCount" type="number" min="0" step="1" placeholder="선택 수" aria-label="그룹에서 선택할 과목 수">
-              <button class="button" id="planGroupCreate" type="button">선택 셀로 그룹 만들기</button>
-              <select id="planGroupTarget" aria-label="기존 선택과목 그룹"><option value="">기존 그룹 선택</option></select>
-              <button class="button" id="planGroupMove" type="button">기존 그룹에 추가</button>
-              <button class="button" id="planGroupUnassign" type="button">그룹에서 빼기</button>
-              <button class="button" id="planGroupClear" type="button">선택 해제</button>
-            </div>
             <div class="curriculum-plan-filters" id="curriculumPlanFilters">
               <select id="curriculumFilterGrade" aria-label="학년 필터"><option value="">전체 학년</option></select>
               <select id="curriculumFilterDivision" aria-label="교육과정 구분 필터"><option value="">전체 교육과정</option></select>
@@ -1145,7 +1127,7 @@
         </div>
         <div class="file-name" id="fileName">불러온 파일 없음</div>
         <div style="margin-top:10px">
-          <button class="button" id="resetData" type="button">불러온 데이터 초기화</button>
+          <button class="button" id="resetData" type="button">선택한 회차 데이터 삭제</button>
         </div>
         <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
         </div>
@@ -1543,6 +1525,7 @@ function courseClient_() {
       currentRound: "1",
       rounds: { "1": null, "2": null, "3": null },
       roundClosures: { "1": {}, "2": {} },
+      applicationImportRevision: 0,
     };
     const STORAGE_KEY = "course-certificate-studio-v1";
     const $ = (selector) => document.querySelector(selector);
@@ -1670,7 +1653,10 @@ function courseClient_() {
           fileName: state.fileName,
           students: state.students,
           courses: state.courses,
-          classOverrides: state.classOverrides
+          classOverrides: state.classOverrides,
+          semesterAssignments: {...state.semesterAssignments},
+          groupAssignments: {...state.groupAssignments},
+          customGroupNames: [...(state.customGroupNames || [])]
         };
       } else if (state.rounds[state.currentRound]) {
         state.rounds[state.currentRound] = null;
@@ -1765,6 +1751,11 @@ function courseClient_() {
       state.courses = data ? data.courses : [];
       state.fileName = data ? data.fileName : "";
       state.classOverrides = data ? { ...data.classOverrides } : {};
+      state.semesterAssignments = {...data?.semesterAssignments};
+      state.groupAssignments = {...data?.groupAssignments};
+      state.customGroupNames = [...(data?.customGroupNames || [])];
+      state.selectedCourseColumns = [];
+      state.lastSelectedCourseColumn = null;
       state.selectedId = state.students[0]?.id || null;
       $("#round").value = `${next}차`;
       $("#fileName").textContent = state.fileName || "불러온 파일 없음";
@@ -1775,6 +1766,35 @@ function courseClient_() {
       renderAggregate();
       renderRoundStatus();
       if (!skipRender) renderWorkflowLayout();
+      persistState();
+    }
+
+    function clearApplicationRound() {
+      state.applicationImportRevision++;
+      syncActiveRound();
+      state.rounds[state.currentRound] = null;
+      if (state.roundClosures[state.currentRound]) state.roundClosures[state.currentRound] = {};
+      state.students = [];
+      state.courses = [];
+      state.selectedId = null;
+      state.fileName = "";
+      state.classOverrides = {};
+      state.semesterAssignments = {};
+      state.groupAssignments = {};
+      state.customGroupNames = [];
+      state.selectedCourseColumns = [];
+      state.lastSelectedCourseColumn = null;
+      $("#fileName").textContent = "불러온 파일 없음";
+      $("#searchInput").value = "";
+      $("#searchInput").disabled = true;
+      $("#classFilter").disabled = true;
+      applyClassFilterOptions([]);
+      renderRoster();
+      renderPreview();
+      renderSemesterClassifier();
+      renderAggregate();
+      renderRoundStatus();
+      renderWorkflowLayout();
       persistState();
     }
 
@@ -1864,7 +1884,10 @@ function courseClient_() {
             fileName: String(data.fileName || ""),
             students: data.students,
             courses: normalizeCourses(Array.isArray(data.courses) ? data.courses : []),
-            classOverrides: data.classOverrides && typeof data.classOverrides === "object" ? data.classOverrides : {}
+            classOverrides: data.classOverrides && typeof data.classOverrides === "object" ? data.classOverrides : {},
+            semesterAssignments: data.semesterAssignments,
+            groupAssignments: data.groupAssignments,
+            customGroupNames: data.customGroupNames
           };
         };
         if (saved.rounds && typeof saved.rounds === "object") {
@@ -1881,10 +1904,6 @@ function courseClient_() {
           };
         }
         state.currentRound = ["1", "2", "3"].includes(String(saved.currentRound)) ? String(saved.currentRound) : "1";
-        if (!state.rounds[state.currentRound]) {
-          const fallback = ["1", "2", "3"].find((key) => state.rounds[key]);
-          if (fallback) state.currentRound = fallback;
-        }
         state.roundClosures = saved.roundClosures && typeof saved.roundClosures === "object"
           ? {
             "1": saved.roundClosures["1"] && typeof saved.roundClosures["1"] === "object" ? saved.roundClosures["1"] : {},
@@ -1897,14 +1916,14 @@ function courseClient_() {
         state.selectedId = saved.selectedId || state.students[0]?.id || null;
         state.fileName = activeRound ? activeRound.fileName : "";
         state.classOverrides = activeRound ? { ...activeRound.classOverrides } : {};
-        state.semesterAssignments = saved.semesterAssignments && typeof saved.semesterAssignments === "object"
-          ? saved.semesterAssignments
+        state.semesterAssignments = (activeRound?.semesterAssignments || saved.semesterAssignments) && typeof (activeRound?.semesterAssignments || saved.semesterAssignments) === "object"
+          ? (activeRound?.semesterAssignments || saved.semesterAssignments)
           : {};
-        state.customGroupNames = Array.isArray(saved.customGroupNames)
-          ? saved.customGroupNames.map((name) => String(name ?? "").trim()).filter(Boolean)
+        state.customGroupNames = Array.isArray(activeRound?.customGroupNames || saved.customGroupNames)
+          ? (activeRound?.customGroupNames || saved.customGroupNames).map((name) => String(name ?? "").trim()).filter(Boolean)
           : [];
-        state.groupAssignments = saved.groupAssignments && typeof saved.groupAssignments === "object"
-          ? saved.groupAssignments
+        state.groupAssignments = (activeRound?.groupAssignments || saved.groupAssignments) && typeof (activeRound?.groupAssignments || saved.groupAssignments) === "object"
+          ? (activeRound?.groupAssignments || saved.groupAssignments)
           : {};
         state.curriculumCatalog = Array.isArray(saved.curriculumCatalog) ? saved.curriculumCatalog : [];
         state.curriculumCatalogQuery = String(saved.curriculumCatalogQuery || "");
@@ -2276,7 +2295,45 @@ function courseClient_() {
       return "미분류";
     }
 
-    function courseGroupLabel(course) {
+    function applicationGroupForCourse(course, currentGrade, groups = null) {
+      const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
+      if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
+      const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
+      const normalize = (name) => String(name ?? "").trim()
+        .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
+        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, " ").trim();
+      const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
+      const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
+        (!hint || group.semester === hint) &&
+        group.courses.some((name) => normalize(name) === normalize(course.name)));
+      if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
+      if (!matches.length) return course.applicationGroups?.[String(currentGrade)] || null;
+      return null;
+    }
+
+    function classifyApplicationRecords(data) {
+      const groups = typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+      const warnings = new Set();
+      for (const course of data.courses) {
+        course.applicationGroups = {};
+        for (const grade of new Set(data.students.filter((student) =>
+          student.selections.some((selection) => selection.column === course.column)).map((student) => String(student.grade)))) {
+          const group = applicationGroupForCourse(course, grade, groups);
+          if (group) course.applicationGroups[grade] = group;
+          else warnings.add(`${Number(grade)+1}학년 ${course.name}`);
+        }
+      }
+      for (const student of data.students) for (const course of student.selections) {
+        course.applicationGroups = data.courses.find((item) => item.column === course.column)?.applicationGroups || {};
+      }
+      return [...warnings];
+    }
+
+    function courseGroupLabel(course, currentGrade) {
+      if (currentGrade && !state.groupAssignments[String(course.column)]) {
+        const applicationGroup = applicationGroupForCourse(course, currentGrade);
+        if (applicationGroup) return `${["1", "2"].includes(applicationGroup.semester) ? applicationGroup.semester+"학기 " : ""}${applicationGroup.name}`;
+      }
       const semester = resolveSemesterKey(course);
       const category = resolveCourseCategoryForOutput(course);
       if (!semester) return category;
@@ -3255,7 +3312,6 @@ function courseClient_() {
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
         $("#curriculumFilterCount").textContent = "0개 과목 표시";
       }
-      if (typeof renderPlanGroups === "function") renderPlanGroups();
     }
 
     function aggregateRecords(
@@ -3281,16 +3337,17 @@ function courseClient_() {
         };
         const semesters = [];
         for (const course of courses) {
+          const applicationGroup = applicationGroupForCourse(course, grade);
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
           const semesterKey = forcedSemester === "1" || forcedSemester === "2"
             ? forcedSemester
-            : (parsedAssignedGroup.semesterKey || course.semesterKey || "");
+            : (parsedAssignedGroup.semesterKey || applicationGroup?.semester || course.semesterKey || "");
           const displayGrade = Number(grade) + 1;
           const semesterName = semesterKey
             ? `${displayGrade}학년 ${semesterKey}학기`
             : `${displayGrade}학년 미분류`;
-          const category = parsedAssignedGroup.category || UNASSIGNED_GROUP;
+          const category = parsedAssignedGroup.category || applicationGroup?.name || UNASSIGNED_GROUP;
           let semester = semesters.find((item) => item.name === semesterName);
           if (!semester) {
             semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
@@ -3365,7 +3422,7 @@ function courseClient_() {
     function certificateMarkup(student, printMode = false) {
       const groups = [];
       for (const course of student.selections) {
-        const groupName = courseGroupLabel(course);
+        const groupName = courseGroupLabel(course, student.grade);
         let group = groups.find((item) => item.name === groupName);
         if (!group) { group = { name: groupName, courses: [] }; groups.push(group); }
         group.courses.push(course);
@@ -3582,7 +3639,7 @@ function courseClient_() {
       const divisionPercent = Number($("#divisionPercent").value) || 110;
       const aggregate = aggregateRecords(
         data.students, data.courses, openingPercent, divisionPercent,
-        data.classOverrides || {}, state.semesterAssignments, state.groupAssignments
+        data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}
       );
       const closures = state.roundClosures[round] || {};
       content.innerHTML = aggregate.reports.map(({ summary, semesters }) => {
@@ -4148,6 +4205,9 @@ function courseClient_() {
       const data = {
         students: merged.students, courses: merged.courses,
         classOverrides: previous?.classOverrides || {},
+        semesterAssignments: previous?.semesterAssignments || {},
+        groupAssignments: previous?.groupAssignments || {},
+        customGroupNames: previous?.customGroupNames || [],
         fileName: `온라인 자동 연동 ${merged.students.length}명`
       };
       state.rounds[round] = data;
@@ -4155,6 +4215,9 @@ function courseClient_() {
         state.students = data.students;
         state.courses = data.courses;
         state.classOverrides = data.classOverrides;
+        state.semesterAssignments = {...data.semesterAssignments};
+        state.groupAssignments = {...data.groupAssignments};
+        state.customGroupNames = [...data.customGroupNames];
         state.fileName = data.fileName;
         if (!state.students.some((student) => student.id === state.selectedId)) state.selectedId = state.students[0]?.id || null;
         $("#fileName").textContent = state.fileName;
@@ -4177,9 +4240,15 @@ function courseClient_() {
         status.textContent = `명단을 만들지 못했습니다. ${merged.errors[0] || ""}`;
         return;
       }
+      const unclassified = classifyApplicationRecords(merged);
       state.students = merged.students;
       state.courses = merged.courses;
       state.classOverrides = {};
+      state.semesterAssignments = {};
+      state.groupAssignments = {};
+      state.customGroupNames = [];
+      state.selectedCourseColumns = [];
+      state.lastSelectedCourseColumn = null;
       state.fileName = `${sourceLabel} ${merged.students.length}명`;
       state.selectedId = merged.students[0].id;
       $("#round").value = `${state.currentRound}차`;
@@ -4194,7 +4263,8 @@ function courseClient_() {
       persistState();
       status.style.color = merged.errors.length ? "#a44939" : "#287956";
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
-        (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "");
+        (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
+        (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
     async function handleApplicationFiles(fileList) {
@@ -4667,12 +4737,16 @@ function courseClient_() {
         status.textContent = "현재는 .xlsx 형식만 지원합니다.";
         return;
       }
+      const uploadRound = state.currentRound;
+      const importRevision = state.applicationImportRevision;
       const reader = new FileReader();
       reader.onerror = () => { status.textContent = "파일을 읽지 못했습니다. 다시 선택해 주세요."; };
       reader.onload = async () => {
         try {
           const sheets = await parseWorkbook(reader.result);
           if (!isDeveloperAccount()) throw new Error("개발자 계정으로 다시 로그인하세요.");
+          if (state.currentRound !== uploadRound) throw new Error("파일을 읽는 중 회차가 바뀌었습니다. 해당 회차에서 다시 업로드하세요.");
+          if (state.applicationImportRevision !== importRevision) throw new Error("파일을 읽는 중 데이터가 삭제되었습니다. 다시 업로드하세요.");
           if (sheets[0]?.rows[0]?.[0] === "차수" && sheets[0].rows[0][5] === "선택과목") {
             const header = ["차수", "학년", "반", "번호", "성명", "선택과목"];
             if (header.some((name, index) => sheets[0].rows[0][index] !== name)) throw new Error("결과 엑셀의 머리글 형식을 확인하세요.");
@@ -4694,6 +4768,7 @@ function courseClient_() {
             return;
           }
           const data = createRecords(sheets[0].rows);
+          const unclassified = classifyApplicationRecords(data);
           $("#fileName").textContent = file.name;
           state.students = data.students;
           state.courses = normalizeCourses(data.courses);
@@ -4717,7 +4792,8 @@ function courseClient_() {
           renderRoundStatus();
           persistState();
           status.style.color = "#287956";
-          status.textContent = `${state.currentRound}차 수강신청: ${data.students.length}명, 과목 ${data.courses.length}개를 불러왔습니다.`;
+          status.textContent = `${state.currentRound}차 수강신청: ${data.students.length}명, 과목 ${data.courses.length}개를 불러왔습니다.` +
+            (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
         } catch (error) {
           const message = error instanceof Error ? error.message : "파일을 처리하는 중 오류가 발생했습니다.";
           status.style.color = "#a44939";
@@ -5540,9 +5616,14 @@ function courseClient_() {
     });
     $("#downloadRetakeList").addEventListener("click", downloadRetakeList);
     resetDataButton.addEventListener("click", () => {
-      resetWorkspace(true);
-      status.style.color = "#596780";
-      status.textContent = "저장된 파일과 계산 결과를 초기화했습니다.";
+      if (typeof requireTeacherLogin !== "function" || !requireTeacherLogin()) return;
+      if (!window.confirm(`${state.currentRound}차의 명단·신청 결과·폐강 검토만 삭제할까요? 편제표와 다른 회차는 유지하며 서버 신청은 삭제하지 않습니다. 자동 연동은 해제됩니다.`)) return;
+      try {
+        if (typeof unlinkApplicationRound === "function") unlinkApplicationRound(state.currentRound);
+        clearApplicationRound();
+        status.style.color = "#596780";
+        status.textContent = `${state.currentRound}차 데이터만 삭제했습니다. 편제표와 다른 회차는 유지됩니다.`;
+      } catch (error) { status.textContent = `회차 삭제 실패: ${error.message}`; }
     });
     dropzone.addEventListener("dragover", (event) => { event.preventDefault(); dropzone.classList.add("dragover"); });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
@@ -5556,7 +5637,6 @@ function courseClient_() {
     if (!showStudentApplicationEntry()) restorePersistedState();
   </script>
   <script src="course-groups.js" defer></script>
-  <script src="plan-groups.js" defer></script>
   <script src="vendor/qrcode.js" defer></script>
   <script src="supabase-client.js" defer></script>
 </body>

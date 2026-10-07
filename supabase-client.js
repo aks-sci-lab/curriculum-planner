@@ -1,6 +1,7 @@
 "use strict";
 var requireTeacherLogin;
 var isDeveloperAccount;
+var unlinkApplicationRound;
 
 (() => {
   const PROJECT_URL = "https://hapfkdkbhnqpfjdepozv.supabase.co";
@@ -53,6 +54,7 @@ var isDeveloperAccount;
     linkedEvents.clear();
     syncRevision++;
     knownEvents = [];
+    eventsLoaded = false;
     syncSnapshots.clear();
     updateAccountControls();
     setApplicationTargetGrades(["2", "3"]);
@@ -101,11 +103,14 @@ var isDeveloperAccount;
   let latestCodes = null;
   let activeCode = "";
   let application = null;
+  let studentSemesters = [];
+  let studentSemesterIndex = 0;
   let teacherBusy = false;
   let studentBusy = false;
   let printingCodes = null;
   let linkedEvents = new Set();
   let knownEvents = [];
+  let eventsLoaded = false;
   let syncTimer = null;
   let syncTask = null;
   let syncRevision = 0;
@@ -210,6 +215,16 @@ var isDeveloperAccount;
     syncRevision++;
     localStorage.setItem(`curriculum-cloud-links:${session.user.id || session.user.email}`, JSON.stringify([...linkedEvents]));
   }
+  unlinkApplicationRound = (round) => {
+    if (!session || expireIfIdle()) throw new Error("교사 로그인이 필요합니다.");
+    if (linkedEvents.size && !eventsLoaded) throw new Error("자동 연동 신청 목록을 읽는 중입니다. 목록 새로고침 후 다시 삭제하세요.");
+    const previous = new Set(linkedEvents);
+    for (const event of knownEvents) if (String(event.round) === String(round)) linkedEvents.delete(event.id);
+    try { saveLinkedEvents(); }
+    catch (error) { linkedEvents = previous; throw error; }
+    syncSnapshots.delete(String(round));
+    byId("cloudSyncStatus").textContent = `${round}차 자동 연동을 해제했습니다. 서버 신청은 유지됩니다.`;
+  };
 
   function syncLinkedResults() {
     if (syncTask) return syncTask.then(() => syncLinkedResults());
@@ -310,6 +325,7 @@ var isDeveloperAccount;
       method: "GET", authenticated: true,
     });
     knownEvents = events;
+    eventsLoaded = true;
     const list = byId("cloudEventList");
     list.replaceChildren();
     if (!events.length) list.textContent = "생성한 수강신청이 없습니다.";
@@ -532,10 +548,12 @@ var isDeveloperAccount;
       studentBusy = false;
       byId("supabaseStudentEntry").querySelectorAll("button").forEach((b) => { b.disabled = false; });
       byId("cloudStudentSave").disabled = !application?.open;
+      if (application) updateStudentSemester();
     }
   }
 
   function renderStudentApplication(data) {
+    studentSemesterIndex = 0;
     byId("cloudStudentCourses").classList.remove("hidden");
     const s = data.student;
     if (!["1", "2"].includes(String(s.grade))) throw new Error("신청 가능한 현재 학년은 1·2학년입니다. 교사에게 명렬 확인을 요청하세요.");
@@ -550,6 +568,9 @@ var isDeveloperAccount;
         const fieldset = document.createElement("fieldset");
         fieldset.dataset.group = group.id;
         fieldset.dataset.count = group.count;
+        const semesters = [...new Set(group.courses.map((name) => data.courses.find((c) => c.subject === name)?.semester))];
+        fieldset.dataset.semester = ["1", "2"].includes(group.semester) ? group.semester :
+          semesters.length === 1 && ["1", "2"].includes(semesters[0]) ? semesters[0] : "0";
         const legend = document.createElement("legend");
         const semester = group.semester ? (group.semester==="0"?"학기 미정":`${group.semester}학기`) : "";
         legend.textContent = `${semester ? semester+" · " : ""}${group.name} · 정확히 ${group.count}과목 선택`;
@@ -566,10 +587,11 @@ var isDeveloperAccount;
       }
     } else {
     const semesters = new Map();
-    for (const course of data.courses) {
+    for (const course of [...data.courses].sort((a, b) => String(a.semester || "9").localeCompare(String(b.semester || "9")))) {
       const semester = course.semester || "학기 미정";
       if (!semesters.has(semester)) {
         const group = document.createElement("fieldset");
+        group.dataset.semester = ["1", "2"].includes(semester) ? semester : "0";
         const legend = document.createElement("legend");
         legend.textContent = semester === "학기 미정" ? semester : `${semester}학기`;
         group.appendChild(legend);
@@ -588,17 +610,56 @@ var isDeveloperAccount;
       semesters.get(semester).appendChild(label);
     }
     }
+    studentSemesters = [...new Set([...choices.children].map((fieldset) => fieldset.dataset.semester))]
+      .sort((a, b) => (a === "0" ? 9 : Number(a)) - (b === "0" ? 9 : Number(b)));
+    updateStudentSemester();
     updateSummary();
     byId("cloudStudentMessage").textContent = !data.open ? "접수가 마감되었습니다. 기존 신청만 확인할 수 있습니다."
       : data.submittedAt ? "기존 신청을 불러왔습니다. 수정 후 저장할 수 있습니다." : "과목을 선택하고 신청 저장을 누르세요.";
   }
+  function updateStudentSemester() {
+    const current = studentSemesters[studentSemesterIndex];
+    const last = studentSemesterIndex === studentSemesters.length - 1;
+    for (const fieldset of byId("cloudStudentChoices").children) {
+      fieldset.classList[fieldset.dataset.semester === current ? "remove" : "add"]("hidden");
+    }
+    byId("cloudStudentSemesterStatus").textContent = current
+      ? `${studentSemesterIndex + 1}/${studentSemesters.length} 단계 · ${current === "0" ? "학기 미정 과목" : current+"학기 수강신청"}` : "";
+    byId("cloudStudentPrevious").classList[studentSemesterIndex > 0 ? "remove" : "add"]("hidden");
+    byId("cloudStudentNext").classList[last || !current ? "add" : "remove"]("hidden");
+    byId("cloudStudentSave").classList[last ? "remove" : "add"]("hidden");
+    byId("cloudStudentNext").textContent = `다음: ${studentSemesters[studentSemesterIndex+1] === "0" ? "학기 미정" : studentSemesters[studentSemesterIndex+1]+"학기"}`;
+  }
+  function validateStudentSemester() {
+    if (!application.open) return;
+    for (const fieldset of byId("cloudStudentChoices").children) {
+      if (fieldset.dataset.semester !== studentSemesters[studentSemesterIndex]) continue;
+      const count = fieldset.querySelectorAll("input:checked").length;
+      if (fieldset.dataset.group && count !== Number(fieldset.dataset.count)) {
+        throw new Error(`${fieldset.querySelector("legend").textContent} · 선택 수를 맞춘 뒤 다음 학기로 이동하세요.`);
+      }
+    }
+  }
+  byId("cloudStudentNext").addEventListener("click", () => {
+    try {
+      validateStudentSemester();
+      if (studentSemesterIndex < studentSemesters.length - 1) studentSemesterIndex++;
+      updateStudentSemester();
+      byId("cloudStudentMessage").textContent = "앞 학기의 선택은 유지됩니다. 모든 학기 선택 후 신청 저장을 누르세요.";
+    } catch (error) { byId("cloudStudentMessage").textContent = error.message; }
+  });
+  byId("cloudStudentPrevious").addEventListener("click", () => {
+    if (studentSemesterIndex > 0) studentSemesterIndex--;
+    updateStudentSemester();
+    byId("cloudStudentMessage").textContent = "선택 내용을 수정한 뒤 다음 학기로 이동하세요.";
+  });
   function updateSummary() {
     const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")];
     byId("cloudStudentSummary").textContent = `선택 ${selected.length}개 · ${selected.reduce((total, b) => total + Number(b.dataset.credit), 0)}학점`;
     for (const fieldset of byId("cloudStudentChoices").querySelectorAll("fieldset[data-group]")) {
       const count = fieldset.querySelectorAll("input:checked").length;
       const group = application.groups.find((g) => g.id === fieldset.dataset.group);
-      fieldset.querySelector("legend").textContent = `${group.name} · ${count}/${group.count}과목 선택`;
+      fieldset.querySelector("legend").textContent = `${fieldset.dataset.semester === "0" ? "" : fieldset.dataset.semester+"학기 · "}${group.name} · ${count}/${group.count}과목 선택`;
       for (const box of fieldset.querySelectorAll("input")) {
         box.disabled = !application.open || (!box.checked && count >= Number(group.count));
       }
@@ -646,6 +707,7 @@ var isDeveloperAccount;
     event.preventDefault();
     studentAction(async () => {
       if (!activeCode || !application?.open) throw new Error("본인 확인 및 접수 상태를 확인하세요.");
+      if (studentSemesterIndex < studentSemesters.length - 1) throw new Error("1학기 선택을 완료하고 다음 학기로 이동한 뒤 모든 학기 신청을 저장하세요.");
       const code = activeCode;
       const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((box) => box.value);
       if (!selected.length) throw new Error("과목을 1개 이상 선택하세요.");
