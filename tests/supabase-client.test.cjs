@@ -127,7 +127,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
   });
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{},
+    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[],
     respond: respond || (async () => ({ data: [] })),
     async settle() {
       for (let i = 0; i < 20; i++) await new Promise(setImmediate);
@@ -136,6 +136,13 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       elements[id].listeners[type]({ preventDefault() {}, target: elements[id] });
       for (let i = 0; i < 10; i++) await new Promise(setImmediate);
     },
+  };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor", "qrcode.js"), "utf8"), context);
+  const generateQR=context.qrcode;
+  context.qrcode=(...args)=>{
+    const qr=generateQR(...args),addData=qr.addData;
+    qr.addData=(text,...options)=>{fixtureData.qrLinks.push(text);return addData(text,...options);};
+    return qr;
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "supabase-client.js"), "utf8"), context);
   return fixtureData;
@@ -433,6 +440,9 @@ test("saved codes open mail merge preview, filter by class, escape names and pri
   assert.ok(preview.includes("000123"));
   assert.ok(preview.includes("#event="));
   assert.ok(!preview.includes("<script>"));
+  assert.equal((preview.match(/class="code-qr"/g) || []).length,2);
+  assert.equal((preview.match(/<svg /g) || []).length,2);
+  assert.ok(!preview.includes("<img"));
   f.elements.cloudPrintClass.value = "1:2";
   await f.fire("cloudPrintClass", "change");
   assert.ok(!f.elements.cloudCodePreview.innerHTML.includes("000123"));
@@ -441,9 +451,13 @@ test("saved codes open mail merge preview, filter by class, escape names and pri
   assert.equal(f.printed, true);
   assert.equal(f.elements.cloudCodeDialog.open, true);
   assert.equal((f.elements.printBatch.innerHTML.match(/class="print-page"/g) || []).length, 1);
+  assert.equal((f.elements.printBatch.innerHTML.match(/<svg /g) || []).length,1);
   f.elements.printBatch.innerHTML = "";
   await f.fire("cloudCodePrint", "click");
   assert.ok(f.elements.printBatch.innerHTML.includes("456789"));
+  assert.ok(f.qrLinks.length>=4);
+  assert.ok(f.qrLinks.every((link)=>link==="https://school.example/app/#event="+codes.id));
+  assert.equal(f.requests.length,0);
 });
 
 test("teacher log controls send the exact server cutoff and optional student id", async () => {

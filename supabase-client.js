@@ -718,9 +718,16 @@ var isDeveloperAccount;
     }
     function codeMarkup(students) {
       const link = eventLink(printingCodes.id);
+      if (typeof qrcode !== "function") throw new Error("QR코드 생성 기능을 불러오지 못했습니다. 페이지를 새로고침하세요.");
+      const qr = qrcode(0, "M");
+      qr.addData(link, "Byte");
+      qr.make();
+      const qrImage = qr.createSvgTag({cellSize:4, margin:16, scalable:true,
+        alt:"학교·차수별 수강신청 페이지로 이동하는 QR코드"});
       return students.map((s) => `<section class="print-page"><h2>수강신청 안내</h2>
         <p>${escapeHtml(s.grade)}학년 ${escapeHtml(s.classroom)}반 ${escapeHtml(s.number)}번 <strong>${escapeHtml(s.name)}</strong></p>
-        <p>아래 학교·차수 신청 주소로 접속하여 본인 코드를 입력하세요.</p>
+        <p>QR코드를 스캔하거나 아래 학교·차수 신청 주소로 접속하여 본인 코드를 입력하세요.</p>
+        <figure class="code-qr">${qrImage}<figcaption>학생 수강신청 페이지</figcaption></figure>
         <p style="overflow-wrap:anywhere">${escapeHtml(link)}</p>
         <p style="font-size:28px">개인 신청 코드: <strong>${escapeHtml(s.code)}</strong></p>
         <p>학교·차수와 본인 정보를 확인한 뒤 과목을 선택하고 신청 저장을 누르세요.</p>
@@ -778,12 +785,17 @@ var isDeveloperAccount;
         byId("cloudTeacherMessage").textContent = "저장한 코드 파일의 출력창을 열었습니다.";
       });
     });
-    byId("cloudPrintClass").addEventListener("change", previewCodes);
+    byId("cloudPrintClass").addEventListener("change", () => {
+      try { previewCodes(); }
+      catch (error) { byId("cloudTeacherMessage").textContent = error.message; }
+    });
     byId("cloudCodeClose").addEventListener("click", () => byId("cloudCodeDialog").close());
     byId("cloudCodePrint").addEventListener("click", () => {
-      byId("printBatch").innerHTML = codeMarkup(filteredPrintStudents());
-      // Keep the preview open so another print can rebuild the batch after afterprint clears it.
-      window.print();
+      try {
+        byId("printBatch").innerHTML = codeMarkup(filteredPrintStudents());
+        // Keep the preview open so another print can rebuild the batch after afterprint clears it.
+        window.print();
+      } catch (error) { byId("cloudTeacherMessage").textContent = error.message; }
     });
   async function initializeTeacherSession() {
     if (eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=")) return;

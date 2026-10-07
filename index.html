@@ -910,6 +910,13 @@
     .application-link-field { width: 100%; padding: 10px; border: 1px solid #c9d4ea; border-radius: 8px; }
     #cloudCodeDialog { width: min(820px, 90vw); max-height: 85vh; overflow: auto; border: 1px solid #d7deed; border-radius: 12px; }
     #cloudCodePreview .print-page { padding: 20px; margin-top: 12px; border: 1px solid #d7deed; }
+    .code-qr { width: 180px; margin: 20px 0; text-align: center; break-inside: avoid; }
+    .code-qr svg { display: block; width: 180px; height: 180px; }
+    .code-qr figcaption { margin-top: 6px; font-size: 12px; }
+    @media print {
+      .code-qr, .code-qr svg { width: 45mm; }
+      .code-qr svg { height: 45mm; }
+    }
     @media print { #cloudCodeDialog, #cloudCodeDialog::backdrop { display: none !important; } }
     .course-history { max-height: 500px; overflow: auto; padding: 12px; background: #f2f5fb; }
     .course-group-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; margin-top:12px; }
@@ -5550,6 +5557,7 @@ function courseClient_() {
   </script>
   <script src="course-groups.js" defer></script>
   <script src="plan-groups.js" defer></script>
+  <script src="vendor/qrcode.js" defer></script>
   <script src="supabase-client.js" defer></script>
 </body>
 </html>
