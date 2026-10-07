@@ -297,6 +297,25 @@ test("normal teacher does not get developer Excel upload controls", async () => 
   await f.settle();
   assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),true);
   assert.equal(f.elements.curriculumGoogleLogin.disabled,true);
+  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),false);
+  assert.equal(f.elements.teacherLoginGate.classList.contains("hidden"),true);
+  assert.equal(f.elements.curriculumGoogleLogin.classList.contains("hidden"),true);
+  assert.equal(f.elements.headerTeacherLogout.classList.contains("hidden"),false);
+});
+
+test("logged-out teacher content is hidden and student routes do not display the teacher login gate", async () => {
+  const f=fixture();
+  await f.settle();
+  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),true);
+  assert.equal(f.elements.teacherLoginGate.classList.contains("hidden"),false);
+  assert.equal(f.elements.teacherHeader.classList.contains("hidden"),false);
+  for (const hash of ["#student","#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","#apply=https%3A%2F%2Fscript.google.com"]) {
+    const student=fixture({href:"https://school.example/app/"+hash});
+    await student.settle();
+    assert.equal(student.elements.teacherHeader.classList.contains("hidden"),true);
+    assert.equal(student.elements.teacherLoginGate.classList.contains("hidden"),true);
+    assert.equal(student.elements.teacherWorkspace.classList.contains("hidden"),true);
+  }
 });
 
 test("an in-flight token refresh cannot restore a session after idle logout", async () => {
@@ -317,6 +336,8 @@ test("an in-flight token refresh cannot restore a session after idle logout", as
   assert.equal(storage.has(key),false);
   assert.equal(f.elements.curriculumGoogleLogin.disabled,false);
   assert.equal(f.elements.cloudTeacherControls.classList.contains("hidden"),true);
+  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),true);
+  assert.equal(f.elements.teacherLoginGate.classList.contains("hidden"),false);
   assert.equal(f.requests.filter((r)=>r.url.includes("course_events")).length,0);
 });
 
@@ -686,4 +707,36 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   count.value="1";count.onchange();
   assert.equal(ctx.getCourseApplicationGroups().length,1);
   assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");
+});
+
+test("uncolored plan selections create persistent semester-scoped groups shared with online setup", () => {
+  const f=fixture(),storage=new Map();
+  const subjects={"2":[{subject:"A",semester:"1·2"},{subject:"B",semester:"1"}],
+    "3":[{subject:"C",semester:"1"}]};
+  const load=()=>{
+    const ctx=vm.createContext({
+      document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
+        createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
+      window:{confirm:()=>true},crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
+      localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}});
+    vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
+    return ctx;
+  };
+  let ctx=load();
+  assert.equal(ctx.getPlanApplicationGroups().length,0);
+  assert.throws(()=>ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["A (2학기)"],name:"잘못된 학기",count:1}),/같은 학년·학기/);
+  assert.throws(()=>ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["B"],name:"선택",count:2}),/0~1/);
+  ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["A (1학기)","B"],name:"수학 선택",count:1});
+  ctx.assignPlanApplicationGroup({grade:"2",semester:"2",courses:["A (2학기)"],name:"2학기 선택",count:1});
+  ctx.assignPlanApplicationGroup({grade:"3",semester:"1",courses:["C"],name:"3학년 선택",count:1});
+  const groups=ctx.getCourseApplicationGroups();
+  assert.equal(groups.length,3);
+  assert.deepEqual(JSON.parse(JSON.stringify(groups[0].courses)),["A (1학기)","B"]);
+  assert.throws(()=>ctx.assignPlanApplicationGroup({grade:"2",semester:"2",courses:["A (2학기)"],targetId:groups[0].id}),/같은 학년·학기/);
+  ctx=load();
+  assert.equal(ctx.getCourseApplicationGroups()[0].name,"수학 선택");
+  ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["B"],targetId:""});
+  assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
+  ctx.assignPlanApplicationGroup({grade:"2",semester:"1",courses:["B"],targetId:groups[0].id});
+  assert.equal(ctx.getCourseApplicationGroups()[0].count,1);
 });

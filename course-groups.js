@@ -3,6 +3,8 @@ var renderCourseGroups;
 var getCourseApplicationGroups;
 var getGroupedApplicationSubjects;
 var setApplicationTargetGrades;
+var getPlanApplicationGroups;
+var assignPlanApplicationGroup;
 (() => {
   const workspaceTabs = ["Groups", "Online", "Results"]
     .map((name) => document.getElementById(`application${name}Tab`));
@@ -103,10 +105,53 @@ var setApplicationTargetGrades;
     for (const id of available.keys()) seeded.add(id);
     for (const id of selected) if (!available.has(id)) selected.delete(id);
   }
-  function persist() {
+  function persist(required = false) {
     try { localStorage.setItem(key, JSON.stringify(groups)); localStorage.setItem(key+"-seeded",JSON.stringify([...seeded])); }
-    catch (error) { message.textContent = `그룹 저장 실패: ${error.message}`; }
+    catch (error) {
+      message.textContent = `그룹 저장 실패: ${error.message}`;
+      if (required) throw new Error(message.textContent);
+    }
+    if (typeof renderPlanGroups === "function") renderPlanGroups();
   }
+  getPlanApplicationGroups = () => {
+    sync();
+    return JSON.parse(JSON.stringify(groups));
+  };
+  assignPlanApplicationGroup = ({ grade, semester, courses, name, count, targetId }) => {
+    sync();
+    const original = JSON.stringify(groups);
+    const names = [...new Set(courses)];
+    if (!names.length || names.some((subject) => !available.has(`${grade}:${semester}:${subject}`))) {
+      throw new Error("같은 학년·학기의 신청 가능한 과목 셀을 선택하세요.");
+    }
+    let target = targetId ? groups.find((g) => g.id === targetId) : null;
+    if (targetId && (!target || target.grade !== grade || target.semester !== semester)) {
+      throw new Error("같은 학년·학기의 그룹만 선택할 수 있습니다.");
+    }
+    if (name !== undefined) {
+      if (!name.trim() || name.trim().length > 100) throw new Error("그룹명을 1~100자로 입력하세요.");
+      if (!Number.isInteger(count) || count < 0 || count > names.length) {
+        throw new Error(`선택 수를 0~${names.length} 정수로 지정하세요.`);
+      }
+      const colors = ["#DCE8FF", "#D9F0E5", "#FCE5CC", "#EADFFA", "#FADDE5", "#D5EEF3"];
+      target = {id:crypto.randomUUID(), grade, semester, name:name.trim(), count,
+        fill:colors[groups.length % colors.length], courses:[]};
+      groups.push(target);
+    }
+    const emptied = new Set();
+    for (const group of groups.filter((g) => g.grade === grade && g.semester === semester)) {
+      const hadCourses = group.courses.length;
+      group.courses = group.courses.filter((subject) => !names.includes(subject));
+      if (group !== target && group.count > group.courses.length) group.count = null;
+      if (hadCourses && !group.courses.length && group !== target) emptied.add(group.id);
+    }
+    if (target) target.courses.push(...names);
+    groups = groups.filter((g) => !emptied.has(g.id));
+    try { persist(true); }
+    catch (error) { groups = JSON.parse(original); throw error; }
+    renderCourseGroups();
+    return target?.name || "미분류";
+  };
   function button(text, action) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "button"; b.textContent = text; b.onclick = action;
@@ -230,6 +275,7 @@ var setApplicationTargetGrades;
         for (const course of visible) panel.appendChild(courseRow(course));
       }
     }
+    if (typeof renderPlanGroups === "function") renderPlanGroups();
   };
   getCourseApplicationGroups = (grades = targetGrades) => {
     sync();

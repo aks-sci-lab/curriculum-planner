@@ -17,15 +17,22 @@ var isDeveloperAccount;
   requireTeacherLogin = () => {
     if (session && Date.now() - lastActivity < IDLE_MS) return true;
     byId("cloudTeacherMessage").textContent = "편제표 업로드 전에 구글 로그인을 해주세요.";
-    switchWorkflowStep(2);
-    byId("applicationOnlineTab").click();
-    byId("cloudTeacherGoogleLogin").focus();
+    updateAccountControls();
+    byId("teacherLoginMessage").textContent = "오른쪽 위의 구글 로그인 후 이용하세요.";
+    byId("curriculumGoogleLogin").focus();
     return false;
   };
   function saveSession() {
     localStorage.setItem(SESSION_KEY, JSON.stringify({ session, lastActivity }));
   }
   function updateAccountControls() {
+    const studentRoute = !!eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=");
+    const loggedIn = !!session && Date.now() - lastActivity < IDLE_MS && !studentRoute;
+    byId("teacherHeader").classList[studentRoute ? "add" : "remove"]("hidden");
+    byId("teacherWorkspace").classList[loggedIn ? "remove" : "add"]("hidden");
+    byId("teacherLoginGate").classList[loggedIn || studentRoute ? "add" : "remove"]("hidden");
+    byId("headerTeacherLogout").classList[loggedIn ? "remove" : "add"]("hidden");
+    byId("curriculumGoogleLogin").classList[loggedIn ? "add" : "remove"]("hidden");
     byId("developerResultUpload").classList[isDeveloperAccount() ? "remove" : "add"]("hidden");
     byId("curriculumGoogleLogin").disabled = !!session;
     byId("curriculumLoginStatus").textContent = session ? `${session.user.email} · 로그인 중` : "편제표 업로드 전에 로그인하세요.";
@@ -35,6 +42,10 @@ var isDeveloperAccount;
     session = null;
     localStorage.removeItem(SESSION_KEY);
     latestCodes = null;
+    printingCodes = null;
+    byId("cloudCodeDialog").close();
+    byId("cloudCodePreview").replaceChildren();
+    byId("printBatch").replaceChildren();
     pendingRoster = null;
     if (syncTimer !== null) window.clearInterval(syncTimer);
     if (idleTimer !== null) window.clearInterval(idleTimer);
@@ -50,6 +61,7 @@ var isDeveloperAccount;
     byId("cloudTeacherControls").classList.add("hidden");
     byId("cloudTeacherLogin").classList.remove("hidden");
     byId("cloudTeacherMessage").textContent = message;
+    byId("teacherLoginMessage").textContent = message;
     byId("cloudSyncStatus").textContent = "로그인하면 집계표 자동 연동을 재개합니다.";
   }
   function expireIfIdle() {
@@ -268,10 +280,12 @@ var isDeveloperAccount;
     buttons.forEach((button) => { button.disabled = true; });
     byId("cloudRosterInput").disabled = true;
     byId("cloudTeacherMessage").textContent = "처리 중…";
+    byId("teacherLoginMessage").textContent = "로그인 처리 중…";
     try {
       await action();
     } catch (error) {
       byId("cloudTeacherMessage").textContent = error.message;
+      byId("teacherLoginMessage").textContent = error.message;
     } finally {
       teacherBusy = false;
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
@@ -772,7 +786,7 @@ var isDeveloperAccount;
       window.print();
     });
   async function initializeTeacherSession() {
-    if (eventId || new URL(window.location.href).hash === "#student") return;
+    if (eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=")) return;
     const url = new URL(window.location.href);
     if (url.searchParams.has("code") || url.searchParams.has("error")) return completeGoogleLogin();
     const raw = localStorage.getItem(SESSION_KEY);
@@ -781,6 +795,7 @@ var isDeveloperAccount;
     if (!Number.isFinite(saved.lastActivity) || saved.lastActivity > Date.now() || Date.now() - saved.lastActivity >= IDLE_MS) {
       localStorage.removeItem(SESSION_KEY);
       byId("cloudTeacherMessage").textContent = "5분간 활동이 없어 자동 로그아웃했습니다.";
+      byId("teacherLoginMessage").textContent = "5분간 활동이 없어 자동 로그아웃했습니다.";
       return;
     }
     setSession(saved.session, saved.lastActivity);
@@ -791,4 +806,6 @@ var isDeveloperAccount;
     byId("cloudTeacherMessage").textContent = `로그인 처리 실패: ${error.message}`;
   });
   byId("curriculumGoogleLogin").addEventListener("click", () => byId("cloudTeacherGoogleLogin").click());
+  byId("headerTeacherLogout").addEventListener("click", () => byId("cloudTeacherLogout").click());
+  updateAccountControls();
 })();

@@ -893,6 +893,17 @@
       text-overflow: ellipsis;
     }
     .hidden { display: none !important; }
+    .teacher-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; background: white; border-bottom: 1px solid #d7deed; }
+    .teacher-account { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+    .login-gate { margin: 80px auto; max-width: 540px; padding: 32px; text-align: center; background: white; border: 1px solid #d7deed; border-radius: 14px; }
+    .plan-group-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px; background: #f4f7ff; border-bottom: 1px solid #d7deed; }
+    .plan-group-toolbar input, .plan-group-toolbar select { padding: 7px; border: 1px solid #c9d4ea; border-radius: 6px; }
+    .plan-group-toolbar input[type="number"] { width: 85px; }
+    #curriculumPlanWrap td.plan-group-cell { box-shadow: inset 0 -4px var(--group-color, transparent); }
+    #curriculumPlanWrap.group-selecting td { user-select: none; }
+    #curriculumPlanWrap.group-selecting td.plan-group-cell { cursor: pointer; }
+    #curriculumPlanWrap td.plan-group-selected { outline: 3px solid #3464e8; outline-offset: -3px; background: #e4edff !important; }
+    .plan-group-badge { display: block; font-size: 10px; font-weight: 600; color: #32456b; white-space: normal; pointer-events: none; }
     .student-entry { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
     .student-entry h1 { font-size: 22px; }
     .student-entry iframe { display: block; width: 100%; min-height: 78vh; border: 1px solid #d7deed; border-radius: 12px; background: white; }
@@ -952,7 +963,7 @@
     @page { size: A4 portrait; margin: 14mm; }
     @media print {
       body { min-width: 0; background: white; }
-      .topbar, .workspace { display: none !important; }
+      .topbar, .workspace, .teacher-header, .login-gate { display: none !important; }
       #printBatch { display: block !important; }
       .print-page { width: 182mm; min-height: 269mm; padding: 8mm 5mm; page-break-after: always; break-after: page; color: #111; }
       .print-page:last-child { page-break-after: auto; break-after: auto; }
@@ -969,6 +980,20 @@
   </style>
 </head>
 <body>
+  <header class="teacher-header" id="teacherHeader">
+    <strong>교육과정 편성 프로그램</strong>
+    <div class="teacher-account">
+      <span id="curriculumLoginStatus" role="status">구글 로그인 후 이용할 수 있습니다.</span>
+      <button class="button" id="curriculumGoogleLogin" type="button">구글 로그인</button>
+      <button class="button hidden" id="headerTeacherLogout" type="button">로그아웃</button>
+    </div>
+  </header>
+  <section class="login-gate" id="teacherLoginGate">
+    <h1>교육과정 편성 프로그램</h1>
+    <p>오른쪽 위의 구글 로그인 후 편제표와 수강신청 업무를 이용할 수 있습니다.</p>
+    <p id="teacherLoginMessage" role="status" aria-live="polite"></p>
+    <a class="file-button" href="#student">학생 수강신청 입구</a>
+  </section>
   <section class="student-entry hidden" id="studentEntry" aria-label="학생 수강신청">
     <h1>학생 수강신청</h1>
     <p class="note">학교에서 안내한 신청 링크인지 확인하세요. 아래 화면에 본인 신청 코드만 입력하면 해당 학교·차수의 신청 과목이 표시됩니다. 코드는 다른 학생에게 공유하지 마세요.</p>
@@ -996,7 +1021,7 @@
       </form>
     </section>
   </section>
-  <div class="workspace">
+  <div class="workspace hidden" id="teacherWorkspace">
     <aside class="app-sidebar">
       <div class="sidebar-brand">
         <div class="brand"><span class="brand-mark" aria-hidden="true">✓</span><span>교육과정 편성 프로그램</span></div>
@@ -1024,8 +1049,6 @@
         <p class="note">교육과정 목록과 편제표를 불러와 과목을 편성하고, 편제표 셀을 직접 수정할 수 있습니다.</p>
         <div class="curriculum-toolbar">
           <label class="file-button" for="curriculumInput">저장된 교육과정 불러오기</label>
-          <button class="button" id="curriculumGoogleLogin" type="button">구글 로그인</button>
-          <span id="curriculumLoginStatus" role="status">편제표 업로드 전에 로그인하세요.</span>
           <label class="file-button" for="curriculumPlanInput">편제표 불러오기</label>
           <button class="button" id="clearCurriculumPlan" type="button">편제표 초기화</button>
           <input class="hidden" id="curriculumInput" type="file" accept=".xlsx">
@@ -1044,6 +1067,19 @@
           </section>
           <section class="curriculum-box curriculum-import-box" id="curriculumPlanDropZone">
             <h4>불러온 편제표 <span class="curriculum-edit-hint">셀을 클릭해 내용 수정</span></h4>
+            <div class="plan-group-toolbar">
+              <button class="button" id="planGroupMode" type="button" aria-pressed="false">선택과목 그룹 편성</button>
+              <span id="planGroupSelectionStatus" role="status">그룹 편성 모드에서 같은 학기의 셀을 클릭하거나 Shift로 범위를 선택하세요.</span>
+            </div>
+            <div class="plan-group-toolbar hidden" id="planGroupActions">
+              <input id="planGroupName" type="text" maxlength="100" placeholder="새 그룹명" aria-label="편제표 새 선택과목 그룹명">
+              <input id="planGroupCount" type="number" min="0" step="1" placeholder="선택 수" aria-label="그룹에서 선택할 과목 수">
+              <button class="button" id="planGroupCreate" type="button">선택 셀로 그룹 만들기</button>
+              <select id="planGroupTarget" aria-label="기존 선택과목 그룹"><option value="">기존 그룹 선택</option></select>
+              <button class="button" id="planGroupMove" type="button">기존 그룹에 추가</button>
+              <button class="button" id="planGroupUnassign" type="button">그룹에서 빼기</button>
+              <button class="button" id="planGroupClear" type="button">선택 해제</button>
+            </div>
             <div class="curriculum-plan-filters" id="curriculumPlanFilters">
               <select id="curriculumFilterGrade" aria-label="학년 필터"><option value="">전체 학년</option></select>
               <select id="curriculumFilterDivision" aria-label="교육과정 구분 필터"><option value="">전체 교육과정</option></select>
@@ -3212,6 +3248,7 @@ function courseClient_() {
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
         $("#curriculumFilterCount").textContent = "0개 과목 표시";
       }
+      if (typeof renderPlanGroups === "function") renderPlanGroups();
     }
 
     function aggregateRecords(
@@ -5512,6 +5549,7 @@ function courseClient_() {
     if (!showStudentApplicationEntry()) restorePersistedState();
   </script>
   <script src="course-groups.js" defer></script>
+  <script src="plan-groups.js" defer></script>
   <script src="supabase-client.js" defer></script>
 </body>
 </html>
