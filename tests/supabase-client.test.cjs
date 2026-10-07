@@ -58,7 +58,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) elements[match[2]] = new Element(match[1]);
   for (const [name,panel] of [["Groups","applicationGroupsPanel"],["Online","supabaseTeacherPanel"],
-    ["Results","applicationResultsPanel"],["Legacy","applicationLegacyPanel"]]) {
+    ["Results","applicationResultsPanel"]]) {
     elements[`application${name}Tab`].setAttribute("aria-controls",panel);
   }
   const requests = [];
@@ -75,6 +75,9 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       createTextNode: (text) => Object.assign(new Element("#text"), { textContent: text }),
     },
     URL, URLSearchParams, crypto: webcrypto, TextEncoder,
+    Date: class extends Date {
+      static now() { return fixtureData.now ?? Date.now(); }
+    },
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     sessionStorage: {
       getItem: (key) => storage.get(key) ?? null,
@@ -84,14 +87,19 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key),
     },
     window: {
       location: { href, assign: (url) => redirects.push(url) },
       history: { replaceState: (state, title, url) => history.push(url) },
       confirm: () => true,
       print: () => { fixtureData.printed = true; },
-      setInterval: (callback) => { fixtureData.poll = callback; return 1; },
-      clearInterval: () => { fixtureData.poll = null; },
+      addEventListener: (name, callback) => { fixtureData.activity[name] = callback; },
+      setInterval: (callback, delay) => {
+        if (delay === 30000) fixtureData.poll = callback; else fixtureData.idle = callback;
+        return delay;
+      },
+      clearInterval: (id) => { if (id===30000) fixtureData.poll = null; else fixtureData.idle = null; },
     },
     switchWorkflowStep: (step) => { fixtureData.step = step; },
     state: { currentRound: "2" },
@@ -104,9 +112,10 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       fixtureData.synced = {round,entries,subjects};
       fixtureData.syncCalls.push(fixtureData.synced);
     },
-    parseWorkbook: async () => [],
+    parseWorkbook: async () => fixtureData.workbook || [],
     parseApplicationRoster: () => [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     downloadTextFile: (text, name) => downloads.push({ data: JSON.parse(text), name }),
+    downloadRowsXlsx: (rows,name) => downloads.push({rows:JSON.parse(JSON.stringify(rows)),name}),
     escapeHtml: (value) => String(value).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     })[c]),
@@ -118,7 +127,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
   });
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history, syncCalls: [],
+    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{},
     respond: respond || (async () => ({ data: [] })),
     async settle() {
       for (let i = 0; i < 20; i++) await new Promise(setImmediate);
@@ -196,7 +205,7 @@ test("code login fixes promoted grade from roster and does not expose a grade sw
   }
 });
 
-test("teacher Google PKCE login, roster creation and logout do not persist credentials", async () => {
+test("teacher Google PKCE login persists session, exports Excel and clears it on logout", async () => {
   const start = fixture();
   start.respond = async () => ({ data: { external: { google: true } } });
   await start.fire("cloudTeacherGoogleLogin", "click");
@@ -229,7 +238,7 @@ test("teacher Google PKCE login, roster creation and logout do not persist crede
   assert.equal(f.requests[0].body.auth_code, "test-code");
   assert.equal(f.requests[0].body.code_verifier, pending.verifier);
   assert.equal(f.requests[1].options.headers.Authorization, "Bearer test-token");
-  assert.equal(f.storage.size, 0);
+  assert.ok(f.storage.has("curriculum-teacher-session-v1"));
   assert.equal(f.history[0], "https://school.example/app/");
   assert.equal(f.step, 2);
   f.elements.schoolName.value = "가상학교";
@@ -241,7 +250,8 @@ test("teacher Google PKCE login, roster creation and logout do not persist crede
   assert.equal(f.elements.cloudCreateEvent.disabled, false);
   await f.fire("cloudCreateEvent", "click");
   assert.equal(f.downloads.length, 1);
-  assert.equal(f.downloads[0].data.students[0].code, "b".repeat(32));
+  assert.equal(f.downloads[0].rows[1][5], "b".repeat(32));
+  assert.equal(f.downloads[0].name,"학생별_신청코드.xlsx");
   assert.equal(f.elements.cloudDownloadCodes.disabled, false);
   assert.match(f.elements.cloudTeacherMessage.textContent, /신청을 생성/);
   const created=f.requests.find((request)=>request.url.endsWith("create_course_event"));
@@ -251,6 +261,96 @@ test("teacher Google PKCE login, roster creation and logout do not persist crede
   await f.fire("cloudTeacherLogout", "click");
   assert.equal(f.elements.cloudDownloadCodes.disabled, true);
   assert.match(f.elements.cloudTeacherMessage.textContent, /로그아웃/);
+});
+
+test("teacher session survives reload, gates uploads and expires after five idle minutes", async () => {
+  const key="curriculum-teacher-session-v1";
+  const initial=Date.now();
+  const session={access_token:"token",refresh_token:"refresh",expires_at:initial/1000+3600,
+    user:{email:"lany0665@gmail.com"}};
+  const storage=new Map([[key,JSON.stringify({session,lastActivity:initial})]]);
+  const f=fixture({storage});
+  await f.settle();
+  assert.equal(f.elements.curriculumGoogleLogin.disabled,true);
+  assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),false);
+  f.now=initial+10000;
+  f.activity.pointerdown({isTrusted:true});
+  assert.equal(JSON.parse(storage.get(key)).lastActivity,f.now);
+  f.now+=5*60*1000;
+  f.idle();
+  await f.settle();
+  assert.equal(storage.has(key),false);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/5분간 활동/);
+  assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),true);
+  assert.equal(f.poll,null);
+  const expired=fixture({storage:new Map([[key,JSON.stringify({session,lastActivity:initial-300001})]])});
+  await expired.settle();
+  assert.equal(expired.elements.curriculumGoogleLogin.disabled,false);
+  assert.equal(expired.requests.length,0);
+});
+
+test("normal teacher does not get developer Excel upload controls", async () => {
+  const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({
+    lastActivity:Date.now(),session:{access_token:"token",refresh_token:"refresh",expires_in:3600,user:{email:"teacher@example.invalid"}}
+  })]]);
+  const f=fixture({storage});
+  await f.settle();
+  assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),true);
+  assert.equal(f.elements.curriculumGoogleLogin.disabled,true);
+});
+
+test("an in-flight token refresh cannot restore a session after idle logout", async () => {
+  const initial=Date.now(),key="curriculum-teacher-session-v1";
+  const session={access_token:"old",refresh_token:"refresh",expires_at:initial/1000-1,user:{email:"lany0665@gmail.com"}};
+  const storage=new Map([[key,JSON.stringify({session,lastActivity:initial})]]);
+  let finishRefresh;
+  const f=fixture({storage,respond:async(request)=>{
+    if(request.url.includes("grant_type=refresh_token")) return new Promise((resolve)=>{finishRefresh=resolve;});
+    return {data:[]};
+  }});
+  await f.settle();
+  assert.equal(typeof finishRefresh,"function");
+  f.now=initial+300000;
+  f.idle();
+  finishRefresh({data:{...session,access_token:"new",expires_at:initial/1000+3600}});
+  await f.settle();
+  assert.equal(storage.has(key),false);
+  assert.equal(f.elements.curriculumGoogleLogin.disabled,false);
+  assert.equal(f.elements.cloudTeacherControls.classList.contains("hidden"),true);
+  assert.equal(f.requests.filter((r)=>r.url.includes("course_events")).length,0);
+});
+
+test("an authenticated response arriving after idle logout does not restore teacher controls", async () => {
+  const initial=Date.now(),key="curriculum-teacher-session-v1";
+  const session={access_token:"token",refresh_token:"refresh",expires_in:3600,user:{email:"lany0665@gmail.com"}};
+  let finish;
+  const f=fixture({storage:new Map([[key,JSON.stringify({session,lastActivity:initial})]]),
+    respond:async(request)=>request.url.includes("course_events")
+      ?new Promise((resolve)=>{finish=resolve;}):{data:[]}});
+  await f.settle();
+  assert.equal(typeof finish,"function");
+  f.now=initial+300000;
+  f.idle();
+  finish({data:[]});
+  await f.settle();
+  assert.equal(f.elements.cloudTeacherControls.classList.contains("hidden"),true);
+  assert.equal(f.storage.has(key),false);
+  assert.equal(f.elements.cloudEventList.children.length,0);
+});
+
+test("saved Excel code files preserve leading zeroes and can be used for mail merge repeatedly", async () => {
+  const f=fixture();
+  f.workbook=[{rows:[
+    ["신청ID","현재학년","반","번호","이름","신청코드","학생링크"],
+    ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","1","1","1","가상","001234","link"],
+  ]}];
+  f.elements.cloudCodeFile.files=[{name:"codes.xlsx",arrayBuffer:async()=>new ArrayBuffer(0)}];
+  await f.fire("cloudCodeFile","change");
+  assert.equal(f.elements.cloudCodeDialog.open,true);
+  assert.match(f.elements.cloudCodePreview.innerHTML,/001234/);
+  await f.fire("cloudDownloadCodes","click");
+  assert.equal(f.downloads[0].rows[1][5],"001234");
+  assert.equal(f.downloads[0].name,"학생별_신청코드.xlsx");
 });
 
 test("Google login reports missing provider, missing verifier, expired verifier and denial", async () => {

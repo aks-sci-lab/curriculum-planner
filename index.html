@@ -1024,6 +1024,8 @@
         <p class="note">교육과정 목록과 편제표를 불러와 과목을 편성하고, 편제표 셀을 직접 수정할 수 있습니다.</p>
         <div class="curriculum-toolbar">
           <label class="file-button" for="curriculumInput">저장된 교육과정 불러오기</label>
+          <button class="button" id="curriculumGoogleLogin" type="button">구글 로그인</button>
+          <span id="curriculumLoginStatus" role="status">편제표 업로드 전에 로그인하세요.</span>
           <label class="file-button" for="curriculumPlanInput">편제표 불러오기</label>
           <button class="button" id="clearCurriculumPlan" type="button">편제표 초기화</button>
           <input class="hidden" id="curriculumInput" type="file" accept=".xlsx">
@@ -1070,7 +1072,6 @@
           <button class="button" id="applicationGroupsTab" role="tab" aria-selected="true" aria-controls="applicationGroupsPanel" type="button">① 과목·그룹 설정</button>
           <button class="button" id="applicationOnlineTab" role="tab" aria-selected="false" aria-controls="supabaseTeacherPanel" type="button">② 온라인 신청 관리</button>
           <button class="button" id="applicationResultsTab" role="tab" aria-selected="false" aria-controls="applicationResultsPanel" type="button">③ 결과 불러오기</button>
-          <button class="button" id="applicationLegacyTab" role="tab" aria-selected="false" aria-controls="applicationLegacyPanel" type="button">다른 신청 방식</button>
         </div>
         <section class="application-subject-box" id="applicationGroupsPanel" role="tabpanel" aria-labelledby="applicationGroupsTab">
           <details>
@@ -1083,11 +1084,14 @@
           <p id="courseGroupMessage" role="status"></p>
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
+        <p class="note">온라인 신청 결과는 자동으로 집계표에 연동됩니다. 차수를 선택해 해당 결과를 확인하세요.</p>
         <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택">
           <button class="round-tab" type="button" role="tab" data-round="1" aria-selected="true">1차</button>
           <button class="round-tab" type="button" role="tab" data-round="2" aria-selected="false">2차</button>
           <button class="round-tab" type="button" role="tab" data-round="3" aria-selected="false">3차</button>
         </div>
+        <div id="developerResultUpload" class="hidden">
+        <p class="note">개발자 전용 · 선택한 차수의 수강신청 결과 엑셀을 업로드하면 확인서·집계표에 반영됩니다. 온라인 연동 차수는 먼저 연동을 해제하세요.</p>
         <div class="dropzone" id="dropzone">
           <div class="upload-icon" aria-hidden="true">↑</div>
           <strong>선택한 차수의 학생별 신청 명단을 여기에 놓으세요</strong>
@@ -1101,9 +1105,6 @@
           <button class="button" id="resetData" type="button">불러온 데이터 초기화</button>
         </div>
         <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
-        <div class="application-tools">
-          <label class="file-button" for="applicationFilesInput">신청 파일 취합하기</label>
-          <input class="hidden" id="applicationFilesInput" type="file" accept=".json" multiple>
         </div>
         <div class="round-status-list" id="roundStatusList"></div>
         </section>
@@ -1124,7 +1125,7 @@
             <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
             <button class="button" id="cloudPrintCodes" type="button">학생 코드 메일머지 출력창</button>
             <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>
-            <input class="hidden" id="cloudCodeFile" type="file" accept=".json">
+            <input class="hidden" id="cloudCodeFile" type="file" accept=".xlsx,.json">
             <button class="button" id="cloudRefreshEvents" type="button">내 수강신청 새로고침</button>
             <p>공통 학생 입구: <a id="cloudStudentLink" href="#student">학생 수강신청</a></p>
             <div id="cloudEventList"></div>
@@ -1135,64 +1136,6 @@
             <summary>최초 운영자 설정 (교사별 Apps Script 배포 불필요)</summary>
             <p class="note">신규 설치는 Supabase SQL Editor에서 setup.sql → upgrade-codes-history.sql → upgrade-selection-groups.sql → upgrade-semester-groups.sql 순서로 실행하세요(supabase 폴더). 기존 설치는 아직 실행하지 않은 업데이트만 한 번 실행합니다. Google 로그인 제공자 연결도 필요하며 클라이언트 비밀번호는 Supabase 대시보드에만 입력하세요.</p>
           </details>
-        </section>
-        <section class="hidden" id="applicationLegacyPanel" role="tabpanel" aria-labelledby="applicationLegacyTab">
-        <details class="google-form-guide">
-          <summary>기존 Apps Script 방식 (이전 신청 호환용)</summary>
-        <div class="application-tools">
-          <label class="file-button" for="applicationRosterInput">학생 명렬 업로드 · 온라인 신청 설정 만들기</label>
-          <input class="hidden" id="applicationRosterInput" type="file" accept=".xlsx">
-          <button class="button" id="downloadDriveServer" type="button">온라인 신청 서버 코드(.gs)</button>
-        </div>
-        <p class="note">편제표를 먼저 불러온 뒤 학생 명렬(현재 학년·반·번호·이름)을 업로드하세요. 온라인 신청 설정 JSON이 저장됩니다. 아래 안내에 따라 Apps Script를 배포하고 관리자 페이지에 이 설정을 올리면 학생용 신청 페이지가 준비됩니다. 명렬 업로드만으로 기존 신청 결과를 덮어쓰지 않습니다.</p>
-        <div class="application-subject-box">
-          <label for="applicationServerUrl">학교 수강신청 서버 주소 (Apps Script 배포 /exec 주소)</label>
-          <input class="application-link-field" id="applicationServerUrl" type="url" placeholder="https://script.google.com/macros/s/배포ID/exec" autocomplete="off">
-          <div class="application-tools">
-            <button class="button" id="createSchoolApplicationLink" type="button">학교 신청 링크 만들기</button>
-            <button class="button" id="copySchoolApplicationLink" type="button" disabled>신청 링크 복사</button>
-            <a class="file-button hidden" id="previewSchoolApplicationLink" target="_blank" rel="noopener noreferrer">학생 화면 열기</a>
-          </div>
-          <label for="schoolApplicationLink">학생에게 배포할 링크</label>
-          <input class="application-link-field" id="schoolApplicationLink" type="text" readonly placeholder="학교 신청 링크를 생성하면 여기에 표시됩니다.">
-          <p class="note">학생은 이 웹사이트의 학교 신청 링크로 접속해 개인 코드만 입력합니다. 링크에는 서버 연결 주소만 포함하며 관리자 키·명렬·학생 코드는 포함하지 않습니다. 학교·차수별로 생성한 링크와 본인 코드를 전달하세요.</p>
-        </div>
-        <details class="google-form-guide">
-          <summary>구글드라이브 기반 온라인 수강신청 설정</summary>
-          <ol>
-            <li>`온라인 신청 서버 코드(.gs)`를 내려받아 script.google.com의 새 프로젝트에 붙여넣습니다. 신청 차수마다 새 프로젝트를 사용하세요.</li>
-            <li>함수 `initializeCourseServer`를 선택해 실행하고 권한을 승인합니다. 실행 로그에 관리자 키가 표시됩니다. 이 키는 비밀번호이므로 학생에게 공유하지 마세요.</li>
-            <li>`배포 → 새 배포 → 웹 앱`에서 실행 사용자는 `나`, 액세스 권한은 `모든 사용자`로 설정합니다. 학교 정책에 따라 이 설정이 차단될 수 있습니다.</li>
-            <li>배포된 /exec 주소 뒤에 `?admin=관리자키`를 붙여 관리자 페이지를 엽니다. 명렬 업로드로 저장한 `온라인_수강신청_설정.json`을 이 페이지에 업로드합니다.</li>
-            <li>관리자 페이지에서 `학생별 신청 코드 저장`을 누릅니다. 위 `학교 수강신청 서버 주소`에 관리자 키가 없는 /exec 주소를 입력하고 `학교 신청 링크 만들기`를 누르세요. 학생에게는 생성된 이 웹사이트의 링크와 본인 코드만 전달합니다.</li>
-            <li>학생은 코드로 본인 정보를 확인하고 신청합니다. 같은 코드로 다시 신청하면 해당 학생의 신청만 수정됩니다. 전체 명렬이나 다른 학생의 신청 결과는 공개되지 않습니다.</li>
-            <li>관리자 페이지에서 `신청 마감` 후 `신청 결과 저장`으로 JSON을 내려받고, 이 프로그램에서 같은 차수를 선택한 뒤 `신청 파일 취합하기`로 불러옵니다.</li>
-          </ol>
-        </details>
-        <p class="privacy-note"><b aria-hidden="true">●</b><span>온라인 설정 JSON·학생별 코드·관리자 키는 개인정보와 접근 권한을 포함합니다. GitHub에 올리거나 전체 학생에게 공유하지 마세요. 설정 업로드와 신청 제출은 배포한 관리자 계정의 비공개 스프레드시트에 저장됩니다.</span></p>
-        </details>
-        <div class="application-tools">
-          <button class="button" id="downloadApplicationForm" type="button">학생용 신청 양식 만들기</button>
-        </div>
-        <p class="note">`학생용 신청 양식 만들기`는 1단계 편제표의 선택과목으로 만든 학생용 웹페이지(.html)를보냅니다. 이 파일을 학생에게 배포(학교 홈페이지·LMS·메일)하면 학생이 과목을 고른 뒤 신청 파일(.json)을 저장합니다. 학생들의 신청 파일을 모아 `신청 파일 취합하기`로 올리면 현재 차수 명단이 완성됩니다.</p>
-        <div class="application-tools">
-          <button class="button" id="copyAppsScript" type="button">구글폼 생성 코드 복사</button>
-          <button class="button" id="downloadAppsScript" type="button">생성 코드 다운로드(.gs)</button>
-          <label class="file-button" for="googleFormsInput">구글폼 결과 변환하기</label>
-          <input class="hidden" id="googleFormsInput" type="file" accept=".xlsx">
-        </div>
-        <details class="google-form-guide">
-          <summary>구글폼 자동 생성 안내 (인터넷으로 실시간 신청받기)</summary>
-          <ol>
-            <li>위 `구글폼 생성 코드 복사`를 누릅니다. (1단계 편제표의 선택과목이 코드에 포함됩니다)</li>
-            <li>구글 계정으로 <a href="https://script.google.com" target="_blank" rel="noopener">script.google.com</a>에 접속해 `새 프로젝트`를 열고 코드를 붙여넣은 뒤 저장합니다.</li>
-            <li>실행(▶)을 누르고 권한을 승인하면 수강신청 구글폼과 응답 스프레드시트가 자동으로 만들어집니다.</li>
-            <li>실행 로그에 표시된 설문 주소를 학생에게 공유해 신청을 받습니다. 학생은 로그인 없이 응답할 수 있고, 응답 시트는 실행한 관리자만 볼 수 있습니다.</li>
-            <li>응답 스프레드시트에서 `파일 → 다운로드 → .xlsx`로 저장한 뒤, 위 `구글폼 결과 변환하기`로 올리면 현재 차수 명단으로 변환됩니다.</li>
-            <li>다른 학교 관리자에게는 이 프로그램(index.html)만 공유하세요. 각 학교 관리자가 자기 학교 편제표를 불러와 자기 계정으로 코드를 실행하면 학교별로 독립된 폼이 만들어집니다.</li>
-            <li>학교 구글 계정(Workspace)을 쓰는 경우 생성 코드 맨 위의 `CONFIG.requireSchoolLogin`을 true로 바꾸면 로그인한 학생만 응답할 수 있고, `CONFIG.adminEmails`에 이메일을 넣으면 응답 시트를 다른 관리자와 공동 관리할 수 있습니다.</li>
-          </ol>
-        </details>
         </section>
       </section>
       <section class="workflow-placeholder hidden" id="workflowStep10Panel">
@@ -4052,6 +3995,25 @@ function courseClient_() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
+    function downloadRowsXlsx(rows, filename) {
+      const sheetData = rows.map((row, index) => `<row r="${index + 1}">${row.map((value, column) =>
+        `<c r="${columnName(column)}${index + 1}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value ?? "")}</t></is></c>`
+      ).join("")}</row>`).join("");
+      const blob = createXlsxBlob({
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+        "_rels/.rels": '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        "xl/workbook.xml": '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="데이터" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetData}</sheetData><autoFilter ref="A1:${columnName(Math.max(0, ...rows.map((row) => row.length - 1)))}${rows.length}"/></worksheet>`
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     function normalizeApplicationServerUrl(value) {
       let url;
       try {
@@ -4295,17 +4257,19 @@ function courseClient_() {
     }
 
     // 구글폼 체크박스 응답("과목1, 과목2")을 알려진 과목명 목록으로 분할한다. 과목명에 쉼표가 있어도 동작한다.
-    function splitGoogleFormSelections(text, knownNames) {
+    function splitGoogleFormSelections(text, knownNames, strict = false) {
       const found = [];
       let rest = String(text ?? "");
       const names = [...knownNames].sort((a, b) => b.length - a.length);
       while (rest.trim()) {
         const trimmed = rest.replace(/^[,\s]+/, "");
+        if (!trimmed) break;
         const hit = names.find((name) => trimmed.startsWith(name));
         if (hit) {
           found.push(hit);
           rest = trimmed.slice(hit.length);
         } else {
+          if (strict) throw new Error(`편제표에 없는 선택과목입니다: ${trimmed}`);
           const comma = trimmed.indexOf(",");
           if (comma < 0) break;
           rest = trimmed.slice(comma + 1);
@@ -4650,8 +4614,11 @@ function courseClient_() {
 
     function handleWorkbook(file) {
       if (!file) return;
+      if (typeof isDeveloperAccount !== "function" || !isDeveloperAccount()) {
+        status.textContent = "개발자 계정에서만 결과 엑셀을 업로드할 수 있습니다.";
+        return;
+      }
       status.textContent = "";
-      $("#fileName").textContent = file.name;
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
         status.textContent = "현재는 .xlsx 형식만 지원합니다.";
         return;
@@ -4661,7 +4628,29 @@ function courseClient_() {
       reader.onload = async () => {
         try {
           const sheets = await parseWorkbook(reader.result);
+          if (!isDeveloperAccount()) throw new Error("개발자 계정으로 다시 로그인하세요.");
+          if (sheets[0]?.rows[0]?.[0] === "차수" && sheets[0].rows[0][5] === "선택과목") {
+            const header = ["차수", "학년", "반", "번호", "성명", "선택과목"];
+            if (header.some((name, index) => sheets[0].rows[0][index] !== name)) throw new Error("결과 엑셀의 머리글 형식을 확인하세요.");
+            const rows = sheets[0].rows.slice(1).filter((row) => row.some((value) => String(value ?? "").trim()));
+            if (!rows.length) throw new Error("신청 결과가 비어 있습니다.");
+            if (rows.some((row) => String(row[0]) !== state.currentRound)) throw new Error("업로드한 엑셀의 차수와 현재 선택한 차수가 다릅니다.");
+            const subjects = collectApplicationSubjects({ includeExcluded: true });
+            const entries = rows.map((row) => ({
+              grade:String(row[1]), classroom:String(row[2]), number:String(row[3]), name:String(row[4]),
+              selections: splitGoogleFormSelections(row[5], new Set([
+                ...(subjects?.[String(Number(row[1])+1)] || []).map((course) => course.subject),
+                ...(subjects?.[String(Number(row[1])+1)] || []).flatMap((course) =>
+                  course.semester.includes("·") ? course.semester.split("·").map((sem) => `${course.subject} (${sem}학기)`) : [])
+              ]), true)
+            }));
+            const merged = mergeApplications(entries);
+            if (merged.errors.length) throw new Error(merged.errors.join("\n"));
+            applyMergedApplications(entries, file.name);
+            return;
+          }
           const data = createRecords(sheets[0].rows);
+          $("#fileName").textContent = file.name;
           state.students = data.students;
           state.courses = normalizeCourses(data.courses);
           state.classOverrides = {};
@@ -4687,7 +4676,6 @@ function courseClient_() {
           status.textContent = `${state.currentRound}차 수강신청: ${data.students.length}명, 과목 ${data.courses.length}개를 불러왔습니다.`;
         } catch (error) {
           const message = error instanceof Error ? error.message : "파일을 처리하는 중 오류가 발생했습니다.";
-          resetWorkspace(false);
           status.style.color = "#a44939";
           status.textContent = message;
         }
@@ -4696,6 +4684,7 @@ function courseClient_() {
     }
 
     function handleCurriculumWorkbook(file) {
+      if (file && (typeof requireTeacherLogin !== "function" || !requireTeacherLogin())) return;
       if (!file) return;
       status.textContent = "";
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
@@ -4712,6 +4701,7 @@ function courseClient_() {
         try {
           const sheets = await parseWorkbook(reader.result);
           const curriculum = createCurriculumRecords(sheets[0].rows);
+          if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
           state.curriculumCatalog = curriculum;
           state.curriculumFileName = file.name;
           renderCurriculumStep();
@@ -5121,6 +5111,7 @@ function courseClient_() {
 
     function handleCurriculumPlanWorkbook(file) {
       if (!file) return;
+      if (typeof requireTeacherLogin !== "function" || !requireTeacherLogin()) return;
       status.textContent = "";
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
         status.style.color = "#a44939";
@@ -5135,6 +5126,7 @@ function courseClient_() {
       reader.onload = async () => {
         try {
           const sheets = await parseWorkbook(reader.result, { expandMergedCells: true, includeLayout: true });
+          if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
           let plan = [];
           let importedLayout = null;
           let parseError = null;
@@ -5503,88 +5495,6 @@ function courseClient_() {
       if (Number(state.workflowStep) === 8) renderRetakePanel();
     });
     $("#downloadRetakeList").addEventListener("click", downloadRetakeList);
-    $("#downloadApplicationForm").addEventListener("click", downloadApplicationForm);
-    function clearSchoolApplicationLink() {
-      $("#schoolApplicationLink").value = "";
-      $("#copySchoolApplicationLink").disabled = true;
-      $("#previewSchoolApplicationLink").removeAttribute("href");
-      $("#previewSchoolApplicationLink").classList.add("hidden");
-    }
-    $("#applicationServerUrl").addEventListener("input", clearSchoolApplicationLink);
-    $("#createSchoolApplicationLink").addEventListener("click", () => {
-      clearSchoolApplicationLink();
-      try {
-        const link = buildSchoolApplicationLink($("#applicationServerUrl").value, window.location.href);
-        $("#schoolApplicationLink").value = link;
-        $("#copySchoolApplicationLink").disabled = false;
-        $("#previewSchoolApplicationLink").href = link;
-        $("#previewSchoolApplicationLink").classList.remove("hidden");
-        status.style.color = "#287956";
-        status.textContent = "학교 신청 링크를 만들었습니다. 학생 화면 열기로 학교·차수를 확인한 뒤 링크와 개인 코드를 배포하세요.";
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "신청 링크를 만들지 못했습니다.";
-      }
-    });
-    $("#copySchoolApplicationLink").addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText($("#schoolApplicationLink").value);
-        status.style.color = "#287956";
-        status.textContent = "학교 신청 링크를 복사했습니다.";
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = "복사가 차단되었습니다. 학생에게 배포할 링크 칸을 선택해 직접 복사하세요.";
-      }
-    });
-    $("#applicationRosterInput").addEventListener("change", (event) => {
-      handleApplicationRoster(event.target.files[0]);
-      event.target.value = "";
-    });
-    $("#downloadDriveServer").addEventListener("click", () => {
-      downloadTextFile($("#driveServerTemplate").textContent.trim(), "온라인_수강신청_서버.gs", "text/plain;charset=utf-8");
-      status.style.color = "#287956";
-      status.textContent = "서버 코드를 저장했습니다. Apps Script 새 프로젝트에 붙여넣고 온라인 수강신청 설정 안내를 따라 배포하세요.";
-    });
-    $("#copyAppsScript").addEventListener("click", async () => {
-      const subjects = selectedApplicationSubjects();
-      const total = subjects ? subjects["1"].length + subjects["2"].length + subjects["3"].length : 0;
-      if (!total) {
-        status.style.color = "#a44939";
-        status.textContent = "1단계에서 편제표를 먼저 불러오세요. 선택과목을 찾지 못했습니다.";
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(buildAppsScriptCode(subjects));
-        status.style.color = "#287956";
-        status.textContent = "구글폼 생성 코드를 복사했습니다. script.google.com 새 프로젝트에 붙여넣으세요.";
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = "복사가 차단되었습니다. `생성 코드 다운로드(.gs)`를 사용하세요.";
-      }
-    });
-    $("#downloadAppsScript").addEventListener("click", () => {
-      const subjects = selectedApplicationSubjects();
-      const total = subjects ? subjects["1"].length + subjects["2"].length + subjects["3"].length : 0;
-      if (!total) {
-        status.style.color = "#a44939";
-        status.textContent = "1단계에서 편제표를 먼저 불러오세요. 선택과목을 찾지 못했습니다.";
-        return;
-      }
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(new Blob([buildAppsScriptCode(subjects)], { type: "text/plain;charset=utf-8" }));
-      link.href = url;
-      link.download = "구글폼_생성_코드.gs";
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
-    $("#googleFormsInput").addEventListener("change", async (event) => {
-      await handleGoogleFormsFile(event.target.files[0]);
-      event.target.value = "";
-    });
-    $("#applicationFilesInput").addEventListener("change", async (event) => {
-      await handleApplicationFiles(event.target.files);
-      event.target.value = "";
-    });
     resetDataButton.addEventListener("click", () => {
       resetWorkspace(true);
       status.style.color = "#596780";

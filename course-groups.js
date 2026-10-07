@@ -4,7 +4,7 @@ var getCourseApplicationGroups;
 var getGroupedApplicationSubjects;
 var setApplicationTargetGrades;
 (() => {
-  const workspaceTabs = ["Groups", "Online", "Results", "Legacy"]
+  const workspaceTabs = ["Groups", "Online", "Results"]
     .map((name) => document.getElementById(`application${name}Tab`));
   function openWorkspaceTab(index, focus = false) {
     workspaceTabs.forEach((tab, i) => {
@@ -18,8 +18,8 @@ var setApplicationTargetGrades;
   workspaceTabs.forEach((tab, index) => {
     tab.addEventListener("click", () => openWorkspaceTab(index));
     tab.addEventListener("keydown", (event) => {
-      const next = event.key === "ArrowRight" ? (index + 1) % 4 : event.key === "ArrowLeft" ? (index + 3) % 4 :
-        event.key === "Home" ? 0 : event.key === "End" ? 3 : null;
+      const next = event.key === "ArrowRight" ? (index + 1) % 3 : event.key === "ArrowLeft" ? (index + 2) % 3 :
+        event.key === "Home" ? 0 : event.key === "End" ? 2 : null;
       if (next === null) return;
       event.preventDefault();
       openWorkspaceTab(next, true);

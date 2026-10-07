@@ -350,6 +350,7 @@ test("cloud aggregation updates its own round, clears rollback results and prese
     applyClassFilterOptions(){},renderRoster(){renders++;},renderPreview(){},
     renderSemesterClassifier(){},renderAggregate(){},
   });
+
   vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
   vm.runInContext(functionSource("function applyCloudApplicationResults(", "function applyMergedApplications("),ctx);
   const subjects={"2":[{subject:"A",semester:"1",credit:3}],"3":[]};
@@ -367,6 +368,66 @@ test("cloud aggregation updates its own round, clears rollback results and prese
   assert.equal(saves,2);
   assert.throws(()=>ctx.applyCloudApplicationResults("1",[{...entries[0],selections:["unknown"]}],subjects),/연동 실패/);
   assert.equal(saves,2);
+});
+
+test("Excel data export uses text cells for codes and formula-like input", () => {
+  let files,download;
+  const ctx=vm.createContext({
+    xmlEscape:(value)=>String(value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"),
+    columnName:(index)=>String.fromCharCode(65+index),
+    createXlsxBlob:(value)=>{files=value;return {};},
+    URL:{createObjectURL:()=>"blob",revokeObjectURL(){}},
+    document:{createElement:()=>({click(){download=this.download;}})},setTimeout(){},
+  });
+  vm.runInContext(functionSource("function downloadRowsXlsx(", "function normalizeApplicationServerUrl("),ctx);
+  ctx.downloadRowsXlsx([["신청코드","성명"],["001234","=HYPERLINK(\"bad\")"]],"codes.xlsx");
+  assert.equal(download,"codes.xlsx");
+  assert.match(files["xl/worksheets/sheet1.xml"],/t="inlineStr".*001234/s);
+  assert.ok(!files["xl/worksheets/sheet1.xml"].includes("<f>"));
+});
+
+test("developer result Excel imports both layouts and rejects invalid or expired uploads without clearing data", async () => {
+  let developer = true, completion, workbook, imported, persisted = 0;
+  const existing = [{id:"existing"}];
+  const state = {currentRound:"2", students:existing};
+  const elements = new Map(), status = {style:{}};
+  const ctx = vm.createContext({
+    state,status, isDeveloperAccount:()=>developer,
+    $:(id)=>{if(!elements.has(id)) elements.set(id,{});return elements.get(id);},
+    FileReader:class { readAsArrayBuffer(){completion=this.onload();} },
+    parseWorkbook:async()=>workbook,
+    collectApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1",credit:3}],"3":[]}),
+    mergeApplications:()=>({errors:[]}),
+    applyMergedApplications:(entries)=>{imported=plain(entries);},
+    createRecords:()=>({students:[{id:"wide"}],courses:[]}),
+    normalizeCourses:(courses)=>courses,
+    applyClassFilterOptions(){}, renderRoster(){},renderPreview(){},renderSemesterClassifier(){},
+    renderAggregate(){},renderRoundStatus(){},persistState(){persisted++;},
+  });
+  vm.runInContext(functionSource("function splitGoogleFormSelections(", "function parseGoogleFormsRows("),ctx);
+  vm.runInContext(functionSource("function handleWorkbook(", "function handleCurriculumWorkbook("),ctx);
+  workbook=[{rows:[["차수","학년","반","번호","성명","선택과목"],["2","1","1","1","가상","수학"]]}];
+  ctx.handleWorkbook({name:"results.xlsx"}); await completion;
+  assert.deepEqual(imported[0].selections,["수학"]);
+  imported=null;
+  workbook[0].rows[1][5]="수학, 알 수 없는 과목";
+  ctx.handleWorkbook({name:"results.xlsx"}); await completion;
+  assert.match(status.textContent,/편제표에 없는/);
+  assert.equal(imported,null);
+  assert.equal(state.students,existing);
+  workbook=[{rows:[["과목별 결과"]]}];
+  ctx.handleWorkbook({name:"wide.xlsx"}); await completion;
+  assert.equal(state.students[0].id,"wide");
+  assert.equal(persisted,1);
+  developer=false;
+  ctx.handleWorkbook({name:"forbidden.xlsx"});
+  assert.match(status.textContent,/개발자 계정/);
+  assert.equal(persisted,1);
+  developer=true;
+  ctx.parseWorkbook=async()=>{developer=false;return workbook;};
+  ctx.handleWorkbook({name:"expired.xlsx"}); await completion;
+  assert.match(status.textContent,/다시 로그인/);
+  assert.equal(persisted,1);
 });
 
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
