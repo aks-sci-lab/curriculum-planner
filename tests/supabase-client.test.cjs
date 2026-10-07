@@ -174,10 +174,25 @@ test("grade menus scope groups and rebuild colors without removing the other gra
   assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
   f.elements.courseGroupEditor.children.find((child)=>child.textContent==="편제표 색상으로 다시 구성").onclick();
   assert.ok(f.groupSettings().some((group)=>group.grade==="3" && group.name==="3학년 보관"));
-  f.elements.applicationGrade1Tab.listeners.keydown({key:"ArrowRight",preventDefault(){}});
+  await f.fire("applicationGrade2Tab","click");
   assert.equal(f.renderedGrade,"2");
+  assert.equal(f.elements.applicationGrade2Tab["aria-selected"],"true");
+  assert.equal(f.elements.applicationGrade1Tab["aria-selected"],"false");
+  await f.fire("applicationGrade1Tab","click");
+  assert.equal(f.renderedGrade,"1");
+  f.elements.applicationGrade1Tab.listeners.keydown({key:"ArrowRight",preventDefault(){}});
   assert.equal(f.elements.applicationGrade2Tab.focused,true);
   assert.equal(f.elements.applicationGradeWorkspace["aria-labelledby"],"applicationGrade2Tab");
+});
+
+test("grade menu deployment loads versioned application scripts to bypass stale caches", () => {
+  const html=fs.readFileSync(path.join(__dirname,"..","index.html"),"utf8");
+  const versions=["course-groups","curriculum-workbook","supabase-client"].map((name)=>{
+    const match=html.match(new RegExp(`src="${name}\\.js\\?v=([^"]+)"`));
+    assert.ok(match,`${name} must have a deployment version`);
+    return match[1];
+  });
+  assert.equal(new Set(versions).size,1);
 });
 
 test("grade menus filter online events, roster uploads and preserve each grade's draft", async () => {
