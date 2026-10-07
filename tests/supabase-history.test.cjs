@@ -98,5 +98,22 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
     await db.query("select public.manage_course_event($1::uuid,'delete')", [event.id]);
     await db.exec("reset role");
     assert.equal((await db.query("select * from public.course_application_history where event_id=$1::uuid", [event.id])).rows.length, 0);
+    await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "upgrade-selection-groups.sql"), "utf8"));
+    await as("authenticated", owner);
+    setup.groups = [{id:"g1", grade:"2",name:"교과",count:1,courses:["A","B"]}];
+    const grouped = await create();
+    await as("anon");
+    const groupedData = await get(grouped.id, grouped.students[0].code);
+    assert.equal(groupedData.groups[0].count, 1);
+    await assert.rejects(() => db.query("select public.save_scoped_course_application($1::uuid,$2,$3::jsonb)",
+      [grouped.id,grouped.students[0].code,'["A","B"]']), /정확히 1/);
+    await db.query("select public.save_scoped_course_application($1::uuid,$2,$3::jsonb)",
+      [grouped.id,grouped.students[0].code,'["B"]']);
+    await as("authenticated",owner);
+    setup.groups[0].courses=["A"];
+    await assert.rejects(() => create(), /모든 과목/);
+    setup.groups[0].courses=["A","B"];
+    setup.groups[0].count=3;
+    await assert.rejects(() => create(), /선택 수/);
   } finally { await db.close(); }
 });

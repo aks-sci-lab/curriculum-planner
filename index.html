@@ -899,6 +899,7 @@
     .application-link-field { width: 100%; padding: 10px; border: 1px solid #c9d4ea; border-radius: 8px; }
     #cloudCodeDialog { width: min(820px, 90vw); max-height: 85vh; overflow: auto; border: 1px solid #d7deed; border-radius: 12px; }
     #cloudCodePreview .print-page { padding: 20px; margin-top: 12px; border: 1px solid #d7deed; }
+    @media print { #cloudCodeDialog, #cloudCodeDialog::backdrop { display: none !important; } }
     .course-history { max-height: 500px; overflow: auto; padding: 12px; background: #f2f5fb; }
     #printBatch { display: none; }
     @media (max-width: 980px) {
@@ -1165,6 +1166,10 @@
         <div class="application-subject-box">
           <p class="application-subject-title">신청 받을 과목 (학생선택교육과정 중 진급 학년에 편제된 전체 과목 · 자동 반영)</p>
           <div id="applicationSubjectList" class="application-subject-list"></div>
+          <h3>수강신청 선택 그룹 설정</h3>
+          <p class="note">진급 학년·학기·교과군으로 자동 그룹화합니다. 각 그룹에서 학생이 정확히 선택할 과목 수를 입력하세요. 과목 옆 이동 메뉴로 다른 그룹에 옮길 수 있습니다. 이 설정은 새 Supabase 수강신청 생성 시 적용되며 시간표용 그룹화와는 별개입니다.</p>
+          <div id="courseGroupEditor"></div>
+          <p id="courseGroupMessage" role="status"></p>
         </div>
         <div class="round-status-list" id="roundStatusList"></div>
       </section>
@@ -3694,6 +3699,7 @@ function courseClient_() {
       const total = subjects ? subjects["1"].length + subjects["2"].length + subjects["3"].length : 0;
       if (!total) {
         container.innerHTML = '<div class="curriculum-empty">1단계 편제표의 학생선택교육과정에서 2·3학년에 편제된 과목을 자동 표시합니다. 교육과정 구분과 학년별 학기 시수를 확인하세요.</div>';
+        if (typeof renderCourseGroups === "function") renderCourseGroups();
         return;
       }
       container.innerHTML = ["2", "3"].filter((grade) => subjects[grade].length).map((grade) => {
@@ -3708,6 +3714,7 @@ function courseClient_() {
             const meta = [item.type, item.area, item.credit ? `${item.credit}학점` : ""].filter(Boolean).join(" · ");
             return `<div class="application-subject"><span>${escapeHtml(item.subject)}</span><span class="application-subject-meta">${escapeHtml(meta)}</span></div>`;
           }).join("");
+          if (typeof renderCourseGroups === "function") renderCourseGroups();
           return `<div class="application-semester">${semester === "0" ? "학기 미정" : `${semester}학기`}</div>${items}`;
         }).join("");
         return `<div class="application-grade">${grade}학년 과목(현재 ${Number(grade) - 1}학년이 신청)</div>${semesterHtml}`;
@@ -5440,6 +5447,7 @@ function courseClient_() {
     window.addEventListener("hashchange", () => window.location.reload());
     if (!showStudentApplicationEntry()) restorePersistedState();
   </script>
+  <script src="course-groups.js" defer></script>
   <script src="supabase-client.js" defer></script>
 </body>
 </html>

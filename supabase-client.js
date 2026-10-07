@@ -51,7 +51,7 @@
     }
     if (!response.ok) {
       if (result?.code === "PGRST202" || result?.code === "42P01") {
-        throw new Error("Supabase 설정이 필요합니다. 최초 설치는 supabase/setup.sql, 6자리 코드·로그 업데이트는 supabase/upgrade-codes-history.sql을 SQL Editor에서 실행하세요.");
+        throw new Error("Supabase 설정이 필요합니다. 최초 설치: setup.sql → upgrade-codes-history.sql → upgrade-selection-groups.sql 순서로 SQL Editor에서 실행하세요. 기존 설치는 아직 실행하지 않은 업데이트만 실행하세요.");
       }
       throw new Error(result?.message || result?.msg || result?.error_description || "서버 요청에 실패했습니다.");
     }
@@ -248,6 +248,7 @@
         type: "course-application-setup",
         schoolName: byId("schoolName").value.trim(), schoolYear: byId("schoolYear").value.trim(),
         round: state.currentRound, subjects,
+        groups: getCourseApplicationGroups(),
         roster: parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())),
       };
       for (const student of setup.roster) {
@@ -299,6 +300,25 @@
     byId("cloudStudentIdentity").textContent = `${s.grade}학년 ${s.classroom}반 ${s.number}번 ${s.name} · 신청 대상: ${Number(s.grade) + 1}학년`;
     const choices = byId("cloudStudentChoices");
     choices.replaceChildren();
+    if (data.groups?.length) {
+      for (const group of data.groups) {
+        const fieldset = document.createElement("fieldset");
+        fieldset.dataset.group = group.id;
+        fieldset.dataset.count = group.count;
+        const legend = document.createElement("legend");
+        legend.textContent = `${group.name} · 정확히 ${group.count}과목 선택`;
+        fieldset.appendChild(legend);
+        for (const subject of group.courses) {
+          const course = data.courses.find((c) => c.subject === subject);
+          if (!course) throw new Error("그룹 과목 설정이 잘못되었습니다.");
+          const label = document.createElement("label"); label.className = "application-subject";
+          const box = document.createElement("input"); box.type = "checkbox"; box.value = subject;
+          box.dataset.credit = course.credit; box.checked = data.selections.includes(subject); box.disabled = !data.open;
+          label.append(box, document.createTextNode(`${subject} · ${course.credit}학점`)); fieldset.appendChild(label);
+        }
+        choices.appendChild(fieldset);
+      }
+    } else {
     const semesters = new Map();
     for (const course of data.courses) {
       const semester = course.semester || "학기 미정";
@@ -321,6 +341,7 @@
       label.append(box, document.createTextNode(`${course.subject} · ${course.credit}학점`));
       semesters.get(semester).appendChild(label);
     }
+    }
     updateSummary();
     byId("cloudStudentMessage").textContent = !data.open ? "접수가 마감되었습니다. 기존 신청만 확인할 수 있습니다."
       : data.submittedAt ? "기존 신청을 불러왔습니다. 수정 후 저장할 수 있습니다." : "과목을 선택하고 신청 저장을 누르세요.";
@@ -328,6 +349,11 @@
   function updateSummary() {
     const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")];
     byId("cloudStudentSummary").textContent = `선택 ${selected.length}개 · ${selected.reduce((total, b) => total + Number(b.dataset.credit), 0)}학점`;
+    for (const fieldset of byId("cloudStudentChoices").querySelectorAll("fieldset[data-group]")) {
+      const count = fieldset.querySelectorAll("input:checked").length;
+      const group = application.groups.find((g) => g.id === fieldset.dataset.group);
+      fieldset.querySelector("legend").textContent = `${group.name} · ${count}/${group.count}과목 선택`;
+    }
   }
   byId("cloudStudentChoices").addEventListener("change", updateSummary);
   byId("cloudStudentCode").addEventListener("input", () => {
@@ -366,6 +392,10 @@
       const code = activeCode;
       const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((box) => box.value);
       if (!selected.length) throw new Error("과목을 1개 이상 선택하세요.");
+      for (const group of application.groups || []) {
+        const count = selected.filter((name) => group.courses.includes(name)).length;
+        if (count !== group.count) throw new Error(`${group.name}: 정확히 ${group.count}과목을 선택하세요 (현재 ${count}개).`);
+      }
       const result = eventId
         ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
         : await rpc("save_course_application", { p_code: code, p_selections: selected });
@@ -477,7 +507,7 @@
     byId("cloudCodeClose").addEventListener("click", () => byId("cloudCodeDialog").close());
     byId("cloudCodePrint").addEventListener("click", () => {
       byId("printBatch").innerHTML = codeMarkup(filteredPrintStudents());
-      byId("cloudCodeDialog").close();
+      // Keep the preview open so another print can rebuild the batch after afterprint clears it.
       window.print();
     });
   completeGoogleLogin().catch((error) => {

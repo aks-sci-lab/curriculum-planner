@@ -25,13 +25,15 @@ class Element {
   showModal() { this.open = true; }
   close() { this.open = false; }
   querySelector(selector) {
-    return this.children.find((child) => selector === ".course-history" && child.className === "course-history") || null;
+    return this.children.find((child) => selector === ".course-history" && child.className === "course-history" ||
+      selector === "legend" && child.tag === "legend") || null;
   }
   remove() { this.parent.children = this.parent.children.filter((child) => child !== this); }
   querySelectorAll(selector) {
     const result = [];
     const visit = (element) => {
       if (selector === "button" && element.tag === "button" ||
+          selector === "fieldset[data-group]" && element.tag === "fieldset" && element.dataset.group ||
           selector === "input:checked" && element.tag === "input" && element.checked) result.push(element);
       element.children.forEach(visit);
     };
@@ -73,6 +75,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     switchWorkflowStep: (step) => { fixtureData.step = step; },
     state: { currentRound: "2" },
     selectedApplicationSubjects: () => ({ "2": [{ subject: "수학", credit: 3 }], "3": [] }),
+    getCourseApplicationGroups: () => [{id:"g1",grade:"2",name:"수학",count:1,courses:["수학"]}],
     parseWorkbook: async () => [],
     parseApplicationRoster: () => [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     downloadTextFile: (text, name) => downloads.push({ data: JSON.parse(text), name }),
@@ -134,7 +137,7 @@ test("closed applications disable submission and setup errors are explicit", asy
   f.elements.cloudStudentCode.value = "a".repeat(32);
   f.respond = async () => ({ ok: false, data: { code: "PGRST202" } });
   await f.fire("cloudStudentLogin", "submit");
-  assert.match(f.elements.cloudStudentMessage.textContent, /supabase\/setup.sql/);
+  assert.match(f.elements.cloudStudentMessage.textContent, /setup.sql/);
   f.respond = async () => ({ data: {
     student: { grade: "1", classroom: "1", number: "1", name: "가상학생" },
     schoolName: "가상학교", schoolYear: "2026", round: "1", open: false,
@@ -254,8 +257,11 @@ test("saved codes open mail merge preview, filter by class, escape names and pri
   assert.ok(f.elements.cloudCodePreview.innerHTML.includes("456789"));
   await f.fire("cloudCodePrint", "click");
   assert.equal(f.printed, true);
-  assert.equal(f.elements.cloudCodeDialog.open, false);
+  assert.equal(f.elements.cloudCodeDialog.open, true);
   assert.equal((f.elements.printBatch.innerHTML.match(/class="print-page"/g) || []).length, 1);
+  f.elements.printBatch.innerHTML = "";
+  await f.fire("cloudCodePrint", "click");
+  assert.ok(f.elements.printBatch.innerHTML.includes("456789"));
 });
 
 test("teacher log controls send the exact server cutoff and optional student id", async () => {
@@ -280,6 +286,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
       return { data: { message: "복원 완료" } };
     },
   });
+
   await f.settle();
   const event = f.elements.cloudEventList.children[0];
   assert.ok(event.children.find((e) => e.tag === "a").href.includes("#event="));
@@ -300,3 +307,56 @@ test("teacher log controls send the exact server cutoff and optional student id"
   assert.equal(rollback.body.p_student, null);
   assert.equal(rollback.body.p_before, cutoff);
 });
+
+  test("student group counters and exact counts prevent incomplete or excess submissions", async () => {
+    const id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const f=fixture({href:`https://school.example/app/#event=${id}`});
+    f.respond=async(r)=>({data:r.url.endsWith("get_scoped_course_application")?{
+      student:{grade:"1",classroom:"1",number:"1",name:"가상"},schoolName:"학교",schoolYear:"2026",round:"1",open:true,
+      courses:[{subject:"A",credit:3},{subject:"B",credit:4}],selections:[],
+      groups:[{id:"g",name:"교과",count:1,courses:["A","B"]}],
+    }:{message:"저장"}});
+    f.elements.cloudStudentCode.value="123456";
+    await f.fire("cloudStudentLogin","submit");
+    const fieldset=f.elements.cloudStudentChoices.children[0];
+    assert.match(fieldset.children[0].textContent,/0\/1/);
+    fieldset.children[1].children[0].checked=true;
+    fieldset.children[2].children[0].checked=true;
+    await f.fire("cloudStudentApplication","submit");
+    assert.match(f.elements.cloudStudentMessage.textContent,/정확히 1/);
+    assert.equal(f.requests.length,1);
+    fieldset.children[2].children[0].checked=false;
+    await f.fire("cloudStudentChoices","change");
+    assert.match(fieldset.children[0].textContent,/1\/1/);
+    await f.fire("cloudStudentApplication","submit");
+    assert.equal(f.requests.length,2);
+  });
+
+  test("group editor auto groups and allows cross-group movement without losing courses", () => {
+    const f=fixture();
+    const storage=new Map();
+    const subjects={"2":[{subject:"A",semester:"1",area:"사회"},{subject:"B",semester:"1",area:"사회"},
+      {subject:"C",semester:"2",area:"과학"}],"3":[]};
+    const ctx=vm.createContext({
+      document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag)},
+      localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
+      crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
+    let groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
+    assert.equal(groups.length,2);
+    assert.deepEqual(groups[0].courses,["A","B"]);
+    const panel=f.elements.courseGroupEditor.children.find((e)=>e.tag==="fieldset");
+    const count=panel.children[2].children[0];
+    count.value="2";count.onchange();
+    assert.equal(ctx.getCourseApplicationGroups()[0].count,2);
+    count.value="3";count.onchange();
+    assert.throws(()=>ctx.getCourseApplicationGroups(),/선택 수/);
+    count.value="1";count.onchange();
+    const move=panel.children[3].children[0];
+    move.value=groups[1].id;move.onchange();
+    groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
+    assert.deepEqual(groups[0].courses,["B"]);
+    assert.deepEqual(groups[1].courses,["C","A"]);
+    assert.ok(storage.size);
+  });
