@@ -5,10 +5,8 @@
       selectedId: null,
       fileName: "",
       classOverrides: {},
-      plannedClassCounts: {},
       semesterAssignments: {},
       customGroupNames: [],
-      customGroupNamesByGrade: { "2": [], "3": [] },
       groupAssignments: {},
       selectedCourseColumns: [],
       lastSelectedCourseColumn: null,
@@ -16,8 +14,6 @@
       curriculumCatalogQuery: "",
       curriculumFileName: "",
       curriculumPlanFileName: "",
-      curriculumPlanAcademicYear: "",
-      curriculumPlansByYear: {},
       curriculumImportedLayout: null,
       curriculumTemplateRows: [],
       curriculumPlan: [],
@@ -36,25 +32,17 @@
       curriculumPlanFilters: { grade: "", division: "", area: "", detail: "", query: "" },
       workflowStep: 1,
       currentRound: "1",
-      certificateTargetGrade: "2",
-      aggregateTargetGrade: "2",
-      classifierTargetGrade: "2",
       rounds: { "1": null },
       roundClosures: { "1": {} },
       applicationImportRevision: 0,
-      activeDataSchoolYear: "",
-      priorCourseHistory: [],
-      historyArchivedYears: {},
     };
     const stateProxyCache = new WeakMap();
     const stateRawTargets = new WeakMap();
     let statePersistenceTimer = null;
     let statePersistenceSuppressed = 0;
-    // 새로고침 직후 저장분을 복원하기 전에는 빈 초기 상태로 저장분을 덮어쓰지 않는다.
-    let statePersistenceReady = false;
 
     function scheduleStatePersistence() {
-      if (!statePersistenceReady || statePersistenceSuppressed || statePersistenceTimer !== null) return;
+      if (statePersistenceSuppressed || statePersistenceTimer !== null) return;
       statePersistenceTimer = window.setTimeout(() => {
         statePersistenceTimer = null;
         persistState();
@@ -91,8 +79,6 @@
 
     const state = observeState(rawState);
     const STORAGE_KEY = "course-certificate-studio-v1";
-    let curriculumLayoutStoredId = "";
-    let curriculumLayoutPersistenceTimer = null;
     const $ = (selector) => document.querySelector(selector);
     const rosterInput = $("#rosterInput");
     const dropzone = $("#dropzone");
@@ -204,16 +190,26 @@
       };
     }
 
+    function planSubjectKey(grade, subject) {
+      return `${String(grade || "")}::${String(subject || "").trim()}`;
+    }
+
     function isSelectableDetail(detail) {
       const normalized = normalizeCurriculumDetail(detail);
       return normalized === "일반선택" || normalized === "진로선택" || normalized === "융합선택";
     }
 
+    function curriculumBundleKeyForRow(row) {
+      if (!row) return "";
+      if (normalizeCurriculumDivision(row.division) !== "학생 선택 교육과정") return "";
+      if (!isSelectableDetail(row.detail)) return "";
+      const bundle = String(row.bundleName || "").trim();
+      if (!bundle) return "";
+      return `${String(row.grade || "1")}::${bundle}`;
+    }
+
     function applyClassFilterOptions(students) {
-      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
-      const classes = [...new Set(students
-        .filter((student) => String(student.grade) === currentGrade)
-        .map((student) => student.classroom))]
+      const classes = [...new Set(students.map((student) => student.classroom))]
         .sort((a, b) => Number(a) - Number(b));
       $("#classFilter").innerHTML = '<option value="">전체 반</option>' +
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
@@ -225,17 +221,13 @@
       if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
         state.rounds[state.currentRound] = {
           fileName: state.fileName,
-          dataSchoolYear: state.activeDataSchoolYear,
           gradeFiles: state.rounds[state.currentRound]?.gradeFiles || {},
           students: state.students,
           courses: state.courses,
           classOverrides: state.classOverrides,
           semesterAssignments: {...state.semesterAssignments},
           groupAssignments: {...state.groupAssignments},
-          customGroupNames: [...(state.customGroupNames || [])],
-          customGroupNamesByGrade: normalizeGradeGroupNames(
-            state.customGroupNamesByGrade, state.customGroupNames
-          )
+          customGroupNames: [...(state.customGroupNames || [])]
         };
       } else if (state.rounds[state.currentRound]) {
         state.rounds[state.currentRound] = null;
@@ -247,7 +239,6 @@
         window.clearTimeout(statePersistenceTimer);
         statePersistenceTimer = null;
       }
-      if (!statePersistenceReady) return false;
       try {
         statePersistenceSuppressed++;
         syncActiveRound();
@@ -261,23 +252,14 @@
           selectedId: state.selectedId,
           fileName: state.fileName,
           classOverrides: state.classOverrides,
-          plannedClassCounts: state.plannedClassCounts,
           semesterAssignments: state.semesterAssignments,
           customGroupNames: state.customGroupNames,
-          customGroupNamesByGrade: state.customGroupNamesByGrade,
           groupAssignments: state.groupAssignments,
           curriculumCatalog: state.curriculumCatalog,
           curriculumCatalogQuery: state.curriculumCatalogQuery,
           curriculumFileName: state.curriculumFileName,
           curriculumPlanFileName: state.curriculumPlanFileName,
-          curriculumPlanAcademicYear: state.curriculumPlanAcademicYear,
-          curriculumPlansByYear: state.curriculumPlansByYear,
-          curriculumLayoutArchiveId: state.curriculumImportedLayout?.archiveId ||
-            curriculumLayoutStoredId || "",
-          ...(state.curriculumImportedLayout &&
-            curriculumLayoutStoredId !== state.curriculumImportedLayout.archiveId
-            ? { curriculumImportedLayout: state.curriculumImportedLayout }
-            : {}),
+          curriculumImportedLayout: state.curriculumImportedLayout,
           curriculumTemplateRows: state.curriculumTemplateRows,
           curriculumPlan: state.curriculumPlan,
           curriculumPlanFilters: state.curriculumPlanFilters,
@@ -288,59 +270,18 @@
           curriculumBundleName: state.curriculumBundleName,
           curriculumBundlePick: state.curriculumBundlePick,
           workflowStep: state.workflowStep,
-          certificateTargetGrade: state.certificateTargetGrade,
-          aggregateTargetGrade: state.aggregateTargetGrade,
-          classifierTargetGrade: state.classifierTargetGrade,
           openingPercent: $("#openingPercent").value,
           divisionPercent: $("#divisionPercent").value,
           schoolYear: $("#schoolYear").value,
-          activeDataSchoolYear: state.activeDataSchoolYear,
-          priorCourseHistory: state.priorCourseHistory,
-          historyArchivedYears: state.historyArchivedYears,
           round: $("#round").value,
           confirmDate: $("#confirmDate").value,
           schoolName: $("#schoolName").value
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-        return true;
       } catch (error) {
         statePersistenceSuppressed = Math.max(0, statePersistenceSuppressed - 1);
-        console.error("작업 상태 저장 실패", error);
-        const message = error?.name === "QuotaExceededError"
-          ? "브라우저 저장 공간이 부족해 변경 내용을 저장하지 못했습니다. 불필요한 브라우저 데이터를 정리한 뒤 다시 시도하세요."
-          : `변경 내용을 저장하지 못했습니다: ${error?.message || "브라우저 저장소 오류"}`;
-        if (typeof status !== "undefined") {
-          status.style.color = "#a44939";
-          status.textContent = message;
-        }
-        showAppToast(message);
-        return false;
+        // 저장 용량 제한 등으로 실패할 수 있으므로 기능 동작은 계속 유지한다.
       }
-    }
-
-    function scheduleCurriculumLayoutPersistence() {
-      if (curriculumLayoutPersistenceTimer !== null) {
-        window.clearTimeout(curriculumLayoutPersistenceTimer);
-      }
-      curriculumLayoutPersistenceTimer = window.setTimeout(async () => {
-        curriculumLayoutPersistenceTimer = null;
-        const layout = state.curriculumImportedLayout;
-        if (!layout?.archiveId) return;
-        try {
-          const snapshot = JSON.parse(JSON.stringify(layout));
-          await storeCurriculumLayout(snapshot);
-          if (state.curriculumImportedLayout?.archiveId !== snapshot.archiveId) return;
-          if (JSON.stringify(state.curriculumImportedLayout) !== JSON.stringify(snapshot)) return;
-          curriculumLayoutStoredId = snapshot.archiveId;
-          persistState();
-        } catch (error) {
-          console.error("편제표 저장 실패", error);
-          const message = `편제표 저장에 실패했습니다: ${error?.message || "브라우저 저장소 오류"}`;
-          status.style.color = "#a44939";
-          status.textContent = message;
-          showAppToast(message);
-        }
-      }, 250);
     }
 
     function clearPersistedState() {
@@ -368,13 +309,10 @@
       $("#closurePanel").classList.toggle("hidden", step !== 4);
       $("#retakePanel").classList.toggle("hidden", step !== 4);
       $("#classifierPanel").classList.toggle("hidden", step !== 5);
-      if (step === 3) renderPreview();
       if (step === 4) {
-        renderAggregate();
         renderClosurePanel(state.currentRound);
         renderRetakePanel();
       }
-      if (step === 5) renderSemesterClassifier();
     }
 
     function switchWorkflowStep(step, skipPersist = false) {
@@ -408,7 +346,6 @@
       syncActiveRound();
       state.currentRound = next;
       const data = state.rounds[next];
-      state.activeDataSchoolYear = String(data?.dataSchoolYear || "");
       state.students = data ? data.students : [];
       state.courses = data ? data.courses : [];
       state.fileName = data ? data.fileName : "";
@@ -416,15 +353,9 @@
       state.semesterAssignments = {...data?.semesterAssignments};
       state.groupAssignments = {...data?.groupAssignments};
       state.customGroupNames = [...(data?.customGroupNames || [])];
-      state.customGroupNamesByGrade = normalizeGradeGroupNames(
-        data?.customGroupNamesByGrade, state.customGroupNames
-      );
-      state.customGroupNames = [];
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
-      state.selectedId = state.students.find((student) =>
-        String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade || "2"))?.id ||
-        state.students[0]?.id || null;
+      state.selectedId = state.students[0]?.id || null;
       $("#round").value = `${next}차`;
       $("#fileName").textContent = state.fileName || "불러온 파일 없음";
       applyClassFilterOptions(state.students);
@@ -446,12 +377,10 @@
       state.courses = [];
       state.selectedId = null;
       state.fileName = "";
-      state.activeDataSchoolYear = "";
       state.classOverrides = {};
       state.semesterAssignments = {};
       state.groupAssignments = {};
       state.customGroupNames = [];
-      state.customGroupNamesByGrade = { "2": [], "3": [] };
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       $("#fileName").textContent = "불러온 파일 없음";
@@ -474,29 +403,19 @@
       state.selectedId = null;
       state.fileName = "";
       state.classOverrides = {};
-      state.plannedClassCounts = {};
       state.currentRound = "1";
       state.rounds = { "1": null };
       state.roundClosures = { "1": {} };
-      state.priorCourseHistory = [];
-      state.historyArchivedYears = {};
       state.semesterAssignments = {};
       state.customGroupNames = [];
-      state.customGroupNamesByGrade = { "2": [], "3": [] };
       state.groupAssignments = {};
-      state.aggregateTargetGrade = "2";
-      state.classifierTargetGrade = "2";
-      state.certificateTargetGrade = "2";
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       state.curriculumCatalog = [];
       state.curriculumCatalogQuery = "";
       state.curriculumFileName = "";
       state.curriculumPlanFileName = "";
-      state.curriculumPlanAcademicYear = "";
-      state.curriculumPlansByYear = {};
       state.curriculumImportedLayout = null;
-      curriculumLayoutStoredId = "";
       state.curriculumTemplateRows = [];
       state.curriculumPlan = [];
       state.curriculumTargetGrade = "1";
@@ -552,7 +471,6 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) {
         resetWorkspace(false);
-        statePersistenceReady = true;
         return;
       }
       try {
@@ -563,17 +481,13 @@
           if (!data || !Array.isArray(data.students) || !data.students.length) return null;
           return {
             fileName: String(data.fileName || ""),
-            dataSchoolYear: String(data.dataSchoolYear || ""),
             gradeFiles: data.gradeFiles && typeof data.gradeFiles === "object" ? data.gradeFiles : {},
             students: data.students,
             courses: normalizeCourses(Array.isArray(data.courses) ? data.courses : []),
             classOverrides: data.classOverrides && typeof data.classOverrides === "object" ? data.classOverrides : {},
             semesterAssignments: data.semesterAssignments,
             groupAssignments: data.groupAssignments,
-            customGroupNames: data.customGroupNames,
-            customGroupNamesByGrade: normalizeGradeGroupNames(
-              data.customGroupNamesByGrade, data.customGroupNames
-            )
+            customGroupNames: data.customGroupNames
           };
         };
         if (saved.rounds && typeof saved.rounds === "object") {
@@ -597,41 +511,13 @@
         state.courses = activeRound ? activeRound.courses : [];
         state.selectedId = saved.selectedId || state.students[0]?.id || null;
         state.fileName = activeRound ? activeRound.fileName : "";
-        state.activeDataSchoolYear = String(activeRound?.dataSchoolYear || saved.activeDataSchoolYear || "");
-        state.priorCourseHistory = Array.isArray(saved.priorCourseHistory)
-          ? saved.priorCourseHistory.filter((item) => item && typeof item === "object")
-          : [];
-        state.historyArchivedYears = saved.historyArchivedYears && typeof saved.historyArchivedYears === "object"
-          ? saved.historyArchivedYears : {};
         state.classOverrides = activeRound ? { ...activeRound.classOverrides } : {};
-        state.plannedClassCounts = saved.plannedClassCounts && typeof saved.plannedClassCounts === "object"
-          ? Object.fromEntries(["2", "3"]
-            .filter((grade) => Number.isInteger(saved.plannedClassCounts[grade]) && saved.plannedClassCounts[grade] > 0)
-            .map((grade) => [grade, saved.plannedClassCounts[grade]]))
-          : {};
         state.semesterAssignments = (activeRound?.semesterAssignments || saved.semesterAssignments) && typeof (activeRound?.semesterAssignments || saved.semesterAssignments) === "object"
           ? (activeRound?.semesterAssignments || saved.semesterAssignments)
           : {};
         state.customGroupNames = Array.isArray(activeRound?.customGroupNames || saved.customGroupNames)
           ? (activeRound?.customGroupNames || saved.customGroupNames).map((name) => String(name ?? "").trim()).filter(Boolean)
           : [];
-        state.customGroupNamesByGrade = normalizeGradeGroupNames(
-          activeRound?.customGroupNamesByGrade || saved.customGroupNamesByGrade,
-          activeRound?.customGroupNames || saved.customGroupNames
-        );
-        state.customGroupNames = [];
-        state.aggregateTargetGrade = ["2", "3"].includes(String(saved.aggregateTargetGrade))
-          ? String(saved.aggregateTargetGrade) : "2";
-        state.classifierTargetGrade = ["2", "3"].includes(String(saved.classifierTargetGrade))
-          ? String(saved.classifierTargetGrade) : "2";
-        state.certificateTargetGrade = ["2", "3"].includes(String(saved.certificateTargetGrade))
-          ? String(saved.certificateTargetGrade) : "2";
-        if (!state.students.some((student) =>
-          student.id === state.selectedId &&
-          String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade))) {
-          state.selectedId = state.students.find((student) =>
-            String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade))?.id || null;
-        }
         state.groupAssignments = (activeRound?.groupAssignments || saved.groupAssignments) && typeof (activeRound?.groupAssignments || saved.groupAssignments) === "object"
           ? (activeRound?.groupAssignments || saved.groupAssignments)
           : {};
@@ -639,25 +525,16 @@
         state.curriculumCatalogQuery = String(saved.curriculumCatalogQuery || "");
         state.curriculumFileName = String(saved.curriculumFileName || "");
         state.curriculumPlanFileName = String(saved.curriculumPlanFileName || "");
-        const persistedLayout = saved.curriculumImportedLayout &&
+        state.curriculumImportedLayout = saved.curriculumImportedLayout &&
           Array.isArray(saved.curriculumImportedLayout.rows)
           ? saved.curriculumImportedLayout
           : null;
-        const persistedLayoutId = String(saved.curriculumLayoutArchiveId || persistedLayout?.archiveId || "");
-        state.curriculumImportedLayout = persistedLayout;
-        curriculumLayoutStoredId = persistedLayout ? "" : persistedLayoutId;
         state.curriculumTemplateRows = Array.isArray(saved.curriculumTemplateRows)
           ? saved.curriculumTemplateRows.map((row) => normalizeCurriculumPlanRow(row))
           : [];
         state.curriculumPlan = Array.isArray(saved.curriculumPlan)
           ? saved.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row))
           : [];
-        state.curriculumPlansByYear = saved.curriculumPlansByYear && typeof saved.curriculumPlansByYear === "object"
-          ? saved.curriculumPlansByYear : {};
-        state.curriculumPlanAcademicYear = String(saved.curriculumPlanAcademicYear || saved.schoolYear || "");
-        if (state.curriculumPlanAcademicYear && !state.curriculumPlansByYear[state.curriculumPlanAcademicYear]) {
-          state.curriculumPlansByYear[state.curriculumPlanAcademicYear] = state.curriculumPlan;
-        }
         state.curriculumPlanFilters = saved.curriculumPlanFilters &&
           typeof saved.curriculumPlanFilters === "object"
           ? {
@@ -692,55 +569,18 @@
         $("#classFilter").disabled = !state.students.length;
         applyClassFilterOptions(state.students);
         $("#studentCount").textContent = `${state.students.length} / ${state.students.length}명`;
-        // 화면 표시 오류가 저장 데이터 전체 초기화로 이어지지 않도록 렌더링 실패는 따로 처리한다.
-        try {
-          renderRoster();
-          renderPreview();
-          renderCurriculumStep();
-          renderSemesterClassifier();
-          renderAggregate();
-          renderWorkflowLayout();
-        } catch (error) {
-          console.error("복원한 자료 표시 실패", error);
-          status.style.color = "#a44939";
-          status.textContent = `저장 자료는 복원했지만 일부 화면을 표시하지 못했습니다: ${error?.message || error}`;
-        }
-        statePersistenceReady = true;
-        if (persistedLayout) {
-          scheduleCurriculumLayoutPersistence();
-        } else if (persistedLayoutId) {
-          const layoutRestoreRevision = state.curriculumMutationRevision;
-          loadCurriculumLayout(persistedLayoutId).then((layout) => {
-            if (!layout) throw new Error("저장된 편제표를 찾을 수 없습니다.");
-            if (state.curriculumImportedLayout ||
-                state.curriculumMutationRevision !== layoutRestoreRevision) return;
-            state.curriculumImportedLayout = layout;
-            curriculumLayoutStoredId = persistedLayoutId;
-            renderCurriculumStep();
-            renderApplicationSubjects();
-            renderPreview();
-            renderSemesterClassifier();
-            renderAggregate();
-            persistState();
-          }).catch((error) => {
-            console.error("저장된 편제표 복원 실패", error);
-            const message = `저장된 편제표를 불러오지 못했습니다: ${error?.message || "브라우저 저장소 오류"}`;
-            status.style.color = "#a44939";
-            status.textContent = message;
-            showAppToast(message);
-          });
-        }
-        if (state.students.length && !status.textContent.startsWith("저장 자료는 복원했지만")) {
+        renderRoster();
+        renderPreview();
+        renderCurriculumStep();
+        renderSemesterClassifier();
+        renderAggregate();
+        renderWorkflowLayout();
+        if (state.students.length) {
           status.style.color = "#287956";
           status.textContent = `새로고침 이전 파일(${state.fileName || "이전 파일"})을 복원했습니다.`;
         }
       } catch (error) {
-        console.error("저장 자료 복원 실패", error);
-        statePersistenceReady = true;
         resetWorkspace(true);
-        try { localStorage.setItem(`${STORAGE_KEY}-unreadable-backup`, raw); } catch (backupError) { /* 공간 부족 시 백업 생략 */ }
-        status.style.color = "#a44939";
-        status.textContent = "저장 자료 형식을 읽지 못해 초기화했습니다. 원본은 브라우저에 백업해 두었습니다.";
       }
     }
 
@@ -804,7 +644,22 @@
       return String(value ?? "").replace(/\s+/g, " ").trim();
     }
 
+    function courseDefaultCategory(course) {
+      return normalizeGroupName(course.category) || "과목";
+    }
     const UNASSIGNED_GROUP = "미분류";
+
+    function availableGroupNames(courses) {
+      const names = [];
+      const pushUnique = (name) => {
+        const normalized = normalizeGroupName(name);
+        if (!normalized || names.includes(normalized)) return;
+        names.push(normalized);
+      };
+      for (const custom of state.customGroupNames) pushUnique(custom);
+      for (const assigned of Object.values(state.groupAssignments)) pushUnique(assigned);
+      return names;
+    }
 
     function resolveCourseCategory(course) {
       const key = String(course.column);
@@ -820,32 +675,26 @@
       return UNASSIGNED_GROUP;
     }
 
-    function applicationGroupForCourse(course, currentGrade, groups = null) {
-      const matches = applicationGroupMatchesForCourse(course, currentGrade, groups);
-      if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
-      if (matches.length > 1) return null;
-      const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
-      const gradeSettings = settings.filter((group) => group.grade === String(Number(currentGrade) + 1));
-      const savedGroup = course.applicationGroups?.[String(currentGrade)];
-      if (!gradeSettings.length && savedGroup?.name) return savedGroup;
-      return null;
+    function semesterTitle(key) {
+      if (key === "1") return "1학기";
+      if (key === "2") return "2학기";
+      return "미분류";
     }
 
-    function applicationGroupMatchesForCourse(course, currentGrade, groups = null) {
-      const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
-      if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return [];
+    function applicationGroupForCourse(course, currentGrade, groups = null) {
+      const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
+      if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
-      const normalize = (name) => curriculumCourseNameKey(name)
-        .replace(/[\[(](?:일반|진로|융합)(?:선택)?[)\]]$/, "");
-      const hint = ["1", "2"].includes(String(course.semesterKey))
-        ? String(course.semesterKey) : parseSemesterFromCourseName(course.name);
-      const gradeSettings = settings.filter((group) => group.grade === String(Number(currentGrade) + 1));
-      const courseMatches = gradeSettings.filter((group) =>
+      const normalize = (name) => String(name ?? "").trim()
+        .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
+        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, " ").trim();
+      const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
+      const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
+        (!hint || group.semester === hint) &&
         group.courses.some((name) => normalize(name) === normalize(course.name)));
-      const hintedMatches = hint
-        ? courseMatches.filter((group) => group.semester === hint)
-        : courseMatches;
-      return hintedMatches.length ? hintedMatches : courseMatches;
+      if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
+      if (!matches.length) return course.applicationGroups?.[String(currentGrade)] || null;
+      return null;
     }
 
     function classifyApplicationRecords(data) {
@@ -857,12 +706,7 @@
           student.selections.some((selection) => selection.column === course.column)).map((student) => String(student.grade)))) {
           const group = applicationGroupForCourse(course, grade, groups);
           if (group) course.applicationGroups[grade] = group;
-          else {
-            const matches = applicationGroupMatchesForCourse(course, grade, groups);
-            const hasSemesterSpecificMatches = matches.length > 1 &&
-              new Set(matches.map((item) => item.semester)).size > 1;
-            if (!hasSemesterSpecificMatches) warnings.add(`${Number(grade)+1}학년 ${course.name}`);
-          }
+          else warnings.add(`${Number(grade)+1}학년 ${course.name}`);
         }
       }
       for (const student of data.students) for (const course of student.selections) {
@@ -875,151 +719,11 @@
       if (currentGrade && !state.groupAssignments[String(course.column)]) {
         const applicationGroup = applicationGroupForCourse(course, currentGrade);
         if (applicationGroup) return `${["1", "2"].includes(applicationGroup.semester) ? applicationGroup.semester+"학기 " : ""}${applicationGroup.name}`;
-        const matches = applicationGroupMatchesForCourse(course, currentGrade);
-        const resolvedSemester = resolveSemesterKey(course);
-        const preferredSemester = ["1", "2"].includes(resolvedSemester)
-          ? resolvedSemester : curriculumSemesterForCourse(course, Number(currentGrade) + 1);
-        const preferredMatches = matches.filter((group) => group.semester === preferredSemester);
-        const groups = preferredMatches.length ? preferredMatches : matches;
-        if (groups.length && groups.every((group) => ["1", "2"].includes(group.semester)) &&
-            new Set(groups.map((group) => group.semester)).size === groups.length) {
-          return groups.slice().sort((a, b) => Number(a.semester) - Number(b.semester))
-            .map((group) => `${group.semester}학기 ${group.name}`).join(" / ");
-        }
       }
       const semester = resolveSemesterKey(course);
       const category = resolveCourseCategoryForOutput(course);
       if (!semester) return category;
       return category === "과목" ? `${semester}학기` : `${semester}학기 ${category}`;
-    }
-
-    function normalizeRomanNumerals(value) {
-      const values = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
-      const canonicalNumeral = (number) => {
-        const pairs = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"],
-          [100, "C"], [90, "XC"], [50, "L"], [40, "XL"],
-          [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
-        let remaining = number;
-        let result = "";
-        for (const [amount, symbol] of pairs) {
-          while (remaining >= amount) {
-            result += symbol;
-            remaining -= amount;
-          }
-        }
-        return result;
-      };
-      return String(value || "").normalize("NFKC")
-        .replace(/(?<![A-Za-z])[IVXLCDM]+(?![A-Za-z])/gi, (numeral) => {
-          const upper = numeral.toUpperCase();
-          let number = 0;
-          for (let index = 0; index < upper.length; index++) {
-            const current = values[upper[index]];
-            const next = values[upper[index + 1]] || 0;
-            number += current < next ? -current : current;
-          }
-          return number > 0 && number <= 3999 && canonicalNumeral(number) === upper
-            ? String(number) : numeral;
-        });
-    }
-
-    function curriculumCourseNameKey(value) {
-      return normalizeRomanNumerals(value)
-        .replace(/\s+/g, "")
-        .replace(/[\[(](?:[12]학기|[23]학년)[)\]]$/, "")
-        .trim();
-    }
-
-    function curriculumGradesForCourse(course) {
-      const schoolYear = String(state.activeDataSchoolYear || "");
-      const plan = schoolYear
-        ? (state.curriculumPlansByYear?.[schoolYear] ||
-          (String(state.curriculumPlanAcademicYear || "") === schoolYear ? state.curriculumPlan : []))
-        : state.curriculumPlan;
-      const nameKey = curriculumCourseNameKey(course.name);
-      if (!nameKey || !Array.isArray(plan)) return new Set();
-      return new Set(plan
-        .filter((row) => curriculumCourseNameKey(row.subject) === nameKey)
-        .map((row) => String(row.grade || ""))
-        .filter((grade) => ["2", "3"].includes(grade)));
-    }
-
-    function curriculumSemesterForCourse(course, targetGrade) {
-      const schoolYear = String(state.activeDataSchoolYear || "");
-      const plan = schoolYear
-        ? (state.curriculumPlansByYear?.[schoolYear] ||
-          (String(state.curriculumPlanAcademicYear || "") === schoolYear ? state.curriculumPlan : []))
-        : state.curriculumPlan;
-      const nameKey = curriculumCourseNameKey(course.name);
-      if (!nameKey || !Array.isArray(plan)) return "";
-      const semesterFields = {
-        "1": ["sem11", "sem12"],
-        "2": ["sem21", "sem22"],
-        "3": ["sem31", "sem32"],
-      }[String(targetGrade)];
-      if (!semesterFields) return "";
-      const semesters = new Set();
-      for (const row of plan) {
-        if (String(row.grade || "") !== String(targetGrade) ||
-            curriculumCourseNameKey(row.subject) !== nameKey) continue;
-        semesterFields.forEach((field, index) => {
-          const value = String(row[field] ?? "").trim();
-          if (value && !/^[-–—]+$/.test(value) && !/^0(?:\.0+)?$/.test(value)) {
-            semesters.add(String(index + 1));
-          }
-        });
-      }
-      return semesters.size === 1 ? [...semesters][0] : "";
-    }
-
-    function courseBelongsToCurrentGrade(course, currentGrade, students) {
-      const grade = String(currentGrade);
-      const targetGrade = String(Number(grade) + 1);
-      const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
-      if (namedGrade) return namedGrade === targetGrade;
-      const curriculumGrades = curriculumGradesForCourse(course);
-      if (curriculumGrades.size === 1) return curriculumGrades.has(targetGrade);
-      if (curriculumGrades.size && !curriculumGrades.has(targetGrade)) return false;
-      if (course.applicationCurrentGrade !== undefined && course.applicationCurrentGrade !== null &&
-          String(course.applicationCurrentGrade) !== "") {
-        return String(course.applicationCurrentGrade) === grade;
-      }
-      const applicationGroups = course.applicationGroups;
-      if (applicationGroups && typeof applicationGroups === "object" && Object.keys(applicationGroups).length) {
-        return Object.hasOwn(applicationGroups, grade);
-      }
-      const selectedGrades = new Set(students.filter((student) =>
-        student.selections.some((selection) => String(selection.column) === String(course.column)))
-        .map((student) => String(student.grade)));
-      if (selectedGrades.size) return selectedGrades.has(grade);
-      const rosterGrades = new Set(students.map((student) => String(student.grade)));
-      return rosterGrades.size === 1 && rosterGrades.has(grade);
-    }
-
-    function coursesForCurrentGrade(currentGrade, courses = state.courses, students = state.students) {
-      return courses.filter((course) => courseBelongsToCurrentGrade(course, currentGrade, students));
-    }
-
-    function targetGradeCurrentGrade(targetGrade) {
-      return String(Number(targetGrade) - 1);
-    }
-
-    function gradeGroupNames(targetGrade) {
-      const scoped = state.customGroupNamesByGrade?.[String(targetGrade)] || [];
-      const legacy = state.customGroupNames || [];
-      return [...new Set([...legacy, ...scoped].map(normalizeGroupName).filter(Boolean))];
-    }
-
-    function normalizeGradeGroupNames(value, legacyNames = []) {
-      const source = value && typeof value === "object" ? value : null;
-      const normalize = (names) => Array.isArray(names)
-        ? [...new Set(names.map((name) => normalizeGroupName(name)).filter(Boolean))]
-        : [];
-      if (!source || (!Array.isArray(source["2"]) && !Array.isArray(source["3"]))) {
-        const legacy = normalize(legacyNames);
-        return { "2": [...legacy], "3": [...legacy] };
-      }
-      return { "2": normalize(source["2"]), "3": normalize(source["3"]) };
     }
 
     function courseIndexByColumn(columnKey) {
@@ -1085,13 +789,11 @@
       }
 
       const creditRow = rows[headerIndex] || [];
-      const findColumn = (matcher) => creditRow.findIndex((value) =>
-        matcher(String(value ?? "").replace(/\s+/g, "").trim()));
+      const findColumn = (matcher) => creditRow.findIndex((value) => matcher(String(value ?? "").trim()));
       const gradeColumn = findColumn((value) => value === "학년");
       const classColumn = findColumn((value) => value === "반");
-      const numberColumn = findColumn((value) => /^(번호|출석번호)$/.test(value));
+      const numberColumn = findColumn((value) => value.includes("번호"));
       const nameColumn = findColumn((value) => value.includes("성명"));
-      const studentIdColumn = findColumn((value) => /학번|학생ID|학생식별번호/.test(value));
       if ([gradeColumn, classColumn, numberColumn, nameColumn].some((column) => column < 0)) {
         throw new Error("학년/반/번호/성명 열을 자동으로 찾지 못했습니다. 헤더명을 확인해 주세요.");
       }
@@ -1110,7 +812,6 @@
 
       const courses = [];
       for (let column = courseStartColumn; column < titleRow.length; column++) {
-        if (column === studentIdColumn) continue;
         const name = String(titleRow[column] ?? "").trim();
         if (!name) continue;
         const rawGroup = String(groupRow[column] ?? "").trim();
@@ -1135,12 +836,11 @@
         const classroom = String(row[classColumn] ?? "").trim();
         const number = String(row[numberColumn] ?? "").trim();
         const name = String(row[nameColumn] ?? "").trim();
-        const studentId = studentIdColumn >= 0 ? String(row[studentIdColumn] ?? "").trim() : "";
         if (!name || !grade || !classroom || !number) continue;
         const selections = courses.filter((course) => isSelected(row[course.column]));
         students.push({
           id: `${grade}-${classroom}-${number}-${name}`,
-          studentId, grade, classroom, number, name, selections,
+          grade, classroom, number, name, selections,
           totalCredits: selections.reduce((total, course) => total + course.credits, 0)
         });
       }
@@ -1354,6 +1054,20 @@
       }
       if (!records.length) throw new Error("편제표에서 과목 행을 찾지 못했습니다.");
       return records;
+    }
+
+    function curriculumCatalogTableHtml(rows, emptyText) {
+      if (!rows.length) return `<div class="curriculum-empty">${escapeHtml(emptyText)}</div>`;
+      return `<table class="curriculum-table">
+        <thead><tr><th style="width:18%">교과(군)</th><th style="width:16%">유형</th><th style="width:36%">과목명</th><th style="width:10%">학점</th><th style="width:20%">범위</th></tr></thead>
+        <tbody>${rows.map((item) => `<tr>
+          <td>${escapeHtml(curriculumAreaOf(item) || "-")}</td>
+          <td>${escapeHtml(item.type || "-")}</td>
+          <td>${escapeHtml(item.subject)}</td>
+          <td>${escapeHtml(item.credit || 0)}</td>
+          <td>${escapeHtml(item.minCredit || 0)}~${escapeHtml(item.maxCredit || 0)}</td>
+        </tr>`).join("")}</tbody>
+      </table>`;
     }
 
     function curriculumBundleSummaryHtml(rows) {
@@ -1572,6 +1286,226 @@
       }).join("");
     }
 
+    function curriculumPlanTableHtml(rows, emptyText) {
+      const visibleGrade = String(state.curriculumTargetGrade || "1");
+      const visibleDivision = normalizeCurriculumDivisionFilter(state.curriculumTargetDivision);
+      const visibleArea = String(state.curriculumTargetArea || "").trim();
+      const visibleDetail = normalizeCurriculumDetailFilter(state.curriculumTargetDetail);
+      const visibleIndexes = rows
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => String(item.grade || "1") === visibleGrade)
+        .filter(({ item }) => !visibleDivision || normalizeCurriculumDivision(item.division) === visibleDivision)
+        .filter(({ item }) => !visibleArea || String(item.area || "").trim() === visibleArea)
+        .filter(({ item }) => !visibleDetail || normalizeCurriculumDetail(item.detail) === visibleDetail);
+      if (!visibleIndexes.length) return `<div class="curriculum-empty">${escapeHtml(emptyText)}</div>`;
+
+      const displayGroups = new Map();
+      for (const { item, index } of visibleIndexes) {
+        const bundleKey = curriculumBundleKeyForRow(item);
+        const sharedValues = [
+          String(item.grade || "1"),
+          normalizeCurriculumDivision(item.division),
+          String(item.area || "").trim(),
+          normalizeCurriculumDetail(item.detail)
+        ];
+        if (!bundleKey) {
+          sharedValues.push(String(item.baseCredit || 0), String(item.opCredit || 0));
+          sharedValues.push(...CURRICULUM_SEMESTER_FIELDS.map((field) => String(item[field] || "").trim()));
+        }
+        const groupKey = JSON.stringify([bundleKey, ...sharedValues]);
+        const current = displayGroups.get(groupKey) || {
+          bundleKey,
+          indexes: [],
+          item,
+          pick: 1,
+          activeFields: new Set()
+        };
+        current.indexes.push(index);
+        current.pick = Math.max(current.pick, Math.max(1, Number(item.bundlePick) || 1));
+        for (const field of CURRICULUM_SEMESTER_FIELDS) {
+          if (String(item[field] || "").trim() !== "") current.activeFields.add(field);
+        }
+        displayGroups.set(groupKey, current);
+      }
+      let displayRows = [...displayGroups.values()];
+      const bundleGroups = new Map();
+      for (const displayRow of displayRows) {
+        if (!displayRow.bundleKey) continue;
+        const current = bundleGroups.get(displayRow.bundleKey) || {
+          displayRows: [],
+          indexes: [],
+          pick: 1,
+          activeFields: new Set(),
+          hoursByField: Object.fromEntries(CURRICULUM_SEMESTER_FIELDS.map((field) => [field, 0]))
+        };
+        current.displayRows.push(displayRow);
+        current.indexes.push(...displayRow.indexes);
+        current.pick = Math.max(current.pick, displayRow.pick);
+        for (const field of displayRow.activeFields) current.activeFields.add(field);
+        bundleGroups.set(displayRow.bundleKey, current);
+      }
+      for (const group of bundleGroups.values()) {
+        for (const index of group.indexes) {
+          const row = rows[index];
+          for (const field of CURRICULUM_SEMESTER_FIELDS) {
+            if (String(row[field] || "").trim()) {
+              group.hoursByField[field] += Number(row.opCredit) || 0;
+            }
+          }
+        }
+      }
+      const orderedDisplayRows = [];
+      const placedBundles = new Set();
+      for (const displayRow of displayRows) {
+        if (!displayRow.bundleKey) {
+          orderedDisplayRows.push(displayRow);
+          continue;
+        }
+        if (placedBundles.has(displayRow.bundleKey)) continue;
+        placedBundles.add(displayRow.bundleKey);
+        orderedDisplayRows.push(...bundleGroups.get(displayRow.bundleKey).displayRows);
+      }
+      displayRows = orderedDisplayRows;
+      const bundleCellMetaByGroup = new Map();
+      for (const [bundleKey, group] of bundleGroups.entries()) {
+        group.displayRows.forEach((displayRow, offset) => {
+          bundleCellMetaByGroup.set(displayRow, {
+            bundleKey,
+            first: offset === 0,
+            rowSpan: group.displayRows.length,
+            pick: group.pick,
+            activeFields: group.activeFields,
+            hoursByField: group.hoursByField
+          });
+        });
+      }
+
+      const makeOptions = (options, value) =>
+        options.map((option) => `<option value="${escapeHtml(option)}"${option === value ? " selected" : ""}>${escapeHtml(option)}</option>`).join("");
+      const makeGradeOptions = (value) =>
+        ["1", "2", "3"].map((grade) => `<option value="${grade}"${String(value) === grade ? " selected" : ""}>${grade}학년</option>`).join("");
+      const semesterLabel = {
+        sem11: "1-1",
+        sem12: "1-2",
+        sem21: "2-1",
+        sem22: "2-2",
+        sem31: "3-1",
+        sem32: "3-2"
+      };
+      const semesterCell = (item, index, field, bundleMeta) => {
+        const active = String(item[field] || "").trim() !== "";
+        const label = semesterLabel[field] || field;
+        if (bundleMeta) {
+          const bundleActive = bundleMeta.activeFields.has(field);
+          if (bundleActive) {
+            if (!bundleMeta.first) return "";
+            const hours = bundleMeta.hoursByField[field] || 0;
+            return `<td class="curriculum-sem-cell" rowspan="${bundleMeta.rowSpan}"><button class="curriculum-sem-button active" type="button" data-semester-field="${field}" data-plan-index="${index}" data-bundle-key="${escapeHtml(bundleMeta.bundleKey)}" aria-label="${escapeHtml(item.subject || "")} ${label}, 택${bundleMeta.pick}, ${hours}시간"><span class="curriculum-sem-main">택${bundleMeta.pick}</span><span class="curriculum-sem-hours">${hours}시간</span></button></td>`;
+          }
+          return `<td class="curriculum-sem-cell"><button class="curriculum-sem-button" type="button" data-semester-field="${field}" data-plan-index="${index}" data-bundle-key="${escapeHtml(bundleMeta.bundleKey)}" aria-label="${escapeHtml(item.subject || "")} ${label}"></button></td>`;
+        }
+        const hours = active ? Number(item.opCredit) || 0 : 0;
+        return `<td class="curriculum-sem-cell"><button class="curriculum-sem-button${active ? " active" : ""}" type="button" data-semester-field="${field}" data-plan-index="${index}" data-bundle-key="" aria-label="${escapeHtml(item.subject || "")} ${label}${active ? `, ${hours}시간` : ""}">${active ? `<span class="curriculum-sem-hours">${hours}시간</span>` : ""}</button></td>`;
+      };
+      const rowsHtml = displayRows.map((displayRow) => {
+        const { item, indexes } = displayRow;
+        const index = indexes[0];
+        const normalizedDetail = normalizeCurriculumDetail(item.detail);
+        const isSelectable = isSelectableDetail(normalizedDetail) && normalizeCurriculumDivision(item.division) === "학생 선택 교육과정";
+        const bundleName = isSelectable ? String(item.bundleName || "") : "";
+        const bundleMeta = bundleCellMetaByGroup.get(displayRow);
+        const semesterCellHtml = CURRICULUM_SEMESTER_FIELDS.map((field) => semesterCell(item, index, field, bundleMeta)).join("");
+        const pickValue = isSelectable ? Math.max(1, Number(item.bundlePick) || 1) : "";
+        const planIndexes = indexes.join(",");
+        const subjectList = indexes.map((subjectIndex) =>
+          `<span class="curriculum-subject-entry"><button class="curriculum-subject-name" type="button" data-plan-action="remove" data-plan-index="${subjectIndex}" aria-label="${escapeHtml(rows[subjectIndex].subject)} 삭제">${escapeHtml(rows[subjectIndex].subject)}</button></span>`
+        ).join(", ");
+        const baseCredits = [...new Set(indexes.map((subjectIndex) => String(rows[subjectIndex].baseCredit || 0)))].join(", ");
+        const opCredits = [...new Set(indexes.map((subjectIndex) => String(rows[subjectIndex].opCredit || 0)))].join(", ");
+        const pickCellHtml = `<td><input class="curriculum-cell-input curriculum-cell-input-num" type="number" min="1" step="1" data-plan-field="bundlePick" data-plan-index="${index}" data-plan-indexes="${planIndexes}" data-bundle-key="${escapeHtml(bundleMeta ? bundleMeta.bundleKey : "")}" value="${pickValue}" placeholder="-" ${isSelectable ? "" : "disabled"}></td>`;
+        return `<tr>
+          <td><select class="curriculum-cell-select" data-plan-field="division" data-plan-index="${index}" data-plan-indexes="${planIndexes}" aria-label="${escapeHtml(item.subject || "")} 구분">
+            ${makeOptions(CURRICULUM_DIVISION_OPTIONS, normalizeCurriculumDivision(item.division))}
+          </select></td>
+          <td><select class="curriculum-cell-select" data-plan-field="grade" data-plan-index="${index}" data-plan-indexes="${planIndexes}" aria-label="${escapeHtml(item.subject || "")} 학년">
+            ${makeGradeOptions(item.grade || "1")}
+          </select></td>
+          <td>${escapeHtml(item.area || "-")}</td>
+          <td><select class="curriculum-cell-select" data-plan-field="detail" data-plan-index="${index}" data-plan-indexes="${planIndexes}" aria-label="${escapeHtml(item.subject || "")} 세부">
+            ${makeOptions(CURRICULUM_DETAIL_OPTIONS, normalizedDetail)}
+          </select></td>
+          <td>${subjectList}</td>
+          <td><input class="curriculum-cell-input" type="text" data-plan-field="bundleName" data-plan-index="${index}" data-plan-indexes="${planIndexes}" value="${escapeHtml(bundleName)}" placeholder="선택묶음" ${isSelectable ? "" : "disabled"}></td>
+          ${pickCellHtml}
+          <td>${escapeHtml(baseCredits)}</td>
+          <td>${escapeHtml(opCredits)}</td>
+          ${semesterCellHtml}
+        </tr>`;
+      }).join("");
+      const visibleRows = visibleIndexes.map(({ item }) => item);
+      return `${curriculumBundleSummaryHtml(visibleRows)}${curriculumSemesterHoursSummaryHtml(visibleIndexes, visibleGrade)}<table class="curriculum-table">
+        <thead><tr>
+          <th style="width:9%">구분</th><th style="width:6%">학년</th><th style="width:7%">교과(군)</th><th style="width:8%">세부</th><th style="width:16%">과목명</th>
+          <th style="width:9%">선택묶음</th><th style="width:5%">선택수</th>
+          <th style="width:4%">기준</th><th style="width:4%">운영</th>
+          <th style="width:4.5%">1-1</th><th style="width:4.5%">1-2</th><th style="width:4.5%">2-1</th><th style="width:4.5%">2-2</th><th style="width:4.5%">3-1</th><th style="width:4.5%">3-2</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>`;
+    }
+
+    function createInternalTemplateFromCatalog(catalog) {
+      return catalog.map((item) => normalizeCurriculumPlanRow({
+        grade: "1",
+        division: "학생 선택 교육과정",
+        area: curriculumAreaOf(item),
+        detail: item.type || "",
+        subject: item.subject,
+        bundleName: "",
+        bundlePick: 1,
+        baseCredit: item.credit || 0,
+        opCredit: item.credit || 0,
+        sem11: "",
+        sem12: "",
+        sem21: "",
+        sem22: "",
+        sem31: "",
+        sem32: ""
+      }, { detail: "일반선택" }));
+    }
+
+    function getCurriculumAreaOptions() {
+      return [...new Set(state.curriculumCatalog.map((item) => curriculumAreaOf(item)).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, "ko"));
+    }
+
+    function updateCurriculumBuilderControls() {
+      const gradeSelect = $("#curriculumTargetGrade");
+      const divisionSelect = $("#curriculumTargetDivision");
+      const areaSelect = $("#curriculumTargetArea");
+      const detailSelect = $("#curriculumTargetDetail");
+      const bundleNameInput = $("#curriculumBundleName");
+      const bundlePickInput = $("#curriculumBundlePick");
+      if (!gradeSelect || !divisionSelect || !areaSelect || !detailSelect || !bundleNameInput || !bundlePickInput) return;
+
+      gradeSelect.value = state.curriculumTargetGrade;
+      divisionSelect.value = normalizeCurriculumDivision(state.curriculumTargetDivision);
+      if (!state.curriculumTargetDivision) divisionSelect.value = "";
+      detailSelect.value = normalizeCurriculumDetail(state.curriculumTargetDetail);
+      if (!state.curriculumTargetDetail) detailSelect.value = "";
+      bundleNameInput.value = state.curriculumBundleName;
+      bundlePickInput.value = String(Math.max(1, Number(state.curriculumBundlePick) || 1));
+
+      const options = getCurriculumAreaOptions();
+      const current = state.curriculumTargetArea;
+      areaSelect.innerHTML = `<option value="">전체 교과군</option>${options.map((area) =>
+        `<option value="${escapeHtml(area)}"${area === current ? " selected" : ""}>${escapeHtml(area)}</option>`).join("")}`;
+      if (current && !options.includes(current)) {
+        state.curriculumTargetArea = "";
+        areaSelect.value = "";
+      }
+    }
+
     function filteredCurriculumCatalog() {
       const query = String(state.curriculumCatalogQuery || "").trim().toLocaleLowerCase();
       if (!query) return [...state.curriculumCatalog];
@@ -1614,18 +1548,34 @@
         : "";
     }
 
-    function syncCurriculumTemplateRows() {
+    function addCurriculumItemToPlan(subject) {
+      const targetSubject = String(subject || "").trim();
+      if (!targetSubject) return false;
+      const item = state.curriculumCatalog.find((row) => String(row.subject || "").trim() === targetSubject);
+      if (!item) return false;
+      const exists = state.curriculumPlan.find((row) => String(row.subject || "").trim() === targetSubject);
+      if (exists) return false;
+      const detail = normalizeCurriculumDetail(state.curriculumTargetDetail || item.type || "일반선택");
+      const division = normalizeCurriculumDivision(state.curriculumTargetDivision || "학생 선택 교육과정");
+      const isSelectable = isSelectableDetail(detail) && division === "학생 선택 교육과정";
+      const nextRow = normalizeCurriculumPlanRow({
+        grade: state.curriculumTargetGrade,
+        division,
+        area: curriculumAreaOf(item),
+        detail,
+        subject: item.subject,
+        bundleName: isSelectable ? state.curriculumBundleName : "",
+        bundlePick: isSelectable ? state.curriculumBundlePick : 1,
+        baseCredit: item.credit || 0,
+        opCredit: item.credit || 0
+      }, { detail: "일반선택", division: "학생 선택 교육과정" });
+      state.curriculumPlan.push(nextRow);
       state.curriculumTemplateRows = state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row));
+      return true;
     }
 
-    function syncCurriculumPlanYearSnapshot(year = $("#schoolYear").value) {
-      const academicYear = String(year || "").trim();
-      if (!academicYear) return;
-      state.curriculumPlanAcademicYear = academicYear;
-      state.curriculumPlansByYear = {
-        ...(state.curriculumPlansByYear || {}),
-        [academicYear]: state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row))
-      };
+    function syncCurriculumTemplateRows() {
+      state.curriculumTemplateRows = state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row));
     }
 
     function curriculumSnapshot() {
@@ -1633,9 +1583,7 @@
         curriculumPlan: state.curriculumPlan,
         curriculumTemplateRows: state.curriculumTemplateRows,
         curriculumImportedLayout: state.curriculumImportedLayout,
-        curriculumPlanFileName: state.curriculumPlanFileName,
-        curriculumPlanAcademicYear: state.curriculumPlanAcademicYear,
-        curriculumPlansByYear: state.curriculumPlansByYear
+        curriculumPlanFileName: state.curriculumPlanFileName
       }));
     }
 
@@ -1651,11 +1599,7 @@
       state.curriculumPlan = snapshot.curriculumPlan;
       state.curriculumTemplateRows = snapshot.curriculumTemplateRows;
       state.curriculumImportedLayout = snapshot.curriculumImportedLayout;
-      if (!snapshot.curriculumImportedLayout) curriculumLayoutStoredId = "";
       state.curriculumPlanFileName = snapshot.curriculumPlanFileName;
-      state.curriculumPlanAcademicYear = snapshot.curriculumPlanAcademicYear || "";
-      state.curriculumPlansByYear = snapshot.curriculumPlansByYear || {};
-      scheduleCurriculumLayoutPersistence();
       state.curriculumMutationRevision += 1;
       state.curriculumEditBefore = null;
       state.curriculumEditUndoRecorded = false;
@@ -1764,8 +1708,7 @@
       divisionPercent,
       classOverrides = {},
       semesterAssignments = {},
-      groupAssignments = {},
-      plannedClassCounts = {}
+      groupAssignments = {}
     ) {
       const grades = [...new Set(students.map((student) => student.grade))];
       const reports = grades.map((grade) => {
@@ -1775,24 +1718,33 @@
           grade,
           students: gradeStudents.length,
           classes,
-          plannedClasses: Number.isInteger(plannedClassCounts[String(Number(grade) + 1)]) &&
-            plannedClassCounts[String(Number(grade) + 1)] > 0
-            ? plannedClassCounts[String(Number(grade) + 1)]
-            : classes,
           averageClassSize: classes ? gradeStudents.length / classes : 0,
           openingLimit: classes ? (gradeStudents.length / classes) * openingPercent / 100 : 0,
           divisionLimit: classes ? (gradeStudents.length / classes) * divisionPercent / 100 : 0
         };
         const semesters = [];
         for (const course of courses) {
-          if (!courseBelongsToCurrentGrade(course, grade, students)) continue;
           const applicationGroup = applicationGroupForCourse(course, grade);
-          const applicationGroups = typeof applicationGroupMatchesForCourse === "function"
-            ? applicationGroupMatchesForCourse(course, grade) : [];
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
+          const semesterKey = forcedSemester === "1" || forcedSemester === "2"
+            ? forcedSemester
+            : (parsedAssignedGroup.semesterKey || applicationGroup?.semester || course.semesterKey || "");
           const displayGrade = Number(grade) + 1;
-          const curriculumSemester = curriculumSemesterForCourse(course, displayGrade);
+          const semesterName = semesterKey
+            ? `${displayGrade}학년 ${semesterKey}학기`
+            : `${displayGrade}학년 미분류`;
+          const category = parsedAssignedGroup.category || applicationGroup?.name || UNASSIGNED_GROUP;
+          let semester = semesters.find((item) => item.name === semesterName);
+          if (!semester) {
+            semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
+            semesters.push(semester);
+          }
+          let group = semester.groups.find((item) => item.category === category);
+          if (!group) {
+            group = { category, courses: [] };
+            semester.groups.push(group);
+          }
           const enrollment = gradeStudents.filter((student) =>
             student.selections.some((selection) => selection.column === course.column)).length;
           const recommendedClasses = summary.divisionLimit > 0 && enrollment > 0
@@ -1802,72 +1754,20 @@
           const classCount = Object.prototype.hasOwnProperty.call(classOverrides, overrideKey)
             ? classOverrides[overrideKey]
             : recommendedClasses;
-          let matchingGroups = applicationGroups;
-          const explicitSemester = [forcedSemester, parsedAssignedGroup.semesterKey]
-            .map((value) => String(value || ""))
-            .find((value) => value === "1" || value === "2");
-          if (matchingGroups.length > 1) {
-            const preferredSemester = explicitSemester ||
-              (curriculumSemester === "1" || curriculumSemester === "2" ? curriculumSemester : "");
-            if (preferredSemester) {
-              const preferredGroups = matchingGroups.filter((item) => item.semester === preferredSemester);
-              matchingGroups = preferredGroups;
-            }
-          }
-          let groupTargets;
-          if (matchingGroups.length > 1 &&
-              new Set(matchingGroups.map((item) => item.semester)).size > 1) {
-            groupTargets = matchingGroups;
-          } else if (matchingGroups.length === 1) {
-            groupTargets = matchingGroups;
-          } else {
-            groupTargets = applicationGroup ? [applicationGroup] : [null];
-          }
-          for (const targetGroup of groupTargets) {
-            const semesterKey = [
-              forcedSemester,
-              parsedAssignedGroup.semesterKey,
-              targetGroup?.semester,
-              curriculumSemester,
-              course.semesterKey,
-            ].map((value) => String(value || ""))
-              .find((value) => value === "1" || value === "2") || "";
-            const semesterName = semesterKey
-              ? `${displayGrade}학년 ${semesterKey}학기`
-              : `${displayGrade}학년 미분류`;
-            const category = parsedAssignedGroup.category || targetGroup?.name || UNASSIGNED_GROUP;
-            let semester = semesters.find((item) => item.name === semesterName);
-            if (!semester) {
-              semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
-              semesters.push(semester);
-            }
-            const groupKey = !parsedAssignedGroup.category && targetGroup?.id
-              ? targetGroup.id : category;
-            let group = semester.groups.find((item) => item.key === groupKey);
-            if (!group) {
-              group = { key: groupKey, category, courses: [], choiceCount: null };
-              semester.groups.push(group);
-            }
-            if (Number.isInteger(targetGroup?.count) && targetGroup.count >= 0) {
-              group.choiceCount = targetGroup.count;
-            }
-            group.courses.push({
-              category,
-              column: course.column,
-              name: course.name,
-              enrollment,
-              enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
-              recommendedClasses,
-              classCount,
-              averageClassSize: classCount ? enrollment / classCount : 0
-            });
-          }
+          group.courses.push({
+            category,
+            column: course.column,
+            name: course.name,
+            enrollment,
+            enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
+            recommendedClasses,
+            classCount,
+            averageClassSize: classCount ? enrollment / classCount : 0
+          });
         }
         for (const semester of semesters) {
           for (const group of semester.groups) {
-            group.totalClasses = group.choiceCount === null
-              ? group.courses.reduce((total, item) => total + item.classCount, 0)
-              : summary.plannedClasses * group.choiceCount;
+            group.totalClasses = group.courses.reduce((total, item) => total + item.classCount, 0);
           }
         }
         semesters.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ko"));
@@ -1877,32 +1777,22 @@
     }
 
     function currentStudent() {
-      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
-      return state.students.find((student) =>
-        student.id === state.selectedId && String(student.grade) === currentGrade) ||
-        state.students.find((student) => String(student.grade) === currentGrade) || null;
+      return state.students.find((student) => student.id === state.selectedId) || null;
     }
 
     function visibleStudents() {
       const query = $("#searchInput").value.trim().toLocaleLowerCase();
       const classValue = $("#classFilter").value;
-      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
       return state.students.filter((student) => {
         const searchable = `${student.name} ${student.grade} ${student.classroom} ${student.number}`.toLocaleLowerCase();
-        return String(student.grade) === currentGrade &&
-          (!query || searchable.includes(query)) &&
+        return (!query || searchable.includes(query)) &&
           (!classValue || student.classroom === classValue);
       });
     }
 
     function renderRoster() {
       const students = visibleStudents();
-      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
-      const gradeStudentCount = state.students.filter((student) => String(student.grade) === currentGrade).length;
-      for (const tab of $("#certificateGradeTabs")?.querySelectorAll?.("[data-certificate-grade]") || []) {
-        tab.setAttribute("aria-selected", String(tab.dataset.certificateGrade) === String(state.certificateTargetGrade || "2") ? "true" : "false");
-      }
-      $("#studentCount").textContent = `${students.length} / ${gradeStudentCount}명`;
+      $("#studentCount").textContent = `${students.length} / ${state.students.length}명`;
       const list = $("#studentList");
       if (!students.length) {
         const empty = document.createElement("div");
@@ -1934,182 +1824,7 @@
       list.replaceChildren(fragment);
     }
 
-    function historyRecordKey(record) {
-      return [record.studentId, record.schoolYear, record.grade, record.courseName, record.semester || ""]
-        .map((value) => String(value || "").trim()).join("|");
-    }
-
-    function studentHistory(student) {
-      if (!student.studentId) return [];
-      const targetGrade = Number(student.grade) + 1;
-      return state.priorCourseHistory.filter((record) =>
-        String(record.studentId || "") === String(student.studentId || "") &&
-        Number(record.grade) < targetGrade &&
-        Number(record.schoolYear) < Number($("#schoolYear").value)
-      ).sort((a, b) =>
-        Number(a.schoolYear) - Number(b.schoolYear) || Number(a.grade) - Number(b.grade) ||
-        String(a.courseName).localeCompare(String(b.courseName), "ko"));
-    }
-
-    function addHistoryRecord(record) {
-      const key = historyRecordKey(record);
-      const existing = new Map(state.priorCourseHistory.map((item) => [historyRecordKey(item), item]));
-      if (existing.has(key)) return false;
-      existing.set(key, { ...record, status: record.status === "incomplete" ? "incomplete" : "completed" });
-      state.priorCourseHistory = [...existing.values()];
-      return true;
-    }
-
-    function archiveCurrentAcademicYear(previousYear, nextYear) {
-      const yearKey = String(previousYear);
-      if (!previousYear || state.historyArchivedYears[yearKey]) return { archived: 0, skipped: 0 };
-      let archived = 0;
-      let skipped = 0;
-      for (const student of state.students) {
-        if (!student.studentId) {
-          skipped++;
-          continue;
-        }
-        const targetGrade = String(Number(student.grade) + 1);
-        const studentCourses = new Map();
-        for (const course of student.selections || []) {
-          studentCourses.set(`${course.name}|${course.semesterKey || ""}`, {
-            courseName: course.name,
-            semester: course.semesterKey || "",
-            credit: Number(course.credits) || 0,
-            area: course.area || course.category || ""
-          });
-        }
-        const savedPlan = state.curriculumPlansByYear?.[yearKey];
-        const schoolPlan = Array.isArray(savedPlan)
-          ? savedPlan
-          : (!state.curriculumPlanAcademicYear || state.curriculumPlanAcademicYear === yearKey)
-            ? state.curriculumPlan : [];
-        for (const row of schoolPlan) {
-          if (String(row.grade) !== targetGrade ||
-              normalizeCurriculumDivision(row.division) !== "학교 지정 교육과정") continue;
-          const name = String(row.subject || "").trim();
-          if (!name) continue;
-          for (const [semesterIndex, field] of CURRICULUM_SEMESTER_FIELDS.entries()) {
-            const credit = Number(row[field]) || 0;
-            if (!credit) continue;
-            const semester = `${Math.floor(semesterIndex / 2) + 1}-${semesterIndex % 2 + 1}`;
-            const key = `${name}|${semester}`;
-            studentCourses.set(key, {
-              courseName: name,
-              semester,
-              credit,
-              area: row.area || ""
-            });
-          }
-        }
-        for (const course of studentCourses.values()) {
-          if (addHistoryRecord({
-            studentId: String(student.studentId),
-            schoolYear: yearKey,
-            grade: targetGrade,
-            courseName: course.courseName,
-            semester: course.semester,
-            credit: course.credit,
-            area: course.area,
-            status: "completed"
-          })) archived++;
-        }
-      }
-      state.historyArchivedYears[yearKey] = { nextYear: String(nextYear), archivedAt: new Date().toISOString() };
-      return { archived, skipped };
-    }
-
-    function prepareAcademicYearImport() {
-      const nextYear = String($("#schoolYear").value || "").trim();
-      const previousYear = String(state.activeDataSchoolYear || "").trim();
-      if (!nextYear) return;
-      if (previousYear && previousYear !== nextYear) {
-        state.students = [];
-        state.courses = [];
-        state.selectedId = null;
-        state.fileName = "";
-        state.classOverrides = {};
-        state.semesterAssignments = {};
-        state.groupAssignments = {};
-        state.rounds = { "1": null };
-        state.roundClosures = { "1": {} };
-        state.currentRound = "1";
-        state.activeDataSchoolYear = nextYear;
-      } else if (!previousYear) {
-        state.activeDataSchoolYear = nextYear;
-      }
-    }
-
-    function handleSchoolYearChange() {
-      const nextYear = String($("#schoolYear").value || "").trim();
-      const previousYear = String(state.activeDataSchoolYear || "").trim();
-      if (previousYear && nextYear && Number(nextYear) > Number(previousYear)) {
-        const result = archiveCurrentAcademicYear(previousYear, nextYear);
-        status.style.color = result.skipped ? "#a44939" : "#287956";
-        status.textContent = `${previousYear}학년도 이력을 ${result.archived}개 과목 누적했습니다.` +
-          (result.skipped ? ` 학번이 없어 ${result.skipped}명은 자동 연결하지 못했습니다. 이수 이력 파일을 업로드하세요.` : "");
-      }
-      updateCertificateText();
-    }
-
-    async function handleHistoryWorkbook(file) {
-      if (!file) return;
-      try {
-        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("이수 이력 파일은 .xlsx 형식이어야 합니다.");
-        const sheets = await parseWorkbook(await file.arrayBuffer());
-        const rows = sheets[0]?.rows || [];
-        const compact = (value) => String(value ?? "").replace(/\s+/g, "");
-        const headerIndex = rows.findIndex((row) => {
-          const header = row.map(compact);
-          return header.some((value) => /^(학번|학생ID|학생식별번호)$/.test(value)) &&
-            header.some((value) => /학년도/.test(value)) &&
-            header.some((value) => /^(과목명|과목)$/.test(value));
-        });
-        if (headerIndex < 0) throw new Error("학번·학년도·과목명 머리글이 있는 이수 이력 양식인지 확인하세요.");
-        const header = rows[headerIndex].map(compact);
-        const find = (pattern) => header.findIndex((value) => pattern.test(value));
-        const columns = {
-          studentId: find(/^(학번|학생ID|학생식별번호)$/),
-          schoolYear: find(/학년도/),
-          grade: find(/^학년$/),
-          courseName: find(/^(과목명|과목)$/),
-          credit: find(/학점/),
-          area: find(/^(교과군|교과)$/),
-          semester: find(/학기/),
-          status: find(/이수여부|상태/)
-        };
-        let imported = 0;
-        for (const row of rows.slice(headerIndex + 1)) {
-          const studentId = String(row[columns.studentId] ?? "").trim();
-          const schoolYear = String(row[columns.schoolYear] ?? "").trim().replace(/학년도$/, "");
-          const grade = String(row[columns.grade] ?? "").trim().replace(/학년$/, "");
-          const courseName = String(row[columns.courseName] ?? "").trim();
-          if (!studentId && !schoolYear && !courseName) continue;
-          if (!studentId || !/^\d{4}$/.test(schoolYear) || !/^[1-3]$/.test(grade) || !courseName) {
-            throw new Error("이수 이력의 학번·4자리 학년도·1~3학년·과목명을 확인하세요.");
-          }
-          if (addHistoryRecord({
-            studentId, schoolYear, grade, courseName,
-            credit: Number(row[columns.credit]) || 0,
-            area: columns.area >= 0 ? String(row[columns.area] ?? "").trim() : "",
-            semester: columns.semester >= 0 ? String(row[columns.semester] ?? "").trim() : "",
-            status: columns.status >= 0 && /미이수|미완료/.test(String(row[columns.status] ?? "")) ? "incomplete" : "completed"
-          })) imported++;
-        }
-        status.style.color = "#287956";
-        status.textContent = `${file.name}에서 이수 이력 ${imported}개 과목을 추가했습니다.`;
-        renderPreview();
-        persistState();
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "이수 이력 파일을 처리하지 못했습니다.";
-      }
-    }
-
     function certificateMarkup(student, printMode = false) {
-      const history = studentHistory(student);
-      const completedHistory = history.filter((record) => record.status !== "incomplete");
       const groups = [];
       for (const course of student.selections) {
         const groupName = courseGroupLabel(course, student.grade);
@@ -2122,36 +1837,13 @@
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
               <td class="course-cell">${escapeHtml(course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
-      const historyBody = history.length
-        ? history.map((record) => `<tr>
-            <td>${escapeHtml(record.schoolYear)} · ${escapeHtml(record.grade)}학년</td>
-            <td>${escapeHtml(record.area || "이전 이수")}</td>
-            <td>${escapeHtml(record.courseName)}${record.semester ? ` (${escapeHtml(record.semester)})` : ""}</td>
-            <td>${Number(record.credit) || "—"}</td>
-            <td>${printMode ? (record.status === "incomplete" ? "미이수" : "이수") :
-              `<select class="history-status" data-history-key="${escapeHtml(historyRecordKey(record))}" aria-label="${escapeHtml(record.courseName)} 이수 상태">
-                <option value="completed"${record.status !== "incomplete" ? " selected" : ""}>이수</option>
-                <option value="incomplete"${record.status === "incomplete" ? " selected" : ""}>미이수</option>
-              </select>`}</td>
-          </tr>`).join("")
-        : `<tr><td colspan="5">${student.studentId ? "등록된 이전 이수 내역이 없습니다." : "학번이 없어 이전 이수 내역과 자동 연결할 수 없습니다."}</td></tr>`;
-      const historicalCredits = completedHistory.reduce((sum, course) => sum + (Number(course.credit) || 0), 0);
-      const currentCoreCredits = student.selections.reduce((sum, course) =>
+      const coreCredits = student.selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
-      const historicalCoreCredits = completedHistory.reduce((sum, course) =>
-        sum + (isCoreCourse({ area: course.area, category: course.area, name: course.courseName }) ? Number(course.credit) || 0 : 0), 0);
-      const totalCredits = historicalCredits + student.totalCredits;
-      const coreCredits = historicalCoreCredits + currentCoreCredits;
-      const corePercent = totalCredits ? Math.round(coreCredits / totalCredits * 100) : 0;
-      const additionalCoreCredits = Math.max(0, totalCredits - coreCredits * 2);
-      const coreLimitStatus = coreCredits * 2 > totalCredits
-        ? "현재 국·영·수 비율이 50% 권고를 초과했습니다."
-        : "현재 국·영·수 비율은 50% 권고 범위입니다.";
-      const gauge = `<div class="paper-credit-gauge" aria-label="총 이수 및 신청 ${totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>이전 이수 ${historicalCredits}학점 + 현재 신청 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+      const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
+      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
-        <div class="paper-credit-gauge-label${coreCredits * 2 > totalCredits ? " over-limit" : ""}"><span>${coreLimitStatus}</span><strong>추가 가능 ${additionalCoreCredits}학점</strong></div>
-      </div>`;
+      </div>` : "";
       return `<article class="${printMode ? "print-page" : "preview-paper"}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
@@ -2160,11 +1852,6 @@
           <table class="certificate-table">
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
             <tbody>${body}</tbody>
-          </table>
-          <h3 class="history-heading">이전 이수 내역</h3>
-          <table class="certificate-table history-table">
-            <thead><tr><th>학년도·학년</th><th>교과군</th><th>과목명</th><th>학점</th><th>상태</th></tr></thead>
-            <tbody>${historyBody}</tbody>
           </table>
           ${gauge}
           <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
@@ -2184,9 +1871,7 @@
       if (!student) {
         preview.className = "placeholder";
         preview.innerHTML = '<div class="placeholder-icon" aria-hidden="true">▤</div><strong>확인서 미리보기</strong><span>학생 목록에서 확인할 학생을 선택하세요.</span>';
-        const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
-        const gradeStudentCount = state.students.filter((item) => String(item.grade) === currentGrade).length;
-        $("#previewSubheading").textContent = `${gradeStudentCount}명의 확인서를 준비했습니다.`;
+        $("#previewSubheading").textContent = `${state.students.length}명의 확인서를 준비했습니다.`;
         $("#printSelected").disabled = true;
         $("#printAll").disabled = visibleStudents().length === 0;
         return;
@@ -2200,25 +1885,14 @@
 
     function renderSemesterClassifier() {
       const container = $("#semesterClassifier");
-      const targetGrade = ["2", "3"].includes(String(state.classifierTargetGrade))
-        ? String(state.classifierTargetGrade) : "2";
-      const currentGrade = targetGradeCurrentGrade(targetGrade);
-      for (const tab of $("#classifierGradeTabs")?.querySelectorAll?.("[data-classifier-grade]") || []) {
-        tab.setAttribute("aria-selected", String(tab.dataset.classifierGrade) === targetGrade ? "true" : "false");
-      }
-      const courses = coursesForCurrentGrade(currentGrade);
-      if (!courses.length) {
-        container.innerHTML = `<div class="aggregate-empty">${targetGrade}학년 과목 자료가 없습니다.</div>`;
+      if (!state.courses.length) {
+        container.innerHTML = "";
         return;
       }
-      const customNames = gradeGroupNames(targetGrade);
-      const customAndAssigned = [...new Set([
-        ...customNames,
-        ...courses.map((course) => normalizeGroupName(state.groupAssignments[String(course.column)]))
-      ])].filter((name) => name && name !== UNASSIGNED_GROUP);
+      const customAndAssigned = availableGroupNames(state.courses).filter((name) => name !== UNASSIGNED_GROUP);
       const groupNames = [UNASSIGNED_GROUP, ...customAndAssigned];
       const groupedCourses = new Map(groupNames.map((name) => [name, []]));
-      for (const course of courses) {
+      for (const course of state.courses) {
         const category = resolveCourseCategory(course);
         if (!groupedCourses.has(category)) groupedCourses.set(category, []);
         groupedCourses.get(category).push(course);
@@ -2228,7 +1902,7 @@
       const renderCards = (list) => list.length
         ? list.map((course) => {
           const selectedClass = selectedSet.has(String(course.column)) ? " selected" : "";
-          return `<div class="group-course-card${selectedClass}" draggable="true" data-drag-course-column="${course.column}" data-course-grade="${currentGrade}">
+          return `<div class="group-course-card${selectedClass}" draggable="true" data-drag-course-column="${course.column}">
             <span title="${escapeHtml(course.name)}">${escapeHtml(course.name)}</span>
             <span class="group-course-meta">${escapeHtml(course.credits || 0)}학점</span>
           </div>`;
@@ -2240,12 +1914,12 @@
         </div>
         <div class="group-manager">
           <div class="group-manager-form">
-            <input id="newGroupName" type="text" placeholder="${targetGrade}학년 새 이동수업 반 이름 입력">
+            <input id="newGroupName" type="text" placeholder="새 선택과목 그룹명 입력 (예: 융합탐구군)">
             <button class="button" type="button" data-action="add-group">그룹 추가</button>
           </div>
           <div class="group-chip-list">
-            ${customNames.length
-              ? customNames.map((name) =>
+            ${state.customGroupNames.length
+              ? state.customGroupNames.map((name) =>
                 `<span class="group-chip">${escapeHtml(name)}<button type="button" aria-label="${escapeHtml(name)} 그룹 삭제" data-action="remove-group" data-group-name="${escapeHtml(name)}">×</button></span>`).join("")
               : '<span class="group-chip-empty">추가된 사용자 그룹 없음</span>'}
           </div>
@@ -2273,21 +1947,9 @@
     }
 
     function renderAggregate() {
-      const targetGrade = ["2", "3"].includes(String(state.aggregateTargetGrade))
-        ? String(state.aggregateTargetGrade) : "2";
-      const currentGrade = targetGradeCurrentGrade(targetGrade);
-      $("#plannedClassCountLabel").textContent = `${targetGrade}학년 편제 학급수`;
-      for (const tab of $("#aggregateGradeTabs")?.querySelectorAll?.("[data-aggregate-grade]") || []) {
-        tab.setAttribute("aria-selected", String(tab.dataset.aggregateGrade) === targetGrade ? "true" : "false");
-      }
-      const students = state.students.filter((student) => String(student.grade) === currentGrade);
-      const courses = coursesForCurrentGrade(currentGrade);
-      const plannedClassInput = $("#plannedClassCount");
-      plannedClassInput.value = String(state.plannedClassCounts[targetGrade] ??
-        (students.length ? new Set(students.map((student) => student.classroom)).size : ""));
-      if (!students.length || !courses.length) {
+      if (!state.students.length || !state.courses.length) {
         $("#aggregateDescription").textContent = "학생별 신청 명단에서 과목별 인원을 계산했습니다.";
-        $("#aggregateContent").innerHTML = `<div class="aggregate-empty">${targetGrade}학년 자료가 없습니다. 해당 학년의 결과를 불러오세요.</div>`;
+        $("#aggregateContent").innerHTML = '<div class="aggregate-empty">학생별 신청 명단을 불러오면 집계표가 표시됩니다.</div>';
         $("#downloadAggregate").disabled = true;
         return;
       }
@@ -2300,8 +1962,8 @@
         return;
       }
       const aggregate = aggregateRecords(
-        students, courses, openingPercent, divisionPercent,
-        state.classOverrides, state.semesterAssignments, state.groupAssignments, state.plannedClassCounts
+        state.students, state.courses, openingPercent, divisionPercent,
+        state.classOverrides, state.semesterAssignments, state.groupAssignments
       );
       let atRiskCount = 0;
       const allCourses = aggregate.reports.flatMap((report) => report.semesters.flatMap((semester) =>
@@ -2343,10 +2005,10 @@
               const blanks = Array.from({ length: maxCourses - group.courses.length }, () => "<td></td>").join("");
               return `<tr><th class="aggregate-row-label">${label}</th>${values}${blanks}</tr>`;
             }).join("");
-            const groupCaption = group.choiceCount === null
-              ? group.category
-              : `${group.category} · ${group.choiceCount}과목 선택`;
-            return `<table class="aggregate-sheet-table"><caption>${escapeHtml(groupCaption)}</caption><tbody><tr><th class="aggregate-row-label">과목</th>${headerCells}${paddingCells}${totalCell}</tr>${metricRows}</tbody></table>`;
+            const riskCount = $("#aggregateContent").querySelectorAll(".aggregate-subject.at-risk").length;
+            const riskSummary = $("#aggregateContent").querySelector("[data-aggregate-risk-count]");
+            if (riskSummary) riskSummary.textContent = `${riskCount}과목`;
+            return `<table class="aggregate-sheet-table"><caption>${escapeHtml(group.category)}</caption><tbody><tr><th class="aggregate-row-label">과목</th>${headerCells}${paddingCells}${totalCell}</tr>${metricRows}</tbody></table>`;
           }).join("");
           return `<h3 class="aggregate-semester">${escapeHtml(semester.name)}</h3><div class="aggregate-sheet-wrap">${rows}</div>`;
         }).join("");
@@ -2363,10 +2025,8 @@
           ${semesterTables}
         </section>`;
       }).join("");
-      const riskSummary = $("#aggregateContent").querySelector("[data-aggregate-risk-count]");
-      if (riskSummary) riskSummary.textContent = `${atRiskCount}과목`;
       $("#aggregateDescription").textContent =
-        `${state.currentRound}차 · ${targetGrade}학년 · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 폐강 예정 ${atRiskCount}과목`;
+        `${state.currentRound}차 · ${aggregate.reports.length}개 학년 · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 폐강 예정 ${atRiskCount}과목`;
       $("#downloadAggregate").disabled = false;
     }
 
@@ -2409,15 +2069,8 @@
       description.textContent = `${round}차 결과 기준입니다. 개설기준과 자동 판정을 참고해 과목별 개설/폐강 여부를 검토하세요.`;
       const openingPercent = Number($("#openingPercent").value) || 90;
       const divisionPercent = Number($("#divisionPercent").value) || 110;
-      const currentGrade = targetGradeCurrentGrade(state.aggregateTargetGrade || "2");
-      const students = data.students.filter((student) => String(student.grade) === currentGrade);
-      if (!students.length) {
-        description.textContent = `${Number(currentGrade) + 1}학년 수강신청 데이터가 없습니다.`;
-        content.innerHTML = "";
-        return;
-      }
       const aggregate = aggregateRecords(
-        students, data.courses, openingPercent, divisionPercent,
+        data.students, data.courses, openingPercent, divisionPercent,
         data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}
       );
       const closures = state.roundClosures[round] || {};
@@ -2429,16 +2082,16 @@
             const key = `${summary.grade}:${course.column}`;
             const risk = course.enrollment < summary.openingLimit;
             const verdict = risk
-              ? '<span class="closure-verdict-risk">폐강 예정</span>'
-              : '<span class="closure-verdict-open">개설 가능</span>';
-            const confirmed = closures[key] || "";
+              ? '<span class="closure-verdict-risk">기준 미달</span>'
+              : '<span class="closure-verdict-open">기준 충족</span>';
+            const confirmed = Object.hasOwn(closures, key) ? closures[key] : risk ? "" : "open";
             return `<tr>
               <td class="closure-subject">${escapeHtml(course.name)}</td>
               <td>${escapeHtml(semester)}</td>
               <td>${course.enrollment}</td>
               <td>${summary.openingLimit.toFixed(2)}</td>
               <td>${verdict}</td>
-              <td><select class="closure-select" data-closure-round="${round}" data-closure-key="${escapeHtml(key)}" aria-label="${escapeHtml(course.name)} 개설/폐강 확정">
+              <td><select class="closure-select" data-closure-round="${round}" data-closure-key="${escapeHtml(key)}" aria-label="${escapeHtml(course.name)} 교사 최종 결정">
                 <option value=""${confirmed === "" ? " selected" : ""}>미정</option>
                 <option value="open"${confirmed === "open" ? " selected" : ""}>개설</option>
                 <option value="closed"${confirmed === "closed" ? " selected" : ""}>폐강</option>
@@ -2446,7 +2099,8 @@
             </tr>`;
           }).join("");
         return `<h3 class="closure-grade-heading">${Number(summary.grade) + 1}학년(현${summary.grade}학년) · 총 ${summary.students}명</h3>
-          <table class="closure-table"><thead><tr><th>과목</th><th>학기</th><th>신청 인원</th><th>개설기준</th><th>자동 판정</th><th>확정</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+          <p class="closure-decision-note">기준 판정은 참고 정보입니다. 개설 여부는 아래에서 교사가 최종 결정하세요.</p>
+          <table class="closure-table"><thead><tr><th>과목</th><th>학기</th><th>신청 인원</th><th>개설기준</th><th>기준 비교</th><th>교사 최종 결정</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
       }).join("");
     }
 
@@ -2514,7 +2168,6 @@
     function downloadRetakeList() {
       const { sourceRound, rows } = retakeTargets();
       if (!rows.length) return;
-      const nextRound = Number(sourceRound) + 1;
       const sheetRows = [
         ["학년", "반", "번호", "이름", "폐강 과목"],
         ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, courses.join(", ")])
@@ -2565,15 +2218,10 @@
         const type = context.selectionType || "";
         // 학년은 학기 열(1-1~3-2) 중 시수가 적힌 위치로 판별하고, 없으면 학년 열 문맥을 사용한다.
         const byGrade = new Map();
-        const subjectFill = curriculumCellFill(layout, context.rowIndex, columns.subject);
         columns.semesters.forEach((column, index) => {
           if (column < 0) return;
           const value = String(context.row[column] ?? "").trim();
-          // 시수가 비어 있어도 학기 칸에 직접 채운 색이 있으면 해당 학기 편성으로 보고 색상 그룹에 포함한다.
-          // 과목명 칸과 같은 색이면 행 전체 강조로 보고 제외한다.
-          const fill = value ? "" : curriculumCellFill(layout, context.rowIndex, column);
-          const colorOnly = Boolean(fill) && fill !== subjectFill;
-          if ((!value && !colorOnly) || /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
+          if (!value || /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
           const grade = Math.floor(index / 2) + 1;
           const sem = String((index % 2) + 1);
           if (/학년/.test(value)) {
@@ -2587,7 +2235,7 @@
           }
           if (!byGrade.has(grade)) byGrade.set(grade, { semesters: [], hours: [] });
           byGrade.get(grade).semesters.push(sem);
-          if (value) byGrade.get(grade).hours.push(value);
+          byGrade.get(grade).hours.push(value);
         });
         if (!byGrade.size && !columns.semesters.some((column) => column >= 0)) {
           const fallback = context.grade.match(/[123]/)?.[0];
@@ -2667,7 +2315,109 @@
       if (typeof renderCourseGroups === "function") renderCourseGroups();
     }
 
-    // 신청 결과를 편제표의 학년·학기별 과목과 연결한다.
+    // 학생용 수강신청 웹페이지(독립 실행 HTML)를 만든다.
+    function buildApplicationPageHtml(subjects) {
+      const schoolName = String($("#schoolName").value || "").trim();
+      const schoolYear = String($("#schoolYear").value || "").trim();
+      const dataJson = JSON.stringify(subjects).replace(/</g, "\\u003c");
+      return [
+        "<!DOCTYPE html>",
+        '<html lang="ko"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        `<title>수강신청 - ${xmlEscape(schoolName)}</title>`,
+        "<style>",
+        "body{margin:0;background:#f2f5fb;font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#1f2a44;}",
+        ".wrap{max-width:720px;margin:0 auto;padding:24px 16px 60px;}",
+        "h1{font-size:22px;margin:0 0 4px;}",
+        ".school{color:#5f6d86;font-size:13px;margin:0 0 18px;}",
+        ".id-panel{background:#fff;border:1px solid #d7deed;border-radius:12px;padding:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:end;}",
+        ".field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#50607b;}",
+        ".field input,.field select{padding:8px;border:1px solid #c9d4ea;border-radius:8px;font-size:14px;width:90px;}",
+        ".field input[name=name]{width:120px;}",
+        "#targetInfo{font-size:14px;font-weight:700;color:#2f4f9f;margin:18px 0 8px;}",
+        ".semester{margin:16px 0 6px;font-size:15px;font-weight:700;}",
+        ".area{margin:10px 0 4px;font-size:13px;font-weight:700;color:#50607b;}",
+        ".course{display:flex;align-items:center;gap:10px;min-height:48px;background:#fff;border:1px solid #d7dfed;border-radius:10px;padding:10px 12px;margin-bottom:7px;font-size:14px;cursor:pointer;}",
+        ".course:has(input:checked){border:2px solid #3b68e8;padding:9px 11px;background:#eef3ff;}",
+        ".course input{width:20px;height:20px;accent-color:#3b68e8;}",
+        ".meta{margin-left:auto;font-size:11px;color:#7a879e;}",
+        ".action-bar{position:sticky;bottom:0;margin:14px -4px -4px;padding:12px;border:1px solid #c8d6f7;border-radius:12px;background:#fffffff2;box-shadow:0 -6px 18px #1b31501c;backdrop-filter:blur(10px);}",
+        ".summary{display:grid;gap:7px;font-weight:700;font-size:14px;color:#2f4f9f;}",
+        ".summary-values{display:flex;justify-content:space-between;gap:8px;}",
+        ".summary-values strong{color:#5b45b0;}",
+        ".gauge{height:8px;overflow:hidden;border-radius:99px;background:#e4eaf5;}",
+        ".gauge span{display:block;height:100%;border-radius:inherit;background:#6c55c7;}",
+        "#submitBtn{width:100%;min-height:48px;margin-top:10px;padding:14px;border:0;border-radius:10px;background:#2f4f9f;color:#fff;font-size:16px;font-weight:700;cursor:pointer;}",
+        "@media(max-width:480px){.wrap{padding:18px 12px calc(90px + env(safe-area-inset-bottom));}.id-panel{gap:8px}.field{flex:1 1 42%}.field input,.field select{width:100%}.course{font-size:14px}.action-bar{bottom:env(safe-area-inset-bottom);}}",
+        ".note{margin-top:10px;font-size:12px;color:#60708a;line-height:1.6;}",
+        ".error{color:#b3261e;font-size:13px;font-weight:700;}",
+        "</style></head><body>",
+        '<main class="wrap">',
+        `<h1>${xmlEscape(schoolYear)}학년도 수강신청</h1>`,
+        `<p class="school">${xmlEscape(schoolName)}</p>`,
+        '<section class="id-panel">',
+        '<label class="field">현재 학년<select id="grade"><option value="1">1학년</option><option value="2">2학년</option></select></label>',
+        '<label class="field">반<input id="classroom" type="number" min="1" max="30"></label>',
+        '<label class="field">번호<input id="number" type="number" min="1" max="99"></label>',
+        '<label class="field">이름<input id="name" type="text" maxlength="20"></label>',
+        "</section>",
+        '<p id="targetInfo"></p>',
+        '<div id="courseList"></div>',
+        '<div class="action-bar"><div class="summary" id="summary"><div class="summary-values"><span id="summaryTotal">선택한 과목: 0개 · 0학점</span><strong id="summaryCore">국·영·수 0%</strong></div><div class="gauge" role="progressbar" aria-label="신청 학점 중 국어·영어·수학 과목 비율" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="summaryGauge"></span></div></div>',
+        '<button id="submitBtn" type="button">신청 파일 저장</button></div>',
+        '<p class="note">저장된 신청 파일(.json)을 담임선생님께 제출하세요. 이 페이지는 인터넷 연결 없이도 동작하며, 입력한 내용은 파일로만 저장됩니다.</p>',
+        '<p class="error" id="errorMsg"></p>',
+        "</main>",
+        "<script>",
+        `var COURSES = ${dataJson};`,
+        "var gradeSel=document.getElementById('grade');",
+        "function targetGrade(){return String(Number(gradeSel.value)+1);}",
+        "function isCore(c){var a=String(c.area||c.category||'').replace(/\\s+/g,'');if(/국어|영어|수학/.test(a))return true;return /^(국어|화법과작문|독서와작문|문학|언어와매체|영어|영어회화|영어독해와작문|수학|대수|미적분|확률과통계|기하|경제수학|인공지능수학)/.test(String(c.subject||'').replace(/\\s+/g,''));}",
+        "function esc(v){return String(v==null?'':v).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}",
+        "function render(){",
+        "var tg=targetGrade();var list=COURSES[tg]||[];",
+        "document.getElementById('targetInfo').textContent='신청 대상: '+tg+'학년 과목 ('+list.length+'개)';",
+        "var semesters={};list.forEach(function(c){var s=c.semester||'0';if(!semesters[s])semesters[s]=[];semesters[s].push(c);});",
+        "var html='';Object.keys(semesters).sort().forEach(function(s){",
+        "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
+        "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
+        "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
+        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
+        "});});",
+        "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
+        "updateSummary();",
+        "document.querySelectorAll('#courseList input[type=checkbox]').forEach(function(box){box.addEventListener('change',updateSummary);});",
+        "}",
+        "function selectedCourses(){return Array.prototype.slice.call(document.querySelectorAll('#courseList input:checked'));}",
+        "function updateSummary(){",
+        "var sel=selectedCourses();var credits=sel.reduce(function(t,box){return t+(Number(box.dataset.credit)||0);},0);",
+        "var core=sel.reduce(function(t,box){return t+(box.dataset.core==='1'?(Number(box.dataset.credit)||0):0);},0);var percent=credits?Math.round(core/credits*100):0;",
+        "document.getElementById('summaryTotal').textContent='선택한 과목: '+sel.length+'개 · '+credits+'학점';",
+        "document.getElementById('summaryCore').textContent='국·영·수 '+core+'학점 · '+percent+'%';",
+        "var gauge=document.getElementById('summaryGauge');gauge.style.width=percent+'%';gauge.parentElement.setAttribute('aria-valuenow',String(percent));",
+        "}",
+        "gradeSel.addEventListener('change',render);render();",
+        "document.getElementById('submitBtn').addEventListener('click',function(){",
+        "var err=document.getElementById('errorMsg');err.textContent='';",
+        "var classroom=document.getElementById('classroom').value.trim();",
+        "var number=document.getElementById('number').value.trim();",
+        "var name=document.getElementById('name').value.trim();",
+        "var sel=selectedCourses().map(function(box){return box.value;});",
+        "if(!classroom||!number||!name){err.textContent='반, 번호, 이름을 모두 입력하세요.';return;}",
+        "if(!sel.length){err.textContent='신청할 과목을 1개 이상 선택하세요.';return;}",
+        "var payload={type:'course-application',grade:gradeSel.value,classroom:classroom,number:number,name:name,selections:sel};",
+        "var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});",
+        "var a=document.createElement('a');a.href=URL.createObjectURL(blob);",
+        "a.download='수강신청_'+gradeSel.value+'학년_'+classroom+'반_'+number+'번_'+name+'.json';a.click();",
+        "setTimeout(function(){URL.revokeObjectURL(a.href);},1000);",
+        "err.textContent='';",
+        "document.getElementById('summaryTotal').textContent='신청 파일을 저장했습니다. 파일을 담임선생님께 제출하세요.';",
+        "});",
+        "<\/script></body></html>"
+      ].join("\n");
+    }
+
+    // 학생 신청 파일(JSON)들을 명단(학생·과목 구조)으로 합친다.
     function mergeApplications(entries, applicationSubjects = null) {
       const subjects = applicationSubjects || collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
       const nameCount = new Map();
@@ -2731,7 +2481,6 @@
         }
         students.push({
           id: `app-${grade}-${classroom}-${number}-${name}`,
-          studentId: String(entry?.studentId || entry?.학번 || "").trim(),
           grade, classroom, number, name,
           selections: picked,
           totalCredits: picked.reduce((total, course) => total + (course.credits || 0), 0)
@@ -2741,6 +2490,25 @@
         Number(a.grade) - Number(b.grade) || Number(a.classroom) - Number(b.classroom) ||
         Number(a.number) - Number(b.number) || a.name.localeCompare(b.name, "ko"));
       return { students, courses, errors };
+    }
+
+    function downloadApplicationForm() {
+      const subjects = selectedApplicationSubjects();
+      const total = subjects ? subjects["1"].length + subjects["2"].length + subjects["3"].length : 0;
+      if (!total) {
+        status.style.color = "#a44939";
+        status.textContent = "1단계에서 편제표를 먼저 불러오세요. 선택과목을 찾지 못했습니다.";
+        return;
+      }
+      const html = buildApplicationPageHtml(subjects);
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+      link.href = url;
+      link.download = "수강신청_양식.html";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      status.style.color = "#287956";
+      status.textContent = `학생용 신청 양식을 저장했습니다. (선택과목 ${total}개)`;
     }
 
     function parseApplicationRoster(sheets) {
@@ -2758,7 +2526,6 @@
         const classroomColumn = header.indexOf("반");
         const numberColumn = header.findIndex((value) => /^(번호|출석번호)$/.test(value));
         const nameColumn = header.findIndex((value) => /^(이름|성명|학생명)$/.test(value));
-        const studentIdColumn = header.findIndex((value) => /^(학번|학생ID|학생식별번호)$/.test(value));
         const sheetGrade = String(sheet.name).match(/([123])\s*학년/)?.[1] || "";
         for (let index = headerIndex + 1; index < sheet.rows.length; index++) {
           const row = sheet.rows[index];
@@ -2774,12 +2541,20 @@
           const identity = `${grade}:${classroom}:${number}`;
           if (identities.has(identity)) throw new Error(`${location}: 학년·반·번호가 중복됩니다 (${identity}).`);
           identities.add(identity);
-          const studentId = studentIdColumn >= 0 ? String(row[studentIdColumn] ?? "").trim() : "";
-          students.push({ ...(studentId ? { studentId } : {}), grade, classroom, number, name });
+          students.push({ grade, classroom, number, name });
         }
       }
       if (!students.length) throw new Error("학생 명렬에서 학년·반·번호·이름 머리글과 학생을 찾지 못했습니다.");
       return students;
+    }
+
+    function downloadTextFile(text, filename, type) {
+      const url = URL.createObjectURL(new Blob([text], { type }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     function downloadRowsXlsx(rows, filename) {
@@ -2817,6 +2592,17 @@
       return url.href;
     }
 
+    function buildSchoolApplicationLink(serverUrl, pageUrl) {
+      const endpoint = normalizeApplicationServerUrl(serverUrl);
+      const page = new URL(pageUrl);
+      if (page.protocol !== "https:" && page.protocol !== "http:") {
+        throw new Error("학생에게 배포할 링크는 게시된 웹사이트에서 만들어 주세요. 로컬 파일 주소는 배포할 수 없습니다.");
+      }
+      page.search = "";
+      page.hash = new URLSearchParams({ apply: endpoint }).toString();
+      return page.href;
+    }
+
     function showStudentApplicationEntry() {
       if (window.location.hash === "#student" || new URLSearchParams(window.location.hash.slice(1)).has("event")) {
         $(".workspace").classList.add("hidden");
@@ -2843,14 +2629,40 @@
       return true;
     }
 
+    async function handleApplicationRoster(file) {
+      if (!file) return;
+      try {
+        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식으로 선택하세요.");
+        const subjects = selectedApplicationSubjects();
+        if (!subjects || !subjects["2"].length && !subjects["3"].length) {
+          throw new Error("1단계 편제표의 학생선택교육과정에 2·3학년 과목이 편제되어 있는지 확인하세요.");
+        }
+        const round = state.currentRound;
+        const schoolName = String($("#schoolName").value || "").trim();
+        const schoolYear = String($("#schoolYear").value || "").trim();
+        const roster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
+        for (const student of roster) {
+          if (!subjects[String(Number(student.grade) + 1)].length) {
+            throw new Error(`현재 ${student.grade}학년이 신청할 ${Number(student.grade) + 1}학년 학생선택교육과정 과목이 없습니다. 편제표의 교육과정 구분과 학기 시수를 확인하세요.`);
+          }
+        }
+        const setup = { type: "course-application-setup", round, schoolName, schoolYear, subjects, roster };
+        downloadTextFile(JSON.stringify(setup, null, 2), "온라인_수강신청_설정.json", "application/json");
+        status.style.color = "#287956";
+        status.textContent = `${round}차 온라인 신청 설정(${roster.length}명)을 저장했습니다. Apps Script 관리자 페이지에 업로드하세요. 기존 신청 결과는 변경하지 않았습니다.`;
+      } catch (error) {
+        status.style.color = "#a44939";
+        status.textContent = error instanceof Error ? error.message : "학생 명렬을 처리하지 못했습니다.";
+      }
+    }
+
+    // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
     function applyCloudApplicationResults(round, entries, subjects) {
       round = String(round);
       if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
-      prepareAcademicYearImport();
       const merged = mergeApplications(entries, subjects);
       if (merged.errors.length) throw new Error(`집계표 연동 실패: ${merged.errors[0]}`);
       state.rounds ||= {"1":null};
-      state.activeDataSchoolYear = String($("#schoolYear").value || "");
       state.rounds[round] ||= null;
       state.roundClosures ||= {};
       state.roundClosures[round] ||= {};
@@ -2862,10 +2674,6 @@
         semesterAssignments: previous?.semesterAssignments || {},
         groupAssignments: previous?.groupAssignments || {},
         customGroupNames: previous?.customGroupNames || [],
-        customGroupNamesByGrade: normalizeGradeGroupNames(
-          previous?.customGroupNamesByGrade, previous?.customGroupNames
-        ),
-        dataSchoolYear: state.activeDataSchoolYear,
         fileName: `온라인 자동 연동 ${merged.students.length}명`
       };
       state.rounds[round] = data;
@@ -2875,22 +2683,9 @@
         state.classOverrides = data.classOverrides;
         state.semesterAssignments = {...data.semesterAssignments};
         state.groupAssignments = {...data.groupAssignments};
-        state.customGroupNames = [];
-        state.customGroupNamesByGrade = normalizeGradeGroupNames(
-          data.customGroupNamesByGrade, data.customGroupNames
-        );
-        const loadedGrades = [...new Set(data.students.map((student) => String(student.grade)))];
-        if (loadedGrades.length === 1) {
-          state.certificateTargetGrade = String(Number(loadedGrades[0]) + 1);
-          state.selectedId = data.students[0]?.id || null;
-        }
+        state.customGroupNames = [...data.customGroupNames];
         state.fileName = data.fileName;
-        if (!state.students.some((student) =>
-          student.id === state.selectedId &&
-          String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade || "2"))) {
-          state.selectedId = state.students.find((student) =>
-            String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade || "2"))?.id || null;
-        }
+        if (!state.students.some((student) => student.id === state.selectedId)) state.selectedId = state.students[0]?.id || null;
         $("#fileName").textContent = state.fileName;
         $("#searchInput").disabled = !state.students.length;
         $("#classFilter").disabled = !state.students.length;
@@ -2904,8 +2699,41 @@
       persistState();
     }
 
+    function applyMergedApplications(entries, sourceLabel) {
+      const merged = mergeApplications(entries);
+      if (!merged.students.length) {
+        status.style.color = "#a44939";
+        status.textContent = `명단을 만들지 못했습니다. ${merged.errors[0] || ""}`;
+        return;
+      }
+      const unclassified = classifyApplicationRecords(merged);
+      state.students = merged.students;
+      state.courses = merged.courses;
+      state.classOverrides = {};
+      state.semesterAssignments = {};
+      state.groupAssignments = {};
+      state.customGroupNames = [];
+      state.selectedCourseColumns = [];
+      state.lastSelectedCourseColumn = null;
+      state.fileName = `${sourceLabel} ${merged.students.length}명`;
+      state.selectedId = merged.students[0].id;
+      $("#round").value = `${state.currentRound}차`;
+      applyClassFilterOptions(merged.students);
+      $("#searchInput").disabled = false;
+      $("#classFilter").disabled = false;
+      renderRoster();
+      renderPreview();
+      renderSemesterClassifier();
+      renderAggregate();
+      renderRoundStatus();
+      persistState();
+      status.style.color = merged.errors.length ? "#a44939" : "#287956";
+      status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
+        (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
+        (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
+    }
+
     function storeDeveloperGradeResults(data, sourceLabel, grade) {
-      prepareAcademicYearImport();
       grade = String(grade);
       const students = data.students.filter((student) => String(student.grade) === grade);
       if (!students.length) throw new Error(`현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
@@ -2917,8 +2745,7 @@
         course.applicationCurrentGrade ? course.applicationCurrentGrade !== grade : otherColumns.has(course.column));
       for (const course of otherCourses) otherColumns.add(course.column);
       const occupied = new Set([...otherCourses.map((course) => String(course.column)),
-        ...Object.keys(state.classOverrides || {}).map((key) => key.includes(":") ? key.slice(key.indexOf(":") + 1) : key),
-        ...Object.keys(state.semesterAssignments || {}),
+        ...Object.keys(state.classOverrides || {}), ...Object.keys(state.semesterAssignments || {}),
         ...Object.keys(state.groupAssignments || {})]);
       const remapped = new Map();
       courses.forEach((course, index) => {
@@ -2933,23 +2760,11 @@
       state.students = [...otherStudents, ...nextStudents].sort((a,b) =>
         Number(a.grade)-Number(b.grade) || Number(a.classroom)-Number(b.classroom) || Number(a.number)-Number(b.number));
       state.courses = [...otherCourses, ...remapped.values()];
-      state.certificateTargetGrade = String(Number(grade) + 1);
-      $("#searchInput").value = "";
-      $("#classFilter").value = "";
-      state.classOverrides = Object.fromEntries(Object.entries(state.classOverrides || {}).filter(([key]) => {
-        const column = key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
-        return otherColumns.has(column);
-      }));
-      for (const key of ["semesterAssignments", "groupAssignments"]) {
+      for (const key of ["classOverrides", "semesterAssignments", "groupAssignments"]) {
         state[key] = Object.fromEntries(Object.entries(state[key] || {}).filter(([column]) => otherColumns.has(column)));
       }
-      state.customGroupNamesByGrade = normalizeGradeGroupNames(
-        state.customGroupNamesByGrade, state.customGroupNames
-      );
-      state.customGroupNames = [];
-      state.customGroupNamesByGrade[String(Number(grade) + 1)] = [];
+      state.customGroupNames ||= [];
       state.rounds ||= {"1":null};
-      state.activeDataSchoolYear = String($("#schoolYear").value || "");
       const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
       state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
       state.fileName = Object.entries(gradeFiles).map(([g,name]) => `${g}학년: ${name}`).join(" / ");
@@ -2970,6 +2785,110 @@
       renderRoundStatus();
     }
 
+    async function handleApplicationFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      const entries = [];
+      const failures = [];
+      for (const file of files) {
+        try {
+          const parsed = JSON.parse(await file.text());
+          if (parsed?.type === "course-application-results") {
+            if (String(parsed.round) !== state.currentRound) {
+              throw new Error(`${file.name}: ${parsed.round}차 결과입니다. 해당 차수로 전환한 뒤 다시 불러오세요.`);
+            }
+            if (!Array.isArray(parsed.entries)) throw new Error(`${file.name}: 신청 결과 형식이 잘못되었습니다.`);
+            entries.push(...parsed.entries);
+          }
+          else if (parsed && (parsed.type === "course-application" || Array.isArray(parsed.selections))) entries.push(parsed);
+          else failures.push(file.name);
+        } catch (error) {
+          failures.push(`${file.name}: ${error instanceof Error ? error.message : "파일 읽기 실패"}`);
+        }
+      }
+      if (!entries.length) {
+        status.style.color = "#a44939";
+        status.textContent = failures.length
+          ? `읽을 수 있는 신청 파일이 없습니다. ${failures[0]}`
+          : "신청 결과가 비어 있습니다. 학생 신청이 저장된 결과 JSON을 선택하세요.";
+        return;
+      }
+      applyMergedApplications(entries, "온라인 신청 취합");
+      if (failures.length) {
+        status.style.color = "#a44939";
+        status.textContent += ` 읽지 못한 파일 ${failures.length}개 (${failures[0]}).`;
+      }
+    }
+
+    // 구글폼을 자동 생성하는 Google Apps Script 코드를 만든다.
+    function buildAppsScriptCode(subjects) {
+      const schoolName = String($("#schoolName").value || "").trim();
+      const schoolYear = String($("#schoolYear").value || "").trim();
+      const escapeCode = (value) => String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const dataJson = JSON.stringify(subjects).replace(/</g, "\\u003c");
+      const lines = [
+        "// 이 코드는 '교육과정 편성 프로그램'에서 생성했습니다.",
+        "// 사용법: script.google.com → 새 프로젝트 → 이 코드 전체 붙여넣기 → 저장 → 실행(▶) → 권한 승인",
+        "// 실행 로그에 설문 주소와 응답 스프레드시트 주소가 표시됩니다.",
+        "// 학교마다 관리자가 각자의 구글 계정으로 실행하면 그 학교만의 폼·응답 시트가 만들어지고,",
+        "// 학생에게는 실행 로그의 설문 주소만 공유하면 됩니다. 응답 시트는 실행한 관리자만 볼 수 있습니다.",
+        "",
+        "var CONFIG = {",
+        "  requireSchoolLogin: false, // true: 학교 구글 계정(Workspace)으로 로그인한 학생만 응답 가능",
+        "  collectEmail: false,       // true: 응답자 이메일을 함께 수집(로그인 제한과 함께 사용 권장)",
+        "  adminEmails: []            // 응답 시트를 함께 관리할 다른 관리자 이메일. 예: ['teacher@school.kr']",
+        "};",
+        "",
+        "function createCourseApplicationForm() {",
+        `  var SUBJECTS = ${dataJson};`,
+        `  var form = FormApp.create('${escapeCode(schoolYear)}학년도 수강신청 (${escapeCode(schoolName)})');`,
+        "  form.setDescription('현재 학년 기준으로 다음 학년에 들을 과목을 선택하세요. 제출은 1회만 가능하니 신중하게 선택하세요.');",
+        "  form.setLimitOneResponsePerUser(false);",
+        "  if (CONFIG.requireSchoolLogin) form.setRequireLogin(true);",
+        "  if (CONFIG.collectEmail) form.setCollectEmail(true);",
+        "  var gradeItem = form.addMultipleChoiceItem().setTitle('현재 학년').setRequired(true);",
+        "  form.addTextItem().setTitle('반').setRequired(true);",
+        "  form.addTextItem().setTitle('번호').setRequired(true);",
+        "  form.addTextItem().setTitle('이름').setRequired(true);",
+        "  var pages = {};",
+        "  var previousPage = null;",
+        "  ['2', '3'].forEach(function (grade) {",
+        "    var courses = SUBJECTS[grade] || [];",
+        "    if (!courses.length) return;",
+        "    var page = form.addPageBreakItem().setTitle(grade + '학년 선택과목');",
+        "    if (previousPage) page.setGoToPage(FormApp.PageNavigationType.SUBMIT);",
+        "    previousPage = page;",
+        "    var bySemester = {};",
+        "    courses.forEach(function (course) {",
+        "      var key = course.semester || '0';",
+        "      if (!bySemester[key]) bySemester[key] = [];",
+        "      bySemester[key].push(course);",
+        "    });",
+        "    Object.keys(bySemester).sort().forEach(function (semester) {",
+        "      var names = bySemester[semester].map(function (course) { var classification = String(course.type || '').replace(/선택$/, ''); return course.subject + (classification ? '(' + classification + ')' : ''); });",
+        "      var title = grade + '학년 ' + (semester === '0' ? '학기 미정' : semester + '학기') + ' 선택과목';",
+        "      form.addCheckboxItem().setTitle(title).setChoiceValues(names)",
+        "        .setHelpText('이 학기에 들을 과목을 모두 선택하세요. (중복 선택 가능)');",
+        "    });",
+        "    pages[grade] = page;",
+        "  });",
+        "  var choices = [];",
+        "  if (pages['2']) choices.push(gradeItem.createChoice('1학년', pages['2']));",
+        "  if (pages['3']) choices.push(gradeItem.createChoice('2학년', pages['3']));",
+        "  if (!choices.length) throw new Error('신청할 수 있는 2·3학년 과목이 없습니다.');",
+        "  gradeItem.setChoices(choices);",
+        `  var sheet = SpreadsheetApp.create('수강신청 응답 (${escapeCode(schoolName)})');`,
+        "  if (CONFIG.adminEmails.length) sheet.addEditors(CONFIG.adminEmails);",
+        "  form.setDestination(FormApp.DestinationType.SPREADSHEET, sheet.getId());",
+        "  Logger.log('설문 주소: ' + form.getPublishedUrl());",
+        "  Logger.log('응답 스프레드시트: ' + sheet.getUrl());",
+        "}",
+        ""
+      ];
+      return lines.join("\n");
+    }
+
+    // 구글폼 체크박스 응답("과목1, 과목2")을 알려진 과목명 목록으로 분할한다. 과목명에 쉼표가 있어도 동작한다.
     function splitGoogleFormSelections(text, knownNames, strict = false) {
       const found = [];
       let rest = String(text ?? "");
@@ -2992,6 +2911,70 @@
     }
 
     // 구글폼 응답 시트 행들을 신청 항목 배열로 변환한다.
+    function parseGoogleFormsRows(rows, subjects) {
+      const headerIndex = rows.findIndex((row) =>
+        (row || []).some((value) => /이름|성명/.test(String(value ?? ""))) &&
+        (row || []).some((value) => /학년/.test(String(value ?? ""))));
+      if (headerIndex < 0) throw new Error("구글폼 응답 시트에서 머리글 행(학년/이름)을 찾지 못했습니다.");
+      const header = rows[headerIndex].map((value) => String(value ?? "").trim());
+      const findColumn = (pattern) => header.findIndex((label) => pattern.test(label));
+      const gradeColumn = findColumn(/학년/);
+      const classroomColumn = findColumn(/^반$|^\s*반\s*/);
+      const numberColumn = findColumn(/번호/);
+      const nameColumn = findColumn(/이름|성명/);
+      if (gradeColumn < 0 || nameColumn < 0) throw new Error("구글폼 응답 시트에 학년/이름 열이 없습니다.");
+      // '2학년 1학기 선택과목' 같은 체크박스 질문 열을 학년별로 모은다.
+      const questionColumns = header
+        .map((label, column) => ({ label, column, grade: label.match(/^([23])\s*학년/)?.[1] || "" }))
+        .filter((item) => item.grade && item.column > nameColumn);
+      const entries = [];
+      for (const row of rows.slice(headerIndex + 1)) {
+        const grade = String(row?.[gradeColumn] ?? "").match(/[12]/)?.[0] || "";
+        const name = String(row?.[nameColumn] ?? "").trim();
+        if (!grade || !name) continue;
+        const targetGrade = String(Number(grade) + 1);
+        const subjectByLabel = new Map();
+        for (const course of subjects?.[targetGrade] || []) {
+          subjectByLabel.set(course.subject, course.subject);
+          subjectByLabel.set(applicationCourseLabel(course), course.subject);
+        }
+        const knownNames = new Set(subjectByLabel.keys());
+        const selections = [];
+        for (const item of questionColumns) {
+          if (item.grade !== targetGrade) continue;
+          selections.push(...splitGoogleFormSelections(row[item.column], knownNames).map((label) => subjectByLabel.get(label)));
+        }
+        entries.push({
+          type: "course-application",
+          grade,
+          classroom: String(row?.[classroomColumn] ?? "").trim(),
+          number: String(row?.[numberColumn] ?? "").trim(),
+          name,
+          selections
+        });
+      }
+      return entries;
+    }
+
+    async function handleGoogleFormsFile(file) {
+      if (!file) return;
+      status.textContent = "";
+      try {
+        const sheets = await parseWorkbook(await file.arrayBuffer());
+        const subjects = collectApplicationSubjects({ includeExcluded: true });
+        const entries = parseGoogleFormsRows(sheets[0].rows, subjects);
+        if (!entries.length) {
+          status.style.color = "#a44939";
+          status.textContent = "응답 시트에서 학생 응답을 찾지 못했습니다.";
+          return;
+        }
+        applyMergedApplications(entries, "구글폼 응답 취합");
+      } catch (error) {
+        status.style.color = "#a44939";
+        status.textContent = error instanceof Error ? error.message : "구글폼 응답 파일을 처리하지 못했습니다.";
+      }
+    }
+
     function xmlEscape(value) {
       return String(value ?? "").replace(/[<>&'"]/g, (character) => ({
         "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;"
@@ -3063,7 +3046,7 @@
         merge(0, row, 1, row);
 
           const courses = semester.groups.flatMap((group) => group.courses);
-          const semesterTotal = semester.groups.reduce((total, group) => total + group.totalClasses, 0);
+          const semesterTotal = courses.reduce((total, course) => total + course.classCount, 0);
           const blocks = [];
           for (let index = 0; index < courses.length; index += BLOCK_SIZE) {
             blocks.push(courses.slice(index, index + BLOCK_SIZE));
@@ -3217,12 +3200,9 @@
     function buildAggregateXlsxFiles() {
       const openingPercent = Number($("#openingPercent").value);
       const divisionPercent = Number($("#divisionPercent").value);
-      const currentGrade = targetGradeCurrentGrade(state.aggregateTargetGrade || "2");
-      const students = state.students.filter((student) => String(student.grade) === currentGrade);
-      const courses = coursesForCurrentGrade(currentGrade);
       const aggregate = aggregateRecords(
-        students, courses, openingPercent, divisionPercent,
-        state.classOverrides, state.semesterAssignments, state.groupAssignments, state.plannedClassCounts
+        state.students, state.courses, openingPercent, divisionPercent,
+        state.classOverrides, state.semesterAssignments, state.groupAssignments
       );
       const sheets = aggregate.reports.map((report) => ({
         name: `${Number(report.summary.grade) + 1}학년(현${report.summary.grade}학년)`,
@@ -3255,13 +3235,6 @@
       link.download = "과목별_수강신청_집계표.xlsx";
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
-
-    function downloadHistoryTemplate() {
-      downloadRowsXlsx([
-        ["학번", "학년도", "학년", "과목명", "학점", "교과군", "학기", "이수여부"],
-        ["20260001", "2026", "1", "예시 과목", "3", "국어", "1-1", "이수"]
-      ], "학생별_이수이력_양식.xlsx");
     }
 
     function updateCertificateText() {
@@ -3305,7 +3278,6 @@
             if (!gradeRows.length) throw new Error(`현재 ${uploadGrade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
             const entries = gradeRows.map((row) => ({
               grade:String(row[1]), classroom:String(row[2]), number:String(row[3]), name:String(row[4]),
-              studentId:String(row[6] ?? "").trim(),
               selections: splitGoogleFormSelections(row[5], new Set([
                 ...(subjects?.[String(Number(row[1])+1)] || []).map((course) => course.subject),
                 ...(subjects?.[String(Number(row[1])+1)] || []).flatMap((course) =>
@@ -3548,9 +3520,7 @@
       const nextPlan = [...state.curriculumPlan];
       nextPlan.splice(planIndex > 0 ? planIndex : state.curriculumPlan.length, 0, planRow);
       state.curriculumPlan = nextPlan;
-      syncCurriculumPlanYearSnapshot();
       state.curriculumImportedLayout = nextLayout;
-      scheduleCurriculumLayoutPersistence();
       state.curriculumMutationRevision += 1;
       syncCurriculumTemplateRows();
       renderCurriculumStep();
@@ -3651,7 +3621,6 @@
         : layout.rows.length;
       const nextLayout = insertImportedPlanLayoutRow(layout, insertionRow, []);
       state.curriculumImportedLayout = nextLayout;
-      scheduleCurriculumLayoutPersistence();
       state.curriculumSelectedRow = insertionRow;
       state.curriculumMutationRevision += 1;
       renderCurriculumStep();
@@ -3823,19 +3792,16 @@
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
           importedLayout.archiveId = await storeCurriculumArchive(reader.result);
-          await storeCurriculumLayout(importedLayout);
-          curriculumLayoutStoredId = importedLayout.archiveId;
           if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
           recordCurriculumUndo();
           state.curriculumMutationRevision += 1;
           state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
           state.curriculumPlan = plan;
-          syncCurriculumPlanYearSnapshot();
           state.curriculumTemplateRows = plan.map((row) => normalizeCurriculumPlanRow(row));
           state.curriculumPlanFileName = file.name;
           state.curriculumImportedLayout = importedLayout;
           renderCurriculumStep();
-          if (!persistState()) throw new Error("브라우저 저장 공간이 부족해 편제표를 저장하지 못했습니다.");
+          persistState();
           status.style.color = plan.length ? "#287956" : "#a44939";
           status.textContent = plan.length
             ? `편제표 ${plan.length}개 과목을 불러와 반영했습니다.`
@@ -4014,7 +3980,6 @@
       state.curriculumImportedLayout.rows[rowIndex] = state.curriculumImportedLayout.rows[rowIndex] || [];
       state.curriculumImportedLayout.rows[rowIndex][columnIndexValue] = cell.innerText.replace(/\r\n?/g, "\n");
       if (state.curriculumImportedLayout.formulas) delete state.curriculumImportedLayout.formulas[`${rowIndex}:${columnIndexValue}`];
-      scheduleCurriculumLayoutPersistence();
       try {
         recalculatePlanFormulas(state.curriculumImportedLayout);
         for (const [key] of Object.entries(state.curriculumImportedLayout.formulas || {})) {
@@ -4042,11 +4007,9 @@
             `${state.curriculumPlanFileName} ${state.curriculumImportedLayout.sheetName || ""}`
           );
           state.curriculumPlan = plan;
-          syncCurriculumPlanYearSnapshot();
           state.curriculumTemplateRows = plan.map((row) => normalizeCurriculumPlanRow(row));
           renderCurriculumStep();
           persistState();
-          scheduleCurriculumLayoutPersistence();
           status.style.color = "#287956";
           status.textContent = "편제표 수정 내용을 저장했습니다.";
         } catch (error) {
@@ -4059,11 +4022,9 @@
     $("#clearCurriculumPlan").addEventListener("click", () => {
       if (state.curriculumImportedLayout || state.curriculumPlan.length) recordCurriculumUndo();
       state.curriculumPlan = [];
-      syncCurriculumPlanYearSnapshot();
       state.curriculumTemplateRows = [];
       state.curriculumPlanFileName = "";
       state.curriculumImportedLayout = null;
-      curriculumLayoutStoredId = "";
       state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
       state.curriculumMutationRevision += 1;
       if (curriculumPlanInput) curriculumPlanInput.value = "";
@@ -4073,38 +4034,11 @@
       status.textContent = "편제표를 초기화했습니다.";
     });
     $("#searchInput").addEventListener("input", () => { renderRoster(); renderPreview(); });
-    $("#preview").addEventListener("change", (event) => {
-      const selector = event.target.closest(".history-status");
-      if (!selector) return;
-      const record = state.priorCourseHistory.find((item) => historyRecordKey(item) === selector.dataset.historyKey);
-      if (!record) return;
-      record.status = selector.value === "incomplete" ? "incomplete" : "completed";
-      renderPreview();
-      persistState();
-    });
-    $("#historyInput").addEventListener("change", (event) => {
-      handleHistoryWorkbook(event.target.files[0]);
-      event.target.value = "";
-    });
-    $("#downloadHistoryTemplate").addEventListener("click", downloadHistoryTemplate);
     $("#classFilter").addEventListener("change", () => { renderRoster(); renderPreview(); });
     $("#studentList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-student-id]");
       if (!button) return;
       state.selectedId = button.dataset.studentId;
-      renderRoster();
-      renderPreview();
-      persistState();
-    });
-    $("#certificateGradeTabs").addEventListener("click", (event) => {
-      const tab = event.target.closest("[data-certificate-grade]");
-      if (!tab || !["2", "3"].includes(tab.dataset.certificateGrade)) return;
-      state.certificateTargetGrade = tab.dataset.certificateGrade;
-      $("#searchInput").value = "";
-      $("#classFilter").value = "";
-      state.selectedId = state.students.find((student) =>
-        String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade))?.id || null;
-      applyClassFilterOptions(state.students);
       renderRoster();
       renderPreview();
       persistState();
@@ -4115,40 +4049,8 @@
     });
     $("#printAll").addEventListener("click", () => printStudents(visibleStudents()));
     $("#downloadAggregate").addEventListener("click", downloadAggregate);
-    $("#aggregateGradeTabs").addEventListener("click", (event) => {
-      const tab = event.target.closest("[data-aggregate-grade]");
-      if (!tab || !["2", "3"].includes(tab.dataset.aggregateGrade)) return;
-      state.aggregateTargetGrade = tab.dataset.aggregateGrade;
-      renderAggregate();
-      renderClosurePanel(state.currentRound);
-      persistState();
-    });
-    $("#classifierGradeTabs").addEventListener("click", (event) => {
-      const tab = event.target.closest("[data-classifier-grade]");
-      if (!tab || !["2", "3"].includes(tab.dataset.classifierGrade)) return;
-      state.classifierTargetGrade = tab.dataset.classifierGrade;
-      state.selectedCourseColumns = [];
-      state.lastSelectedCourseColumn = null;
-      renderSemesterClassifier();
-      persistState();
-    });
     $("#openingPercent").addEventListener("input", () => { renderAggregate(); persistState(); });
     $("#divisionPercent").addEventListener("input", () => { renderAggregate(); persistState(); });
-    $("#plannedClassCount").addEventListener("change", (event) => {
-      const input = event.target;
-      const value = Number(input.value);
-      if (!Number.isInteger(value) || value < 1) {
-        input.setCustomValidity("1 이상의 정수를 입력하세요.");
-        input.reportValidity();
-        input.setCustomValidity("");
-        renderAggregate();
-        return;
-      }
-      state.plannedClassCounts ||= {};
-      state.plannedClassCounts[String(state.aggregateTargetGrade || "2")] = value;
-      renderAggregate();
-      persistState();
-    });
     $("#aggregateContent").addEventListener("change", (event) => {
       const input = event.target.closest(".aggregate-class-input");
       if (!input) return;
@@ -4185,11 +4087,10 @@
         const input = $("#newGroupName");
         const nextName = normalizeGroupName(input?.value);
         if (!nextName || nextName === UNASSIGNED_GROUP) return;
-        const grade = String(state.classifierTargetGrade || "2");
-        const names = state.customGroupNamesByGrade[grade] ||= [];
-        if (!names.includes(nextName)) names.push(nextName);
+        if (!state.customGroupNames.includes(nextName)) state.customGroupNames.push(nextName);
         if (input) input.value = "";
         renderSemesterClassifier();
+        renderAggregate();
         persistState();
         return;
       }
@@ -4197,15 +4098,9 @@
       if (!removeButton) return;
       const name = normalizeGroupName(removeButton.dataset.groupName);
       if (!name) return;
-      const grade = String(state.classifierTargetGrade || "2");
-      state.customGroupNamesByGrade[grade] =
-        (state.customGroupNamesByGrade[grade] || []).filter((item) => item !== name);
-      const currentGrade = targetGradeCurrentGrade(grade);
-      const gradeColumns = new Set(coursesForCurrentGrade(currentGrade).map((course) => String(course.column)));
+      state.customGroupNames = state.customGroupNames.filter((item) => item !== name);
       for (const [column, assigned] of Object.entries(state.groupAssignments)) {
-        if (gradeColumns.has(String(column)) && normalizeGroupName(assigned) === name) {
-          delete state.groupAssignments[column];
-        }
+        if (normalizeGroupName(assigned) === name) delete state.groupAssignments[column];
       }
       renderPreview();
       renderSemesterClassifier();
@@ -4273,10 +4168,9 @@
       if (!key) return;
       const selectedKeys = state.selectedCourseColumns.map((value) => String(value));
       const movedKeys = selectedKeys.includes(key) ? selectedKeys : [key];
-      const currentGrade = targetGradeCurrentGrade(state.classifierTargetGrade || "2");
       for (const movedKey of movedKeys) {
         const course = state.courses.find((item) => String(item.column) === movedKey);
-        if (!course || !courseBelongsToCurrentGrade(course, currentGrade, state.students)) continue;
+        if (!course) continue;
         if (targetGroup === UNASSIGNED_GROUP) delete state.groupAssignments[movedKey];
         else state.groupAssignments[movedKey] = targetGroup;
       }
@@ -4289,7 +4183,6 @@
     for (const selector of ["#schoolYear", "#round", "#confirmDate", "#schoolName"]) {
       $(selector).addEventListener("input", updateCertificateText);
     }
-    $("#schoolYear").addEventListener("change", handleSchoolYearChange);
     workflowSteps.addEventListener("click", (event) => {
       const button = event.target.closest("[data-workflow-step]");
       if (!button) return;
@@ -4322,8 +4215,7 @@
       const round = select.dataset.closureRound;
       const key = select.dataset.closureKey;
       if (!state.roundClosures[round]) state.roundClosures[round] = {};
-      if (select.value) state.roundClosures[round][key] = select.value;
-      else delete state.roundClosures[round][key];
+      state.roundClosures[round][key] = select.value;
       persistState();
       renderAggregate();
       if (Number(state.workflowStep) === 4) renderRetakePanel();
@@ -4348,6 +4240,4 @@
     });
     window.addEventListener("afterprint", () => { $("#printBatch").innerHTML = ""; });
     window.addEventListener("hashchange", () => window.location.reload());
-    document.addEventListener("DOMContentLoaded", () => {
-      if (!showStudentApplicationEntry()) restorePersistedState();
-    }, { once: true });
+    if (!showStudentApplicationEntry()) restorePersistedState();

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261007-reactive-realtime">
+  <link rel="stylesheet" href="styles.css?v=20261008-student-centered-ux">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -42,6 +42,11 @@
     <section id="cloudStudentCourses" class="hidden">
       <h2 id="cloudStudentTitle"></h2>
       <p id="cloudStudentIdentity"></p>
+      <ol class="student-progress" id="cloudStudentProgress" aria-label="수강신청 진행 단계">
+        <li data-progress-step="1"><span>1</span><small>본인 확인</small></li>
+        <li data-progress-step="2"><span>2</span><small>과목 선택</small></li>
+        <li data-progress-step="3"><span>3</span><small>신청 저장</small></li>
+      </ol>
       <form id="cloudStudentApplication">
         <p id="cloudStudentSemesterStatus" role="status" aria-live="polite"></p>
         <div id="cloudStudentChoices"></div>
@@ -128,6 +133,14 @@
       <section class="workflow-step-panel hidden" id="workflowStep2Panel">
         <h3>2단계 · 학년별 수강신청</h3>
         <p class="note">1학년은 2학년 때 들을 과목, 2학년은 3학년 때 들을 과목을 신청받습니다. 기본 1차에서 시작하며 필요할 때 차수를 추가해 결과를 분리해서 관리합니다.</p>
+        <nav class="application-workflow-guide" aria-label="수강신청 관리 순서">
+          <span>신청 준비 순서</span>
+          <button class="button button-quiet" id="applicationGuideGroups" type="button"><b>1</b> 과목·선택 그룹 확인</button>
+          <span class="application-guide-arrow" aria-hidden="true">›</span>
+          <button class="button button-quiet" id="applicationGuideOnline" type="button"><b>2</b> 명렬 업로드·신청 생성</button>
+          <span class="application-guide-arrow" aria-hidden="true">›</span>
+          <button class="button button-quiet" id="applicationGuideResults" type="button"><b>3</b> 코드 안내·결과 확인</button>
+        </nav>
         <div class="group-scope-tabs" role="tablist" aria-label="수강신청 현재 학년 선택">
           <button class="button" id="applicationGrade1Tab" role="tab" aria-selected="true" aria-controls="applicationGradeWorkspace" type="button">1학년 → 2학년 수강신청</button>
           <button class="button" id="applicationGrade2Tab" role="tab" aria-selected="false" aria-controls="applicationGradeWorkspace" tabindex="-1" type="button">2학년 → 3학년 수강신청</button>
@@ -151,7 +164,7 @@
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
         <p class="note">온라인 신청 결과는 자동으로 집계표에 연동됩니다. 차수를 선택해 해당 결과를 확인하세요.</p>
-        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하고 다른 학년 자료는 유지합니다. 확인서·집계표·이동수업 반편성은 학년 탭별로 분리해 표시합니다. 차수 데이터 삭제는 두 학년 자료 전체에 적용됩니다.</p>
+        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하며 다른 학년은 유지합니다. 확인서·집계표는 차수별 두 학년 데이터를 함께 사용하며, 차수 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
         <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택"></div>
         <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
         <div id="developerResultUpload" class="hidden">
@@ -174,7 +187,7 @@
         </section>
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
           <h3>온라인 신청 관리</h3>
-          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달 · 학번 열은 이수 이력 연결에 사용</p>
+          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달</p>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
           </div>
@@ -206,10 +219,6 @@
 
       <section id="certificatePanel" class="hidden">
         <div class="certificate-round-line"><span class="count-pill" id="certificateRoundBadge">1차</span><span class="note-inline">차수는 2단계에서 전환할 수 있습니다.</span></div>
-        <div class="group-scope-tabs" id="certificateGradeTabs" role="tablist" aria-label="확인서 발급 학년 선택">
-          <button class="button" type="button" role="tab" data-certificate-grade="2" aria-selected="true">2학년</button>
-          <button class="button" type="button" role="tab" data-certificate-grade="3" aria-selected="false">3학년</button>
-        </div>
         <div class="certificate-setup-grid">
           <div class="certificate-controls">
           <section class="panel settings-panel">
@@ -221,13 +230,6 @@
               <div class="field field-wide"><label for="confirmDate">확인 날짜</label><input id="confirmDate" type="text" value="2026. 9. 28."></div>
               <div class="field field-wide"><label for="schoolName">학교명</label><input id="schoolName" type="text" value="천상고등학교"></div>
             </div>
-          </section>
-          <section class="panel settings-panel history-import-panel">
-            <h2 class="panel-heading">이수 이력</h2>
-            <p class="panel-subtitle">학번으로 학생을 연결합니다. 자동 누적 자료가 없다면 엑셀 이력을 불러오세요.</p>
-            <button class="button" id="downloadHistoryTemplate" type="button">이수 이력 양식 다운로드</button>
-            <label class="file-button" for="historyInput">이수 이력 엑셀 불러오기</label>
-            <input class="hidden" id="historyInput" type="file" accept=".xlsx">
           </section>
           <section class="panel roster-panel">
             <div class="roster-header"><h2>학생 목록</h2><span class="count-pill" id="studentCount">0명</span></div>
@@ -266,13 +268,8 @@
         <div class="aggregate-settings">
           <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
           <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
-          <div class="field"><label id="plannedClassCountLabel" for="plannedClassCount">2학년 편제 학급수</label><input id="plannedClassCount" type="number" min="1" step="1" value=""></div>
         </div>
-        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 편제 학급수는 학년별로 지정할 수 있으며, 각 선택군의 총 학급수는 편제 학급수 × 해당 그룹에서 선택할 과목 수로 계산됩니다. 선택 수는 2단계 그룹 설정을 따릅니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 과목별 개설 학급수 칸은 직접 수정할 수 있으며 엑셀에 반영됩니다.</p>
-        <div class="group-scope-tabs" id="aggregateGradeTabs" role="tablist" aria-label="집계표 학년 선택">
-          <button class="button" type="button" role="tab" data-aggregate-grade="2" aria-selected="true">2학년</button>
-          <button class="button" type="button" role="tab" data-aggregate-grade="3" aria-selected="false">3학년</button>
-        </div>
+        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 이동수업 반편성은 5단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
         <div class="aggregate-content" id="aggregateContent"></div>
       </section>
       <section class="panel hidden" id="closurePanel">
@@ -291,11 +288,7 @@
       </section>
       <section class="panel hidden" id="classifierPanel">
         <div class="roster-header">
-          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">학년별 과목을 분리해 새 반을 만들고 과목을 편성합니다.</p></div>
-        </div>
-        <div class="group-scope-tabs" id="classifierGradeTabs" role="tablist" aria-label="이동수업 학년 선택">
-          <button class="button" type="button" role="tab" data-classifier-grade="2" aria-selected="true">2학년</button>
-          <button class="button" type="button" role="tab" data-classifier-grade="3" aria-selected="false">3학년</button>
+          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">새 반을 만든 뒤 과목 카드를 드래그해 이동수업 그룹으로 편성합니다.</p></div>
         </div>
         <div class="semester-classifier" id="semesterClassifier"></div>
       </section>
@@ -307,6 +300,17 @@
     <div class="main-heading"><div><h2>학생 화면 미리보기</h2><p>가상 학생으로 확인합니다. 선택·제출 내용은 저장되지 않습니다.</p></div><button class="button" id="cloudStudentPreviewClose" type="button">닫기</button></div>
     <div id="cloudStudentPreviewContent"></div>
   </dialog>
+  <dialog id="cloudTeacherEditDialog" aria-labelledby="cloudTeacherEditTitle" style="width:min(850px, calc(100vw - 40px));max-height:90vh;overflow:auto">
+    <div class="main-heading"><h2 id="cloudTeacherEditTitle">학생 선택 과목 변경</h2><button class="button button-secondary" id="cloudTeacherEditClose" type="button">닫기</button></div>
+    <p class="note">해당 신청의 학생 선택을 서버에 저장합니다. 마감 후에도 교사는 수정할 수 있으며 변경 이력이 남습니다.</p>
+    <label for="cloudTeacherEditStudent">변경할 학생</label>
+    <select id="cloudTeacherEditStudent" class="application-link-field"></select>
+    <form id="cloudTeacherEditForm">
+      <div id="cloudTeacherEditChoices"></div>
+      <button class="button button-primary" id="cloudTeacherEditSave" type="submit">선택 과목 변경 저장</button>
+    </form>
+    <p id="cloudTeacherEditMessage" role="status" aria-live="polite"></p>
+  </dialog>
   <dialog id="cloudCodeDialog">
     <h2>학생별 수강신청 안내문 메일머지</h2>
     <p>학생마다 별도 안내문을 출력합니다. 인쇄 창에서 PDF로 저장할 수도 있습니다.</p>
@@ -317,12 +321,245 @@
     <div id="cloudCodePreview"></div>
   </dialog>
 
-  <script defer src="app.js?v=20261008-integrity-cleanup"></script>
-  <script src="xlsx-parser.js?v=20261008-integrity-cleanup" defer></script>
-  <script src="course-groups.js?v=20261008-integrity-cleanup" defer></script>
-  <script src="curriculum-workbook.js?v=20261008-integrity-cleanup" defer></script>
+  <script id="driveServerTemplate" type="text/plain">
+function initializeCourseServer() {
+  var props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('ADMIN_KEY')) {
+    props.setProperty('ADMIN_KEY', Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, ''));
+  }
+  Logger.log('관리자 키 (학생에게 공유 금지): ' + props.getProperty('ADMIN_KEY'));
+}
+function requireAdmin_(key) {
+  var expected = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
+  if (!expected || key !== expected) throw new Error('관리자 인증에 실패했습니다.');
+}
+function database_() {
+  var id = PropertiesService.getScriptProperties().getProperty('DATABASE_ID');
+  if (!id) throw new Error('관리자가 신청 설정을 먼저 업로드해야 합니다.');
+  return SpreadsheetApp.openById(id);
+}
+function config_(db) {
+  return JSON.parse(db.getSheetByName('설정').getRange(1, 1).getValue());
+}
+function withLock_(action) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try { return action(); } finally { lock.releaseLock(); }
+}
+function textCell_(value) {
+  var text = String(value);
+  return /^[=+\-@']/.test(text) ? "'" + text : text;
+}
+function uploadCourseSetup(key, raw) {
+  requireAdmin_(key);
+  return withLock_(function() {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('DATABASE_ID')) throw new Error('이미 설정되었습니다. 다른 차수는 새 Apps Script 프로젝트로 배포하세요.');
+    var data = JSON.parse(raw);
+    if (data.type !== 'course-application-setup' || !/^[1-9][0-9]{0,8}$/.test(String(data.round)) ||
+        !Array.isArray(data.roster) || !data.roster.length || data.roster.length > 10000 ||
+        !data.subjects || !Array.isArray(data.subjects['2']) || !Array.isArray(data.subjects['3'])) {
+      throw new Error('이 프로그램에서 생성한 온라인 신청 설정 JSON을 선택하세요.');
+    }
+    var seen = {};
+    var rows = data.roster.map(function(s) {
+      if (!/^[12]$/.test(String(s.grade)) || !/^[1-9]\d*$/.test(String(s.classroom)) ||
+          !/^[1-9]\d*$/.test(String(s.number)) || typeof s.name !== 'string' || !s.name.trim() ||
+          !data.subjects[String(Number(s.grade) + 1)].length) throw new Error('명렬 또는 해당 학년 과목이 잘못되었습니다.');
+      var identity = [s.grade, s.classroom, s.number].join(':');
+      if (seen[identity]) throw new Error('학년·반·번호가 중복됩니다.');
+      seen[identity] = true;
+      return [Utilities.getUuid().replace(/-/g, ''), String(s.grade), String(s.classroom), String(s.number), textCell_(s.name.trim())];
+    });
+    ['2', '3'].forEach(function(g) {
+      var names = {};
+      data.subjects[g].forEach(function(c) {
+        if (!c || typeof c.subject !== 'string' || !c.subject.trim() || names[c.subject] ||
+            !Number.isFinite(c.credit) || c.credit < 0) throw new Error('신청 과목 설정이 잘못되었습니다.');
+        names[c.subject] = true;
+      });
+    });
+    var cfg = {schoolName: String(data.schoolName || ''), schoolYear: String(data.schoolYear || ''),
+      round: String(data.round), subjects: data.subjects};
+    var configJson = JSON.stringify(cfg);
+    if (configJson.length > 45000) throw new Error('과목 설정이 너무 큽니다. 과목 수를 줄여 주세요.');
+    var db = SpreadsheetApp.create(cfg.schoolYear + '학년도 ' + cfg.round + '차 수강신청');
+    var settings = db.getSheets()[0].setName('설정');
+    settings.getRange(1, 1).setNumberFormat('@').setValue(configJson);
+    var roster = db.insertSheet('명렬');
+    roster.getRange(1, 1, 1, 5).setValues([['신청코드', '현재학년', '반', '번호', '이름']]);
+    roster.getRange(2, 1, rows.length, 5).setNumberFormat('@').setValues(rows);
+    db.insertSheet('신청').appendRow(['신청코드', '수정시각', '선택과목JSON']);
+    props.setProperty('DATABASE_ID', db.getId());
+    props.setProperty('APPLICATION_OPEN', 'true');
+    return '설정 완료: ' + rows.length + '명 · ' + cfg.round + '차. 스프레드시트: ' + db.getUrl();
+  });
+}
+function student_(db, code) {
+  if (typeof code !== 'string' || !/^[a-f0-9]{32}$/.test(code)) throw new Error('신청 코드를 확인하세요.');
+  var rows = db.getSheetByName('명렬').getDataRange().getDisplayValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][0] === code) return {grade: rows[i][1], classroom: rows[i][2], number: rows[i][3], name: rows[i][4]};
+  }
+  throw new Error('신청 코드를 확인하세요.');
+}
+function getStudentApplication(code) {
+  var db = database_();
+  var student = student_(db, code);
+  var cfg = config_(db);
+  var selections = [];
+  var rows = db.getSheetByName('신청').getDataRange().getValues();
+  rows.slice(1).forEach(function(r) { if (r[0] === code) selections = JSON.parse(r[2]); });
+  return {student: student, schoolName: cfg.schoolName, schoolYear: cfg.schoolYear, round: cfg.round,
+    courses: cfg.subjects[String(Number(student.grade) + 1)], selections: selections,
+    open: PropertiesService.getScriptProperties().getProperty('APPLICATION_OPEN') === 'true'};
+}
+function saveStudentApplication(code, selections) {
+  return withLock_(function() {
+    if (PropertiesService.getScriptProperties().getProperty('APPLICATION_OPEN') !== 'true') throw new Error('수강신청이 마감되었습니다.');
+    var db = database_();
+    var student = student_(db, code);
+    var allowed = config_(db).subjects[String(Number(student.grade) + 1)].map(function(c) { return c.subject; });
+    if (!Array.isArray(selections) || !selections.length || selections.length > allowed.length ||
+        selections.some(function(s, i) { return allowed.indexOf(s) < 0 || selections.indexOf(s) !== i; })) {
+      throw new Error('신청 가능한 과목을 1개 이상 선택하세요.');
+    }
+    var sheet = db.getSheetByName('신청');
+    var rows = sheet.getDataRange().getValues();
+    var row = rows.length + 1;
+    for (var i = 1; i < rows.length; i++) if (rows[i][0] === code) { row = i + 1; break; }
+    sheet.getRange(row, 1, 1, 3).setValues([[code, new Date(), JSON.stringify(selections)]]);
+    return '신청이 저장되었습니다. 다시 제출하면 기존 신청이 수정됩니다.';
+  });
+}
+function setApplicationOpen(key, open) {
+  requireAdmin_(key);
+  if (typeof open !== 'boolean') throw new Error('마감 설정이 잘못되었습니다.');
+  return withLock_(function() {
+    database_();
+    PropertiesService.getScriptProperties().setProperty('APPLICATION_OPEN', String(open));
+    return open ? '수강신청을 다시 열었습니다.' : '수강신청을 마감했습니다.';
+  });
+}
+function exportCourseData(key, kind) {
+  requireAdmin_(key);
+  return withLock_(function() {
+    var db = database_();
+    var cfg = config_(db);
+    var rows = db.getSheetByName('명렬').getDataRange().getDisplayValues().slice(1);
+    if (kind === 'codes') return JSON.stringify({students: rows.map(function(r) {
+      return {grade: r[1], classroom: r[2], number: r[3], name: r[4], code: r[0]};
+    })}, null, 2);
+    if (kind !== 'results') throw new Error('알 수 없는 다운로드 유형입니다.');
+    var byCode = {};
+    db.getSheetByName('신청').getDataRange().getValues().slice(1).forEach(function(r) { byCode[r[0]] = JSON.parse(r[2]); });
+    return JSON.stringify({type: 'course-application-results', round: cfg.round,
+      entries: rows.filter(function(r) { return byCode[r[0]]; }).map(function(r) {
+        return {type: 'course-application', grade: r[1], classroom: r[2], number: r[3], name: r[4], selections: byCode[r[0]]};
+      })}, null, 2);
+  });
+}
+function doGet(e) {
+  var key = e && e.parameter && e.parameter.admin || '';
+  if (key) requireAdmin_(key);
+  var html = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>온라인 수강신청</title><style>body{font-family:sans-serif;max-width:720px;margin:24px auto;padding:16px;background:#f2f5fb}' +
+    'button,input{padding:10px;margin:6px}label{display:block;padding:8px}button{cursor:pointer}#message{white-space:pre-wrap}fieldset{margin:12px 0}</style></head>' +
+    '<body><h1>온라인 수강신청</h1><main id="app"></main><p id="message" role="status" aria-live="polite"></p>' +
+    '<script>var ADMIN_KEY=' + JSON.stringify(key).replace(/</g, '\\u003c') + ';(' + courseClient_.toString() + ')();</scr' + 'ipt></body></html>';
+  var output = HtmlService.createHtmlOutput(html);
+  // 학생 화면만 학교 웹사이트에 삽입한다. 관리자 화면은 프레임 삽입을 허용하지 않는다.
+  if (!key) output.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return output;
+}
+function courseClient_() {
+  var app = document.getElementById('app'), message = document.getElementById('message');
+  var busy = false;
+  function call(name, args, done) {
+    if (busy) return;
+    busy = true;
+    app.querySelectorAll('button').forEach(function(b) { b.disabled = true; });
+    message.textContent = '처리 중…';
+    var runner = google.script.run.withSuccessHandler(function(value) {
+      busy = false;
+      app.querySelectorAll('button').forEach(function(b) { b.disabled = false; });
+      message.textContent = '';
+      done(value);
+    }).withFailureHandler(function(err) {
+      busy = false;
+      app.querySelectorAll('button').forEach(function(b) { b.disabled = false; });
+      message.textContent = err.message || '처리에 실패했습니다.';
+    });
+    runner[name].apply(runner, args);
+  }
+  function button(text, action) {
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = text; b.onclick = action; app.appendChild(b);
+  }
+  function download(text, filename) {
+    var a = document.createElement('a'), url = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+    a.href = url; a.download = filename; a.click(); setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  }
+  if (ADMIN_KEY) {
+    app.textContent = '관리자 전용: 학생에게는 관리자 키가 없는 /exec 주소와 본인 신청 코드만 전달하세요. 명렬은 1회만 설정할 수 있습니다.';
+    var file = document.createElement('input'); file.type = 'file'; file.accept = '.json'; app.appendChild(file);
+    button('온라인 신청 설정 업로드', function() {
+      if (!file.files[0]) { message.textContent = '설정 JSON 파일을 선택하세요.'; return; }
+      file.files[0].text().then(function(raw) {
+        call('uploadCourseSetup', [ADMIN_KEY, raw], function(v) { message.textContent = v; });
+      }).catch(function(err) { message.textContent = '파일 읽기 실패: ' + err.message; });
+    });
+    button('학생별 신청 코드 저장', function() {
+      call('exportCourseData', [ADMIN_KEY, 'codes'], function(v) { download(v, '학생별_신청코드.json'); });
+    });
+    button('신청 마감', function() { call('setApplicationOpen', [ADMIN_KEY, false], function(v) { message.textContent = v; }); });
+    button('신청 다시 열기', function() { call('setApplicationOpen', [ADMIN_KEY, true], function(v) { message.textContent = v; }); });
+    button('신청 결과 저장', function() {
+      call('exportCourseData', [ADMIN_KEY, 'results'], function(v) { download(v, '온라인_수강신청_결과.json'); });
+    });
+    return;
+  }
+  var code = document.createElement('input'); code.type = 'password'; code.placeholder = '개별 신청 코드';
+  code.setAttribute('aria-label', '개별 신청 코드'); code.autocomplete = 'off'; app.appendChild(code);
+  var activeCode = '', choices = document.createElement('section'), info = document.createElement('p');
+  button('본인 확인', function() {
+    choices.replaceChildren(); activeCode = ''; info.textContent = '';
+    var entered = code.value.trim();
+    call('getStudentApplication', [entered], function(data) {
+      activeCode = entered;
+      var s = data.student;
+      info.textContent = data.schoolYear + '학년도 ' + data.schoolName + ' ' + data.round + '차 · ' +
+        s.grade + '학년 ' + s.classroom + '반 ' + s.number + '번 ' + s.name + ' (신청 대상: ' + (Number(s.grade) + 1) + '학년)';
+      var semesters = {};
+      data.courses.forEach(function(c) {
+        var semester = c.semester || '학기 미정';
+        if (!semesters[semester]) {
+          var group = document.createElement('fieldset'), title = document.createElement('legend');
+          title.textContent = semester === '학기 미정' ? semester : semester + '학기';
+          group.appendChild(title); choices.appendChild(group); semesters[semester] = group;
+        }
+        var label = document.createElement('label'), box = document.createElement('input');
+        box.type = 'checkbox'; box.value = c.subject; box.checked = data.selections.indexOf(c.subject) >= 0; box.disabled = !data.open;
+        var classification = String(c.type || '').replace(/선택$/, '');
+        label.appendChild(box); label.appendChild(document.createTextNode(c.subject + (classification ? '(' + classification + ')' : '') + ' · ' + c.credit + '학점'));
+        semesters[semester].appendChild(label);
+      });
+      if (!data.open) message.textContent = '수강신청이 마감되었습니다. 기존 신청만 확인할 수 있습니다.';
+    });
+  });
+  app.appendChild(info); app.appendChild(choices);
+  button('신청 저장 / 수정', function() {
+    if (!activeCode || code.value.trim() !== activeCode) { message.textContent = '먼저 본인 확인을 해주세요.'; return; }
+    var selected = Array.from(choices.querySelectorAll('input:checked')).map(function(b) { return b.value; });
+    call('saveStudentApplication', [activeCode, selected], function(v) { message.textContent = v; });
+  });
+}
+  </script>
+  <script defer src="app.js?v=20261008-student-centered-ux"></script>
+  <script src="xlsx-parser.js?v=20261008-student-centered-ux" defer></script>
+  <script src="course-groups.js?v=20261008-student-centered-ux" defer></script>
+  <script src="curriculum-workbook.js?v=20261008-student-centered-ux" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261008-integrity-cleanup" defer></script>
+  <script src="supabase-client.js?v=20261008-student-centered-ux" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

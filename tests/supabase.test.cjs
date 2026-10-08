@@ -115,8 +115,36 @@ test("Supabase schema validates settings, isolates teachers and supports code-on
     await manage(event.id, "delete");
     await as("anon");
     await assert.rejects(() => get(newCode), /신청 코드/);
+    const largeSetup = {
+      ...setup,
+      round: "3",
+      roster: Array.from({ length: 350 }, (_, index) => {
+        const classroom = Math.floor(index / 35) + 1;
+        const number = index % 35 + 1;
+        return {
+          grade: "1",
+          classroom: String(classroom),
+          number: String(number),
+          name: `테스트학생${String(classroom).padStart(2, "0")}-${String(number).padStart(2, "0")}`,
+        };
+      }),
+    };
+    await as("authenticated", teacher1);
+    const largeEvent = (await create(largeSetup)).rows[0].result;
+    assert.equal(largeEvent.students.length, 350);
+    assert.equal(new Set(largeEvent.students.map((student) => student.code)).size, 350);
+    await as("anon");
+    const firstStudent = largeEvent.students[0];
+    const application = (await get(firstStudent.code)).rows[0].result;
+    assert.equal(application.student.name, "테스트학생01-01");
+    assert.deepEqual(application.courses.map((course) => course.subject), ["수학", "국어"]);
+    for (const student of largeEvent.students) await save(student.code, ["수학"]);
+    await as("authenticated", teacher1);
+    const largeResults = (await manage(largeEvent.id, "export")).rows[0].result;
+    assert.equal(largeResults.entries.length, 350);
+    assert.ok(largeResults.entries.every((entry) => entry.selections[0] === "수학"));
     await db.exec("reset role");
-    assert.equal((await db.query("select * from public.course_students")).rows.length, 0);
+    assert.equal((await db.query("select * from public.course_students")).rows.length, 350);
   } finally {
     await db.close();
   }

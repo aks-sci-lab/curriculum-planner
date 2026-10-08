@@ -154,12 +154,6 @@
     .certificate-table .group-cell { width: 31%; text-align: center; line-height: 1.45; }
     .certificate-table .course-cell { width: 54%; }
     .certificate-table .credit-cell { width: 15%; text-align: center; }
-    .history-heading { margin: 15px 0 6px; font-size: 13px; }
-    .history-table { font-size: 11px; }
-    .history-table th, .history-table td { height: 23px; padding: 3px 5px; }
-    .history-table th { text-align: center; }
-    .history-status { max-width: 76px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; font: inherit; }
-    .history-import-panel { display: grid; gap: 8px; }
     .aggregate-panel { margin: 0 0 18px; }
     .workflow-panel { margin: 0; }
     .workflow-panel h2 { margin: 0 0 10px; font-size: 14px; }
@@ -921,7 +915,6 @@
     .paper-total { margin: 25px 0 0; font-size: 14px; line-height: 1.9; }
     .paper-credit-gauge { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #d7e0f2; border-radius: 9px; background: #f8faff; font-size: 12px; }
     .paper-credit-gauge-label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-    .paper-credit-gauge-label.over-limit { color: #a44939; font-weight: 700; }
     .paper-credit-gauge-track, .student-summary-track, .aggregate-progress-track { display:block; height:8px; overflow:hidden; border-radius:999px; background:#e4eaf5; }
     .paper-credit-gauge-track span, .student-summary-track span, .aggregate-progress-track span { display:block; height:100%; border-radius:inherit; background:#3b68e8; }
     .paper-credit-gauge-track.core span, .student-summary-track.core span { background:#6c55c7; }
@@ -1037,6 +1030,56 @@
     dialog[open] { animation:dialog-enter .18s ease-out; }
     dialog::backdrop { background:#15233b66; animation:backdrop-enter .18s ease-out; }
     @keyframes dialog-enter { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+
+    .student-entry[id="supabaseStudentEntry"] {
+      max-width: 820px;
+      margin: 24px auto;
+      padding: clamp(18px, 4vw, 36px);
+      background: #fff;
+      border: 1px solid #dfe6f2;
+      border-radius: 18px;
+      box-shadow: 0 12px 36px #1b31500d;
+    }
+    #supabaseStudentEntry > h1 { margin: 0 0 8px; font-size: clamp(22px, 4vw, 30px); }
+    #supabaseStudentEntry > .note { color: #52627d; font-size: 14px; line-height: 1.7; }
+    #cloudStudentLogin { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; max-width: 540px; }
+    #cloudStudentLogin label { grid-column: 1 / -1; margin-bottom: -6px; font-weight: 700; }
+    #cloudStudentCode { min-height: 46px; font-size: 18px; letter-spacing: .18em; }
+    #cloudStudentLogin .button { min-height: 46px; }
+    #cloudStudentMessage { min-height: 24px; margin: 12px 0; color: #405473; font-weight: 600; }
+    #cloudStudentTitle { margin: 24px 0 6px; font-size: clamp(19px, 3.5vw, 26px); line-height: 1.45; }
+    #cloudStudentIdentity { color: #52627d; line-height: 1.6; }
+    .student-progress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); list-style: none; margin: 18px 0 22px; padding: 0; }
+    .student-progress li { position: relative; display: grid; justify-items: center; gap: 7px; color: #77849a; text-align: center; }
+    .student-progress li:not(:last-child)::after { position: absolute; top: 16px; left: calc(50% + 22px); width: calc(100% - 44px); height: 2px; content: ""; background: #dfe5ef; }
+    .student-progress li.is-complete:not(:last-child)::after { background: #3b68e8; }
+    .student-progress li > span { display: grid; width: 34px; height: 34px; place-items: center; border: 2px solid #d5ddeb; border-radius: 50%; background: #fff; font-weight: 750; }
+    .student-progress li.is-current { color: #2852ce; font-weight: 750; }
+    .student-progress li.is-current > span { border-color: #3b68e8; color: #fff; background: #3b68e8; box-shadow: 0 0 0 4px #eaf0ff; }
+    .student-progress li.is-complete > span { border-color: #3b68e8; color: #2852ce; }
+    .student-progress li small { position: relative; z-index: 1; padding: 0 5px; background: #fff; font-size: 12px; }
+    .application-workflow-guide { display: flex; align-items: center; gap: 4px; margin: 12px 0 16px; padding: 10px 12px; border: 1px solid #dce5f5; border-radius: 10px; background: #f8faff; }
+    .application-workflow-guide > span:first-child { margin-right: auto; color: #52627d; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .application-workflow-guide .button { min-height: 34px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
+    .application-workflow-guide .button b { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; color: #2852ce; background: #e8eeff; }
+    .application-guide-arrow { color: #9aa7bb; font-size: 20px; }
+    .closure-decision-note { margin: 4px 0 8px; color: #52627d; font-size: 12px; line-height: 1.6; }
+    .closure-verdict-open { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f5ee; }
+    .closure-verdict-risk { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #fff0e2; color: #98500d; }
+    @media (max-width: 720px) {
+      .student-entry[id="supabaseStudentEntry"] { margin: 10px; padding: 18px 14px; border-radius: 14px; }
+      #cloudStudentLogin { grid-template-columns: 1fr; }
+      #cloudStudentLogin label { grid-column: auto; }
+      #cloudStudentLogin .button { width: 100%; }
+      .application-workflow-guide { flex-wrap: wrap; }
+      .application-workflow-guide > span:first-child { flex-basis: 100%; margin-bottom: 4px; }
+      .application-workflow-guide .button { flex: 1 1 100%; justify-content: flex-start; min-height: 40px; }
+      .application-guide-arrow { display: none; }
+      .student-progress li small { max-width: 100%; font-size: 10px; }
+      .closure-table { display: block; overflow-x: auto; }
+      .closure-table th, .closure-table td { min-width: 88px; padding: 8px; }
+      .closure-table th:first-child, .closure-table td:first-child { min-width: 150px; }
+    }
     @keyframes backdrop-enter { from { opacity:0; } to { opacity:1; } }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
@@ -1054,11 +1097,6 @@
       .paper-student { padding-bottom: 2mm; font-size: 12px; }
       .certificate-table { font-size: 12px; }
       .certificate-table th, .certificate-table td { height: 8mm; padding: 1mm 2mm; }
-      .history-heading { margin: 4mm 0 2mm; font-size: 11px; }
-      .history-table { font-size: 9px; }
-      .history-table th, .history-table td { height: 5mm; padding: .5mm 1mm; }
-      .history-status { appearance: none; border: 0; padding: 0; background: transparent; color: #111; }
-      .paper-credit-gauge { margin-top: 3mm; padding: 2mm; }
       .paper-total { margin-top: 7mm; font-size: 12px; }
       .paper-signature { gap: 3mm; margin-top: 14mm; font-size: 12px; }
       .paper-school { margin-top: 20mm; font-size: 15px; }

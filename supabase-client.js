@@ -29,6 +29,14 @@ var updateApplicationGradeControls;
   function saveSession() {
     localStorage.setItem(SESSION_KEY, JSON.stringify({ session, lastActivity }));
   }
+
+  for (const [guideId, tabId] of [
+    ["applicationGuideGroups", "applicationGroupsTab"],
+    ["applicationGuideOnline", "applicationOnlineTab"],
+    ["applicationGuideResults", "applicationResultsTab"],
+  ]) {
+    byId(guideId).addEventListener("click", () => byId(tabId).click());
+  }
   function updateAccountControls() {
     const studentRoute = !!eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=");
     const loggedIn = !!session && Date.now() - lastActivity < IDLE_MS && !studentRoute;
@@ -48,6 +56,10 @@ var updateApplicationGradeControls;
     latestCodes = null;
     printingCodes = null;
     byId("cloudCodeDialog").close();
+    byId("cloudTeacherEditDialog").close();
+    teacherEdit = null;
+    byId("cloudTeacherEditChoices").replaceChildren();
+    byId("cloudTeacherEditStudent").replaceChildren();
     byId("cloudStudentPreviewDialog").close();
     closeStudentPreview();
     byId("cloudCodePreview").replaceChildren();
@@ -114,7 +126,10 @@ var updateApplicationGradeControls;
   let studentSemesters = [];
   let studentSemesterIndex = 0;
   let teacherBusy = false;
+  let teacherEdit = null;
+  let teacherEditBusy = false;
   let studentBusy = false;
+  let studentSaved = false;
   let printingCodes = null;
   let linkedEvents = new Set();
   let knownEvents = [];
@@ -546,6 +561,9 @@ var updateApplicationGradeControls;
       section.appendChild(button("학생 화면 미리보기", () => teacherAction(async () => {
         openStudentPreview(event);
       })));
+      section.appendChild(button("학생 선택 과목 변경", () => teacherAction(async () => {
+        await openTeacherEditor(event);
+      })));
       section.appendChild(button(linkedEvents.has(event.id) ? "집계표 연동 해제" : "집계표 연동", () => teacherAction(async () => {
         if (linkedEvents.has(event.id)) {
           linkedEvents.delete(event.id);
@@ -594,6 +612,113 @@ var updateApplicationGradeControls;
       list.appendChild(section);
     }
   }
+
+  async function openTeacherEditor(event) {
+    const revision = sessionRevision;
+    const data = await rpc("get_teacher_course_applications", { p_event: event.id }, true);
+    if (!session || revision !== sessionRevision) throw new Error("다시 로그인하세요.");
+    const entries = data.entries.filter((student) => student.grade === String(state.applicationMenuGrade || "1"));
+    if (!entries.length) throw new Error("선택한 학년의 학생이 없습니다.");
+    teacherEdit = { eventId: event.id, entries, subjects: data.subjects, groups: data.groups };
+    const select = byId("cloudTeacherEditStudent");
+    select.replaceChildren();
+    for (const student of entries) {
+      const option = document.createElement("option");
+      option.value = student.id;
+      option.textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}${student.submittedAt ? "" : " · 미제출"}`;
+      select.appendChild(option);
+    }
+    select.value = entries[0].id;
+    renderTeacherEditor();
+    byId("cloudTeacherEditDialog").showModal();
+  }
+
+  function renderTeacherEditor() {
+    if (!teacherEdit) return;
+    const student = teacherEdit.entries.find((entry) => entry.id === byId("cloudTeacherEditStudent").value);
+    if (!student) throw new Error("학생을 선택하세요.");
+    const grade = String(Number(student.grade) + 1);
+    const courses = teacherEdit.subjects[grade] || [];
+    const groups = (teacherEdit.groups || []).filter((group) => group.grade === grade);
+    const choices = byId("cloudTeacherEditChoices");
+    choices.replaceChildren();
+    for (const group of groups.length ? groups : [{ name: "신청 과목", courses: courses.map((course) => course.subject) }]) {
+      const fieldset = document.createElement("fieldset");
+      const legend = document.createElement("legend");
+      legend.textContent = `${group.semester && group.semester !== "0" ? group.semester + "학기 · " : ""}${group.name}${group.count === undefined ? "" : ` · 정확히 ${group.count}과목 선택`}`;
+      fieldset.appendChild(legend);
+      if (group.count !== undefined) fieldset.dataset.count = String(group.count);
+      for (const subject of group.courses) {
+        const course = courses.find((item) => item.subject === subject);
+        if (!course) throw new Error("그룹 과목 설정이 잘못되었습니다.");
+        const label = document.createElement("label");
+        label.className = "application-subject";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.value = subject;
+        box.checked = student.selections.includes(subject);
+        label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`));
+        fieldset.appendChild(label);
+      }
+      choices.appendChild(fieldset);
+    }
+    byId("cloudTeacherEditMessage").textContent = "과목을 변경한 뒤 저장하세요. 학생을 바꾸면 저장하지 않은 변경은 취소됩니다.";
+  }
+
+  byId("cloudTeacherEditStudent").addEventListener("change", () => {
+    try { renderTeacherEditor(); }
+    catch (error) { byId("cloudTeacherEditMessage").textContent = error.message; }
+  });
+  byId("cloudTeacherEditClose").addEventListener("click", () => byId("cloudTeacherEditDialog").close());
+  byId("cloudTeacherEditDialog").addEventListener("close", () => {
+    teacherEdit = null;
+    byId("cloudTeacherEditChoices").replaceChildren();
+    byId("cloudTeacherEditStudent").replaceChildren();
+  });
+  byId("cloudTeacherEditForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (teacherEditBusy) return;
+    teacherEditBusy = true;
+    const editor = teacherEdit;
+    const select = byId("cloudTeacherEditStudent");
+    const controls = [select, byId("cloudTeacherEditSave"), ...byId("cloudTeacherEditChoices").querySelectorAll("input")];
+    controls.forEach((control) => { control.disabled = true; });
+    let saved = false;
+    try {
+      if (!editor) throw new Error("학생 선택 창을 다시 여세요.");
+      const student = editor.entries.find((entry) => entry.id === select.value);
+      if (!student) throw new Error("학생을 선택하세요.");
+      const selected = [...byId("cloudTeacherEditChoices").querySelectorAll("input:checked")].map((box) => box.value);
+      if (!selected.length) throw new Error("과목을 1개 이상 선택하세요.");
+      for (const fieldset of byId("cloudTeacherEditChoices").children) {
+        if (fieldset.dataset.count !== undefined &&
+          fieldset.querySelectorAll("input:checked").length !== Number(fieldset.dataset.count)) {
+          throw new Error(`${fieldset.querySelector("legend").textContent} · 선택 수를 맞추세요.`);
+        }
+      }
+      byId("cloudTeacherEditMessage").textContent = "저장 중…";
+      await rpc("save_teacher_course_application", {
+        p_event: editor.eventId, p_student: student.id, p_selections: selected,
+        p_previous_selections: student.selections, p_previous_submitted_at: student.submittedAt
+      }, true);
+      saved = true;
+      if (teacherEdit === editor) {
+        byId("cloudTeacherEditMessage").textContent = "학생 선택 과목을 변경했습니다.";
+        byId("cloudTeacherEditDialog").close();
+      }
+      window.showAppToast?.("학생 선택 과목을 변경했습니다.");
+      await syncLinkedResults();
+      byId("cloudTeacherMessage").textContent = "학생 선택 과목을 변경하고 연동 집계표를 갱신했습니다.";
+    } catch (error) {
+      const message = saved ? `서버 저장 완료 · 집계표 갱신 실패: ${error.message}` : error.message;
+      if (teacherEdit === editor) byId("cloudTeacherEditMessage").textContent = message;
+      byId("cloudTeacherMessage").textContent = message;
+      window.showAppToast?.(message, "error");
+    } finally {
+      teacherEditBusy = false;
+      controls.forEach((control) => { control.disabled = false; });
+    }
+  });
 
   updateApplicationGradeControls = () => {
     const grade = state.applicationMenuGrade || "1";
@@ -786,6 +911,7 @@ var updateApplicationGradeControls;
 
   function renderStudentApplication(data) {
     studentSemesterIndex = 0;
+    studentSaved = false;
     byId("cloudStudentCourses").classList.remove("hidden");
     const s = data.student;
     if (!["1", "2"].includes(String(s.grade))) throw new Error("신청 가능한 현재 학년은 1·2학년입니다. 교사에게 명렬 확인을 요청하세요.");
@@ -848,6 +974,7 @@ var updateApplicationGradeControls;
       .sort((a, b) => (a === "0" ? 9 : Number(a)) - (b === "0" ? 9 : Number(b)));
     updateStudentSemester();
     updateSummary();
+    updateStudentProgress();
     byId("cloudStudentMessage").textContent = !data.open ? "접수가 마감되었습니다. 기존 신청만 확인할 수 있습니다."
       : data.submittedAt ? "기존 신청을 불러왔습니다. 수정 후 저장할 수 있습니다." : "과목을 선택하고 신청 저장을 누르세요.";
   }
@@ -863,6 +990,22 @@ var updateApplicationGradeControls;
     byId("cloudStudentNext").classList[last || !current ? "add" : "remove"]("hidden");
     byId("cloudStudentSave").classList[last ? "remove" : "add"]("hidden");
     byId("cloudStudentNext").textContent = `다음: ${studentSemesters[studentSemesterIndex+1] === "0" ? "학기 미정" : studentSemesters[studentSemesterIndex+1]+"학기"}`;
+    updateStudentProgress();
+  }
+  function updateStudentProgress() {
+    const progress = byId("cloudStudentProgress");
+    if (!progress) return;
+    const current = studentSaved ? 3 : application ? 2 : 1;
+    for (const item of progress.children) {
+      const step = Number(item.dataset.progressStep);
+      item.classList[step < current ? "add" : "remove"]("is-complete");
+      item.classList[step === current ? "add" : "remove"]("is-current");
+      item.setAttribute("aria-current", step === current ? "step" : "false");
+    }
+    const selectionStep = [...progress.children].find((item) => Number(item.dataset.progressStep) === 2)?.children[1];
+    if (selectionStep && studentSemesters.length > 1) {
+      selectionStep.textContent = `과목 선택 · ${studentSemesterIndex + 1}/${studentSemesters.length}학기`;
+    }
   }
   function validateStudentSemester() {
     if (!application.open) return;
@@ -907,6 +1050,7 @@ var updateApplicationGradeControls;
     }
   }
   byId("cloudStudentChoices").addEventListener("change", (event) => {
+    studentSaved = false;
     const box = event.target;
     const fieldset = box?.closest?.("fieldset[data-group]");
     if (fieldset && box.checked && fieldset.querySelectorAll("input:checked").length > Number(fieldset.dataset.count)) {
@@ -966,6 +1110,8 @@ var updateApplicationGradeControls;
         : await rpc("save_course_application", { p_code: code, p_selections: selected });
       if (activeCode === code) {
         byId("cloudStudentMessage").textContent = result.message;
+        studentSaved = true;
+        updateStudentProgress();
         window.showAppToast?.(result.message);
       }
     });
