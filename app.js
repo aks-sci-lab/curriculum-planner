@@ -88,6 +88,8 @@
 
     const state = observeState(rawState);
     const STORAGE_KEY = "course-certificate-studio-v1";
+    let curriculumLayoutStoredId = "";
+    let curriculumLayoutPersistenceTimer = null;
     const $ = (selector) => document.querySelector(selector);
     const rosterInput = $("#rosterInput");
     const dropzone = $("#dropzone");
@@ -278,7 +280,11 @@
           curriculumPlanFileName: state.curriculumPlanFileName,
           curriculumPlanAcademicYear: state.curriculumPlanAcademicYear,
           curriculumPlansByYear: state.curriculumPlansByYear,
-          curriculumImportedLayout: state.curriculumImportedLayout,
+          curriculumLayoutArchiveId: state.curriculumImportedLayout?.archiveId || "",
+          ...(state.curriculumImportedLayout &&
+            curriculumLayoutStoredId !== state.curriculumImportedLayout.archiveId
+            ? { curriculumImportedLayout: state.curriculumImportedLayout }
+            : {}),
           curriculumTemplateRows: state.curriculumTemplateRows,
           curriculumPlan: state.curriculumPlan,
           curriculumPlanFilters: state.curriculumPlanFilters,
@@ -303,10 +309,45 @@
           schoolName: $("#schoolName").value
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        return true;
       } catch (error) {
         statePersistenceSuppressed = Math.max(0, statePersistenceSuppressed - 1);
-        // 저장 용량 제한 등으로 실패할 수 있으므로 기능 동작은 계속 유지한다.
+        console.error("작업 상태 저장 실패", error);
+        const message = error?.name === "QuotaExceededError"
+          ? "브라우저 저장 공간이 부족해 변경 내용을 저장하지 못했습니다. 불필요한 브라우저 데이터를 정리한 뒤 다시 시도하세요."
+          : `변경 내용을 저장하지 못했습니다: ${error?.message || "브라우저 저장소 오류"}`;
+        if (typeof status !== "undefined") {
+          status.style.color = "#a44939";
+          status.textContent = message;
+        }
+        showAppToast(message);
+        return false;
       }
+    }
+
+    function scheduleCurriculumLayoutPersistence() {
+      if (curriculumLayoutPersistenceTimer !== null) {
+        window.clearTimeout(curriculumLayoutPersistenceTimer);
+      }
+      curriculumLayoutPersistenceTimer = window.setTimeout(async () => {
+        curriculumLayoutPersistenceTimer = null;
+        const layout = state.curriculumImportedLayout;
+        if (!layout?.archiveId) return;
+        try {
+          const snapshot = JSON.parse(JSON.stringify(layout));
+          await storeCurriculumLayout(snapshot);
+          if (state.curriculumImportedLayout?.archiveId !== snapshot.archiveId) return;
+          if (JSON.stringify(state.curriculumImportedLayout) !== JSON.stringify(snapshot)) return;
+          curriculumLayoutStoredId = snapshot.archiveId;
+          persistState();
+        } catch (error) {
+          console.error("편제표 저장 실패", error);
+          const message = `편제표 저장에 실패했습니다: ${error?.message || "브라우저 저장소 오류"}`;
+          status.style.color = "#a44939";
+          status.textContent = message;
+          showAppToast(message);
+        }
+      }, 250);
     }
 
     function clearPersistedState() {
@@ -594,10 +635,13 @@
         state.curriculumCatalogQuery = String(saved.curriculumCatalogQuery || "");
         state.curriculumFileName = String(saved.curriculumFileName || "");
         state.curriculumPlanFileName = String(saved.curriculumPlanFileName || "");
-        state.curriculumImportedLayout = saved.curriculumImportedLayout &&
+        const persistedLayout = saved.curriculumImportedLayout &&
           Array.isArray(saved.curriculumImportedLayout.rows)
           ? saved.curriculumImportedLayout
           : null;
+        const persistedLayoutId = String(saved.curriculumLayoutArchiveId || persistedLayout?.archiveId || "");
+        state.curriculumImportedLayout = persistedLayout;
+        curriculumLayoutStoredId = persistedLayout ? "" : persistedLayoutId;
         state.curriculumTemplateRows = Array.isArray(saved.curriculumTemplateRows)
           ? saved.curriculumTemplateRows.map((row) => normalizeCurriculumPlanRow(row))
           : [];
@@ -650,6 +694,26 @@
         renderSemesterClassifier();
         renderAggregate();
         renderWorkflowLayout();
+        if (persistedLayout) {
+          scheduleCurriculumLayoutPersistence();
+        } else if (persistedLayoutId) {
+          const layoutRestoreRevision = state.curriculumMutationRevision;
+          loadCurriculumLayout(persistedLayoutId).then((layout) => {
+            if (!layout) throw new Error("저장된 편제표를 찾을 수 없습니다.");
+            if (state.curriculumImportedLayout ||
+                state.curriculumMutationRevision !== layoutRestoreRevision) return;
+            state.curriculumImportedLayout = layout;
+            curriculumLayoutStoredId = persistedLayoutId;
+            renderCurriculumStep();
+            persistState();
+          }).catch((error) => {
+            console.error("저장된 편제표 복원 실패", error);
+            const message = `저장된 편제표를 불러오지 못했습니다: ${error?.message || "브라우저 저장소 오류"}`;
+            status.style.color = "#a44939";
+            status.textContent = message;
+            showAppToast(message);
+          });
+        }
         if (state.students.length) {
           status.style.color = "#287956";
           status.textContent = `새로고침 이전 파일(${state.fileName || "이전 파일"})을 복원했습니다.`;
@@ -1828,6 +1892,7 @@
       state.curriculumPlanFileName = snapshot.curriculumPlanFileName;
       state.curriculumPlanAcademicYear = snapshot.curriculumPlanAcademicYear || "";
       state.curriculumPlansByYear = snapshot.curriculumPlansByYear || {};
+      scheduleCurriculumLayoutPersistence();
       state.curriculumMutationRevision += 1;
       state.curriculumEditBefore = null;
       state.curriculumEditUndoRecorded = false;
@@ -4054,6 +4119,7 @@
       state.curriculumPlan = nextPlan;
       syncCurriculumPlanYearSnapshot();
       state.curriculumImportedLayout = nextLayout;
+      scheduleCurriculumLayoutPersistence();
       state.curriculumMutationRevision += 1;
       syncCurriculumTemplateRows();
       renderCurriculumStep();
@@ -4154,6 +4220,7 @@
         : layout.rows.length;
       const nextLayout = insertImportedPlanLayoutRow(layout, insertionRow, []);
       state.curriculumImportedLayout = nextLayout;
+      scheduleCurriculumLayoutPersistence();
       state.curriculumSelectedRow = insertionRow;
       state.curriculumMutationRevision += 1;
       renderCurriculumStep();
@@ -4325,6 +4392,8 @@
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
           importedLayout.archiveId = await storeCurriculumArchive(reader.result);
+          await storeCurriculumLayout(importedLayout);
+          curriculumLayoutStoredId = importedLayout.archiveId;
           if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
           recordCurriculumUndo();
           state.curriculumMutationRevision += 1;
@@ -4335,7 +4404,7 @@
           state.curriculumPlanFileName = file.name;
           state.curriculumImportedLayout = importedLayout;
           renderCurriculumStep();
-          persistState();
+          if (!persistState()) throw new Error("브라우저 저장 공간이 부족해 편제표를 저장하지 못했습니다.");
           status.style.color = plan.length ? "#287956" : "#a44939";
           status.textContent = plan.length
             ? `편제표 ${plan.length}개 과목을 불러와 반영했습니다.`
@@ -4514,6 +4583,7 @@
       state.curriculumImportedLayout.rows[rowIndex] = state.curriculumImportedLayout.rows[rowIndex] || [];
       state.curriculumImportedLayout.rows[rowIndex][columnIndexValue] = cell.innerText.replace(/\r\n?/g, "\n");
       if (state.curriculumImportedLayout.formulas) delete state.curriculumImportedLayout.formulas[`${rowIndex}:${columnIndexValue}`];
+      scheduleCurriculumLayoutPersistence();
       try {
         recalculatePlanFormulas(state.curriculumImportedLayout);
         for (const [key] of Object.entries(state.curriculumImportedLayout.formulas || {})) {
@@ -4545,6 +4615,7 @@
           state.curriculumTemplateRows = plan.map((row) => normalizeCurriculumPlanRow(row));
           renderCurriculumStep();
           persistState();
+          scheduleCurriculumLayoutPersistence();
           status.style.color = "#287956";
           status.textContent = "편제표 수정 내용을 저장했습니다.";
         } catch (error) {

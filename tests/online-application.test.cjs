@@ -9,6 +9,7 @@ const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).filter((source) => source.trim());
 const frontend = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 const workbookParser = fs.readFileSync(path.join(__dirname, "..", "xlsx-parser.js"), "utf8");
+const curriculumWorkbook = fs.readFileSync(path.join(__dirname, "..", "curriculum-workbook.js"), "utf8");
 function functionSource(start, end) {
   return frontend.slice(frontend.indexOf(start), frontend.indexOf(end));
 }
@@ -112,6 +113,16 @@ test("all embedded scripts parse", () => {
   scripts.forEach((source) => new vm.Script(source));
   new vm.Script(frontend);
   new vm.Script(workbookParser);
+});
+
+test("large imported curriculum layouts persist in IndexedDB and restore by archive ID", () => {
+  assert.match(curriculumWorkbook,/async function storeCurriculumLayout\(layout\)[\s\S]*curriculumArchiveStore\("put",`layout:\$\{layout\.archiveId\}`,layout\)/);
+  assert.match(curriculumWorkbook,/async function loadCurriculumLayout\(id\)[\s\S]*curriculumArchiveStore\("get",`layout:\$\{id\}`\)/);
+  assert.match(frontend,/curriculumLayoutArchiveId:\s*state\.curriculumImportedLayout\?\.archiveId\s*\|\|\s*""/);
+  assert.match(frontend,/loadCurriculumLayout\(persistedLayoutId\)\.then/);
+  assert.match(frontend,/await storeCurriculumLayout\(importedLayout\)/);
+  assert.match(frontend,/function scheduleCurriculumLayoutPersistence\(\)/);
+  assert.match(frontend,/브라우저 저장 공간이 부족해 변경 내용을 저장하지 못했습니다/);
 });
 
 test("roster supports aliases, sheet grades and multiple sheets", () => {

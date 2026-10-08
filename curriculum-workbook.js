@@ -97,6 +97,16 @@ async function storeCurriculumArchive(buffer) {
   await curriculumArchiveStore("put",id,buffer);
   return id;
 }
+async function storeCurriculumLayout(layout) {
+  if (!layout?.archiveId || !Array.isArray(layout.rows)) {
+    throw new Error("편제표 저장 데이터가 올바르지 않습니다.");
+  }
+  await curriculumArchiveStore("put",`layout:${layout.archiveId}`,layout);
+}
+async function loadCurriculumLayout(id) {
+  if (!id) return null;
+  return await curriculumArchiveStore("get",`layout:${id}`) || null;
+}
 
 async function buildOriginalCurriculumWorkbook(layout) {
   if (!layout?.archiveId || !layout.sheetPath) throw new Error("원본 양식을 보존하려면 편제표를 다시 업로드하세요.");
