@@ -3,7 +3,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
-const { randomUUID } = require("node:crypto");
 
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).filter((source) => source.trim());
@@ -11,7 +10,10 @@ const frontend = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 const workbookParser = fs.readFileSync(path.join(__dirname, "..", "xlsx-parser.js"), "utf8");
 const curriculumWorkbook = fs.readFileSync(path.join(__dirname, "..", "curriculum-workbook.js"), "utf8");
 function functionSource(start, end) {
-  return frontend.slice(frontend.indexOf(start), frontend.indexOf(end));
+  const startIndex = frontend.indexOf(start);
+  const endIndex = frontend.indexOf(end, startIndex + start.length);
+  assert.ok(startIndex >= 0 && endIndex > startIndex, `Missing source boundaries: ${start} → ${end}`);
+  return frontend.slice(startIndex, endIndex);
 }
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -23,90 +25,6 @@ function normalizeGradeGroupNamesForTest(value, legacyNames = []) {
   return value
     ? { "2": normalize(value["2"]), "3": normalize(value["3"]) }
     : { "2": normalize(legacyNames), "3": normalize(legacyNames) };
-}
-
-class Sheet {
-  constructor(name) { this.name = name; this.rows = []; }
-  setName(name) { this.name = name; return this; }
-  appendRow(row) { this.rows.push(row); return this; }
-  getDataRange() {
-    return {
-      getValues: () => this.rows.map((r) => [...r]),
-      getDisplayValues: () => this.rows.map((r) => r.map(String)),
-    };
-  }
-  getRange(row, col) {
-    const set = (values) => {
-      values.forEach((r, i) => {
-        this.rows[row - 1 + i] ??= [];
-        r.forEach((value, j) => { this.rows[row - 1 + i][col - 1 + j] = value; });
-      });
-      return range;
-    };
-    const range = {
-      setNumberFormat: () => range,
-      setValues: set,
-      setValue: (value) => set([[value]]),
-      getValue: () => this.rows[row - 1]?.[col - 1],
-    };
-    return range;
-  }
-}
-
-function server() {
-  const properties = new Map();
-  const books = new Map();
-  let locks = 0;
-  const context = vm.createContext({
-    PropertiesService: { getScriptProperties: () => ({
-      getProperty: (key) => properties.get(key),
-      setProperty: (key, value) => properties.set(key, value),
-    }) },
-    Utilities: { getUuid: randomUUID },
-    Logger: { log() {} },
-    LockService: { getScriptLock: () => ({
-      waitLock() { locks++; }, releaseLock() { locks--; },
-    }) },
-    SpreadsheetApp: {
-      create() {
-        const id = String(books.size);
-        const sheets = [new Sheet("Sheet1")];
-        const book = {
-          getId: () => id, getUrl: () => "https://example.invalid/" + id,
-          getSheets: () => sheets,
-          getSheetByName: (name) => sheets.find((s) => s.name === name),
-          insertSheet(name) { const s = new Sheet(name); sheets.push(s); return s; },
-        };
-        books.set(id, book);
-        return book;
-      },
-      openById: (id) => books.get(id),
-    },
-    HtmlService: {
-      XFrameOptionsMode: { ALLOWALL: "ALLOWALL" },
-      createHtmlOutput: (content) => ({
-        content, frameMode: "DEFAULT",
-        setXFrameOptionsMode(mode) { this.frameMode = mode; return this; },
-      }),
-    },
-  });
-  vm.runInContext(scripts[0], context);
-  context.initializeCourseServer();
-  return { context, key: properties.get("ADMIN_KEY"), properties, books, locks: () => locks };
-}
-function setup() {
-  return {
-    type: "course-application-setup", round: "2", schoolName: "가상학교", schoolYear: "2026",
-    roster: [
-      { grade: "1", classroom: "1", number: "1", name: "가상학생1" },
-      { grade: "2", classroom: "2", number: "2", name: "가상학생2" },
-    ],
-    subjects: {
-      "1": [],
-      "2": [{ subject: "수학", credit: 3, semester: "1" }],
-      "3": [{ subject: "과학", credit: 3, semester: "2" }],
-    },
-  };
 }
 
 test("all embedded scripts parse", () => {
@@ -132,7 +50,7 @@ test("large imported curriculum layouts persist in IndexedDB and restore by arch
 
 test("roster supports aliases, sheet grades and multiple sheets", () => {
   const ctx = vm.createContext({});
-  vm.runInContext(functionSource("function parseApplicationRoster(", "function downloadTextFile("), ctx);
+  vm.runInContext(functionSource("function parseApplicationRoster(", "function downloadRowsXlsx("), ctx);
   const result = ctx.parseApplicationRoster([
     { name: "명렬", rows: [["학년", "반", "번호", "성명"], [1, 2, 3, "가상학생1"], []] },
     { name: "2학년", rows: [["반", "출석번호", "학생명", "학번"], [2, 4, "가상학생2", "20260004"]] },
@@ -264,7 +182,7 @@ test("joint and small-enrollment courses are excluded from new applications, not
   vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("),ctx);
   assert.deepEqual(plain(ctx.selectedApplicationSubjects()["2"].map((c)=>c.subject)),["일반 과목","공동체와 인간"]);
   assert.equal(ctx.collectApplicationSubjects({includeExcluded:true})["2"].length,5);
-  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
+  vm.runInContext(functionSource("function mergeApplications(", "function parseApplicationRoster("),ctx);
   const historical=ctx.mergeApplications([{grade:"1",classroom:"1",number:"1",name:"가상",selections:["소인수 과목"]}]);
   assert.deepEqual(plain(historical.errors),[]);
   assert.equal(historical.students[0].selections[0].name,"소인수 과목");
@@ -280,83 +198,6 @@ test("student course classification labels leave selection identities unchanged"
     assert.equal(course.subject,"물리학 실험");
   }
   assert.equal(ctx.applicationCourseLabel({subject:"수학"}),"수학");
-});
-
-test("Google Form classified labels map back to original course names and accept older results", () => {
-  const ctx=vm.createContext({});
-  vm.runInContext(functionSource("function curriculumSelectionType(", "function importedPlanCourseContexts("),ctx);
-  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
-  vm.runInContext(functionSource("function splitGoogleFormSelections(", "async function handleGoogleFormsFile("),ctx);
-  const subjects={"2":[{subject:"물리학 실험",type:"융합선택"},{subject:"경제",type:"진로선택"}]};
-  const result=ctx.parseGoogleFormsRows([
-    ["현재 학년","반","번호","이름","2학년 1학기 선택과목"],
-    ["1학년","1","1","가상1","물리학 실험(융합), 경제(진로)"],
-    ["1학년","1","2","가상2","물리학 실험, 경제"],
-  ],subjects);
-  assert.deepEqual(plain(result.map((entry)=>entry.selections)),[
-    ["물리학 실험","경제"],["물리학 실험","경제"]
-  ]);
-});
-
-test("generated Google Form routes each current grade to only its promoted-grade section", () => {
-  const generator=vm.createContext({$:(selector)=>({value:selector==="#schoolName"?"가상학교":"2026"})});
-  vm.runInContext(functionSource("function buildAppsScriptCode(", "function splitGoogleFormSelections("),generator);
-  for (const subjects of [setup().subjects,{"2":setup().subjects["2"],"3":[]}]) {
-    const pages=[],items=[];
-    const gradeItem={setTitle(){return this;},setRequired(){return this;},
-      createChoice:(label,page)=>({label,page}),setChoices(choices){this.choices=choices;}};
-    const form={
-      setDescription(){},setLimitOneResponsePerUser(){},setDestination(){},
-      addMultipleChoiceItem:()=>gradeItem,
-      addTextItem:()=>({setTitle(){return this;},setRequired(){return this;}}),
-      addPageBreakItem(){
-        const page={setTitle(title){this.title=title;return this;},setGoToPage(target){this.navigation=target;return this;}};
-        pages.push(page);return page;
-      },
-      addCheckboxItem(){
-        const item={page:pages.at(-1),setTitle(){return this;},setChoiceValues(values){this.values=values;return this;},
-          setHelpText(){return this;}};
-        items.push(item);return item;
-      },getPublishedUrl:()=>"https://example.invalid/form",
-    };
-    const ctx=vm.createContext({
-      FormApp:{create:()=>form,PageNavigationType:{SUBMIT:"submit"},DestinationType:{SPREADSHEET:"sheet"}},
-      SpreadsheetApp:{create:()=>({getId:()=>"sheet",getUrl:()=>"url"})},Logger:{log(){}},
-    });
-
-    vm.runInContext(generator.buildAppsScriptCode(subjects),ctx);
-    ctx.createCourseApplicationForm();
-    assert.equal(gradeItem.choices.length,pages.length);
-    for (const choice of gradeItem.choices) {
-      const target=String(Number(choice.label[0])+1);
-      assert.equal(choice.page.title,`${target}학년 선택과목`);
-      assert.deepEqual(plain(items.filter((item)=>item.page===choice.page).flatMap((item)=>item.values)),
-        subjects[target].map((course)=>course.subject));
-      const nextPage=pages[pages.indexOf(choice.page)+1];
-      if (nextPage) assert.equal(nextPage.navigation,"submit");
-    }
-  }
-});
-
-test("generated offline student form shows total credits and the math, English, Korean credit share", () => {
-  const source = functionSource("function buildApplicationPageHtml(", "// 학생 신청 파일(JSON)들을 명단");
-  const context = vm.createContext({
-    $: (selector) => ({ value: selector === "#schoolName" ? "가상학교" : "2026" }),
-    xmlEscape: (value) => String(value),
-  });
-  vm.runInContext(source, context);
-  const html = context.buildApplicationPageHtml({
-    "2": [
-      { subject: "수학", area: "수학", credit: 3, semester: "1" },
-      { subject: "생명과학", area: "과학", credit: 3, semester: "1" },
-    ],
-    "3": [],
-  });
-  assert.match(html, /신청 학점 중 국어·영어·수학 과목 비율/);
-  assert.match(html, /국·영·수/);
-  assert.match(html, /summaryGauge/);
-  assert.match(html, /position:sticky;bottom:0/);
-  assert.match(html, /data-core=/);
 });
 
 test("Excel style fills resolve RGB, theme, tint, indexed and uncolored cells", async () => {
@@ -405,7 +246,7 @@ test("cell fill positions survive layout cropping and inserted rows", () => {
 
 test("semester-qualified result imports retain separate courses, credits and semester keys", () => {
   const ctx=vm.createContext({collectApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1·2",credit:3,area:"수학"}],"3":[]})});
-  vm.runInContext(functionSource("function mergeApplications(","function downloadApplicationForm("),ctx);
+  vm.runInContext(functionSource("function mergeApplications(","function parseApplicationRoster("),ctx);
   const common={grade:"1",classroom:"1",number:"1",name:"가상",studentId:"20260001"};
   const result=ctx.mergeApplications([{...common,selections:["수학 (1학기)","수학 (2학기)"]}]);
   assert.deepEqual(plain(result.errors),[]);
@@ -470,8 +311,8 @@ test("cloud aggregation updates its own round, clears rollback results and prese
     renderSemesterClassifier(){},renderAggregate(){},
   });
 
-  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
-  vm.runInContext(functionSource("function applyCloudApplicationResults(", "function applyMergedApplications("),ctx);
+  vm.runInContext(functionSource("function mergeApplications(", "function parseApplicationRoster("),ctx);
+  vm.runInContext(functionSource("function applyCloudApplicationResults(", "function storeDeveloperGradeResults("),ctx);
   const subjects={"2":[{subject:"A",semester:"1",credit:3}],"3":[]};
   const entries=[{grade:"1",classroom:"1",number:"1",name:"가상",selections:["A"]}];
   ctx.applyCloudApplicationResults("1",entries,subjects);
@@ -574,6 +415,49 @@ test("certificate preview uses the saved grade-specific application group before
   },"1"),"1학기 융합탐구군");
 });
 
+test("certificate preview and print show both semester groups without duplicating selections or credits", () => {
+  const ctx=vm.createContext({
+    state:{curriculumPlan:[],groupAssignments:{},semesterAssignments:{}},
+    getApplicationGroupSettings:()=>[
+      {grade:"3",semester:"2",name:"과학 B",courses:["기후변화와 환경생태(2학기)"]},
+      {grade:"3",semester:"1",name:"과학 A",courses:["기후변화와 환경생태(1학기)"]},
+    ],
+    parseSemesterFromCourseName:(name)=>String(name).match(/([12])학기/)?.[1]||"",
+    resolveSemesterKey:(course)=>ctx.state.semesterAssignments[course.column] || course.semesterKey || "",
+    resolveCourseCategoryForOutput:()=>"미분류",
+    studentHistory:()=>[],
+    isCoreCourse:()=>false,
+    escapeHtml:(value)=>String(value),
+    $:()=>({value:""}),
+  });
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function certificateMarkup(", "function renderPreview("),ctx);
+  const course={column:"climate",name:"기후변화와 환경생태",credits:3};
+  const student={grade:"2",classroom:"1",number:"1",name:"가상학생",selections:[course],totalCredits:3};
+  for (const printMode of [false,true]) {
+    const markup=ctx.certificateMarkup(student,printMode);
+    assert.match(markup,/1학기 과학 A \/ 2학기 과학 B/);
+    assert.doesNotMatch(markup,/미분류/);
+    assert.equal((markup.match(/class="course-cell">기후변화와 환경생태/g)||[]).length,1);
+    assert.match(markup,/총 1과목\(3학점\)/);
+  }
+  assert.equal(ctx.courseGroupLabel({...course,semesterKey:"2"},"2"),"2학기 과학 B");
+  assert.deepEqual(plain(ctx.applicationGroupForCourse({
+    ...course,name:"기후변화와 환경생태(2학기)",semesterKey:"1·2",
+  },"2")),{name:"과학 B",semester:"2"});
+  ctx.state.semesterAssignments.climate="1";
+  assert.equal(ctx.courseGroupLabel(course,"2"),"1학기 과학 A");
+  delete ctx.state.semesterAssignments.climate;
+  ctx.state.curriculumPlan=[{grade:"3",subject:course.name,sem31:"",sem32:3}];
+  assert.equal(ctx.courseGroupLabel(course,"2"),"2학기 과학 B");
+  assert.equal(ctx.courseGroupLabel({...course,semesterKey:"1·2"},"2"),"2학기 과학 B");
+  ctx.state.groupAssignments.climate="직접 지정";
+  ctx.resolveCourseCategoryForOutput=()=>"직접 지정";
+  assert.equal(ctx.courseGroupLabel(course,"2"),"직접 지정");
+  assert.equal(student.selections.length,1);
+  assert.equal(student.totalCredits,3);
+});
+
 test("round deletion retains curriculum, other rounds and their classification settings", () => {
   const other={students:[{id:"other"}],courses:[{column:3}],fileName:"other.xlsx",classOverrides:{3:2},
     semesterAssignments:{3:"2"},groupAssignments:{3:"2학기 보존"},customGroupNames:["보존"]};
@@ -624,7 +508,7 @@ test("developer result Excel imports both layouts and rejects invalid or expired
     applyClassFilterOptions(){}, renderRoster(){},renderPreview(){},renderSemesterClassifier(){},
     renderAggregate(){},renderRoundStatus(){},persistState(){persisted++;},
   });
-  vm.runInContext(functionSource("function splitGoogleFormSelections(", "function parseGoogleFormsRows("),ctx);
+  vm.runInContext(functionSource("function splitGoogleFormSelections(", "function xmlEscape("),ctx);
   vm.runInContext(functionSource("function handleWorkbook(", "function handleCurriculumWorkbook("),ctx);
   workbook=[{rows:[["차수","학년","반","번호","성명","선택과목"],["2","1","1","1","가상","수학"]]}];
   ctx.handleWorkbook({name:"results.xlsx"}); await completion;
@@ -678,7 +562,7 @@ test("developer results replace only the chosen grade and retain courses, settin
     persistState(){ctx.syncActiveRound();},
   });
   vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
-  vm.runInContext(functionSource("function storeDeveloperGradeResults(", "async function handleApplicationFiles("),ctx);
+  vm.runInContext(functionSource("function storeDeveloperGradeResults(", "function splitGoogleFormSelections("),ctx);
   const data=(grade,name)=>({
     courses:[{column:4,name:"공통 이름",credits:3},{column:5,name:"미신청 과목",credits:3}],
     students:[{id:`${grade}-${name}`,grade,name,classroom:"1",number:"1",totalCredits:3,
@@ -858,6 +742,41 @@ test("aggregate and class-assignment views provide separate grade tabs", () => {
   assert.match(html,/id="classifierGradeTabs"[\s\S]*data-classifier-grade="2"[\s\S]*data-classifier-grade="3"/);
 });
 
+test("aggregation keeps same-name groups independent and exports planned totals rather than course override sums", () => {
+  const settings=[
+    {id:"a",grade:"2",semester:"1",name:"선택군",count:1,courses:["A"]},
+    {id:"b",grade:"2",semester:"1",name:"선택군",count:2,courses:["B","C"]},
+    {id:"third",grade:"3",semester:"2",name:"선택군",count:1,courses:["D"]},
+  ];
+  const ctx=vm.createContext({
+    state:{curriculumPlan:[],groupAssignments:{},semesterAssignments:{}},
+    getApplicationGroupSettings:()=>settings,
+    parseSemesterFromCourseName:()=>"",
+    normalizeGroupName:(value)=>String(value??"").trim(),
+    UNASSIGNED_GROUP:"미분류",
+    parseAssignedGroupLabel:()=>({semesterKey:"",category:""}),
+    $:()=>({value:""}),
+  });
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("),ctx);
+  const students=[
+    {grade:"1",classroom:"1",selections:[{column:"a"},{column:"b"}]},
+    {grade:"2",classroom:"1",selections:[{column:"d"}]},
+  ];
+  const courses=[
+    {column:"a",name:"A",applicationCurrentGrade:"1"},
+    {column:"b",name:"B",applicationCurrentGrade:"1"},
+    {column:"d",name:"D",applicationCurrentGrade:"2"},
+  ];
+  const result=ctx.aggregateRecords(students,courses,90,110,{"1:a":9},{},{},{"2":4,"3":5});
+  assert.deepEqual(plain(result.reports.map((report)=>report.semesters.flatMap((semester)=>
+    semester.groups.map((group)=>group.totalClasses)))),[[4,8],[5]]);
+  assert.equal(result.reports[0].semesters[0].groups[0].courses[0].classCount,9);
+  const xml=ctx.createWorksheetXml(result.reports[0],90,110);
+  assert.match(xml,/<c r="H8" s="9"><v>12<\/v><\/c>/);
+});
+
 test("six workflow menus reveal their matching panels without changing the selected round", () => {
   const elements=new Map();
   const element=()=>({attributes:{},hidden:false,textContent:"",
@@ -874,6 +793,9 @@ test("six workflow menus reveal their matching panels without changing the selec
     $:(id)=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);},
     renderCurriculumStep(){},renderRoundStatus(){},renderApplicationSubjects(){},
     renderClosurePanel:(round)=>{ctx.closureRound=round;},renderRetakePanel(){},
+    renderPreview:()=>{ctx.previewRefreshed=true;},
+    renderAggregate:()=>{ctx.aggregateRefreshed=true;},
+    renderSemesterClassifier:()=>{ctx.classifierRefreshed=true;},
     persistState:()=>{saved++;}});
   vm.runInContext(functionSource("function renderWorkflowLayout(", "function switchRound("),ctx);
   ctx.renderWorkflowLayout();
@@ -881,13 +803,16 @@ test("six workflow menus reveal their matching panels without changing the selec
   assert.equal(elements.get("#workflowStep1Panel").classList.states.hidden,false);
   ctx.switchWorkflowStep(3);
   assert.equal(elements.get("#certificatePanel").classList.states.hidden,false);
+  assert.equal(ctx.previewRefreshed,true);
   ctx.switchWorkflowStep(4);
   assert.equal(elements.get("#aggregatePanel").classList.states.hidden,false);
   assert.equal(elements.get("#closurePanel").classList.states.hidden,false);
   assert.equal(elements.get("#retakePanel").classList.states.hidden,false);
   assert.equal(ctx.closureRound,"4");
+  assert.equal(ctx.aggregateRefreshed,true);
   ctx.switchWorkflowStep(5);
   assert.equal(elements.get("#classifierPanel").classList.states.hidden,false);
+  assert.equal(ctx.classifierRefreshed,true);
   ctx.switchWorkflowStep(6);
   assert.equal(elements.get("#workflowStep6Panel").classList.states.hidden,false);
   assert.equal(state.currentRound,"4");
@@ -930,111 +855,39 @@ test("retake decisions follow course names when column IDs change between rounds
   assert.deepEqual(Array.from(result.rows[0].courses),["기하"]);
 });
 
-test("roster upload exports selected subjects and round without overwriting application results", async () => {
-  const subjects = setup().subjects;
-  const existing = [{ name: "기존학생" }];
-  const ctx = vm.createContext({
-    state: { currentRound: "2", students: existing },
-    status: { style: {}, textContent: "" },
-    $: (selector) => ({ value: selector === "#schoolName" ? "가상학교" : "2026" }),
-    selectedApplicationSubjects: () => subjects,
-    parseWorkbook: async () => [
-      { name: "명렬", rows: [["학년", "반", "번호", "성명"], [1, 1, 1, "가상학생1"]] },
-    ],
-    downloadTextFile(text, filename) { ctx.downloaded = { data: JSON.parse(text), filename }; },
+test("retake workbook names its next round and escapes student data", () => {
+  let files,filename;
+  const ctx=vm.createContext({
+    retakeTargets:()=>({sourceRound:"4",rows:[{
+      student:{grade:"1",classroom:"1",number:"1",name:"가상 & 학생"},courses:["기하"],
+    }]}),
+    createXlsxBlob:(data)=>{files=data;return {};},
+    createStylesXml:()=>"<styles/>",
+    URL:{createObjectURL:()=>"blob:test",revokeObjectURL(){}},
+    document:{createElement:()=>({click(){filename=this.download;}})},
+    setTimeout:(callback)=>callback(),
   });
-  vm.runInContext(functionSource("function parseApplicationRoster(", "function downloadTextFile("), ctx);
-  vm.runInContext(functionSource("async function handleApplicationRoster(", "function applyMergedApplications("), ctx);
-  const file = { name: "roster.xlsx", arrayBuffer: async () => new ArrayBuffer(0) };
-  await ctx.handleApplicationRoster(file);
-  assert.equal(ctx.downloaded.filename, "온라인_수강신청_설정.json");
-  assert.equal(ctx.downloaded.data.type, "course-application-setup");
-  assert.equal(ctx.downloaded.data.round, "2");
-  assert.deepEqual(ctx.downloaded.data.subjects, subjects);
-  assert.equal(ctx.downloaded.data.roster.length, 1);
-  assert.equal(ctx.state.students, existing);
-  ctx.downloaded = null;
-  subjects["2"] = [];
-  await ctx.handleApplicationRoster(file);
-  assert.equal(ctx.downloaded, null);
-  assert.match(ctx.status.textContent, /2학년 학생선택교육과정 과목이 없습니다/);
+  vm.runInContext(functionSource("function xmlEscape(", "function createWorksheetXml("),ctx);
+  vm.runInContext(functionSource("function downloadRetakeList(", "function collectApplicationSubjects("),ctx);
+  ctx.downloadRetakeList();
+  assert.equal(filename,"5차_수강신청_대상자(4차_기준).xlsx");
+  assert.match(files["xl/workbook.xml"],/name="5차 대상자"/);
+  assert.match(files["xl/worksheets/sheet1.xml"],/가상 &amp; 학생/);
 });
 
-test("server setup requires admin and rejects invalid/duplicate roster", () => {
-  const s = server(), c = s.context;
-  assert.throws(() => c.uploadCourseSetup("wrong", JSON.stringify(setup())), /인증/);
-  const duplicate = setup();
-  duplicate.roster.push(duplicate.roster[0]);
-  assert.throws(() => c.uploadCourseSetup(s.key, JSON.stringify(duplicate)), /중복/);
-  assert.equal(s.books.size, 0);
-  c.uploadCourseSetup(s.key, JSON.stringify(setup()));
-  assert.throws(() => c.uploadCourseSetup(s.key, JSON.stringify(setup())), /이미 설정/);
-  assert.equal(s.locks(), 0);
+test("removed legacy generators and templates cannot be accidentally shipped again", () => {
+  assert.doesNotMatch(html,/driveServerTemplate/);
+  assert.doesNotMatch(frontend,/function (?:buildApplicationPageHtml|buildAppsScriptCode|curriculumPlanTableHtml|handleApplicationFiles)\(/);
+  for (const file of ["app.js","xlsx-parser.js","course-groups.js","curriculum-workbook.js","supabase-client.js"]) {
+    new vm.Script(fs.readFileSync(path.join(__dirname,"..",file),"utf8"));
+  }
 });
 
-test("student reads only own grade, saves, updates, closes and exports into existing records", () => {
-  const s = server(), c = s.context;
-  c.uploadCourseSetup(s.key, JSON.stringify(setup()));
-  const codes = JSON.parse(c.exportCourseData(s.key, "codes")).students;
-  const first = codes[0].code, second = codes[1].code;
-  assert.match(first, /^[a-f0-9]{32}$/);
-  assert.notEqual(first, second);
-  assert.throws(() => c.getStudentApplication("wrong"), /코드/);
-  assert.throws(() => c.exportCourseData("wrong", "results"), /인증/);
-  const data = plain(c.getStudentApplication(first));
-  assert.equal(data.student.name, "가상학생1");
-  assert.deepEqual(data.courses.map((course) => course.subject), ["수학"]);
-  assert.equal("roster" in data, false);
-  assert.throws(() => c.saveStudentApplication(first, ["과학"]), /가능한 과목/);
-  assert.throws(() => c.saveStudentApplication(first, []), /가능한 과목/);
-  assert.throws(() => c.saveStudentApplication(first, ["수학", "수학"]), /가능한 과목/);
-  c.saveStudentApplication(first, ["수학"]);
-  c.saveStudentApplication(first, ["수학"]);
-  assert.equal(s.books.get("0").getSheetByName("신청").rows.length, 2);
-  assert.deepEqual(plain(c.getStudentApplication(second)).selections, []);
-  c.setApplicationOpen(s.key, false);
-  assert.throws(() => c.saveStudentApplication(second, ["과학"]), /마감/);
-  assert.equal(c.getStudentApplication(first).open, false);
-  c.setApplicationOpen(s.key, true);
-  c.saveStudentApplication(second, ["과학"]);
-  const exported = JSON.parse(c.exportCourseData(s.key, "results"));
-  assert.equal(exported.round, "2");
-  assert.equal(exported.entries.length, 2);
-  assert.equal("code" in exported.entries[0], false);
-  const mergeCtx = vm.createContext({ collectApplicationSubjects: () => setup().subjects });
-  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("), mergeCtx);
-  const merged = plain(mergeCtx.mergeApplications(exported.entries));
-  assert.equal(merged.errors.length, 0);
-  assert.equal(merged.students.length, 2);
-  assert.equal(merged.students[0].totalCredits, 3);
-  assert.equal(s.locks(), 0);
-});
-
-test("student web HTML includes no administrator key or roster; invalid admin is rejected", () => {
-  const s = server(), c = s.context;
-  c.uploadCourseSetup(s.key, JSON.stringify(setup()));
-  const output = c.doGet({ parameter: {} });
-  const content = output.content;
-  assert.equal(output.frameMode, "ALLOWALL");
-  assert.ok(!content.includes(s.key));
-  assert.ok(!content.includes("가상학생1"));
-  const clientScript = content.match(/<script>([\s\S]*?)<\/script>/)[1];
-  new vm.Script(clientScript);
-  assert.throws(() => c.doGet({ parameter: { admin: "wrong" } }), /인증/);
-  const admin = c.doGet({ parameter: { admin: s.key } });
-  assert.ok(admin.content.includes(s.key));
-  assert.equal(admin.frameMode, "DEFAULT");
-});
-
-test("school link carries only a validated server endpoint and rejects secrets or foreign hosts", () => {
+test("existing school links accept only validated server endpoints without credentials", () => {
   const ctx = vm.createContext({ URL, URLSearchParams });
   vm.runInContext(functionSource("function normalizeApplicationServerUrl(", "function showStudentApplicationEntry("), ctx);
   const endpoint = "https://script.google.com/macros/s/Abc_123-xyz/exec";
-  const link = new URL(ctx.buildSchoolApplicationLink(endpoint, "https://school.example/app/?admin=secret#old"));
-  assert.equal(link.origin, "https://school.example");
-  assert.equal(link.search, "");
-  assert.equal(new URLSearchParams(link.hash.slice(1)).get("apply"), endpoint);
-  assert.ok(!link.href.includes("secret"));
+  assert.equal(ctx.normalizeApplicationServerUrl(endpoint),endpoint);
   for (const bad of [
     endpoint + "?admin=secret", endpoint + "#key", endpoint.replace("/exec", "/dev"),
     endpoint.replace("https:", "http:"), endpoint.replace("script.google.com", "evil.example"),
@@ -1042,7 +895,6 @@ test("school link carries only a validated server endpoint and rejects secrets o
     endpoint.replace("script.google.com", "user@script.google.com"),
     "javascript:alert(1)", "not a url",
   ]) assert.throws(() => ctx.normalizeApplicationServerUrl(bad));
-  assert.throws(() => ctx.buildSchoolApplicationLink(endpoint, "file:///C:/app/index.html"), /게시된 웹사이트/);
 });
 
 test("student entry hides administrator workspace and invalid link never loads a frame", () => {
@@ -1061,7 +913,7 @@ test("student entry hides administrator workspace and invalid link never loads a
     URL, URLSearchParams, document: { title: "" }, $: element,
     window: { location: { hash: "" } },
   });
-  vm.runInContext(functionSource("function normalizeApplicationServerUrl(", "async function handleApplicationRoster("), ctx);
+  vm.runInContext(functionSource("function normalizeApplicationServerUrl(", "function applyCloudApplicationResults("), ctx);
   assert.equal(ctx.showStudentApplicationEntry(), false);
   ctx.window.location.hash = "#" + new URLSearchParams({ apply: endpoint });
   assert.equal(ctx.showStudentApplicationEntry(), true);
@@ -1073,20 +925,4 @@ test("student entry hides administrator workspace and invalid link never loads a
   assert.equal(ctx.showStudentApplicationEntry(), true);
   assert.equal(element("#studentApplicationFrame").src, undefined);
   assert.match(element("#studentEntryError").textContent, /Apps Script|管理者|관리자/);
-});
-
-test("result bundle import checks round and reports empty results without changing records", async () => {
-  const ctx = vm.createContext({
-    state: { currentRound: "2" }, status: { style: {}, textContent: "" },
-    applyMergedApplications(entries) { ctx.merged = plain(entries); },
-  });
-  vm.runInContext(functionSource("async function handleApplicationFiles(", "function buildAppsScriptCode("), ctx);
-  const file = (data) => ({ name: "results.json", text: async () => JSON.stringify(data) });
-  await ctx.handleApplicationFiles([file({ type: "course-application-results", round: "1", entries: [{}] })]);
-  assert.match(ctx.status.textContent, /차수로 전환/);
-  assert.equal(ctx.merged, undefined);
-  await ctx.handleApplicationFiles([file({ type: "course-application-results", round: "2", entries: [] })]);
-  assert.match(ctx.status.textContent, /비어/);
-  await ctx.handleApplicationFiles([file({ type: "course-application-results", round: "2", entries: setup().roster })]);
-  assert.equal(ctx.merged.length, 2);
 });

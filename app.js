@@ -204,22 +204,9 @@
       };
     }
 
-    function planSubjectKey(grade, subject) {
-      return `${String(grade || "")}::${String(subject || "").trim()}`;
-    }
-
     function isSelectableDetail(detail) {
       const normalized = normalizeCurriculumDetail(detail);
       return normalized === "일반선택" || normalized === "진로선택" || normalized === "융합선택";
-    }
-
-    function curriculumBundleKeyForRow(row) {
-      if (!row) return "";
-      if (normalizeCurriculumDivision(row.division) !== "학생 선택 교육과정") return "";
-      if (!isSelectableDetail(row.detail)) return "";
-      const bundle = String(row.bundleName || "").trim();
-      if (!bundle) return "";
-      return `${String(row.grade || "1")}::${bundle}`;
     }
 
     function applyClassFilterOptions(students) {
@@ -381,10 +368,13 @@
       $("#closurePanel").classList.toggle("hidden", step !== 4);
       $("#retakePanel").classList.toggle("hidden", step !== 4);
       $("#classifierPanel").classList.toggle("hidden", step !== 5);
+      if (step === 3) renderPreview();
       if (step === 4) {
+        renderAggregate();
         renderClosurePanel(state.currentRound);
         renderRetakePanel();
       }
+      if (step === 5) renderSemesterClassifier();
     }
 
     function switchWorkflowStep(step, skipPersist = false) {
@@ -814,22 +804,7 @@
       return String(value ?? "").replace(/\s+/g, " ").trim();
     }
 
-    function courseDefaultCategory(course) {
-      return normalizeGroupName(course.category) || "과목";
-    }
     const UNASSIGNED_GROUP = "미분류";
-
-    function availableGroupNames(courses) {
-      const names = [];
-      const pushUnique = (name) => {
-        const normalized = normalizeGroupName(name);
-        if (!normalized || names.includes(normalized)) return;
-        names.push(normalized);
-      };
-      for (const custom of state.customGroupNames) pushUnique(custom);
-      for (const assigned of Object.values(state.groupAssignments)) pushUnique(assigned);
-      return names;
-    }
 
     function resolveCourseCategory(course) {
       const key = String(course.column);
@@ -843,12 +818,6 @@
       const assigned = parseAssignedGroupLabel(state.groupAssignments[key]);
       if (assigned.category) return assigned.category;
       return UNASSIGNED_GROUP;
-    }
-
-    function semesterTitle(key) {
-      if (key === "1") return "1학기";
-      if (key === "2") return "2학기";
-      return "미분류";
     }
 
     function applicationGroupForCourse(course, currentGrade, groups = null) {
@@ -868,7 +837,8 @@
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
       const normalize = (name) => curriculumCourseNameKey(name)
         .replace(/[\[(](?:일반|진로|융합)(?:선택)?[)\]]$/, "");
-      const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
+      const hint = ["1", "2"].includes(String(course.semesterKey))
+        ? String(course.semesterKey) : parseSemesterFromCourseName(course.name);
       const gradeSettings = settings.filter((group) => group.grade === String(Number(currentGrade) + 1));
       const courseMatches = gradeSettings.filter((group) =>
         group.courses.some((name) => normalize(name) === normalize(course.name)));
@@ -905,6 +875,17 @@
       if (currentGrade && !state.groupAssignments[String(course.column)]) {
         const applicationGroup = applicationGroupForCourse(course, currentGrade);
         if (applicationGroup) return `${["1", "2"].includes(applicationGroup.semester) ? applicationGroup.semester+"학기 " : ""}${applicationGroup.name}`;
+        const matches = applicationGroupMatchesForCourse(course, currentGrade);
+        const resolvedSemester = resolveSemesterKey(course);
+        const preferredSemester = ["1", "2"].includes(resolvedSemester)
+          ? resolvedSemester : curriculumSemesterForCourse(course, Number(currentGrade) + 1);
+        const preferredMatches = matches.filter((group) => group.semester === preferredSemester);
+        const groups = preferredMatches.length ? preferredMatches : matches;
+        if (groups.length && groups.every((group) => ["1", "2"].includes(group.semester)) &&
+            new Set(groups.map((group) => group.semester)).size === groups.length) {
+          return groups.slice().sort((a, b) => Number(a.semester) - Number(b.semester))
+            .map((group) => `${group.semester}학기 ${group.name}`).join(" / ");
+        }
       }
       const semester = resolveSemesterKey(course);
       const category = resolveCourseCategoryForOutput(course);
@@ -1375,20 +1356,6 @@
       return records;
     }
 
-    function curriculumCatalogTableHtml(rows, emptyText) {
-      if (!rows.length) return `<div class="curriculum-empty">${escapeHtml(emptyText)}</div>`;
-      return `<table class="curriculum-table">
-        <thead><tr><th style="width:18%">교과(군)</th><th style="width:16%">유형</th><th style="width:36%">과목명</th><th style="width:10%">학점</th><th style="width:20%">범위</th></tr></thead>
-        <tbody>${rows.map((item) => `<tr>
-          <td>${escapeHtml(curriculumAreaOf(item) || "-")}</td>
-          <td>${escapeHtml(item.type || "-")}</td>
-          <td>${escapeHtml(item.subject)}</td>
-          <td>${escapeHtml(item.credit || 0)}</td>
-          <td>${escapeHtml(item.minCredit || 0)}~${escapeHtml(item.maxCredit || 0)}</td>
-        </tr>`).join("")}</tbody>
-      </table>`;
-    }
-
     function curriculumBundleSummaryHtml(rows) {
       const bundles = new Map();
       for (const row of rows) {
@@ -1605,226 +1572,6 @@
       }).join("");
     }
 
-    function curriculumPlanTableHtml(rows, emptyText) {
-      const visibleGrade = String(state.curriculumTargetGrade || "1");
-      const visibleDivision = normalizeCurriculumDivisionFilter(state.curriculumTargetDivision);
-      const visibleArea = String(state.curriculumTargetArea || "").trim();
-      const visibleDetail = normalizeCurriculumDetailFilter(state.curriculumTargetDetail);
-      const visibleIndexes = rows
-        .map((item, index) => ({ item, index }))
-        .filter(({ item }) => String(item.grade || "1") === visibleGrade)
-        .filter(({ item }) => !visibleDivision || normalizeCurriculumDivision(item.division) === visibleDivision)
-        .filter(({ item }) => !visibleArea || String(item.area || "").trim() === visibleArea)
-        .filter(({ item }) => !visibleDetail || normalizeCurriculumDetail(item.detail) === visibleDetail);
-      if (!visibleIndexes.length) return `<div class="curriculum-empty">${escapeHtml(emptyText)}</div>`;
-
-      const displayGroups = new Map();
-      for (const { item, index } of visibleIndexes) {
-        const bundleKey = curriculumBundleKeyForRow(item);
-        const sharedValues = [
-          String(item.grade || "1"),
-          normalizeCurriculumDivision(item.division),
-          String(item.area || "").trim(),
-          normalizeCurriculumDetail(item.detail)
-        ];
-        if (!bundleKey) {
-          sharedValues.push(String(item.baseCredit || 0), String(item.opCredit || 0));
-          sharedValues.push(...CURRICULUM_SEMESTER_FIELDS.map((field) => String(item[field] || "").trim()));
-        }
-        const groupKey = JSON.stringify([bundleKey, ...sharedValues]);
-        const current = displayGroups.get(groupKey) || {
-          bundleKey,
-          indexes: [],
-          item,
-          pick: 1,
-          activeFields: new Set()
-        };
-        current.indexes.push(index);
-        current.pick = Math.max(current.pick, Math.max(1, Number(item.bundlePick) || 1));
-        for (const field of CURRICULUM_SEMESTER_FIELDS) {
-          if (String(item[field] || "").trim() !== "") current.activeFields.add(field);
-        }
-        displayGroups.set(groupKey, current);
-      }
-      let displayRows = [...displayGroups.values()];
-      const bundleGroups = new Map();
-      for (const displayRow of displayRows) {
-        if (!displayRow.bundleKey) continue;
-        const current = bundleGroups.get(displayRow.bundleKey) || {
-          displayRows: [],
-          indexes: [],
-          pick: 1,
-          activeFields: new Set(),
-          hoursByField: Object.fromEntries(CURRICULUM_SEMESTER_FIELDS.map((field) => [field, 0]))
-        };
-        current.displayRows.push(displayRow);
-        current.indexes.push(...displayRow.indexes);
-        current.pick = Math.max(current.pick, displayRow.pick);
-        for (const field of displayRow.activeFields) current.activeFields.add(field);
-        bundleGroups.set(displayRow.bundleKey, current);
-      }
-      for (const group of bundleGroups.values()) {
-        for (const index of group.indexes) {
-          const row = rows[index];
-          for (const field of CURRICULUM_SEMESTER_FIELDS) {
-            if (String(row[field] || "").trim()) {
-              group.hoursByField[field] += Number(row.opCredit) || 0;
-            }
-          }
-        }
-      }
-      const orderedDisplayRows = [];
-      const placedBundles = new Set();
-      for (const displayRow of displayRows) {
-        if (!displayRow.bundleKey) {
-          orderedDisplayRows.push(displayRow);
-          continue;
-        }
-        if (placedBundles.has(displayRow.bundleKey)) continue;
-        placedBundles.add(displayRow.bundleKey);
-        orderedDisplayRows.push(...bundleGroups.get(displayRow.bundleKey).displayRows);
-      }
-      displayRows = orderedDisplayRows;
-      const bundleCellMetaByGroup = new Map();
-      for (const [bundleKey, group] of bundleGroups.entries()) {
-        group.displayRows.forEach((displayRow, offset) => {
-          bundleCellMetaByGroup.set(displayRow, {
-            bundleKey,
-            first: offset === 0,
-            rowSpan: group.displayRows.length,
-            pick: group.pick,
-            activeFields: group.activeFields,
-            hoursByField: group.hoursByField
-          });
-        });
-      }
-
-      const makeOptions = (options, value) =>
-        options.map((option) => `<option value="${escapeHtml(option)}"${option === value ? " selected" : ""}>${escapeHtml(option)}</option>`).join("");
-      const makeGradeOptions = (value) =>
-        ["1", "2", "3"].map((grade) => `<option value="${grade}"${String(value) === grade ? " selected" : ""}>${grade}학년</option>`).join("");
-      const semesterLabel = {
-        sem11: "1-1",
-        sem12: "1-2",
-        sem21: "2-1",
-        sem22: "2-2",
-        sem31: "3-1",
-        sem32: "3-2"
-      };
-      const semesterCell = (item, index, field, bundleMeta) => {
-        const active = String(item[field] || "").trim() !== "";
-        const label = semesterLabel[field] || field;
-        if (bundleMeta) {
-          const bundleActive = bundleMeta.activeFields.has(field);
-          if (bundleActive) {
-            if (!bundleMeta.first) return "";
-            const hours = bundleMeta.hoursByField[field] || 0;
-            return `<td class="curriculum-sem-cell" rowspan="${bundleMeta.rowSpan}"><button class="curriculum-sem-button active" type="button" data-semester-field="${field}" data-plan-index="${index}" data-bundle-key="${escapeHtml(bundleMeta.bundleKey)}" aria-label="${escapeHtml(item.subject || "")} ${label}, 택${bundleMeta.pick}, ${hours}시간"><span class="curriculum-sem-main">택${bundleMeta.pick}</span><span class="curriculum-sem-hours">${hours}시간</span></button></td>`;
-          }
-          return `<td class="curriculum-sem-cell"><button class="curriculum-sem-button" type="button" data-semester-field="${field}" data-plan-index="${index}" data-bundle-key="${escapeHtml(bundleMeta.bundleKey)}" aria-label="${escapeHtml(item.subject || "")} ${label}"></button></td>`;
-        }
-        const hours = active ? Number(item.opCredit) || 0 : 0;
-        return `<td class="curriculum-sem-cell"><button class="curriculum-sem-button${active ? " active" : ""}" type="button" data-semester-field="${field}" data-plan-index="${index}" data-bundle-key="" aria-label="${escapeHtml(item.subject || "")} ${label}${active ? `, ${hours}시간` : ""}">${active ? `<span class="curriculum-sem-hours">${hours}시간</span>` : ""}</button></td>`;
-      };
-      const rowsHtml = displayRows.map((displayRow) => {
-        const { item, indexes } = displayRow;
-        const index = indexes[0];
-        const normalizedDetail = normalizeCurriculumDetail(item.detail);
-        const isSelectable = isSelectableDetail(normalizedDetail) && normalizeCurriculumDivision(item.division) === "학생 선택 교육과정";
-        const bundleName = isSelectable ? String(item.bundleName || "") : "";
-        const bundleMeta = bundleCellMetaByGroup.get(displayRow);
-        const semesterCellHtml = CURRICULUM_SEMESTER_FIELDS.map((field) => semesterCell(item, index, field, bundleMeta)).join("");
-        const pickValue = isSelectable ? Math.max(1, Number(item.bundlePick) || 1) : "";
-        const planIndexes = indexes.join(",");
-        const subjectList = indexes.map((subjectIndex) =>
-          `<span class="curriculum-subject-entry"><button class="curriculum-subject-name" type="button" data-plan-action="remove" data-plan-index="${subjectIndex}" aria-label="${escapeHtml(rows[subjectIndex].subject)} 삭제">${escapeHtml(rows[subjectIndex].subject)}</button></span>`
-        ).join(", ");
-        const baseCredits = [...new Set(indexes.map((subjectIndex) => String(rows[subjectIndex].baseCredit || 0)))].join(", ");
-        const opCredits = [...new Set(indexes.map((subjectIndex) => String(rows[subjectIndex].opCredit || 0)))].join(", ");
-        const pickCellHtml = `<td><input class="curriculum-cell-input curriculum-cell-input-num" type="number" min="1" step="1" data-plan-field="bundlePick" data-plan-index="${index}" data-plan-indexes="${planIndexes}" data-bundle-key="${escapeHtml(bundleMeta ? bundleMeta.bundleKey : "")}" value="${pickValue}" placeholder="-" ${isSelectable ? "" : "disabled"}></td>`;
-        return `<tr>
-          <td><select class="curriculum-cell-select" data-plan-field="division" data-plan-index="${index}" data-plan-indexes="${planIndexes}" aria-label="${escapeHtml(item.subject || "")} 구분">
-            ${makeOptions(CURRICULUM_DIVISION_OPTIONS, normalizeCurriculumDivision(item.division))}
-          </select></td>
-          <td><select class="curriculum-cell-select" data-plan-field="grade" data-plan-index="${index}" data-plan-indexes="${planIndexes}" aria-label="${escapeHtml(item.subject || "")} 학년">
-            ${makeGradeOptions(item.grade || "1")}
-          </select></td>
-          <td>${escapeHtml(item.area || "-")}</td>
-          <td><select class="curriculum-cell-select" data-plan-field="detail" data-plan-index="${index}" data-plan-indexes="${planIndexes}" aria-label="${escapeHtml(item.subject || "")} 세부">
-            ${makeOptions(CURRICULUM_DETAIL_OPTIONS, normalizedDetail)}
-          </select></td>
-          <td>${subjectList}</td>
-          <td><input class="curriculum-cell-input" type="text" data-plan-field="bundleName" data-plan-index="${index}" data-plan-indexes="${planIndexes}" value="${escapeHtml(bundleName)}" placeholder="선택묶음" ${isSelectable ? "" : "disabled"}></td>
-          ${pickCellHtml}
-          <td>${escapeHtml(baseCredits)}</td>
-          <td>${escapeHtml(opCredits)}</td>
-          ${semesterCellHtml}
-        </tr>`;
-      }).join("");
-      const visibleRows = visibleIndexes.map(({ item }) => item);
-      return `${curriculumBundleSummaryHtml(visibleRows)}${curriculumSemesterHoursSummaryHtml(visibleIndexes, visibleGrade)}<table class="curriculum-table">
-        <thead><tr>
-          <th style="width:9%">구분</th><th style="width:6%">학년</th><th style="width:7%">교과(군)</th><th style="width:8%">세부</th><th style="width:16%">과목명</th>
-          <th style="width:9%">선택묶음</th><th style="width:5%">선택수</th>
-          <th style="width:4%">기준</th><th style="width:4%">운영</th>
-          <th style="width:4.5%">1-1</th><th style="width:4.5%">1-2</th><th style="width:4.5%">2-1</th><th style="width:4.5%">2-2</th><th style="width:4.5%">3-1</th><th style="width:4.5%">3-2</th>
-        </tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>`;
-    }
-
-    function createInternalTemplateFromCatalog(catalog) {
-      return catalog.map((item) => normalizeCurriculumPlanRow({
-        grade: "1",
-        division: "학생 선택 교육과정",
-        area: curriculumAreaOf(item),
-        detail: item.type || "",
-        subject: item.subject,
-        bundleName: "",
-        bundlePick: 1,
-        baseCredit: item.credit || 0,
-        opCredit: item.credit || 0,
-        sem11: "",
-        sem12: "",
-        sem21: "",
-        sem22: "",
-        sem31: "",
-        sem32: ""
-      }, { detail: "일반선택" }));
-    }
-
-    function getCurriculumAreaOptions() {
-      return [...new Set(state.curriculumCatalog.map((item) => curriculumAreaOf(item)).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, "ko"));
-    }
-
-    function updateCurriculumBuilderControls() {
-      const gradeSelect = $("#curriculumTargetGrade");
-      const divisionSelect = $("#curriculumTargetDivision");
-      const areaSelect = $("#curriculumTargetArea");
-      const detailSelect = $("#curriculumTargetDetail");
-      const bundleNameInput = $("#curriculumBundleName");
-      const bundlePickInput = $("#curriculumBundlePick");
-      if (!gradeSelect || !divisionSelect || !areaSelect || !detailSelect || !bundleNameInput || !bundlePickInput) return;
-
-      gradeSelect.value = state.curriculumTargetGrade;
-      divisionSelect.value = normalizeCurriculumDivision(state.curriculumTargetDivision);
-      if (!state.curriculumTargetDivision) divisionSelect.value = "";
-      detailSelect.value = normalizeCurriculumDetail(state.curriculumTargetDetail);
-      if (!state.curriculumTargetDetail) detailSelect.value = "";
-      bundleNameInput.value = state.curriculumBundleName;
-      bundlePickInput.value = String(Math.max(1, Number(state.curriculumBundlePick) || 1));
-
-      const options = getCurriculumAreaOptions();
-      const current = state.curriculumTargetArea;
-      areaSelect.innerHTML = `<option value="">전체 교과군</option>${options.map((area) =>
-        `<option value="${escapeHtml(area)}"${area === current ? " selected" : ""}>${escapeHtml(area)}</option>`).join("")}`;
-      if (current && !options.includes(current)) {
-        state.curriculumTargetArea = "";
-        areaSelect.value = "";
-      }
-    }
-
     function filteredCurriculumCatalog() {
       const query = String(state.curriculumCatalogQuery || "").trim().toLocaleLowerCase();
       if (!query) return [...state.curriculumCatalog];
@@ -1865,32 +1612,6 @@
       $("#curriculumCatalogFilterCount").textContent = state.curriculumCatalog.length
         ? `${visibleCount}/${state.curriculumCatalog.length}과목`
         : "";
-    }
-
-    function addCurriculumItemToPlan(subject) {
-      const targetSubject = String(subject || "").trim();
-      if (!targetSubject) return false;
-      const item = state.curriculumCatalog.find((row) => String(row.subject || "").trim() === targetSubject);
-      if (!item) return false;
-      const exists = state.curriculumPlan.find((row) => String(row.subject || "").trim() === targetSubject);
-      if (exists) return false;
-      const detail = normalizeCurriculumDetail(state.curriculumTargetDetail || item.type || "일반선택");
-      const division = normalizeCurriculumDivision(state.curriculumTargetDivision || "학생 선택 교육과정");
-      const isSelectable = isSelectableDetail(detail) && division === "학생 선택 교육과정";
-      const nextRow = normalizeCurriculumPlanRow({
-        grade: state.curriculumTargetGrade,
-        division,
-        area: curriculumAreaOf(item),
-        detail,
-        subject: item.subject,
-        bundleName: isSelectable ? state.curriculumBundleName : "",
-        bundlePick: isSelectable ? state.curriculumBundlePick : 1,
-        baseCredit: item.credit || 0,
-        opCredit: item.credit || 0
-      }, { detail: "일반선택", division: "학생 선택 교육과정" });
-      state.curriculumPlan.push(nextRow);
-      state.curriculumTemplateRows = state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row));
-      return true;
     }
 
     function syncCurriculumTemplateRows() {
@@ -2120,9 +1841,11 @@
               semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
               semesters.push(semester);
             }
-            let group = semester.groups.find((item) => item.category === category);
+            const groupKey = !parsedAssignedGroup.category && targetGroup?.id
+              ? targetGroup.id : category;
+            let group = semester.groups.find((item) => item.key === groupKey);
             if (!group) {
-              group = { category, courses: [], choiceCount: null };
+              group = { key: groupKey, category, courses: [], choiceCount: null };
               semester.groups.push(group);
             }
             if (Number.isInteger(targetGroup?.count) && targetGroup.count >= 0) {
@@ -2620,9 +2343,6 @@
               const blanks = Array.from({ length: maxCourses - group.courses.length }, () => "<td></td>").join("");
               return `<tr><th class="aggregate-row-label">${label}</th>${values}${blanks}</tr>`;
             }).join("");
-            const riskCount = $("#aggregateContent").querySelectorAll(".aggregate-subject.at-risk").length;
-            const riskSummary = $("#aggregateContent").querySelector("[data-aggregate-risk-count]");
-            if (riskSummary) riskSummary.textContent = `${riskCount}과목`;
             const groupCaption = group.choiceCount === null
               ? group.category
               : `${group.category} · ${group.choiceCount}과목 선택`;
@@ -2643,6 +2363,8 @@
           ${semesterTables}
         </section>`;
       }).join("");
+      const riskSummary = $("#aggregateContent").querySelector("[data-aggregate-risk-count]");
+      if (riskSummary) riskSummary.textContent = `${atRiskCount}과목`;
       $("#aggregateDescription").textContent =
         `${state.currentRound}차 · ${targetGrade}학년 · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 폐강 예정 ${atRiskCount}과목`;
       $("#downloadAggregate").disabled = false;
@@ -2792,6 +2514,7 @@
     function downloadRetakeList() {
       const { sourceRound, rows } = retakeTargets();
       if (!rows.length) return;
+      const nextRound = Number(sourceRound) + 1;
       const sheetRows = [
         ["학년", "반", "번호", "이름", "폐강 과목"],
         ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, courses.join(", ")])
@@ -2944,111 +2667,7 @@
       if (typeof renderCourseGroups === "function") renderCourseGroups();
     }
 
-    // 학생용 수강신청 웹페이지(독립 실행 HTML)를 만든다.
-    function buildApplicationPageHtml(subjects) {
-      const schoolName = String($("#schoolName").value || "").trim();
-      const schoolYear = String($("#schoolYear").value || "").trim();
-      const dataJson = JSON.stringify(subjects).replace(/</g, "\\u003c");
-      return [
-        "<!DOCTYPE html>",
-        '<html lang="ko"><head><meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        `<title>수강신청 - ${xmlEscape(schoolName)}</title>`,
-        "<style>",
-        "body{margin:0;background:#f2f5fb;font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#1f2a44;}",
-        ".wrap{max-width:720px;margin:0 auto;padding:24px 16px 60px;}",
-        "h1{font-size:22px;margin:0 0 4px;}",
-        ".school{color:#5f6d86;font-size:13px;margin:0 0 18px;}",
-        ".id-panel{background:#fff;border:1px solid #d7deed;border-radius:12px;padding:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:end;}",
-        ".field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#50607b;}",
-        ".field input,.field select{padding:8px;border:1px solid #c9d4ea;border-radius:8px;font-size:14px;width:90px;}",
-        ".field input[name=name]{width:120px;}",
-        "#targetInfo{font-size:14px;font-weight:700;color:#2f4f9f;margin:18px 0 8px;}",
-        ".semester{margin:16px 0 6px;font-size:15px;font-weight:700;}",
-        ".area{margin:10px 0 4px;font-size:13px;font-weight:700;color:#50607b;}",
-        ".course{display:flex;align-items:center;gap:10px;min-height:48px;background:#fff;border:1px solid #d7dfed;border-radius:10px;padding:10px 12px;margin-bottom:7px;font-size:14px;cursor:pointer;}",
-        ".course:has(input:checked){border:2px solid #3b68e8;padding:9px 11px;background:#eef3ff;}",
-        ".course input{width:20px;height:20px;accent-color:#3b68e8;}",
-        ".meta{margin-left:auto;font-size:11px;color:#7a879e;}",
-        ".action-bar{position:sticky;bottom:0;margin:14px -4px -4px;padding:12px;border:1px solid #c8d6f7;border-radius:12px;background:#fffffff2;box-shadow:0 -6px 18px #1b31501c;backdrop-filter:blur(10px);}",
-        ".summary{display:grid;gap:7px;font-weight:700;font-size:14px;color:#2f4f9f;}",
-        ".summary-values{display:flex;justify-content:space-between;gap:8px;}",
-        ".summary-values strong{color:#5b45b0;}",
-        ".gauge{height:8px;overflow:hidden;border-radius:99px;background:#e4eaf5;}",
-        ".gauge span{display:block;height:100%;border-radius:inherit;background:#6c55c7;}",
-        "#submitBtn{width:100%;min-height:48px;margin-top:10px;padding:14px;border:0;border-radius:10px;background:#2f4f9f;color:#fff;font-size:16px;font-weight:700;cursor:pointer;}",
-        "@media(max-width:480px){.wrap{padding:18px 12px calc(90px + env(safe-area-inset-bottom));}.id-panel{gap:8px}.field{flex:1 1 42%}.field input,.field select{width:100%}.course{font-size:14px}.action-bar{bottom:env(safe-area-inset-bottom);}}",
-        ".note{margin-top:10px;font-size:12px;color:#60708a;line-height:1.6;}",
-        ".error{color:#b3261e;font-size:13px;font-weight:700;}",
-        "</style></head><body>",
-        '<main class="wrap">',
-        `<h1>${xmlEscape(schoolYear)}학년도 수강신청</h1>`,
-        `<p class="school">${xmlEscape(schoolName)}</p>`,
-        '<section class="id-panel">',
-        '<label class="field">현재 학년<select id="grade"><option value="1">1학년</option><option value="2">2학년</option></select></label>',
-        '<label class="field">반<input id="classroom" type="number" min="1" max="30"></label>',
-        '<label class="field">번호<input id="number" type="number" min="1" max="99"></label>',
-        '<label class="field">이름<input id="name" type="text" maxlength="20"></label>',
-        '<label class="field">학번<input id="studentId" type="text" maxlength="30" placeholder="이수 이력 연결용"></label>',
-        "</section>",
-        '<p id="targetInfo"></p>',
-        '<div id="courseList"></div>',
-        '<div class="action-bar"><div class="summary" id="summary"><div class="summary-values"><span id="summaryTotal">선택한 과목: 0개 · 0학점</span><strong id="summaryCore">국·영·수 0%</strong></div><div class="gauge" role="progressbar" aria-label="신청 학점 중 국어·영어·수학 과목 비율" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="summaryGauge"></span></div></div>',
-        '<button id="submitBtn" type="button">신청 파일 저장</button></div>',
-        '<p class="note">저장된 신청 파일(.json)을 담임선생님께 제출하세요. 이 페이지는 인터넷 연결 없이도 동작하며, 입력한 내용은 파일로만 저장됩니다.</p>',
-        '<p class="error" id="errorMsg"></p>',
-        "</main>",
-        "<script>",
-        `var COURSES = ${dataJson};`,
-        "var gradeSel=document.getElementById('grade');",
-        "function targetGrade(){return String(Number(gradeSel.value)+1);}",
-        "function isCore(c){var a=String(c.area||c.category||'').replace(/\\s+/g,'');if(/국어|영어|수학/.test(a))return true;return /^(국어|화법과작문|독서와작문|문학|언어와매체|영어|영어회화|영어독해와작문|수학|대수|미적분|확률과통계|기하|경제수학|인공지능수학)/.test(String(c.subject||'').replace(/\\s+/g,''));}",
-        "function esc(v){return String(v==null?'':v).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}",
-        "function render(){",
-        "var tg=targetGrade();var list=COURSES[tg]||[];",
-        "document.getElementById('targetInfo').textContent='신청 대상: '+tg+'학년 과목 ('+list.length+'개)';",
-        "var semesters={};list.forEach(function(c){var s=c.semester||'0';if(!semesters[s])semesters[s]=[];semesters[s].push(c);});",
-        "var html='';Object.keys(semesters).sort().forEach(function(s){",
-        "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
-        "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
-        "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
-        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
-        "});});",
-        "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
-        "updateSummary();",
-        "document.querySelectorAll('#courseList input[type=checkbox]').forEach(function(box){box.addEventListener('change',updateSummary);});",
-        "}",
-        "function selectedCourses(){return Array.prototype.slice.call(document.querySelectorAll('#courseList input:checked'));}",
-        "function updateSummary(){",
-        "var sel=selectedCourses();var credits=sel.reduce(function(t,box){return t+(Number(box.dataset.credit)||0);},0);",
-        "var core=sel.reduce(function(t,box){return t+(box.dataset.core==='1'?(Number(box.dataset.credit)||0):0);},0);var percent=credits?Math.round(core/credits*100):0;",
-        "document.getElementById('summaryTotal').textContent='선택한 과목: '+sel.length+'개 · '+credits+'학점';",
-        "document.getElementById('summaryCore').textContent='국·영·수 '+core+'학점 · '+percent+'%';",
-        "var gauge=document.getElementById('summaryGauge');gauge.style.width=percent+'%';gauge.parentElement.setAttribute('aria-valuenow',String(percent));",
-        "}",
-        "gradeSel.addEventListener('change',render);render();",
-        "document.getElementById('submitBtn').addEventListener('click',function(){",
-        "var err=document.getElementById('errorMsg');err.textContent='';",
-        "var classroom=document.getElementById('classroom').value.trim();",
-        "var number=document.getElementById('number').value.trim();",
-        "var name=document.getElementById('name').value.trim();",
-        "var sel=selectedCourses().map(function(box){return box.value;});",
-        "if(!classroom||!number||!name){err.textContent='반, 번호, 이름을 모두 입력하세요.';return;}",
-        "if(!sel.length){err.textContent='신청할 과목을 1개 이상 선택하세요.';return;}",
-        "var studentId=document.getElementById('studentId').value.trim();",
-        "var payload={type:'course-application',grade:gradeSel.value,classroom:classroom,number:number,name:name,studentId:studentId,selections:sel};",
-        "var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});",
-        "var a=document.createElement('a');a.href=URL.createObjectURL(blob);",
-        "a.download='수강신청_'+gradeSel.value+'학년_'+classroom+'반_'+number+'번_'+name+'.json';a.click();",
-        "setTimeout(function(){URL.revokeObjectURL(a.href);},1000);",
-        "err.textContent='';",
-        "document.getElementById('summaryTotal').textContent='신청 파일을 저장했습니다. 파일을 담임선생님께 제출하세요.';",
-        "});",
-        "<\/script></body></html>"
-      ].join("\n");
-    }
-
-    // 학생 신청 파일(JSON)들을 명단(학생·과목 구조)으로 합친다.
+    // 신청 결과를 편제표의 학년·학기별 과목과 연결한다.
     function mergeApplications(entries, applicationSubjects = null) {
       const subjects = applicationSubjects || collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
       const nameCount = new Map();
@@ -3124,25 +2743,6 @@
       return { students, courses, errors };
     }
 
-    function downloadApplicationForm() {
-      const subjects = selectedApplicationSubjects();
-      const total = subjects ? subjects["1"].length + subjects["2"].length + subjects["3"].length : 0;
-      if (!total) {
-        status.style.color = "#a44939";
-        status.textContent = "1단계에서 편제표를 먼저 불러오세요. 선택과목을 찾지 못했습니다.";
-        return;
-      }
-      const html = buildApplicationPageHtml(subjects);
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
-      link.href = url;
-      link.download = "수강신청_양식.html";
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      status.style.color = "#287956";
-      status.textContent = `학생용 신청 양식을 저장했습니다. (선택과목 ${total}개)`;
-    }
-
     function parseApplicationRoster(sheets) {
       const students = [];
       const identities = new Set();
@@ -3182,15 +2782,6 @@
       return students;
     }
 
-    function downloadTextFile(text, filename, type) {
-      const url = URL.createObjectURL(new Blob([text], { type }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
-
     function downloadRowsXlsx(rows, filename) {
       const sheetData = rows.map((row, index) => `<row r="${index + 1}">${row.map((value, column) =>
         `<c r="${columnName(column)}${index + 1}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value ?? "")}</t></is></c>`
@@ -3226,17 +2817,6 @@
       return url.href;
     }
 
-    function buildSchoolApplicationLink(serverUrl, pageUrl) {
-      const endpoint = normalizeApplicationServerUrl(serverUrl);
-      const page = new URL(pageUrl);
-      if (page.protocol !== "https:" && page.protocol !== "http:") {
-        throw new Error("학생에게 배포할 링크는 게시된 웹사이트에서 만들어 주세요. 로컬 파일 주소는 배포할 수 없습니다.");
-      }
-      page.search = "";
-      page.hash = new URLSearchParams({ apply: endpoint }).toString();
-      return page.href;
-    }
-
     function showStudentApplicationEntry() {
       if (window.location.hash === "#student" || new URLSearchParams(window.location.hash.slice(1)).has("event")) {
         $(".workspace").classList.add("hidden");
@@ -3263,34 +2843,6 @@
       return true;
     }
 
-    async function handleApplicationRoster(file) {
-      if (!file) return;
-      try {
-        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식으로 선택하세요.");
-        const subjects = selectedApplicationSubjects();
-        if (!subjects || !subjects["2"].length && !subjects["3"].length) {
-          throw new Error("1단계 편제표의 학생선택교육과정에 2·3학년 과목이 편제되어 있는지 확인하세요.");
-        }
-        const round = state.currentRound;
-        const schoolName = String($("#schoolName").value || "").trim();
-        const schoolYear = String($("#schoolYear").value || "").trim();
-        const roster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
-        for (const student of roster) {
-          if (!subjects[String(Number(student.grade) + 1)].length) {
-            throw new Error(`현재 ${student.grade}학년이 신청할 ${Number(student.grade) + 1}학년 학생선택교육과정 과목이 없습니다. 편제표의 교육과정 구분과 학기 시수를 확인하세요.`);
-          }
-        }
-        const setup = { type: "course-application-setup", round, schoolName, schoolYear, subjects, roster };
-        downloadTextFile(JSON.stringify(setup, null, 2), "온라인_수강신청_설정.json", "application/json");
-        status.style.color = "#287956";
-        status.textContent = `${round}차 온라인 신청 설정(${roster.length}명)을 저장했습니다. Apps Script 관리자 페이지에 업로드하세요. 기존 신청 결과는 변경하지 않았습니다.`;
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "학생 명렬을 처리하지 못했습니다.";
-      }
-    }
-
-    // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
     function applyCloudApplicationResults(round, entries, subjects) {
       round = String(round);
       if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
@@ -3350,48 +2902,6 @@
       }
       renderRoundStatus();
       persistState();
-    }
-
-    function applyMergedApplications(entries, sourceLabel) {
-      prepareAcademicYearImport();
-      const merged = mergeApplications(entries);
-      if (!merged.students.length) {
-        status.style.color = "#a44939";
-        status.textContent = `명단을 만들지 못했습니다. ${merged.errors[0] || ""}`;
-        return;
-      }
-      const unclassified = classifyApplicationRecords(merged);
-      state.students = merged.students;
-      state.courses = merged.courses;
-      const loadedGrades = [...new Set(merged.students.map((student) => String(student.grade)))];
-      if (loadedGrades.length === 1) {
-        state.certificateTargetGrade = String(Number(loadedGrades[0]) + 1);
-        state.selectedId = merged.students[0]?.id || null;
-      }
-      state.classOverrides = {};
-      state.semesterAssignments = {};
-      state.groupAssignments = {};
-      state.customGroupNames = [];
-      state.customGroupNamesByGrade = { "2": [], "3": [] };
-      state.selectedCourseColumns = [];
-      state.lastSelectedCourseColumn = null;
-      state.fileName = `${sourceLabel} ${merged.students.length}명`;
-      state.activeDataSchoolYear = String($("#schoolYear").value || "");
-      state.selectedId = merged.students[0].id;
-      $("#round").value = `${state.currentRound}차`;
-      applyClassFilterOptions(merged.students);
-      $("#searchInput").disabled = false;
-      $("#classFilter").disabled = false;
-      renderRoster();
-      renderPreview();
-      renderSemesterClassifier();
-      renderAggregate();
-      renderRoundStatus();
-      persistState();
-      status.style.color = merged.errors.length ? "#a44939" : "#287956";
-      status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
-        (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
-        (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
     function storeDeveloperGradeResults(data, sourceLabel, grade) {
@@ -3460,110 +2970,6 @@
       renderRoundStatus();
     }
 
-    async function handleApplicationFiles(fileList) {
-      const files = Array.from(fileList || []);
-      if (!files.length) return;
-      const entries = [];
-      const failures = [];
-      for (const file of files) {
-        try {
-          const parsed = JSON.parse(await file.text());
-          if (parsed?.type === "course-application-results") {
-            if (String(parsed.round) !== state.currentRound) {
-              throw new Error(`${file.name}: ${parsed.round}차 결과입니다. 해당 차수로 전환한 뒤 다시 불러오세요.`);
-            }
-            if (!Array.isArray(parsed.entries)) throw new Error(`${file.name}: 신청 결과 형식이 잘못되었습니다.`);
-            entries.push(...parsed.entries);
-          }
-          else if (parsed && (parsed.type === "course-application" || Array.isArray(parsed.selections))) entries.push(parsed);
-          else failures.push(file.name);
-        } catch (error) {
-          failures.push(`${file.name}: ${error instanceof Error ? error.message : "파일 읽기 실패"}`);
-        }
-      }
-      if (!entries.length) {
-        status.style.color = "#a44939";
-        status.textContent = failures.length
-          ? `읽을 수 있는 신청 파일이 없습니다. ${failures[0]}`
-          : "신청 결과가 비어 있습니다. 학생 신청이 저장된 결과 JSON을 선택하세요.";
-        return;
-      }
-      applyMergedApplications(entries, "온라인 신청 취합");
-      if (failures.length) {
-        status.style.color = "#a44939";
-        status.textContent += ` 읽지 못한 파일 ${failures.length}개 (${failures[0]}).`;
-      }
-    }
-
-    // 구글폼을 자동 생성하는 Google Apps Script 코드를 만든다.
-    function buildAppsScriptCode(subjects) {
-      const schoolName = String($("#schoolName").value || "").trim();
-      const schoolYear = String($("#schoolYear").value || "").trim();
-      const escapeCode = (value) => String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      const dataJson = JSON.stringify(subjects).replace(/</g, "\\u003c");
-      const lines = [
-        "// 이 코드는 '교육과정 편성 프로그램'에서 생성했습니다.",
-        "// 사용법: script.google.com → 새 프로젝트 → 이 코드 전체 붙여넣기 → 저장 → 실행(▶) → 권한 승인",
-        "// 실행 로그에 설문 주소와 응답 스프레드시트 주소가 표시됩니다.",
-        "// 학교마다 관리자가 각자의 구글 계정으로 실행하면 그 학교만의 폼·응답 시트가 만들어지고,",
-        "// 학생에게는 실행 로그의 설문 주소만 공유하면 됩니다. 응답 시트는 실행한 관리자만 볼 수 있습니다.",
-        "",
-        "var CONFIG = {",
-        "  requireSchoolLogin: false, // true: 학교 구글 계정(Workspace)으로 로그인한 학생만 응답 가능",
-        "  collectEmail: false,       // true: 응답자 이메일을 함께 수집(로그인 제한과 함께 사용 권장)",
-        "  adminEmails: []            // 응답 시트를 함께 관리할 다른 관리자 이메일. 예: ['teacher@school.kr']",
-        "};",
-        "",
-        "function createCourseApplicationForm() {",
-        `  var SUBJECTS = ${dataJson};`,
-        `  var form = FormApp.create('${escapeCode(schoolYear)}학년도 수강신청 (${escapeCode(schoolName)})');`,
-        "  form.setDescription('현재 학년 기준으로 다음 학년에 들을 과목을 선택하세요. 제출은 1회만 가능하니 신중하게 선택하세요.');",
-        "  form.setLimitOneResponsePerUser(false);",
-        "  if (CONFIG.requireSchoolLogin) form.setRequireLogin(true);",
-        "  if (CONFIG.collectEmail) form.setCollectEmail(true);",
-        "  var gradeItem = form.addMultipleChoiceItem().setTitle('현재 학년').setRequired(true);",
-        "  form.addTextItem().setTitle('반').setRequired(true);",
-        "  form.addTextItem().setTitle('번호').setRequired(true);",
-        "  form.addTextItem().setTitle('이름').setRequired(true);",
-        "  var pages = {};",
-        "  var previousPage = null;",
-        "  ['2', '3'].forEach(function (grade) {",
-        "    var courses = SUBJECTS[grade] || [];",
-        "    if (!courses.length) return;",
-        "    var page = form.addPageBreakItem().setTitle(grade + '학년 선택과목');",
-        "    if (previousPage) page.setGoToPage(FormApp.PageNavigationType.SUBMIT);",
-        "    previousPage = page;",
-        "    var bySemester = {};",
-        "    courses.forEach(function (course) {",
-        "      var key = course.semester || '0';",
-        "      if (!bySemester[key]) bySemester[key] = [];",
-        "      bySemester[key].push(course);",
-        "    });",
-        "    Object.keys(bySemester).sort().forEach(function (semester) {",
-        "      var names = bySemester[semester].map(function (course) { var classification = String(course.type || '').replace(/선택$/, ''); return course.subject + (classification ? '(' + classification + ')' : ''); });",
-        "      var title = grade + '학년 ' + (semester === '0' ? '학기 미정' : semester + '학기') + ' 선택과목';",
-        "      form.addCheckboxItem().setTitle(title).setChoiceValues(names)",
-        "        .setHelpText('이 학기에 들을 과목을 모두 선택하세요. (중복 선택 가능)');",
-        "    });",
-        "    pages[grade] = page;",
-        "  });",
-        "  var choices = [];",
-        "  if (pages['2']) choices.push(gradeItem.createChoice('1학년', pages['2']));",
-        "  if (pages['3']) choices.push(gradeItem.createChoice('2학년', pages['3']));",
-        "  if (!choices.length) throw new Error('신청할 수 있는 2·3학년 과목이 없습니다.');",
-        "  gradeItem.setChoices(choices);",
-        `  var sheet = SpreadsheetApp.create('수강신청 응답 (${escapeCode(schoolName)})');`,
-        "  if (CONFIG.adminEmails.length) sheet.addEditors(CONFIG.adminEmails);",
-        "  form.setDestination(FormApp.DestinationType.SPREADSHEET, sheet.getId());",
-        "  Logger.log('설문 주소: ' + form.getPublishedUrl());",
-        "  Logger.log('응답 스프레드시트: ' + sheet.getUrl());",
-        "}",
-        ""
-      ];
-      return lines.join("\n");
-    }
-
-    // 구글폼 체크박스 응답("과목1, 과목2")을 알려진 과목명 목록으로 분할한다. 과목명에 쉼표가 있어도 동작한다.
     function splitGoogleFormSelections(text, knownNames, strict = false) {
       const found = [];
       let rest = String(text ?? "");
@@ -3586,70 +2992,6 @@
     }
 
     // 구글폼 응답 시트 행들을 신청 항목 배열로 변환한다.
-    function parseGoogleFormsRows(rows, subjects) {
-      const headerIndex = rows.findIndex((row) =>
-        (row || []).some((value) => /이름|성명/.test(String(value ?? ""))) &&
-        (row || []).some((value) => /학년/.test(String(value ?? ""))));
-      if (headerIndex < 0) throw new Error("구글폼 응답 시트에서 머리글 행(학년/이름)을 찾지 못했습니다.");
-      const header = rows[headerIndex].map((value) => String(value ?? "").trim());
-      const findColumn = (pattern) => header.findIndex((label) => pattern.test(label));
-      const gradeColumn = findColumn(/학년/);
-      const classroomColumn = findColumn(/^반$|^\s*반\s*/);
-      const numberColumn = findColumn(/번호/);
-      const nameColumn = findColumn(/이름|성명/);
-      if (gradeColumn < 0 || nameColumn < 0) throw new Error("구글폼 응답 시트에 학년/이름 열이 없습니다.");
-      // '2학년 1학기 선택과목' 같은 체크박스 질문 열을 학년별로 모은다.
-      const questionColumns = header
-        .map((label, column) => ({ label, column, grade: label.match(/^([23])\s*학년/)?.[1] || "" }))
-        .filter((item) => item.grade && item.column > nameColumn);
-      const entries = [];
-      for (const row of rows.slice(headerIndex + 1)) {
-        const grade = String(row?.[gradeColumn] ?? "").match(/[12]/)?.[0] || "";
-        const name = String(row?.[nameColumn] ?? "").trim();
-        if (!grade || !name) continue;
-        const targetGrade = String(Number(grade) + 1);
-        const subjectByLabel = new Map();
-        for (const course of subjects?.[targetGrade] || []) {
-          subjectByLabel.set(course.subject, course.subject);
-          subjectByLabel.set(applicationCourseLabel(course), course.subject);
-        }
-        const knownNames = new Set(subjectByLabel.keys());
-        const selections = [];
-        for (const item of questionColumns) {
-          if (item.grade !== targetGrade) continue;
-          selections.push(...splitGoogleFormSelections(row[item.column], knownNames).map((label) => subjectByLabel.get(label)));
-        }
-        entries.push({
-          type: "course-application",
-          grade,
-          classroom: String(row?.[classroomColumn] ?? "").trim(),
-          number: String(row?.[numberColumn] ?? "").trim(),
-          name,
-          selections
-        });
-      }
-      return entries;
-    }
-
-    async function handleGoogleFormsFile(file) {
-      if (!file) return;
-      status.textContent = "";
-      try {
-        const sheets = await parseWorkbook(await file.arrayBuffer());
-        const subjects = collectApplicationSubjects({ includeExcluded: true });
-        const entries = parseGoogleFormsRows(sheets[0].rows, subjects);
-        if (!entries.length) {
-          status.style.color = "#a44939";
-          status.textContent = "응답 시트에서 학생 응답을 찾지 못했습니다.";
-          return;
-        }
-        applyMergedApplications(entries, "구글폼 응답 취합");
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "구글폼 응답 파일을 처리하지 못했습니다.";
-      }
-    }
-
     function xmlEscape(value) {
       return String(value ?? "").replace(/[<>&'"]/g, (character) => ({
         "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;"
