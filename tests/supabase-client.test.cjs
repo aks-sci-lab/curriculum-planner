@@ -116,9 +116,6 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     selectedApplicationSubjects: () => fixtureData.subjects,
     renderApplicationSubjects: () => { fixtureData.renderedGrade = context.state.applicationMenuGrade; },
     renderRoundStatus: () => {},
-    renderAggregate: () => { fixtureData.aggregateRenders = (fixtureData.aggregateRenders || 0) + 1; },
-    renderClosurePanel: () => {},
-    renderRetakePanel: () => {},
     getCourseApplicationGroups: () => [{id:"g1",grade:"2",name:"수학",count:1,courses:["수학"]}],
     setApplicationTargetGrades: (grades) => { fixtureData.targetGrades = grades; },
     getGroupedApplicationSubjects: () => fixtureData.subjects,
@@ -148,7 +145,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     context.WebSocket.OPEN = WebSocketClass.OPEN;
   }
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets, poll:null,
+    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets,
     subjects: subjects || { "2": [{subject:"수학",credit:3,semester:"1"}], "3": [] },
     roster: [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     respond: respond || (async () => ({ data: [] })),
@@ -401,8 +398,6 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.match(f.elements.cloudTeacherMessage.textContent, /신청을 생성/);
   const created=f.requests.find((request)=>request.url.endsWith("create_course_event"));
   assert.deepEqual(created.body.p_setup.subjects["3"],[]);
-  assert.equal(f.synced,undefined);
-  await f.fire("refreshAggregate","click");
   assert.equal(f.synced.round,"2");
   assert.equal(f.synced.entries.length,0);
   await f.fire("cloudTeacherLogout", "click");
@@ -776,7 +771,7 @@ test("student group limit disables unchecked choices and re-enables them after d
   assert.equal(b.disabled,false);
 });
 
-test("linked results never start Realtime or polling and refresh only on the aggregate button", async () => {
+test("Realtime updates linked results on student submissions and falls back to polling only while disconnected", async () => {
   const ownerId="cccccccc-cccc-cccc-cccc-cccccccccccc";
   const eventId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
   const otherEventId="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
@@ -818,19 +813,32 @@ test("linked results never start Realtime or polling and refresh only on the agg
     return {data:[]};
   }});
   await f.settle();
-  assert.equal(f.sockets.length,0);
-  assert.equal(f.poll,null);
-  assert.equal(exportCount,0);
-  await f.fire("cloudRefreshEvents","click");
-  assert.equal(exportCount,0);
-  await f.fire("refreshAggregate","click");
-  assert.equal(exportCount,1);
-  assert.equal(f.aggregateRenders,1);
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/최근 갱신/);
-  assert.equal(f.sockets.length,0);
+  assert.equal(f.sockets.length,1);
+  f.openRealtime();
+  await f.settle();
+  assert.equal(f.sockets[0].sent[0][3],"phx_join");
+  assert.equal(f.sockets[0].sent[0][4].config.postgres_changes[0].filter,`owner_id=eq.${ownerId}`);
+  assert.equal(f.elements.cloudSyncStatus.textContent.includes("실시간"),true);
+  assert.ok(exportCount>0);
+  const previous=exportCount;
+  f.poll();
+  await f.settle();
+  assert.equal(exportCount,previous);
+  f.notifyRealtime(otherEventId);
+  await f.settle();
+  assert.equal(exportCount,previous);
+  f.notifyRealtime(eventId);
+  await f.settle();
+  assert.ok(exportCount>previous);
+  assert.equal(typeof f.heartbeat,"function");
+  const beforeDisconnect=exportCount;
+  f.sockets[0].close();
+  f.poll();
+  await f.settle();
+  assert.ok(exportCount>beforeDisconnect);
+  assert.ok(f.reconnect);
   await f.fire("cloudTeacherLogout","click");
-  await f.fire("refreshAggregate","click");
-  assert.equal(exportCount,1);
+  assert.equal(f.sockets[0].readyState,3);
   assert.equal(f.poll,null);
 });
 
@@ -859,52 +867,27 @@ test("linked online results sync without files, include both grades and stop on 
     return {data:{message:"완료"}};
   }});
   await f.settle();
-  assert.equal(f.synced,undefined);
-  await f.fire("refreshAggregate","click");
   assert.equal(f.synced.round,"1");
   assert.equal(f.synced.entries.length,2);
   assert.equal(f.synced.subjects["3"][0].subject,"B");
   assert.equal(f.downloads.length,0);
   const before=f.syncCalls.length;
-  await f.fire("refreshAggregate","click");
+  f.poll(); await f.settle();
   assert.equal(f.syncCalls.length,before); // Unchanged snapshots don't repaint the page.
   entries[0]=[];
-  await f.fire("refreshAggregate","click");
+  f.poll(); await f.settle();
   assert.equal(f.synced.entries.length,1);
   fail=true;
-  await f.fire("refreshAggregate","click");
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/갱신 실패.*연결 실패/);
+  f.poll(); await f.settle();
+  assert.match(f.elements.cloudSyncStatus.textContent,/자동 연동 실패.*연결 실패/);
   assert.equal(f.synced.entries.length,1);
   fail=false;
   entries[0]=[{...entries[1][0],name:"중복"}];
-  await f.fire("refreshAggregate","click");
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/동일 학생/);
+  f.poll(); await f.settle();
+  assert.match(f.elements.cloudSyncStatus.textContent,/동일 학생/);
   assert.equal(f.synced.entries.length,1);
   await f.fire("cloudTeacherLogout","click");
   assert.equal(f.poll,null);
-});
-
-test("manual aggregate refresh disables repeat clicks and reports no linked applications without exporting", async () => {
-  const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({
-    lastActivity:Date.now(),session:{access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,
-      user:{email:"teacher@example.invalid"}}
-  })]]);
-  const f=fixture({storage});
-  await f.settle();
-  let finish;
-  f.respond=async()=>new Promise((resolve)=>{finish=resolve;});
-  const before=f.requests.length;
-  await f.fire("refreshAggregate","click");
-  assert.equal(f.elements.refreshAggregate.disabled,true);
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/가져오는 중/);
-  await f.fire("refreshAggregate","click");
-  assert.equal(f.requests.length,before+1);
-  finish({data:[]});
-  await f.settle();
-  assert.equal(f.elements.refreshAggregate.disabled,false);
-  assert.equal(f.aggregateRenders,1);
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/연동 신청 없음/);
-  assert.equal(f.requests.some((request)=>request.body?.p_action==="export"),false);
 });
 
 test("color groups are semester scoped, editable and retain unassigned courses after reload", () => {
@@ -1024,7 +1007,6 @@ test("deleting a round unlinks only its online events and prevents an in-flight 
     return {data:[]};
   }});
   await f.settle();
-  await f.fire("refreshAggregate","click");
   // The exposed round unlink helper is the one used by the local reset button.
   f.unlinkRound("1");
   finish({data:{entries:[]}});

@@ -572,7 +572,6 @@ test("developer results replace only the chosen grade and retain courses, settin
   const firstColumn=state.students[0].selections[0].column;
   state.classOverrides[firstColumn]=2;
   state.classOverrides[`1:${firstColumn}`]=4;
-  state.classOverrides[`1:${firstColumn}:1:group`]=5;
   state.semesterAssignments[firstColumn]="1";
   state.groupAssignments[firstColumn]="유지할 그룹";
   ctx.storeDeveloperGradeResults(data("2","둘째학생"),"2학년.xlsx","2");
@@ -581,7 +580,6 @@ test("developer results replace only the chosen grade and retain courses, settin
   assert.equal(new Set(state.courses.map((course)=>course.column)).size,4);
   assert.equal(state.classOverrides[firstColumn],2);
   assert.equal(state.classOverrides[`1:${firstColumn}`],4);
-  assert.equal(state.classOverrides[`1:${firstColumn}:1:group`],5);
   assert.equal(state.groupAssignments[firstColumn],"유지할 그룹");
   const secondColumn=state.students[1].selections[0].column;
   state.classOverrides[secondColumn]=3;
@@ -589,7 +587,6 @@ test("developer results replace only the chosen grade and retain courses, settin
   assert.deepEqual(plain(state.students.map((s)=>s.name)),["새학생","둘째학생"]);
   assert.equal(state.classOverrides[firstColumn],undefined);
   assert.equal(state.classOverrides[`1:${firstColumn}`],undefined);
-  assert.equal(state.classOverrides[`1:${firstColumn}:1:group`],undefined);
   assert.equal(state.classOverrides[secondColumn],3);
   assert.equal(state.courses.length,4);
   assert.deepEqual(plain(state.rounds["1"].gradeFiles),{"1":"1학년_수정.xlsx","2":"2학년.xlsx"});
