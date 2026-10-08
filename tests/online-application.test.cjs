@@ -715,6 +715,28 @@ test("aggregate reports and course boards isolate second- and third-year data", 
   assert.deepEqual(plain(ctx.coursesForCurrentGrade("2",[romanGradeCourse],students)),[romanGradeCourse]);
 });
 
+test("aggregate uses grade-specific application groups despite numeral and spacing differences", () => {
+  const ctx=vm.createContext({
+    state:{activeDataSchoolYear:"2026",curriculumPlan:[],groupAssignments:{},semesterAssignments:{}},
+    getApplicationGroupSettings:()=>[
+      {grade:"2",semester:"1",name:"수학 선택군",courses:["심화 과목 Ⅱ"]},
+    ],
+    parseSemesterFromCourseName:()=>"",
+    normalizeGroupName:(value)=>String(value??"").trim(),
+    UNASSIGNED_GROUP:"미분류",
+    parseAssignedGroupLabel:()=>({semesterKey:"",category:""}),
+  });
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  const course={column:"c1",name:"심화 과목 2",applicationCurrentGrade:"1"};
+  const students=[{grade:"1",classroom:"1",selections:[{column:"c1"}]}];
+  const result=ctx.aggregateRecords(students,[course],90,110,{},{},{});
+  assert.deepEqual(plain(result.reports[0].semesters.map((semester)=>({
+    name:semester.name,
+    categories:semester.groups.map((group)=>group.category),
+  }))),[{name:"2학년 1학기",categories:["수학 선택군"]}]);
+});
+
 test("aggregate and class-assignment views provide separate grade tabs", () => {
   assert.match(html,/id="certificateGradeTabs"[\s\S]*data-certificate-grade="2"[\s\S]*data-certificate-grade="3"/);
   assert.match(html,/id="aggregateGradeTabs"[\s\S]*data-aggregate-grade="2"[\s\S]*data-aggregate-grade="3"/);

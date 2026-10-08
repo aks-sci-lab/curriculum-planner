@@ -757,14 +757,13 @@
     }
 
     function applicationGroupForCourse(course, currentGrade, groups = null) {
-      const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
+      const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
       if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
       const savedGroup = course.applicationGroups?.[String(currentGrade)];
       if (savedGroup?.name) return savedGroup;
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
-      const normalize = (name) => String(name ?? "").trim()
-        .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
-        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, " ").trim();
+      const normalize = (name) => curriculumCourseNameKey(name)
+        .replace(/[\[(](?:일반|진로|융합)(?:선택)?[)\]]$/, "");
       const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
       const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
         (!hint || group.semester === hint) &&
