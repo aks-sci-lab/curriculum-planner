@@ -118,8 +118,10 @@ test("all embedded scripts parse", () => {
 test("large imported curriculum layouts persist in IndexedDB and restore by archive ID", () => {
   assert.match(curriculumWorkbook,/async function storeCurriculumLayout\(layout\)[\s\S]*curriculumArchiveStore\("put",`layout:\$\{layout\.archiveId\}`,layout\)/);
   assert.match(curriculumWorkbook,/async function loadCurriculumLayout\(id\)[\s\S]*curriculumArchiveStore\("get",`layout:\$\{id\}`\)/);
-  assert.match(frontend,/curriculumLayoutArchiveId:\s*state\.curriculumImportedLayout\?\.archiveId\s*\|\|\s*""/);
+  assert.match(frontend,/curriculumLayoutArchiveId:\s*state\.curriculumImportedLayout\?\.archiveId\s*\|\|\s*curriculumLayoutStoredId\s*\|\|\s*""/);
   assert.match(frontend,/loadCurriculumLayout\(persistedLayoutId\)\.then/);
+  assert.match(frontend,/curriculumLayoutArchiveId:[\s\S]*?curriculumLayoutStoredId \|\| ""/);
+  assert.match(frontend,/curriculumLayoutStoredId = persistedLayoutId;\s*renderCurriculumStep\(\);\s*renderApplicationSubjects\(\);\s*renderPreview\(\);\s*renderSemesterClassifier\(\);\s*renderAggregate\(\);/);
   assert.match(frontend,/await storeCurriculumLayout\(importedLayout\)/);
   assert.match(frontend,/function scheduleCurriculumLayoutPersistence\(\)/);
   assert.match(frontend,/브라우저 저장 공간이 부족해 변경 내용을 저장하지 못했습니다/);

@@ -897,12 +897,13 @@ test("color groups are semester scoped, editable and retain unassigned courses a
     {subject:"B",semester:"1",semesterColors:{"1":"#E2EFD9"}},
     {subject:"C",semester:"2",semesterColors:{}}
   ],"3":[{subject:"D",semester:"1",semesterColors:{"1":"#E2EFD9"}}]};
+  let currentSubjects=subjects;
   function load() {
     const ctx=vm.createContext({
       document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
         createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
       window:{confirm:()=>true},crypto:webcrypto,
-      selectedApplicationSubjects:()=>subjects,
+      selectedApplicationSubjects:()=>currentSubjects,
       state:{},renderApplicationSubjects:()=>{},renderRoundStatus:()=>{},
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}});
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
@@ -916,6 +917,14 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.deepEqual(groups[0].courses,["A (1학기)","B"]);
   assert.deepEqual(groups[1].courses,["A (2학기)"]);
   assert.ok(groups.every((g)=>g.count===null));
+  const savedGroups=JSON.parse(JSON.stringify(groups));
+  currentSubjects=null;
+  ctx=load();
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.getApplicationGroupSettings())),savedGroups);
+  assert.deepEqual(JSON.parse(storage.get("curriculum-color-semester-groups-v3")),savedGroups);
+  currentSubjects=subjects;
+  ctx.renderCourseGroups();
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.getApplicationGroupSettings())),savedGroups);
   assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
   const editor=f.elements.courseGroupEditor;
   const targets=editor.children.find((e)=>e.tag==="select");

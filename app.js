@@ -280,7 +280,8 @@
           curriculumPlanFileName: state.curriculumPlanFileName,
           curriculumPlanAcademicYear: state.curriculumPlanAcademicYear,
           curriculumPlansByYear: state.curriculumPlansByYear,
-          curriculumLayoutArchiveId: state.curriculumImportedLayout?.archiveId || "",
+          curriculumLayoutArchiveId: state.curriculumImportedLayout?.archiveId ||
+            curriculumLayoutStoredId || "",
           ...(state.curriculumImportedLayout &&
             curriculumLayoutStoredId !== state.curriculumImportedLayout.archiveId
             ? { curriculumImportedLayout: state.curriculumImportedLayout }
@@ -499,6 +500,7 @@
       state.curriculumPlanAcademicYear = "";
       state.curriculumPlansByYear = {};
       state.curriculumImportedLayout = null;
+      curriculumLayoutStoredId = "";
       state.curriculumTemplateRows = [];
       state.curriculumPlan = [];
       state.curriculumTargetGrade = "1";
@@ -705,6 +707,10 @@
             state.curriculumImportedLayout = layout;
             curriculumLayoutStoredId = persistedLayoutId;
             renderCurriculumStep();
+            renderApplicationSubjects();
+            renderPreview();
+            renderSemesterClassifier();
+            renderAggregate();
             persistState();
           }).catch((error) => {
             console.error("저장된 편제표 복원 실패", error);
@@ -1889,6 +1895,7 @@
       state.curriculumPlan = snapshot.curriculumPlan;
       state.curriculumTemplateRows = snapshot.curriculumTemplateRows;
       state.curriculumImportedLayout = snapshot.curriculumImportedLayout;
+      if (!snapshot.curriculumImportedLayout) curriculumLayoutStoredId = "";
       state.curriculumPlanFileName = snapshot.curriculumPlanFileName;
       state.curriculumPlanAcademicYear = snapshot.curriculumPlanAcademicYear || "";
       state.curriculumPlansByYear = snapshot.curriculumPlansByYear || {};
@@ -4632,6 +4639,7 @@
       state.curriculumTemplateRows = [];
       state.curriculumPlanFileName = "";
       state.curriculumImportedLayout = null;
+      curriculumLayoutStoredId = "";
       state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
       state.curriculumMutationRevision += 1;
       if (curriculumPlanInput) curriculumPlanInput.value = "";

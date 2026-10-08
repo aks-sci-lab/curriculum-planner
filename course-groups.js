@@ -70,8 +70,9 @@ var switchApplicationMenuGrade;
     groups = [];
   }
   function sync() {
-    available = new Map();
     const subjects = getGroupedApplicationSubjects();
+    if (!subjects) return;
+    available = new Map();
     for (const grade of ["2", "3"]) {
       for (const course of subjects?.[grade] || []) available.set(`${grade}:${course.semester}:${course.subject}`, { ...course, grade });
     }
