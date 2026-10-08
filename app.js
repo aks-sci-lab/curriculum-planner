@@ -855,6 +855,34 @@
         .filter((grade) => ["2", "3"].includes(grade)));
     }
 
+    function curriculumSemesterForCourse(course, targetGrade) {
+      const schoolYear = String(state.activeDataSchoolYear || "");
+      const plan = schoolYear
+        ? (state.curriculumPlansByYear?.[schoolYear] ||
+          (String(state.curriculumPlanAcademicYear || "") === schoolYear ? state.curriculumPlan : []))
+        : state.curriculumPlan;
+      const nameKey = curriculumCourseNameKey(course.name);
+      if (!nameKey || !Array.isArray(plan)) return "";
+      const semesterFields = {
+        "1": ["sem11", "sem12"],
+        "2": ["sem21", "sem22"],
+        "3": ["sem31", "sem32"],
+      }[String(targetGrade)];
+      if (!semesterFields) return "";
+      const semesters = new Set();
+      for (const row of plan) {
+        if (String(row.grade || "") !== String(targetGrade) ||
+            curriculumCourseNameKey(row.subject) !== nameKey) continue;
+        semesterFields.forEach((field, index) => {
+          const value = String(row[field] ?? "").trim();
+          if (value && !/^[-–—]+$/.test(value) && !/^0(?:\.0+)?$/.test(value)) {
+            semesters.add(String(index + 1));
+          }
+        });
+      }
+      return semesters.size === 1 ? [...semesters][0] : "";
+    }
+
     function courseBelongsToCurrentGrade(course, currentGrade, students) {
       const grade = String(currentGrade);
       const targetGrade = String(Number(grade) + 1);
@@ -1925,10 +1953,16 @@
           const applicationGroup = applicationGroupForCourse(course, grade);
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
-          const semesterKey = forcedSemester === "1" || forcedSemester === "2"
-            ? forcedSemester
-            : (parsedAssignedGroup.semesterKey || applicationGroup?.semester || course.semesterKey || "");
           const displayGrade = Number(grade) + 1;
+          const curriculumSemester = curriculumSemesterForCourse(course, displayGrade);
+          const semesterKey = [
+            forcedSemester,
+            parsedAssignedGroup.semesterKey,
+            applicationGroup?.semester,
+            curriculumSemester,
+            course.semesterKey,
+          ].map((value) => String(value || ""))
+            .find((value) => value === "1" || value === "2") || "";
           const semesterName = semesterKey
             ? `${displayGrade}학년 ${semesterKey}학기`
             : `${displayGrade}학년 미분류`;
@@ -4793,4 +4827,6 @@
     });
     window.addEventListener("afterprint", () => { $("#printBatch").innerHTML = ""; });
     window.addEventListener("hashchange", () => window.location.reload());
-    if (!showStudentApplicationEntry()) restorePersistedState();
+    document.addEventListener("DOMContentLoaded", () => {
+      if (!showStudentApplicationEntry()) restorePersistedState();
+    }, { once: true });

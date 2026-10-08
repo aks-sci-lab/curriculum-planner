@@ -745,6 +745,37 @@ test("aggregate uses grade-specific application groups despite numeral and spaci
   }))),[{name:"2학년 1학기",categories:["수학 선택군"]}]);
 });
 
+test("aggregate restores after group scripts load and uses the curriculum semester for semester-zero groups", () => {
+  assert.match(frontend,/document\.addEventListener\("DOMContentLoaded",\s*\(\) => \{\s*if \(!showStudentApplicationEntry\(\)\) restorePersistedState\(\);\s*\}, \{ once: true \}\);/);
+  const ctx=vm.createContext({
+    state:{
+      activeDataSchoolYear:"2026",curriculumPlanAcademicYear:"2026",
+      curriculumPlan:[{
+        grade:"3",subject:"기후변화와 환경생태",sem31:3,sem32:"",
+      }],
+      groupAssignments:{},semesterAssignments:{},
+    },
+    getApplicationGroupSettings:()=>[
+      {grade:"3",semester:"0",name:"과학 선택군",courses:["기후변화와 환경생태"]},
+    ],
+    curriculumCourseNameKey:(value)=>String(value??"").replace(/\s+/g,""),
+    parseSemesterFromCourseName:()=>"",
+    normalizeGroupName:(value)=>String(value??"").trim(),
+    UNASSIGNED_GROUP:"미분류",
+    parseAssignedGroupLabel:()=>({semesterKey:"",category:""}),
+  });
+  vm.runInContext(functionSource("function curriculumSemesterForCourse(", "function courseBelongsToCurrentGrade("),ctx);
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  const course={column:"climate",name:"기후변화와 환경생태",applicationCurrentGrade:"2"};
+  const result=ctx.aggregateRecords(
+    [{grade:"2",classroom:"1",selections:[{column:"climate"}]}],[course],90,110,{},{},{});
+  assert.deepEqual(plain(result.reports[0].semesters.map((semester)=>({
+    name:semester.name,
+    categories:semester.groups.map((group)=>group.category),
+  }))),[{name:"3학년 1학기",categories:["과학 선택군"]}]);
+});
+
 test("aggregate and class-assignment views provide separate grade tabs", () => {
   assert.match(html,/id="certificateGradeTabs"[\s\S]*data-certificate-grade="2"[\s\S]*data-certificate-grade="3"/);
   assert.match(html,/id="aggregateGradeTabs"[\s\S]*data-aggregate-grade="2"[\s\S]*data-aggregate-grade="3"/);
