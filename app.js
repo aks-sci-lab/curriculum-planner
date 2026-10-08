@@ -760,16 +760,18 @@
       const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
       if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
       const savedGroup = course.applicationGroups?.[String(currentGrade)];
-      if (savedGroup?.name) return savedGroup;
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
       const normalize = (name) => curriculumCourseNameKey(name)
         .replace(/[\[(](?:일반|진로|융합)(?:선택)?[)\]]$/, "");
       const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
-      const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
+      const gradeSettings = settings.filter((group) => group.grade === String(Number(currentGrade) + 1));
+      const matches = gradeSettings.filter((group) =>
         (!hint || group.semester === hint) &&
         group.courses.some((name) => normalize(name) === normalize(course.name)));
       if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
-      if (!matches.length) return course.applicationGroups?.[String(currentGrade)] || null;
+      if (matches.length > 1) return null;
+      if (gradeSettings.length) return null;
+      if (savedGroup?.name) return savedGroup;
       return null;
     }
 

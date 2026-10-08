@@ -498,8 +498,8 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   assert.equal(ctx.applicationGroupForCourse({name:"없는 과목"},"1"),null);
   assert.equal(ctx.applicationGroupForCourse({name:"물리학(3학년)"},"1"),null);
   assert.deepEqual(plain(ctx.applicationGroupForCourse({
-    name:"물리학", applicationGroups:{"1":{name:"저장된 2학년 그룹",semester:"2"}}
-  },"1")), {name:"저장된 2학년 그룹",semester:"2"});
+    name:"물리학", applicationGroups:{"1":{name:"저장된 이전 그룹",semester:"2"}}
+  },"1")), {name:"과학 선택",semester:"1"});
   assert.equal(ctx.courseGroupLabel({name:"실험 (2학기)",column:5},"1"),"2학기 2학기 선택");
   const course={name:"물리학",column:4};
   const data={courses:[course],students:[{grade:"1",selections:[{...course}]}]};
@@ -507,6 +507,14 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   assert.equal(data.students[0].selections[0].applicationGroups["1"].name,"과학 선택");
   groups=[];
   assert.equal(ctx.courseGroupLabel(data.students[0].selections[0],"1"),"1학기 과학 선택");
+  groups=[{grade:"2",semester:"1",name:"과학 선택",courses:["다른 과목"]}];
+  assert.equal(ctx.applicationGroupForCourse({
+    name:"물리학",applicationGroups:{"1":{name:"오래된 그룹",semester:"1"}}
+  },"1"),null);
+  groups=[];
+  assert.deepEqual(plain(ctx.applicationGroupForCourse({
+    name:"물리학",applicationGroups:{"1":{name:"저장된 그룹",semester:"2"}}
+  },"1")),{name:"저장된 그룹",semester:"2"});
   ctx.state.groupAssignments["4"]="manual";
   assert.equal(ctx.courseGroupLabel(course,"1"),"미분류");
 });
