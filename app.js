@@ -803,14 +803,69 @@
       return category === "과목" ? `${semester}학기` : `${semester}학기 ${category}`;
     }
 
+    function normalizeRomanNumerals(value) {
+      const values = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+      const canonicalNumeral = (number) => {
+        const pairs = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"],
+          [100, "C"], [90, "XC"], [50, "L"], [40, "XL"],
+          [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+        let remaining = number;
+        let result = "";
+        for (const [amount, symbol] of pairs) {
+          while (remaining >= amount) {
+            result += symbol;
+            remaining -= amount;
+          }
+        }
+        return result;
+      };
+      return String(value || "").normalize("NFKC")
+        .replace(/(?<![A-Za-z])[IVXLCDM]+(?![A-Za-z])/gi, (numeral) => {
+          const upper = numeral.toUpperCase();
+          let number = 0;
+          for (let index = 0; index < upper.length; index++) {
+            const current = values[upper[index]];
+            const next = values[upper[index + 1]] || 0;
+            number += current < next ? -current : current;
+          }
+          return number > 0 && number <= 3999 && canonicalNumeral(number) === upper
+            ? String(number) : numeral;
+        });
+    }
+
+    function curriculumCourseNameKey(value) {
+      return normalizeRomanNumerals(value)
+        .replace(/\s+/g, "")
+        .replace(/[\[(](?:[12]학기|[23]학년)[)\]]$/, "")
+        .trim();
+    }
+
+    function curriculumGradesForCourse(course) {
+      const schoolYear = String(state.activeDataSchoolYear || "");
+      const plan = schoolYear
+        ? (state.curriculumPlansByYear?.[schoolYear] ||
+          (String(state.curriculumPlanAcademicYear || "") === schoolYear ? state.curriculumPlan : []))
+        : state.curriculumPlan;
+      const nameKey = curriculumCourseNameKey(course.name);
+      if (!nameKey || !Array.isArray(plan)) return new Set();
+      return new Set(plan
+        .filter((row) => curriculumCourseNameKey(row.subject) === nameKey)
+        .map((row) => String(row.grade || ""))
+        .filter((grade) => ["2", "3"].includes(grade)));
+    }
+
     function courseBelongsToCurrentGrade(course, currentGrade, students) {
       const grade = String(currentGrade);
+      const targetGrade = String(Number(grade) + 1);
+      const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
+      if (namedGrade) return namedGrade === targetGrade;
+      const curriculumGrades = curriculumGradesForCourse(course);
+      if (curriculumGrades.size === 1) return curriculumGrades.has(targetGrade);
+      if (curriculumGrades.size && !curriculumGrades.has(targetGrade)) return false;
       if (course.applicationCurrentGrade !== undefined && course.applicationCurrentGrade !== null &&
           String(course.applicationCurrentGrade) !== "") {
         return String(course.applicationCurrentGrade) === grade;
       }
-      const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
-      if (namedGrade) return namedGrade === String(Number(grade) + 1);
       const applicationGroups = course.applicationGroups;
       if (applicationGroups && typeof applicationGroups === "object" && Object.keys(applicationGroups).length) {
         return Object.hasOwn(applicationGroups, grade);

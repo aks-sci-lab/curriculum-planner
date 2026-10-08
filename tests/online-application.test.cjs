@@ -667,13 +667,22 @@ test("developer results replace only the chosen grade and retain courses, settin
 
 test("aggregate reports and course boards isolate second- and third-year data", () => {
   const ctx=vm.createContext({
-    state:{customGroupNames:[],customGroupNamesByGrade:{"2":["2학년 반 A"],"3":["3학년 반 B"]}},
+    state:{
+      customGroupNames:[],
+      customGroupNamesByGrade:{"2":["2학년 반 A"],"3":["3학년 반 B"]},
+      activeDataSchoolYear:"2026",
+      curriculumPlanAcademicYear:"2026",
+      curriculumPlan:[
+        {grade:"2",subject:"2학년 과목"},
+        {grade:"3",subject:"3학년 과목"},
+      ],
+    },
     normalizeGroupName:(value)=>String(value??"").trim(),
     UNASSIGNED_GROUP:"미분류",
     applicationGroupForCourse:()=>null,
     parseAssignedGroupLabel:()=>({semesterKey:"",category:""}),
   });
-  vm.runInContext(functionSource("function courseBelongsToCurrentGrade(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function normalizeRomanNumerals(", "function courseIndexByColumn("),ctx);
   vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
   const students=[
     {grade:"1",classroom:"1",selections:[{column:"second"}]},
@@ -681,7 +690,7 @@ test("aggregate reports and course boards isolate second- and third-year data", 
   ];
   const courses=[
     {column:"second",name:"2학년 과목",applicationCurrentGrade:"1"},
-    {column:"third",name:"3학년 과목",applicationCurrentGrade:"2"},
+    {column:"third",name:"3학년 과목",applicationCurrentGrade:"1"},
   ];
   const result=ctx.aggregateRecords(students,courses,90,110,{},{},{});
   assert.deepEqual(plain(result.reports.map(({summary,semesters})=>({
@@ -695,6 +704,15 @@ test("aggregate reports and course boards isolate second- and third-year data", 
   assert.deepEqual(plain(ctx.coursesForCurrentGrade("2",courses,students).map((course)=>course.name)),["3학년 과목"]);
   assert.deepEqual(plain(ctx.gradeGroupNames("2")),["2학년 반 A"]);
   assert.deepEqual(plain(ctx.gradeGroupNames("3")),["3학년 반 B"]);
+  const namedGradeCourse={column:"named",name:"학년 표시 과목(3학년)",applicationCurrentGrade:"1"};
+  assert.deepEqual(plain(ctx.coursesForCurrentGrade("1",[namedGradeCourse],students)),[]);
+  assert.deepEqual(plain(ctx.coursesForCurrentGrade("2",[namedGradeCourse],students)),[namedGradeCourse]);
+  assert.equal(ctx.curriculumCourseNameKey("선택 과목 2"),ctx.curriculumCourseNameKey(" 선택   과목 Ⅱ "));
+  assert.equal(ctx.curriculumCourseNameKey("선택 과목 (Ⅲ 학년)"),ctx.curriculumCourseNameKey("선택 과목 (3학년)"));
+  assert.equal(ctx.normalizeRomanNumerals("BIO CIVIC"),"BIO CIVIC");
+  const romanGradeCourse={column:"roman",name:"학년 표시 과목(Ⅲ학년)",applicationCurrentGrade:"1"};
+  assert.deepEqual(plain(ctx.coursesForCurrentGrade("1",[romanGradeCourse],students)),[]);
+  assert.deepEqual(plain(ctx.coursesForCurrentGrade("2",[romanGradeCourse],students)),[romanGradeCourse]);
 });
 
 test("aggregate and class-assignment views provide separate grade tabs", () => {
