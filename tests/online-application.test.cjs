@@ -224,6 +224,36 @@ test("application subjects are read from the curriculum cohort matching the curr
   assert.deepEqual(plain(ctx.collectApplicationSubjects())["3"].map((item)=>item.subject),["2025코호트 3학년 과목"]);
 });
 
+test("curriculum group course choices fall back to the uploaded layout and keep subject names unchanged", () => {
+  const ctx = vm.createContext({
+    curriculumSelectionGroupDraft: { grade: "2", semester: "1" },
+    state: {
+      curriculumPlan: [],
+      curriculumImportedLayout: { rows: [] },
+    },
+    normalizeCurriculumDivision: (value) => String(value).includes("학생") ? "학생 선택 교육과정" : "학교 지정 교육과정",
+    isSelectableDetail: (value) => ["일반선택", "진로선택", "융합선택"].includes(value),
+    importedPlanColumnMap: () => ({ semesters: [-1, -1, 2, 3, -1, -1] }),
+    importedPlanCourseContexts: () => [
+      { subject: "생명과학", division: "학생 선택 교육과정", selectionType: "일반선택",
+        area: "과학", row: ["", "", "3", "3"] },
+      { subject: "학교 지정 과목", division: "학교 지정 교육과정", selectionType: "일반선택",
+        area: "과학", row: ["", "", "3", ""] },
+      { subject: "공통 과목", division: "학생 선택 교육과정", selectionType: "공통",
+        area: "과학", row: ["", "", "3", ""] },
+    ],
+  });
+  vm.runInContext(functionSource("function curriculumGroupCourseOptions(", "function renderCurriculumGroupCreator("), ctx);
+  assert.deepEqual(plain(ctx.curriculumGroupCourseOptions()), [["생명과학", "생명과학 · 과학"]]);
+
+  ctx.state.curriculumPlan = [{
+    grade: "2", division: "학생 선택 교육과정", detail: "일반선택", subject: "생명과학",
+    area: "과학", sem21: "3", sem22: "3",
+  }];
+  ctx.curriculumSelectionGroupDraft.semester = "2";
+  assert.deepEqual(plain(ctx.curriculumGroupCourseOptions()), [["생명과학", "생명과학 · 과학"]]);
+});
+
 test("merged subject header uses actual course names and splits course lists by promoted semester", () => {
   const layout = {
     rows: [

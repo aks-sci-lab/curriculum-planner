@@ -1580,13 +1580,34 @@
         const normalized = String(value || "").trim();
         return Boolean(normalized) && !/^[-–—]+$/.test(normalized) && !/^0(?:\.0+)?$/.test(normalized);
       };
+      const addSubject = (subject, area) => {
+        for (const name of String(subject || "").split(/[,，]/)
+          .map((part) => part.replace(/↔/g, " ").trim()).filter(Boolean)) {
+          if (!options.has(name)) options.set(name, `${name} · ${area || "교과군 미정"}`);
+        }
+      };
       for (const row of state.curriculumPlan) {
         if (String(row.grade) !== grade ||
           normalizeCurriculumDivision(row.division) !== "학생 선택 교육과정" ||
           !isSelectableDetail(row.detail) || !hasHours(row[field])) continue;
-        const semesters = ["1", "2"].filter((term) => hasHours(row[`sem${grade}${term}`]));
-        const subject = semesters.length > 1 ? `${row.subject} (${semester}학기)` : row.subject;
-        if (subject) options.set(subject, `${row.subject} · ${row.area || "교과군 미정"}`);
+        addSubject(row.subject, row.area);
+      }
+      if (!options.size && state.curriculumImportedLayout) {
+        const layout = state.curriculumImportedLayout;
+        const columns = importedPlanColumnMap(layout);
+        const semesterColumn = columns.semesters[(Number(grade) - 1) * 2 + Number(semester) - 1];
+        if (semesterColumn >= 0) {
+          for (const context of importedPlanCourseContexts(layout, columns)) {
+            if (normalizeCurriculumDivision(context.division) !== "학생 선택 교육과정" ||
+              !isSelectableDetail(context.selectionType || context.detail)) continue;
+            const value = String(context.row[semesterColumn] ?? "").trim();
+            const schedule = value.match(/([123])\s*학년\s*[/／]\s*([12](?:\s*[,，·]\s*[12])*)\s*학기/);
+            const matchesSchedule = schedule
+              ? schedule[1] === grade && schedule[2].split(/[,，·]/).map((term) => term.trim()).includes(semester)
+              : hasHours(value);
+            if (matchesSchedule) addSubject(context.subject, context.area);
+          }
+        }
       }
       return [...options.entries()].sort(([a], [b]) => a.localeCompare(b, "ko"));
     }
