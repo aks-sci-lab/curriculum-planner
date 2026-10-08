@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6fb">
+  <title>교육과정 편성 프로그램</title>
+  <link rel="stylesheet" href="styles.css?v=20261007-reactive-realtime">
+</head>
+<body class="min-h-screen">
+  <header class="teacher-header" id="teacherHeader">
+    <strong>교육과정 편성 프로그램</strong>
+    <div class="teacher-account">
+      <span id="curriculumLoginStatus" role="status">구글 로그인 후 이용할 수 있습니다.</span>
+      <button class="button" id="curriculumGoogleLogin" type="button">구글 로그인</button>
+      <button class="button hidden" id="headerTeacherLogout" type="button">로그아웃</button>
+    </div>
+  </header>
+  <section class="login-gate" id="teacherLoginGate">
+    <h1>교육과정 편성 프로그램</h1>
+    <p>오른쪽 위의 구글 로그인 후 편제표와 수강신청 업무를 이용할 수 있습니다.</p>
+    <p id="teacherLoginMessage" role="status" aria-live="polite"></p>
+    <a class="file-button" href="#student">학생 수강신청 입구</a>
+  </section>
+  <section class="student-entry hidden" id="studentEntry" aria-label="학생 수강신청">
+    <h1>학생 수강신청</h1>
+    <p class="note">학교에서 안내한 신청 링크인지 확인하세요. 아래 화면에 본인 신청 코드만 입력하면 해당 학교·차수의 신청 과목이 표시됩니다. 코드는 다른 학생에게 공유하지 마세요.</p>
+    <p id="studentEntryError" role="alert"></p>
+    <iframe class="hidden" id="studentApplicationFrame" title="학교별 학생 수강신청" referrerpolicy="no-referrer"></iframe>
+    <p class="note" id="studentFrameHelp">신청 화면이 표시되지 않으면 학교에 서버 배포 상태를 문의하세요. 구글 로그인 화면이 나타나면 신청 코드를 입력하지 말고 학교에 공개 접속 설정을 확인해 주세요.</p>
+    <a class="file-button hidden" id="studentApplicationFallback" target="_blank" rel="noopener noreferrer">신청 화면을 새 창에서 열기</a>
+  </section>
+  <section class="student-entry hidden" id="supabaseStudentEntry" aria-label="온라인 학생 수강신청">
+    <h1>학생 수강신청</h1>
+    <p class="note">학교·차수별 신청 링크로 접속해 6자리 숫자 코드를 입력하세요. 본인 코드만 사용하고 다른 사람에게 공유하지 마세요.</p>
+    <form id="cloudStudentLogin">
+      <label for="cloudStudentCode">개인 신청 코드</label>
+      <input class="application-link-field" id="cloudStudentCode" type="password" inputmode="numeric" autocomplete="off" required>
+      <button class="button" type="submit">수강신청으로 이동</button>
+    </form>
+    <p id="cloudStudentMessage" role="status" aria-live="polite"></p>
+    <section id="cloudStudentCourses" class="hidden">
+      <h2 id="cloudStudentTitle"></h2>
+      <p id="cloudStudentIdentity"></p>
+      <form id="cloudStudentApplication">
+        <p id="cloudStudentSemesterStatus" role="status" aria-live="polite"></p>
+        <div id="cloudStudentChoices"></div>
+        <div class="student-action-bar">
+          <div class="student-summary" id="cloudStudentSummary" role="status" aria-live="polite">
+            <div class="student-summary-values"><span id="cloudStudentTotal">선택 0개 · 0학점</span><strong id="cloudStudentCore">국·영·수 0%</strong></div>
+            <div class="student-summary-track" id="cloudStudentCoreTrack" role="progressbar" aria-label="신청 학점 중 국어·영어·수학 과목 비율" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="cloudStudentCoreFill"></span></div>
+          </div>
+          <div class="student-action-buttons">
+            <button class="button button-secondary hidden" id="cloudStudentPrevious" type="button">이전 학기</button>
+            <button class="button button-primary hidden" id="cloudStudentNext" type="button">다음 학기</button>
+            <button class="button button-primary" id="cloudStudentSave" type="submit">신청 제출 / 변경사항 저장</button>
+          </div>
+        </div>
+      </form>
+    </section>
+  </section>
+  <div class="workspace hidden" id="teacherWorkspace">
+    <aside class="app-sidebar gap-3">
+      <div class="sidebar-brand">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">✓</span><span>교육과정 편성 프로그램</span></div>
+        <a class="file-button" href="#student">학생 수강신청 입구</a>
+      </div>
+      <section class="panel workflow-panel" aria-label="업무 흐름">
+        <h2 class="panel-heading">업무 흐름도</h2>
+        <div class="workflow-steps" id="workflowSteps">
+          <button class="workflow-step-button" type="button" data-workflow-step="1">1. 편제표 수정</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="2">2. 학년별 수강신청</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="3">3. 학년별 확인서 발급</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="4">4. 학년별 집계표</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="5">5. 이동수업 반편성</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="6">6. 시간표 작성</button>
+        </div>
+      </section>
+    </aside>
+    <main class="main">
+      <section class="workflow-step-panel hidden" id="workflowStep1Panel">
+        <div class="curriculum-heading-row">
+        <h3>1단계 · 교육과정 편제표 작성</h3>
+        <p class="note">교육과정 목록과 편제표를 불러와 과목을 편성하고, 편제표 셀을 직접 수정할 수 있습니다.</p>
+        <div class="curriculum-toolbar">
+          <label class="file-button" for="curriculumInput">저장된 교육과정 불러오기</label>
+          <label class="file-button" for="curriculumPlanInput">편제표 불러오기</label>
+          <button class="button" id="clearCurriculumPlan" type="button">편제표 초기화</button>
+          <button class="button" id="exportCurriculumPlan" type="button">편제표 엑셀 내보내기</button>
+          <input class="hidden" id="curriculumInput" type="file" accept=".xlsx">
+          <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx">
+        </div>
+        </div>
+        <div class="curriculum-filename" id="curriculumFileName">저장된 교육과정 목록 없음</div>
+        <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
+        <div class="curriculum-grid curriculum-loaded-grid">
+          <section class="curriculum-box curriculum-catalog-box">
+            <h4>저장된 교육과정 <span class="curriculum-edit-hint">끌어서 편제표에 추가</span></h4>
+            <div class="curriculum-catalog-filter">
+              <input id="curriculumCatalogQuery" type="search" placeholder="과목명·교과군·유형 검색" aria-label="저장된 교육과정 과목 검색">
+              <span class="curriculum-catalog-filter-count" id="curriculumCatalogFilterCount"></span>
+            </div>
+            <div class="curriculum-pick-list" id="curriculumPickList"></div>
+          </section>
+          <section class="curriculum-box curriculum-import-box" id="curriculumPlanDropZone">
+            <h4>불러온 편제표 <span class="curriculum-edit-hint">셀을 클릭해 내용 수정</span></h4>
+            <div class="curriculum-plan-filters" id="curriculumPlanFilters">
+              <select id="curriculumFilterGrade" aria-label="학년 필터"><option value="">전체 학년</option></select>
+              <select id="curriculumFilterDivision" aria-label="교육과정 구분 필터"><option value="">전체 교육과정</option></select>
+              <select id="curriculumFilterArea" aria-label="교과군 필터"><option value="">전체 교과군</option></select>
+              <select id="curriculumFilterDetail" aria-label="선택 유형 필터"><option value="">선택 유형</option></select>
+              <input id="curriculumFilterQuery" type="search" placeholder="과목명·내용 검색" aria-label="편제표 내용 검색">
+              <span id="curriculumFilterCount" class="curriculum-filename"></span>
+            </div>
+            <div class="curriculum-plan-drop">
+              <div class="curriculum-table-wrap" id="curriculumPlanWrap"></div>
+            </div>
+            <div class="curriculum-plan-actions">
+              <span class="curriculum-row-help">셀을 선택한 뒤 행 추가를 누르면 선택한 행 위에 빈 행이 생깁니다. 빈칸을 클릭해 입력하면 자동 저장됩니다.</span>
+              <div class="curriculum-action-buttons">
+                <button class="button button-secondary" id="undoCurriculumEdit" type="button" disabled title="편제표의 직전 변경을 되돌립니다.">실행취소</button>
+                <button class="button" id="addCurriculumPlanRow" type="button">행 추가</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section class="workflow-step-panel hidden" id="workflowStep2Panel">
+        <h3>2단계 · 학년별 수강신청</h3>
+        <p class="note">1학년은 2학년 때 들을 과목, 2학년은 3학년 때 들을 과목을 신청받습니다. 기본 1차에서 시작하며 필요할 때 차수를 추가해 결과를 분리해서 관리합니다.</p>
+        <div class="group-scope-tabs" role="tablist" aria-label="수강신청 현재 학년 선택">
+          <button class="button" id="applicationGrade1Tab" role="tab" aria-selected="true" aria-controls="applicationGradeWorkspace" type="button">1학년 → 2학년 수강신청</button>
+          <button class="button" id="applicationGrade2Tab" role="tab" aria-selected="false" aria-controls="applicationGradeWorkspace" tabindex="-1" type="button">2학년 → 3학년 수강신청</button>
+        </div>
+        <div id="applicationGradeWorkspace" role="tabpanel" aria-labelledby="applicationGrade1Tab">
+        <p class="note" id="applicationGradeDescription">현재 1학년 학생의 2학년 과목·그룹과 온라인 신청을 관리합니다.</p>
+        <div class="group-scope-tabs" id="applicationWorkspaceTabs" role="tablist" aria-label="수강신청 작업">
+          <button class="button" id="applicationGroupsTab" role="tab" aria-selected="true" aria-controls="applicationGroupsPanel" type="button">① 과목·그룹 설정</button>
+          <button class="button" id="applicationOnlineTab" role="tab" aria-selected="false" aria-controls="supabaseTeacherPanel" type="button">② 온라인 신청 관리</button>
+          <button class="button" id="applicationResultsTab" role="tab" aria-selected="false" aria-controls="applicationResultsPanel" type="button">③ 결과 불러오기</button>
+        </div>
+        <section class="application-subject-box" id="applicationGroupsPanel" role="tabpanel" aria-labelledby="applicationGroupsTab">
+          <details>
+          <summary class="application-subject-title">신청 받을 과목 확인 (학생선택교육과정 · 공동교육과정·소인수 제외)</summary>
+          <div id="applicationSubjectList" class="application-subject-list"></div>
+          </details>
+          <h3>수강신청 선택 그룹 설정</h3>
+          <p class="note">같은 학기 열의 같은 배경색으로 선택 그룹을 구성합니다. 색 없는 과목은 학기별 미분류에서 편집·배치하세요. 선택 수는 직접 지정하며 다른 학기의 그룹으로 이동할 수 없습니다. 이전 그룹 설정은 학기별로 새로 지정해야 합니다. 색상 정보가 없는 기존 편제표는 다시 업로드한 뒤 색상으로 다시 구성하세요.</p>
+          <div id="courseGroupEditor"></div>
+          <p id="courseGroupMessage" role="status"></p>
+        </section>
+        <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
+        <p class="note">온라인 신청 결과는 집계표의 신청 결과 새로고침 버튼으로 가져옵니다. 차수를 선택해 마지막으로 가져온 결과를 확인하세요.</p>
+        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하고 다른 학년 자료는 유지합니다. 확인서·집계표·이동수업 반편성은 학년 탭별로 분리해 표시합니다. 차수 데이터 삭제는 두 학년 자료 전체에 적용됩니다.</p>
+        <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택"></div>
+        <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
+        <div id="developerResultUpload" class="hidden">
+        <p class="note">개발자 전용 · 선택한 학년·차수의 결과 엑셀을 업로드하면 해당 학년만 교체해 확인서·집계표에 반영합니다. 다른 학년은 유지됩니다. 온라인 연동 차수는 먼저 연동을 해제하세요.</p>
+        <div class="dropzone" id="dropzone">
+          <div class="upload-icon" aria-hidden="true">↑</div>
+          <strong>선택한 학년·차수의 학생별 신청 명단을 여기에 놓으세요</strong>
+          <span>예시 형식 확인 또는 지난번 학생 명단 선택</span>
+          <label class="file-button" for="rosterInput">학생 명단 선택</label>
+          <a class="file-button" href="선택과목 수강신청결과 예시.xlsx" download>예시 엑셀 다운로드</a>
+          <input class="hidden" id="rosterInput" type="file" accept=".xlsx">
+        </div>
+        <div class="file-name" id="fileName">불러온 파일 없음</div>
+        <div style="margin-top:10px">
+          <button class="button" id="resetData" type="button">선택한 차수 데이터 삭제 (두 학년 전체)</button>
+        </div>
+        <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
+        </div>
+        <div class="round-status-list" id="roundStatusList"></div>
+        </section>
+        <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
+          <h3>온라인 신청 관리</h3>
+          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달 · 학번 열은 이수 이력 연결에 사용</p>
+          <div id="cloudTeacherLogin">
+            <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
+          </div>
+          <div class="hidden" id="cloudTeacherControls">
+            <p id="cloudTeacherAccount"></p>
+            <button class="button" id="cloudTeacherLogout" type="button">로그아웃</button>
+            <p class="note">신청을 생성한 뒤 학생별 코드를 저장하고 안내문을 전달하세요.</p>
+            <label class="file-button" for="cloudRosterInput">① 학생 명렬 업로드 · 신청 학년 확인</label>
+            <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
+            <p id="cloudRosterSummary" role="status">명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.</p>
+            <button class="button button-primary" id="cloudCreateEvent" type="button" disabled>② 그룹 설정 완료 · 수강신청 생성</button>
+            <button class="button" id="cloudPreviewStudent" type="button">학생 화면 미리보기</button>
+            <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
+            <button class="button" id="cloudPrintCodes" type="button">학생 코드 메일머지 출력창</button>
+            <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>
+            <input class="hidden" id="cloudCodeFile" type="file" accept=".xlsx,.json">
+            <button class="button" id="cloudRefreshEvents" type="button">내 수강신청 새로고침</button>
+            <p>공통 학생 입구: <a id="cloudStudentLink" href="#student">학생 수강신청</a></p>
+            <div id="cloudEventList"></div>
+            <p id="cloudSyncStatus" role="status" aria-live="polite">수동 갱신 · 집계표의 신청 결과 새로고침을 누르면 최신 결과를 가져옵니다.</p>
+          </div>
+          <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
+        </section>
+        </div>
+      </section>
+      <section class="workflow-placeholder hidden" id="workflowStep6Panel">
+        시간표 작성 단계입니다. 교시/교실 제약 기반 시간표 편성 화면을 여기에 확장할 수 있도록 구조를 준비했습니다.
+      </section>
+
+      <section id="certificatePanel" class="hidden">
+        <div class="certificate-round-line"><span class="count-pill" id="certificateRoundBadge">1차</span><span class="note-inline">차수는 2단계에서 전환할 수 있습니다.</span></div>
+        <div class="group-scope-tabs" id="certificateGradeTabs" role="tablist" aria-label="확인서 발급 학년 선택">
+          <button class="button" type="button" role="tab" data-certificate-grade="2" aria-selected="true">2학년</button>
+          <button class="button" type="button" role="tab" data-certificate-grade="3" aria-selected="false">3학년</button>
+        </div>
+        <div class="certificate-setup-grid">
+          <div class="certificate-controls">
+          <section class="panel settings-panel">
+            <h2 class="panel-heading">확인서 기본 정보</h2>
+            <p class="panel-subtitle">인쇄물에 표시할 정보를 필요에 맞게 수정하세요.</p>
+            <div class="settings-grid">
+              <div class="field"><label for="schoolYear">학년도</label><input id="schoolYear" type="number" value="2026" min="2000" max="2100"></div>
+              <div class="field"><label for="round">신청 차수</label><input id="round" type="text" value="1차"></div>
+              <div class="field field-wide"><label for="confirmDate">확인 날짜</label><input id="confirmDate" type="text" value="2026. 9. 28."></div>
+              <div class="field field-wide"><label for="schoolName">학교명</label><input id="schoolName" type="text" value="천상고등학교"></div>
+            </div>
+          </section>
+          <section class="panel settings-panel history-import-panel">
+            <h2 class="panel-heading">이수 이력</h2>
+            <p class="panel-subtitle">학번으로 학생을 연결합니다. 자동 누적 자료가 없다면 엑셀 이력을 불러오세요.</p>
+            <button class="button" id="downloadHistoryTemplate" type="button">이수 이력 양식 다운로드</button>
+            <label class="file-button" for="historyInput">이수 이력 엑셀 불러오기</label>
+            <input class="hidden" id="historyInput" type="file" accept=".xlsx">
+          </section>
+          <section class="panel roster-panel">
+            <div class="roster-header"><h2>학생 목록</h2><span class="count-pill" id="studentCount">0명</span></div>
+            <div class="roster-controls">
+              <input class="search-input" id="searchInput" type="search" placeholder="이름 또는 번호 검색" aria-label="이름 또는 번호 검색" disabled>
+              <select class="class-select" id="classFilter" aria-label="반 필터" disabled><option value="">전체 반</option></select>
+            </div>
+            <div class="student-list" id="studentList" aria-live="polite">
+              <div class="empty-roster">엑셀 파일을 불러오면<br>학생 목록이 여기에 표시됩니다.</div>
+            </div>
+          </section>
+        </div>
+        <div class="certificate-preview-column">
+        <div class="main-heading">
+          <div><h1>수강 신청 확인서</h1><p id="previewSubheading">엑셀 파일을 불러와 확인서를 작성하세요.</p></div>
+          <div class="toolbar">
+            <button class="button" id="printSelected" type="button" disabled>현재 학생 인쇄</button>
+            <button class="button button-primary" id="printAll" type="button" disabled>검색 결과 전체 인쇄</button>
+          </div>
+        </div>
+        <section class="preview-area" aria-label="확인서 미리보기">
+          <div id="preview" class="placeholder">
+            <div class="placeholder-icon" aria-hidden="true">▤</div>
+            <strong>확인서 미리보기</strong>
+            <span>왼쪽에서 수강 신청 결과 엑셀을 불러오면 학생별 확인서가 표시됩니다.</span>
+          </div>
+        </section>
+        </div>
+        </div>
+      </section>
+      <section class="panel aggregate-panel hidden" id="aggregatePanel">
+        <div class="roster-header">
+          <div><h2 class="panel-heading">과목별 수강 신청 집계 <span class="count-pill" id="aggregateRoundBadge">1차</span></h2><p class="panel-subtitle" id="aggregateDescription">학생별 신청 명단에서 과목별 인원을 계산했습니다.</p></div>
+          <div>
+            <button class="button" id="refreshAggregate" type="button">신청 결과 새로고침</button>
+            <button class="button button-primary" id="downloadAggregate" type="button">집계표 엑셀 다운로드</button>
+          </div>
+        </div>
+        <p class="aggregate-note" id="aggregateRefreshStatus" role="status" aria-live="polite">온라인 결과는 자동으로 갱신하지 않습니다. 신청 결과 새로고침을 눌러 최신 결과를 가져오세요.</p>
+        <div class="aggregate-settings">
+          <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
+          <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
+          <div class="field"><label id="plannedClassCountLabel" for="plannedClassCount">2학년 편제 학급수</label><input id="plannedClassCount" type="number" min="1" step="1" value=""></div>
+          <button class="button" id="adjustAggregateClasses" type="button">분반 수 자동 조정</button>
+        </div>
+        <p class="aggregate-note" id="aggregateAllocationStatus" role="status" aria-live="polite">편제 학급수 입력 후 분반 수 자동 조정을 누르면 현재 학년·차수의 선택군별 학급수를 신청 인원에 비례해 재배분합니다. 조정 후에도 과목별 수동 수정이 가능합니다.</p>
+        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 편제 학급수는 학년별로 지정할 수 있으며, 각 선택군의 총 학급수는 편제 학급수 × 해당 그룹에서 선택할 과목 수로 계산됩니다. 선택 수는 2단계 그룹 설정을 따릅니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 과목별 개설 학급수 칸은 직접 수정할 수 있으며 엑셀에 반영됩니다.</p>
+        <div class="group-scope-tabs" id="aggregateGradeTabs" role="tablist" aria-label="집계표 학년 선택">
+          <button class="button" type="button" role="tab" data-aggregate-grade="2" aria-selected="true">2학년</button>
+          <button class="button" type="button" role="tab" data-aggregate-grade="3" aria-selected="false">3학년</button>
+        </div>
+        <div class="aggregate-content" id="aggregateContent"></div>
+      </section>
+      <section class="panel hidden" id="closurePanel">
+        <div class="roster-header">
+          <div><h2 class="panel-heading" id="closureTitle">폐강 검토</h2><p class="panel-subtitle" id="closureDescription"></p></div>
+        </div>
+        <div class="aggregate-content" id="closureContent"></div>
+      </section>
+      <section class="panel hidden" id="retakePanel">
+        <div class="roster-header">
+          <div><h2 class="panel-heading">다음 차수 수강신청 대상자</h2><p class="panel-subtitle" id="retakeDescription">폐강이 확정된 과목을 신청한 학생 명단입니다.</p></div>
+          <button class="button button-primary" id="downloadRetakeList" type="button">대상자 명단 엑셀 다운로드</button>
+        </div>
+        <p class="aggregate-note" id="retakeNextRoundNote">다음 차수 결과는 2단계에서 차수를 추가한 뒤 불러오세요.</p>
+        <div class="aggregate-content" id="retakeContent"></div>
+      </section>
+      <section class="panel hidden" id="classifierPanel">
+        <div class="roster-header">
+          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">학년별 과목을 분리해 새 반을 만들고 과목을 편성합니다.</p></div>
+        </div>
+        <div class="group-scope-tabs" id="classifierGradeTabs" role="tablist" aria-label="이동수업 학년 선택">
+          <button class="button" type="button" role="tab" data-classifier-grade="2" aria-selected="true">2학년</button>
+          <button class="button" type="button" role="tab" data-classifier-grade="3" aria-selected="false">3학년</button>
+        </div>
+        <div class="semester-classifier" id="semesterClassifier"></div>
+      </section>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+    </main>
+  </div>
+  <div id="printBatch" aria-hidden="true"></div>
+  <dialog id="cloudStudentPreviewDialog" style="width:min(850px, calc(100vw - 40px));max-height:90vh;overflow:auto">
+    <div class="main-heading"><div><h2>학생 화면 미리보기</h2><p>가상 학생으로 확인합니다. 선택·제출 내용은 저장되지 않습니다.</p></div><button class="button" id="cloudStudentPreviewClose" type="button">닫기</button></div>
+    <div id="cloudStudentPreviewContent"></div>
+  </dialog>
+  <dialog id="cloudCodeDialog">
+    <h2>학생별 수강신청 안내문 메일머지</h2>
+    <p>학생마다 별도 안내문을 출력합니다. 인쇄 창에서 PDF로 저장할 수도 있습니다.</p>
+    <label for="cloudPrintClass">출력할 반</label>
+    <select id="cloudPrintClass"><option value="">전체</option></select>
+    <button class="button" id="cloudCodePrint" type="button">선택한 반 전체 인쇄</button>
+    <button class="button" id="cloudCodeClose" type="button">닫기</button>
+    <div id="cloudCodePreview"></div>
+  </dialog>
+
+  <script defer src="app.js?v=20261008-class-allocation"></script>
+  <script src="xlsx-parser.js?v=20261008-class-allocation" defer></script>
+  <script src="course-groups.js?v=20261008-class-allocation" defer></script>
+  <script src="curriculum-workbook.js?v=20261008-class-allocation" defer></script>
+  <script src="vendor/qrcode.js" defer></script>
+  <script src="supabase-client.js?v=20261008-class-allocation" defer></script>
+  <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
+</body>
+</html>
