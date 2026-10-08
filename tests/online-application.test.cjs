@@ -560,7 +560,7 @@ test("developer result Excel imports both layouts and rejects invalid or expired
     renderAggregate(){},renderRoundStatus(){},persistState(){persisted++;},
   });
   vm.runInContext(functionSource("function splitGoogleFormSelections(", "function parseGoogleFormsRows("),ctx);
-  vm.runInContext(functionSource("function handleWorkbook(", "function handleCurriculumWorkbook("),ctx);
+  vm.runInContext(functionSource("function handleWorkbook(", "function importedPlanColumnMap("),ctx);
   workbook=[{rows:[["차수","학년","반","번호","성명","선택과목"],["2","1","1","1","가상","수학"]]}];
   ctx.handleWorkbook({name:"results.xlsx"}); await completion;
   assert.deepEqual(imported[0].selections,["수학"]);

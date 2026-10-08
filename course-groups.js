@@ -6,6 +6,7 @@ var setApplicationTargetGrades;
 var getApplicationGroupSettings;
 var switchApplicationMenuGrade;
 var switchApplicationGroupCohort;
+var createApplicationGroupFromCurriculum;
 (() => {
   const workspaceTabs = ["Groups", "Online", "Results"]
     .map((name) => document.getElementById(`application${name}Tab`));
@@ -95,9 +96,8 @@ var switchApplicationGroupCohort;
     groups = [];
   }
   function sync() {
-    const subjects = getGroupedApplicationSubjects();
-    if (!subjects) return;
     available = new Map();
+    const subjects = getGroupedApplicationSubjects();
     for (const grade of ["2", "3"]) {
       for (const course of subjects?.[grade] || []) available.set(`${grade}:${course.semester}:${course.subject}`, { ...course, grade });
     }
@@ -162,6 +162,52 @@ var switchApplicationGroupCohort;
   getApplicationGroupSettings = () => {
     sync();
     return JSON.parse(JSON.stringify(groups));
+  };
+  createApplicationGroupFromCurriculum = ({ year, grade, semester, name, courses }) => {
+    year = String(year || "").trim();
+    grade = String(grade || "");
+    semester = String(semester || "");
+    name = String(name || "").trim();
+    courses = [...new Set((Array.isArray(courses) ? courses : []).map((course) => String(course || "").trim()).filter(Boolean))];
+    if (!/^\d{4}$/.test(year)) throw new Error("선택과목군의 신입생 학년도를 확인하세요.");
+    if (!["2", "3"].includes(grade) || !["1", "2"].includes(semester)) {
+      throw new Error("선택과목군의 학년과 학기를 확인하세요.");
+    }
+    if (!name || name === "미분류" || name.length > 100) throw new Error("선택과목군 이름을 1~100자로 입력하세요.");
+    if (!courses.length) throw new Error("선택과목군에 넣을 과목을 하나 이상 클릭하세요.");
+
+    const groupKey = cohortStorageKey(year);
+    let cohortGroups;
+    try {
+      cohortGroups = JSON.parse(localStorage.getItem(groupKey) || "[]");
+    } catch (error) {
+      throw new Error(`기존 선택과목군을 읽지 못했습니다: ${error.message}`);
+    }
+    if (!Array.isArray(cohortGroups) || cohortGroups.some((group) => !group || !Array.isArray(group.courses) ||
+      typeof group.name !== "string" || typeof group.id !== "string" || !["2", "3"].includes(group.grade) ||
+      !["0", "1", "2"].includes(group.semester) || group.courses.some((course) => typeof course !== "string"))) {
+      throw new Error("저장된 선택과목군 형식이 잘못되었습니다.");
+    }
+    if (cohortGroups.some((group) => group.grade === grade && group.semester === semester &&
+      group.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      throw new Error(`${grade}학년 ${semester}학기에 같은 이름의 선택과목군이 이미 있습니다.`);
+    }
+    const selectedCourses = new Set(courses);
+    let movedCount = 0;
+    for (const existing of cohortGroups.filter((group) => group.grade === grade && group.semester === semester)) {
+      const before = existing.courses.length;
+      existing.courses = existing.courses.filter((course) => !selectedCourses.has(course));
+      movedCount += before - existing.courses.length;
+    }
+    cohortGroups = cohortGroups.filter((existing) => existing.courses.length || existing.grade !== grade || existing.semester !== semester);
+    const group = { id: crypto.randomUUID(), grade, semester, name, count: null, courses };
+    cohortGroups.push(group);
+    localStorage.setItem(groupKey, JSON.stringify(cohortGroups));
+    if (year === activeCohortYear) {
+      groups = cohortGroups;
+      renderCourseGroups();
+    }
+    return { ...group, year, movedCount };
   };
   function button(text, action) {
     const b = document.createElement("button");

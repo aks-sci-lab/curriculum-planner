@@ -1,5 +1,12 @@
     "use strict";
     var getApplicationCohortYear;
+    var createApplicationGroupFromCurriculum;
+    const curriculumSelectionGroupDraft = {
+      name: "",
+      grade: "2",
+      semester: "1",
+      courses: new Set()
+    };
     const rawState = {
       students: [],
       courses: [],
@@ -11,9 +18,6 @@
       groupAssignments: {},
       selectedCourseColumns: [],
       lastSelectedCourseColumn: null,
-      curriculumCatalog: [],
-      curriculumCatalogQuery: "",
-      curriculumFileName: "",
       curriculumPlanFileName: "",
       curriculumImportedLayout: null,
       curriculumTemplateRows: [],
@@ -43,9 +47,10 @@
     const stateRawTargets = new WeakMap();
     let statePersistenceTimer = null;
     let statePersistenceSuppressed = 0;
+    let statePersistenceReady = false;
 
     function scheduleStatePersistence() {
-      if (statePersistenceSuppressed || statePersistenceTimer !== null) return;
+      if (!statePersistenceReady || statePersistenceSuppressed || statePersistenceTimer !== null) return;
       statePersistenceTimer = window.setTimeout(() => {
         statePersistenceTimer = null;
         persistState();
@@ -259,9 +264,6 @@
           semesterAssignments: state.semesterAssignments,
           customGroupNames: state.customGroupNames,
           groupAssignments: state.groupAssignments,
-          curriculumCatalog: state.curriculumCatalog,
-          curriculumCatalogQuery: state.curriculumCatalogQuery,
-          curriculumFileName: state.curriculumFileName,
           curriculumPlanFileName: state.curriculumPlanFileName,
           curriculumImportedLayout: state.curriculumImportedLayout,
           curriculumTemplateRows: state.curriculumTemplateRows,
@@ -417,9 +419,6 @@
       state.groupAssignments = {};
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
-      state.curriculumCatalog = [];
-      state.curriculumCatalogQuery = "";
-      state.curriculumFileName = "";
       state.curriculumPlanFileName = "";
       state.curriculumImportedLayout = null;
       state.curriculumTemplateRows = [];
@@ -456,10 +455,6 @@
       $("#aggregateContent").innerHTML = '<div class="aggregate-empty">학생별 신청 명단을 불러오면 집계표가 표시됩니다.</div>';
       $("#downloadAggregate").disabled = true;
       $("#curriculumTemplateFileName").textContent = "편제표를 불러오지 않았습니다.";
-      $("#curriculumFileName").textContent = "저장된 교육과정 목록 없음";
-      $("#curriculumPickList").innerHTML = '<div class="curriculum-empty">교육과정 목록을 불러오면 과목별로 표시됩니다.</div>';
-      $("#curriculumCatalogQuery").value = "";
-      $("#curriculumCatalogFilterCount").textContent = "";
       $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
       $("#curriculumFilterGrade").innerHTML = '<option value="">전체 학년</option>';
       $("#curriculumFilterArea").innerHTML = '<option value="">전체 교과군</option>';
@@ -468,8 +463,6 @@
       $("#curriculumFilterCount").textContent = "0개 과목 표시";
       if (rosterInput) rosterInput.value = "";
       if (curriculumPlanInput) curriculumPlanInput.value = "";
-      const curriculumInput = $("#curriculumInput");
-      if (curriculumInput) curriculumInput.value = "";
       renderPreview();
       state.workflowStep = 1;
       renderWorkflowLayout();
@@ -530,9 +523,6 @@
         state.groupAssignments = (activeRound?.groupAssignments || saved.groupAssignments) && typeof (activeRound?.groupAssignments || saved.groupAssignments) === "object"
           ? (activeRound?.groupAssignments || saved.groupAssignments)
           : {};
-        state.curriculumCatalog = Array.isArray(saved.curriculumCatalog) ? saved.curriculumCatalog : [];
-        state.curriculumCatalogQuery = String(saved.curriculumCatalogQuery || "");
-        state.curriculumFileName = String(saved.curriculumFileName || "");
         state.curriculumPlanFileName = String(saved.curriculumPlanFileName || "");
         state.curriculumImportedLayout = saved.curriculumImportedLayout &&
           Array.isArray(saved.curriculumImportedLayout.rows)
@@ -880,44 +870,6 @@
       return { courses, students };
     }
 
-    function createCurriculumRecords(rows) {
-      const headerIndex = rows.findIndex((row) =>
-        row?.some((value) => String(value).trim().includes("과목명")) &&
-        row?.some((value) => String(value).trim().includes("기준학점")));
-      if (headerIndex < 0) throw new Error("교육과정 목록에서 과목명/기준학점 헤더를 찾지 못했습니다.");
-      const headerRow = rows[headerIndex] || [];
-      const findColumn = (matcher) => headerRow.findIndex((value) => matcher(String(value ?? "").trim()));
-      const subjectColumn = findColumn((value) => value.includes("과목명"));
-      const areaColumn = findColumn((value) => value === "교과(군)");
-      const area2Column = findColumn((value) => value === "교과(군)2");
-      const typeColumn = findColumn((value) => value.includes("과목유형"));
-      const creditColumn = findColumn((value) => value.includes("기준학점"));
-      const minColumn = findColumn((value) => value.includes("최소"));
-      const maxColumn = findColumn((value) => value.includes("최대"));
-      if (subjectColumn < 0 || creditColumn < 0) throw new Error("교육과정 목록의 필수 열(과목명/기준학점)이 없습니다.");
-
-      const records = [];
-      for (let index = headerIndex + 1; index < rows.length; index++) {
-        const row = rows[index] || [];
-        const subject = String(row[subjectColumn] ?? "").trim();
-        if (!subject) continue;
-        records.push({
-          area: normalizeCurriculumAreaName(
-            areaColumn >= 0 ? String(row[areaColumn] ?? "").trim() : "",
-            subject
-          ),
-          area2: area2Column >= 0 ? String(row[area2Column] ?? "").trim() : "",
-          type: typeColumn >= 0 ? String(row[typeColumn] ?? "").trim() : "",
-          subject,
-          credit: Number(row[creditColumn]) || 0,
-          minCredit: minColumn >= 0 ? (Number(row[minColumn]) || 0) : 0,
-          maxCredit: maxColumn >= 0 ? (Number(row[maxColumn]) || 0) : 0
-        });
-      }
-      if (!records.length) throw new Error("교육과정 목록에서 과목 데이터를 찾지 못했습니다.");
-      return records;
-    }
-
     function createCurriculumPlanRecords(rows, context = "") {
       const semesterHeaderPatterns = [
         /(?:^|[^0-9])1-1(?:$|[^0-9])|1학년.*1학기|1학기.*1학년/,
@@ -1086,20 +1038,6 @@
       }
       if (!records.length) throw new Error("편제표에서 과목 행을 찾지 못했습니다.");
       return records;
-    }
-
-    function curriculumCatalogTableHtml(rows, emptyText) {
-      if (!rows.length) return `<div class="curriculum-empty">${escapeHtml(emptyText)}</div>`;
-      return `<table class="curriculum-table">
-        <thead><tr><th style="width:18%">교과(군)</th><th style="width:16%">유형</th><th style="width:36%">과목명</th><th style="width:10%">학점</th><th style="width:20%">범위</th></tr></thead>
-        <tbody>${rows.map((item) => `<tr>
-          <td>${escapeHtml(curriculumAreaOf(item) || "-")}</td>
-          <td>${escapeHtml(item.type || "-")}</td>
-          <td>${escapeHtml(item.subject)}</td>
-          <td>${escapeHtml(item.credit || 0)}</td>
-          <td>${escapeHtml(item.minCredit || 0)}~${escapeHtml(item.maxCredit || 0)}</td>
-        </tr>`).join("")}</tbody>
-      </table>`;
     }
 
     function curriculumBundleSummaryHtml(rows) {
@@ -1506,106 +1444,6 @@
       }, { detail: "일반선택" }));
     }
 
-    function getCurriculumAreaOptions() {
-      return [...new Set(state.curriculumCatalog.map((item) => curriculumAreaOf(item)).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, "ko"));
-    }
-
-    function updateCurriculumBuilderControls() {
-      const gradeSelect = $("#curriculumTargetGrade");
-      const divisionSelect = $("#curriculumTargetDivision");
-      const areaSelect = $("#curriculumTargetArea");
-      const detailSelect = $("#curriculumTargetDetail");
-      const bundleNameInput = $("#curriculumBundleName");
-      const bundlePickInput = $("#curriculumBundlePick");
-      if (!gradeSelect || !divisionSelect || !areaSelect || !detailSelect || !bundleNameInput || !bundlePickInput) return;
-
-      gradeSelect.value = state.curriculumTargetGrade;
-      divisionSelect.value = normalizeCurriculumDivision(state.curriculumTargetDivision);
-      if (!state.curriculumTargetDivision) divisionSelect.value = "";
-      detailSelect.value = normalizeCurriculumDetail(state.curriculumTargetDetail);
-      if (!state.curriculumTargetDetail) detailSelect.value = "";
-      bundleNameInput.value = state.curriculumBundleName;
-      bundlePickInput.value = String(Math.max(1, Number(state.curriculumBundlePick) || 1));
-
-      const options = getCurriculumAreaOptions();
-      const current = state.curriculumTargetArea;
-      areaSelect.innerHTML = `<option value="">전체 교과군</option>${options.map((area) =>
-        `<option value="${escapeHtml(area)}"${area === current ? " selected" : ""}>${escapeHtml(area)}</option>`).join("")}`;
-      if (current && !options.includes(current)) {
-        state.curriculumTargetArea = "";
-        areaSelect.value = "";
-      }
-    }
-
-    function filteredCurriculumCatalog() {
-      const query = String(state.curriculumCatalogQuery || "").trim().toLocaleLowerCase();
-      if (!query) return [...state.curriculumCatalog];
-      return state.curriculumCatalog.filter((item) =>
-        [item.subject, curriculumAreaOf(item), item.type]
-          .some((value) => String(value || "").toLocaleLowerCase().includes(query))
-      );
-    }
-
-    function isAlreadyPlacedInPlan(item) {
-      const subject = String(item?.subject || "").trim();
-      return state.curriculumPlan.some((row) => String(row.subject || "").trim() === subject);
-    }
-
-    function curriculumPickListHtml() {
-      const rows = filteredCurriculumCatalog()
-        .map((item, index) => ({ item, index, used: isAlreadyPlacedInPlan(item) }))
-        .sort((left, right) => Number(left.used) - Number(right.used) || left.index - right.index);
-      if (!rows.length) return `<div class="curriculum-empty">${state.curriculumCatalog.length
-        ? "검색 조건에 맞는 과목이 없습니다."
-        : "교육과정 목록을 불러오면 과목별로 표시됩니다."}</div>`;
-      return rows.map(({ item, used }) => {
-        const detail = String(item.type || "").trim();
-        return `<button class="curriculum-pick-item${used ? " used" : ""}" type="button" data-curriculum-subject="${escapeHtml(item.subject)}" draggable="${used ? "false" : "true"}"${used ? " disabled" : ""}>
-          <span>${escapeHtml(item.subject)}${detail ? ` <small>· ${escapeHtml(detail)}</small>` : ""}</span><small>${escapeHtml(item.credit || 0)}학점</small>
-        </button>`;
-      }).join("");
-    }
-
-    function renderCurriculumCatalog() {
-      $("#curriculumFileName").textContent = state.curriculumFileName
-        ? `저장된 교육과정: ${state.curriculumFileName} · ${state.curriculumCatalog.length}과목`
-        : "저장된 교육과정 목록 없음";
-      $("#curriculumPickList").innerHTML = curriculumPickListHtml();
-      const queryInput = $("#curriculumCatalogQuery");
-      if (queryInput.value !== state.curriculumCatalogQuery) queryInput.value = state.curriculumCatalogQuery;
-      const visibleCount = filteredCurriculumCatalog().length;
-      $("#curriculumCatalogFilterCount").textContent = state.curriculumCatalog.length
-        ? `${visibleCount}/${state.curriculumCatalog.length}과목`
-        : "";
-    }
-
-    function addCurriculumItemToPlan(subject) {
-      const targetSubject = String(subject || "").trim();
-      if (!targetSubject) return false;
-      const item = state.curriculumCatalog.find((row) => String(row.subject || "").trim() === targetSubject);
-      if (!item) return false;
-      const exists = state.curriculumPlan.find((row) => String(row.subject || "").trim() === targetSubject);
-      if (exists) return false;
-      const detail = normalizeCurriculumDetail(state.curriculumTargetDetail || item.type || "일반선택");
-      const division = normalizeCurriculumDivision(state.curriculumTargetDivision || "학생 선택 교육과정");
-      const isSelectable = isSelectableDetail(detail) && division === "학생 선택 교육과정";
-      const nextRow = normalizeCurriculumPlanRow({
-        grade: state.curriculumTargetGrade,
-        division,
-        area: curriculumAreaOf(item),
-        detail,
-        subject: item.subject,
-        bundleName: isSelectable ? state.curriculumBundleName : "",
-        bundlePick: isSelectable ? state.curriculumBundlePick : 1,
-        baseCredit: item.credit || 0,
-        opCredit: item.credit || 0
-      }, { detail: "일반선택", division: "학생 선택 교육과정" });
-      state.curriculumPlan.push(nextRow);
-      state.curriculumTemplateRows = state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row));
-      return true;
-    }
-
     function syncCurriculumTemplateRows() {
       state.curriculumTemplateRows = state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row));
     }
@@ -1715,7 +1553,7 @@
 
     function renderCurriculumStep() {
       $("#undoCurriculumEdit").disabled = !state.curriculumUndoStack.length;
-      renderCurriculumCatalog();
+      renderCurriculumGroupCreator();
       updateCurriculumFilterOptions();
       $("#curriculumTemplateFileName").textContent = state.curriculumPlanFileName
         ? `${state.curriculumCohortYear}학년도 신입생 · ${state.curriculumPlanFileName}`
@@ -1731,6 +1569,47 @@
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
         $("#curriculumFilterCount").textContent = "0개 과목 표시";
       }
+    }
+
+    function curriculumGroupCourseOptions() {
+      const grade = curriculumSelectionGroupDraft.grade;
+      const semester = curriculumSelectionGroupDraft.semester;
+      const field = `sem${grade}${semester}`;
+      const options = new Map();
+      const hasHours = (value) => {
+        const normalized = String(value || "").trim();
+        return Boolean(normalized) && !/^[-–—]+$/.test(normalized) && !/^0(?:\.0+)?$/.test(normalized);
+      };
+      for (const row of state.curriculumPlan) {
+        if (String(row.grade) !== grade ||
+          normalizeCurriculumDivision(row.division) !== "학생 선택 교육과정" ||
+          !isSelectableDetail(row.detail) || !hasHours(row[field])) continue;
+        const semesters = ["1", "2"].filter((term) => hasHours(row[`sem${grade}${term}`]));
+        const subject = semesters.length > 1 ? `${row.subject} (${semester}학기)` : row.subject;
+        if (subject) options.set(subject, `${row.subject} · ${row.area || "교과군 미정"}`);
+      }
+      return [...options.entries()].sort(([a], [b]) => a.localeCompare(b, "ko"));
+    }
+
+    function renderCurriculumGroupCreator() {
+      const courseList = $("#curriculumGroupCourseList");
+      const grade = curriculumSelectionGroupDraft.grade;
+      const semester = curriculumSelectionGroupDraft.semester;
+      const cohortYear = Number(state.curriculumCohortYear);
+      $("#curriculumGroupName").value = curriculumSelectionGroupDraft.name;
+      $("#curriculumGroupGrade").value = grade;
+      $("#curriculumGroupSemester").value = semester;
+      $("#curriculumGroupCohort").textContent = `${cohortYear}학년도 신입생 그룹으로 저장됩니다.`;
+      const options = curriculumGroupCourseOptions();
+      for (const subject of curriculumSelectionGroupDraft.courses) {
+        if (!options.some(([name]) => name === subject)) curriculumSelectionGroupDraft.courses.delete(subject);
+      }
+      courseList.innerHTML = options.length
+        ? options.map(([subject, label]) => `<button class="curriculum-group-course" type="button" data-curriculum-group-course="${escapeHtml(subject)}" aria-pressed="${curriculumSelectionGroupDraft.courses.has(subject)}">${escapeHtml(label)}</button>`).join("")
+        : '<span class="curriculum-empty">선택한 학년·학기의 학생 선택 과목이 없습니다.</span>';
+      $("#curriculumGroupSelectionSummary").textContent = `${curriculumSelectionGroupDraft.courses.size}과목 선택됨`;
+      $("#completeCurriculumGroup").disabled = !curriculumSelectionGroupDraft.name.trim() ||
+        curriculumSelectionGroupDraft.courses.size === 0;
     }
 
     function aggregateRecords(
@@ -3406,40 +3285,6 @@
       reader.readAsArrayBuffer(file);
     }
 
-    function handleCurriculumWorkbook(file) {
-      if (file && (typeof requireTeacherLogin !== "function" || !requireTeacherLogin())) return;
-      if (!file) return;
-      status.textContent = "";
-      if (!file.name.toLowerCase().endsWith(".xlsx")) {
-        status.style.color = "#a44939";
-        status.textContent = "교육과정 목록은 .xlsx 형식만 지원합니다.";
-        return;
-      }
-      const reader = new FileReader();
-      reader.onerror = () => {
-        status.style.color = "#a44939";
-        status.textContent = "교육과정 목록 파일을 읽지 못했습니다.";
-      };
-      reader.onload = async () => {
-        try {
-          const sheets = await parseWorkbook(reader.result);
-          const curriculum = createCurriculumRecords(sheets[0].rows);
-          if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
-          state.curriculumCatalog = curriculum;
-          state.curriculumFileName = file.name;
-          renderCurriculumStep();
-          persistState();
-          status.style.color = "#287956";
-          status.textContent = `교육과정 목록 ${curriculum.length}개 과목을 저장했습니다.`;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "교육과정 목록 처리 중 오류가 발생했습니다.";
-          status.style.color = "#a44939";
-          status.textContent = message;
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
     function importedPlanColumnMap(layout) {
       const rows = expandCurriculumLayoutRows(layout);
       const width = Math.max(0, ...rows.map((row) => row.length));
@@ -3543,92 +3388,6 @@
       }).filter((row) => row.subject);
     }
 
-    function appendCourseToImportedPlan(item) {
-      const layout = state.curriculumImportedLayout;
-      if (!layout) throw new Error("먼저 편제표를 불러오세요.");
-      const subject = String(item?.subject || "").trim();
-      if (!subject) throw new Error("추가할 과목명이 비어 있습니다.");
-      if (state.curriculumPlan.some((row) => String(row.subject || "").trim() === subject)) {
-        throw new Error(`${subject} 과목은 이미 편제표에 있습니다.`);
-      }
-      const columns = importedPlanColumnMap(layout);
-      if (columns.subject < 0) throw new Error("편제표에서 과목명 열을 찾지 못했습니다.");
-      const baseCreditColumn = columns.baseCredit >= 0
-        ? columns.baseCredit : columns.genericCredit;
-      const opCreditColumn = columns.opCredit >= 0
-        ? columns.opCredit : baseCreditColumn;
-
-      const row = Array(Math.max(0, ...layout.rows.map((sourceRow) => sourceRow.length))).fill("");
-      const insertion = findImportedPlanInsertion(layout, columns, item);
-      const anchor = insertion.anchor;
-      const firstPlanRow = state.curriculumPlan[0];
-      const grade = String(anchor?.grade?.match(/[123]/)?.[0] || firstPlanRow?.grade || state.curriculumTargetGrade || "1");
-      const division = String(anchor?.division || firstPlanRow?.division || state.curriculumTargetDivision || "");
-      const area = curriculumAreaOf(item);
-      const selectionType = curriculumSelectionType(item.type) || String(item.type || "");
-      const values = [
-        [columns.subject, item.subject],
-        [baseCreditColumn, item.credit || 0],
-        [opCreditColumn, item.credit || 0]
-      ];
-      // 바로 위 과목과 교과군·선택 유형이 같으면 그 병합 셀을 이어받으므로 값을 비워 두고,
-      // 다르면 새 행에 직접 적어 넣는다.
-      if (!insertion.matchedArea) values.push([columns.area, area]);
-      if (!insertion.matchedType) {
-        values.push([columns.detail, item.type || ""]);
-        const typeColumn = anchor?.typeColumn ?? -1;
-        if (typeColumn >= 0 && typeColumn !== columns.subject) {
-          values.push([typeColumn, selectionType.replace(/선택$/, "")]);
-        }
-      }
-      if (!anchor) {
-        values.push([columns.grade, grade], [columns.division, division]);
-      }
-      for (const [column, value] of values) {
-        if (column >= 0) row[column] = String(value ?? "");
-      }
-      recordCurriculumUndo();
-      const nextLayout = insertImportedPlanLayoutRow(layout, insertion.insertionRow, row,
-        anchor && (insertion.matchedArea || insertion.matchedType) ? anchor.rowIndex : -1);
-      // 병합을 늘리지 못해 교과군 칸이 빈 채로 남으면 직접 적어 넣는다.
-      const insertedCovered = importedPlanCoveredCells(nextLayout);
-      const inserted = nextLayout.rows[insertion.insertionRow];
-      if (columns.area >= 0 && !inserted[columns.area] && !insertedCovered.has(`${insertion.insertionRow}:${columns.area}`)) {
-        inserted[columns.area] = String(area ?? "");
-      }
-      const anchorTypeColumn = anchor?.typeColumn ?? -1;
-      if (anchorTypeColumn >= 0 && !inserted[anchorTypeColumn] &&
-        !insertedCovered.has(`${insertion.insertionRow}:${anchorTypeColumn}`)) {
-        inserted[anchorTypeColumn] = selectionType.replace(/선택$/, "");
-      }
-      const planIndex = anchor
-        ? state.curriculumPlan.findIndex((planRow) => String(planRow.subject || "").trim() === anchor.subject) + 1
-        : state.curriculumPlan.length;
-      const planRow = normalizeCurriculumPlanRow({
-        grade,
-        division,
-        area,
-        detail: item.type || "일반선택",
-        subject,
-        baseCredit: item.credit || 0,
-        opCredit: item.credit || 0
-      });
-      const nextPlan = [...state.curriculumPlan];
-      nextPlan.splice(planIndex > 0 ? planIndex : state.curriculumPlan.length, 0, planRow);
-      state.curriculumPlan = nextPlan;
-      state.curriculumImportedLayout = nextLayout;
-      state.curriculumMutationRevision += 1;
-      syncCurriculumTemplateRows();
-      renderCurriculumStep();
-      persistState();
-      status.style.color = "#287956";
-      status.textContent = anchor
-        ? `${item.subject} 과목을 ${anchor.subject} 아래(${insertion.insertionRow + 1}행)에 추가했습니다.`
-        : `${item.subject} 과목을 편제표에 추가했습니다.`;
-      const insertedCell = $(`#curriculumPlanWrap [data-source-row="${insertion.insertionRow}"][data-source-column="${columns.subject}"]`);
-      if (insertedCell) insertedCell.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-
     // insertionRow 위치에 행을 끼워 넣고 병합 범위·행 높이를 함께 밀어낸다.
     // extendMergesEndingAt 에 행 번호를 주면, 그 행에서 끝나는 세로 병합(구분·교과군 등)을 새 행까지 늘린다.
     function insertImportedPlanLayoutRow(layout, insertionRow, rowValues, extendMergesEndingAt = -1) {
@@ -3684,26 +3443,6 @@
     }
 
     // 드롭한 과목이 들어갈 행 번호와 이어받을 문맥(학년·교육과정·교과군·선택 유형)을 찾는다.
-    function findImportedPlanInsertion(layout, columns, item) {
-      const contexts = importedPlanCourseContexts(layout, columns);
-      const area = String(curriculumAreaOf(item) || "").trim();
-      const type = curriculumSelectionType(item?.type) || String(item?.type || "").trim();
-      const clean = (value) => String(value ?? "").replace(/↔/g, " ").replace(/\s+/g, "").trim();
-      const sameArea = contexts.filter((context) => area && clean(context.area) === clean(area));
-      const sameAreaAndType = sameArea.filter((context) => type && context.selectionType === type);
-      const sameType = contexts.filter((context) => type && context.selectionType === type);
-      // 우선순위: 교과군+선택 유형 일치 → 교과군 일치 → 선택 유형 일치 → 마지막 과목 행
-      const anchor = sameAreaAndType.at(-1) || sameArea.at(-1) || sameType.at(-1) || contexts.at(-1) || null;
-      const matchedArea = Boolean(sameAreaAndType.length || sameArea.length);
-      const matchedType = Boolean(sameAreaAndType.length || (!sameArea.length && sameType.length));
-      return {
-        insertionRow: anchor ? anchor.rowIndex + 1 : layout.rows.length,
-        anchor,
-        matchedArea,
-        matchedType
-      };
-    }
-
     function appendBlankImportedPlanRow() {
       const layout = state.curriculumImportedLayout;
       if (!layout) {
@@ -3919,78 +3658,59 @@
     }
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
-    $("#curriculumInput").addEventListener("change", (event) => { handleCurriculumWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
     $("#curriculumCohortYear").addEventListener("change", (event) => switchCurriculumCohort(event.target.value));
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
-    const curriculumDropZone = $("#curriculumPlanDropZone");
-    $("#curriculumPickList").addEventListener("click", (event) => {
-      if (state.curriculumSuppressNextClick) {
-        state.curriculumSuppressNextClick = false;
-        return;
-      }
-      const button = event.target.closest("[data-curriculum-subject]");
-      if (!button || button.disabled) return;
-      const item = state.curriculumCatalog.find((row) => row.subject === button.dataset.curriculumSubject);
-      if (!item) return;
+    $("#curriculumGroupName").addEventListener("input", (event) => {
+      curriculumSelectionGroupDraft.name = event.target.value;
+      $("#completeCurriculumGroup").disabled = !curriculumSelectionGroupDraft.name.trim() ||
+        curriculumSelectionGroupDraft.courses.size === 0;
+    });
+    $("#curriculumGroupGrade").addEventListener("change", (event) => {
+      curriculumSelectionGroupDraft.grade = event.target.value;
+      curriculumSelectionGroupDraft.courses.clear();
+      renderCurriculumGroupCreator();
+    });
+    $("#curriculumGroupSemester").addEventListener("change", (event) => {
+      curriculumSelectionGroupDraft.semester = event.target.value;
+      curriculumSelectionGroupDraft.courses.clear();
+      renderCurriculumGroupCreator();
+    });
+    $("#curriculumGroupCourseList").addEventListener("click", (event) => {
+      const course = event.target.closest("[data-curriculum-group-course]");
+      if (!course) return;
+      const subject = course.dataset.curriculumGroupCourse;
+      if (curriculumSelectionGroupDraft.courses.has(subject)) curriculumSelectionGroupDraft.courses.delete(subject);
+      else curriculumSelectionGroupDraft.courses.add(subject);
+      course.setAttribute("aria-pressed", String(curriculumSelectionGroupDraft.courses.has(subject)));
+      $("#curriculumGroupSelectionSummary").textContent = `${curriculumSelectionGroupDraft.courses.size}과목 선택됨`;
+      $("#completeCurriculumGroup").disabled = !curriculumSelectionGroupDraft.name.trim() ||
+        curriculumSelectionGroupDraft.courses.size === 0;
+    });
+    $("#completeCurriculumGroup").addEventListener("click", () => {
       try {
-        appendCourseToImportedPlan(item);
+        if (typeof createApplicationGroupFromCurriculum !== "function") {
+          throw new Error("선택과목군 기능을 불러오지 못했습니다. 페이지를 새로고침하세요.");
+        }
+        const grade = curriculumSelectionGroupDraft.grade;
+        const year = String(state.curriculumCohortYear);
+        const created = createApplicationGroupFromCurriculum({
+          year,
+          grade,
+          semester: curriculumSelectionGroupDraft.semester,
+          name: curriculumSelectionGroupDraft.name,
+          courses: [...curriculumSelectionGroupDraft.courses]
+        });
+        curriculumSelectionGroupDraft.name = "";
+        curriculumSelectionGroupDraft.courses.clear();
+        renderCurriculumGroupCreator();
+        showAppToast(`선택과목군을 만들었습니다${created.movedCount ? ` · 기존 그룹에서 ${created.movedCount}과목 이동` : ""}. 다음 단계에서 그룹별 선택 과목 수를 지정하세요.`);
       } catch (error) {
         status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "과목을 편제표에 추가하지 못했습니다.";
-      }
-    });
-    $("#curriculumPickList").addEventListener("dragstart", (event) => {
-      const button = event.target.closest("[data-curriculum-subject]");
-      if (!button || button.disabled) return;
-      const subject = button.dataset.curriculumSubject;
-      state.curriculumDraggingSubject = subject;
-      if (event.dataTransfer) {
-        event.dataTransfer.setData("text/plain", subject);
-        event.dataTransfer.setData("application/x-curriculum-subject", subject);
-        event.dataTransfer.effectAllowed = "copy";
-      }
-    });
-    $("#curriculumPickList").addEventListener("dragend", () => {
-      state.curriculumDraggingSubject = "";
-      curriculumDropZone.classList.remove("dragover");
-    });
-    curriculumDropZone.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-      curriculumDropZone.classList.add("dragover");
-    });
-    curriculumDropZone.addEventListener("dragleave", (event) => {
-      if (!curriculumDropZone.contains(event.relatedTarget)) curriculumDropZone.classList.remove("dragover");
-    });
-    curriculumDropZone.addEventListener("drop", (event) => {
-      event.preventDefault();
-      curriculumDropZone.classList.remove("dragover");
-      const subject = event.dataTransfer?.getData("application/x-curriculum-subject") ||
-        event.dataTransfer?.getData("text/plain") ||
-        state.curriculumDraggingSubject;
-      state.curriculumDraggingSubject = "";
-      state.curriculumSuppressNextClick = true;
-      setTimeout(() => { state.curriculumSuppressNextClick = false; }, 0);
-      const item = state.curriculumCatalog.find((row) => row.subject === subject);
-      if (!item) {
-        status.style.color = "#a44939";
-        status.textContent = "과목 정보를 확인하지 못했습니다. 목록에서 다시 끌어 놓아 주세요.";
-        return;
-      }
-      try {
-        appendCourseToImportedPlan(item);
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "과목을 편제표에 추가하지 못했습니다.";
+        status.textContent = error instanceof Error ? error.message : "선택과목군을 만들지 못했습니다.";
       }
     });
     $("#addCurriculumPlanRow").addEventListener("click", appendBlankImportedPlanRow);
-    $("#curriculumCatalogQuery").addEventListener("input", (event) => {
-      state.curriculumCatalogQuery = event.target.value;
-      renderCurriculumCatalog();
-      persistState();
-    });
     $("#curriculumPlanFilters").addEventListener("change", (event) => {
       const filter = event.target.closest("select[id^='curriculumFilter']");
       if (!filter) return;
@@ -4338,3 +4058,4 @@
     window.addEventListener("afterprint", () => { $("#printBatch").innerHTML = ""; });
     window.addEventListener("hashchange", () => window.location.reload());
     if (!showStudentApplicationEntry()) restorePersistedState();
+    statePersistenceReady = true;

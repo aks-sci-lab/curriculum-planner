@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261008-cohort-curricula">
+  <link rel="stylesheet" href="styles.css?v=20261009-offline-plan">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -73,7 +73,7 @@
       <section class="panel workflow-panel" aria-label="업무 흐름">
         <h2 class="panel-heading">업무 흐름도</h2>
         <div class="workflow-steps" id="workflowSteps">
-          <button class="workflow-step-button" type="button" data-workflow-step="1">1. 편제표 수정</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="1">1. 편제표 업로드</button>
           <button class="workflow-step-button" type="button" data-workflow-step="2">2. 학년별 수강신청</button>
           <button class="workflow-step-button" type="button" data-workflow-step="3">3. 학년별 확인서 발급</button>
           <button class="workflow-step-button" type="button" data-workflow-step="4">4. 학년별 집계표</button>
@@ -85,14 +85,12 @@
     <main class="main">
       <section class="workflow-step-panel hidden" id="workflowStep1Panel">
         <div class="curriculum-heading-row">
-        <h3>1단계 · 교육과정 편제표 작성</h3>
-        <p class="note">교육과정 목록과 편제표를 불러와 과목을 편성하고, 편제표 셀을 직접 수정할 수 있습니다.</p>
+        <h3>1단계 · 교육과정 편제표 업로드</h3>
+        <p class="note">학년도별 편제표를 업로드하고, 과목을 직접 정리하거나 선택과목군을 구성할 수 있습니다.</p>
         <div class="curriculum-toolbar">
-          <label class="file-button" for="curriculumInput">저장된 교육과정 불러오기</label>
           <label class="file-button" for="curriculumPlanInput">선택한 신입생 학년도 편제표 업로드</label>
           <button class="button" id="clearCurriculumPlan" type="button">편제표 초기화</button>
           <button class="button" id="exportCurriculumPlan" type="button">편제표 엑셀 내보내기</button>
-          <input class="hidden" id="curriculumInput" type="file" accept=".xlsx">
           <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx">
         </div>
         </div>
@@ -101,18 +99,40 @@
           <input id="curriculumCohortYear" type="number" min="2000" max="2100" step="1" value="2026">
           <span>각 신입생 학년도의 1~3학년 편제표를 각각 업로드하세요. 수강신청 과목은 현재 학년에 맞는 코호트에서 불러옵니다.</span>
         </div>
-        <div class="curriculum-filename" id="curriculumFileName">저장된 교육과정 목록 없음</div>
-        <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
-        <div class="curriculum-grid curriculum-loaded-grid">
-          <section class="curriculum-box curriculum-catalog-box">
-            <h4>저장된 교육과정 <span class="curriculum-edit-hint">끌어서 편제표에 추가</span></h4>
-            <div class="curriculum-catalog-filter">
-              <input id="curriculumCatalogQuery" type="search" placeholder="과목명·교과군·유형 검색" aria-label="저장된 교육과정 과목 검색">
-              <span class="curriculum-catalog-filter-count" id="curriculumCatalogFilterCount"></span>
+        <section class="curriculum-group-creator" id="curriculumGroupCreator" aria-labelledby="curriculumGroupCreatorTitle">
+          <div class="curriculum-group-creator-heading">
+            <div>
+              <h4 id="curriculumGroupCreatorTitle">선택과목군 빠르게 만들기</h4>
+              <p>그룹명과 대상 학년·학기를 정한 뒤 아래 과목을 클릭해 선택하고 완료를 누르세요.</p>
             </div>
-            <div class="curriculum-pick-list" id="curriculumPickList"></div>
-          </section>
-          <section class="curriculum-box curriculum-import-box" id="curriculumPlanDropZone">
+            <button class="button button-primary" id="completeCurriculumGroup" type="button" disabled>선택과목군 완료</button>
+          </div>
+          <div class="curriculum-group-creator-controls">
+            <label>선택과목군 이름
+              <input id="curriculumGroupName" type="text" maxlength="100" placeholder="예: 사회·과학 선택">
+            </label>
+            <label>신청 대상 학년
+              <select id="curriculumGroupGrade">
+                <option value="2">2학년</option>
+                <option value="3">3학년</option>
+              </select>
+            </label>
+            <label>학기
+              <select id="curriculumGroupSemester">
+                <option value="1">1학기</option>
+                <option value="2">2학기</option>
+              </select>
+            </label>
+            <span class="curriculum-group-cohort" id="curriculumGroupCohort"></span>
+          </div>
+          <div class="curriculum-group-course-list" id="curriculumGroupCourseList" aria-label="선택과목군에 넣을 과목"></div>
+          <div class="curriculum-group-creator-footer">
+            <span id="curriculumGroupSelectionSummary" aria-live="polite"></span>
+            <span>선택할 과목 수는 생성 후 ‘과목·선택 그룹 확인’에서 지정할 수 있습니다.</span>
+          </div>
+        </section>
+        <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
+        <section class="curriculum-box curriculum-import-box curriculum-plan-full" id="curriculumPlanDropZone">
             <h4>불러온 편제표 <span class="curriculum-edit-hint">셀을 클릭해 내용 수정</span></h4>
             <div class="curriculum-plan-filters" id="curriculumPlanFilters">
               <select id="curriculumFilterGrade" aria-label="학년 필터"><option value="">전체 학년</option></select>
@@ -132,8 +152,7 @@
                 <button class="button" id="addCurriculumPlanRow" type="button">행 추가</button>
               </div>
             </div>
-          </section>
-        </div>
+        </section>
       </section>
       <section class="workflow-step-panel hidden" id="workflowStep2Panel">
         <h3>2단계 · 학년별 수강신청</h3>
@@ -195,6 +214,7 @@
           <p class="note">학년별 그룹을 먼저 확인한 뒤 학생 명렬을 올려 신청을 만드세요. 생성된 신청은 아래 목록에서 관리할 수 있습니다.</p>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
+            <p class="note hidden" id="cloudTeacherOfflineNotice" role="status">오프라인입니다. 편제표·학생 명단·집계 등 로컬 기능은 사용할 수 있지만, 온라인 수강신청 생성·동기화에는 인터넷과 교사 로그인이 필요합니다.</p>
           </div>
           <div class="hidden" id="cloudTeacherControls">
             <div class="cloud-teacher-account">
@@ -590,12 +610,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261008-cohort-curricula"></script>
-  <script src="xlsx-parser.js?v=20261008-cohort-curricula" defer></script>
-  <script src="course-groups.js?v=20261008-cohort-curricula" defer></script>
-  <script src="curriculum-workbook.js?v=20261008-cohort-curricula" defer></script>
+  <script defer src="app.js?v=20261009-offline-plan"></script>
+  <script src="xlsx-parser.js?v=20261009-offline-plan" defer></script>
+  <script src="course-groups.js?v=20261009-offline-plan" defer></script>
+  <script src="curriculum-workbook.js?v=20261009-offline-plan" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261008-cohort-curricula" defer></script>
+  <script src="supabase-client.js?v=20261009-offline-plan" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

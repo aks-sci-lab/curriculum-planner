@@ -53,8 +53,9 @@ class Element {
   }
 }
 
-function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects, WebSocketClass } = {}) {
+function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects, WebSocketClass, onLine = true } = {}) {
   const elements = {};
+  const network = { onLine };
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) elements[match[2]] = new Element(match[1]);
   for (const [name,panel] of [["Groups","applicationGroupsPanel"],["Online","supabaseTeacherPanel"],
@@ -76,7 +77,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       createElement: (tag) => new Element(tag),
       createTextNode: (text) => Object.assign(new Element("#text"), { textContent: text }),
     },
-    URL, URLSearchParams, crypto: webcrypto, TextEncoder,
+    URL, URLSearchParams, crypto: webcrypto, TextEncoder, navigator: network,
     Date: class extends Date {
       static now() { return fixtureData.now ?? Date.now(); }
     },
@@ -158,6 +159,11 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
     openRealtime() { sockets[sockets.length-1]?.open(); },
     notifyRealtime(id) { sockets[sockets.length-1]?.notify(id); },
+    setOnline(value) {
+      network.onLine = value;
+      fixtureData.activity[value ? "online" : "offline"]?.();
+    },
+    requireLogin() { return context.requireTeacherLogin(); },
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor", "qrcode.js"), "utf8"), context);
   const generateQR=context.qrcode;
@@ -225,6 +231,29 @@ test("teacher selection editor loads roster without codes and validates group co
   assert.equal(f.elements.cloudTeacherEditSave.disabled, false);
 });
 
+test("offline workspaces bypass teacher login and keep cloud application controls unavailable", async () => {
+  const fileWorkspace = fixture({ href: "file:///C:/curriculum-planner/index.html" });
+  await fileWorkspace.settle();
+  assert.equal(fileWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false);
+  assert.equal(fileWorkspace.elements.teacherLoginGate.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.curriculumLoginStatus.textContent, "오프라인 · 로컬 기능 사용 가능");
+  assert.equal(fileWorkspace.elements.curriculumGoogleLogin.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.cloudTeacherOfflineNotice.classList.contains("hidden"), false);
+  assert.equal(fileWorkspace.requireLogin(), false);
+  assert.match(fileWorkspace.elements.cloudTeacherMessage.textContent, /온라인 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다/);
+  assert.deepEqual(fileWorkspace.redirects, []);
+
+  const reconnectingWorkspace = fixture({ onLine: false });
+  await reconnectingWorkspace.settle();
+  assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false);
+  reconnectingWorkspace.setOnline(true);
+  assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), true);
+  assert.equal(reconnectingWorkspace.elements.teacherLoginGate.classList.contains("hidden"), false);
+  assert.equal(reconnectingWorkspace.elements.cloudTeacherOfflineNotice.classList.contains("hidden"), true);
+  assert.equal(reconnectingWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), false);
+});
+
 test("grade menus scope groups and rebuild colors without removing the other grade", async () => {
   const key = "curriculum-color-semester-groups-v3";
   const storage = new Map([[key, JSON.stringify([
@@ -264,6 +293,15 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
+});
+
+test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
+  const root = path.join(__dirname, "..");
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert.match(html, /id="curriculumPlanInput"/);
+  assert.doesNotMatch(html, /curriculumInput|curriculumPickList|저장된 교육과정 불러오기/);
+  assert.doesNotMatch(app, /handleCurriculumWorkbook|renderCurriculumCatalog|curriculumPickList/);
 });
 
 test("teacher student preview uses real selection flow without submitting to server and restores on close", async () => {
@@ -411,7 +449,10 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   start.respond = async () => ({ data: { external: { google: true } } });
   await start.fire("cloudTeacherGoogleLogin", "click");
   await start.settle();
-  assert.equal(start.redirects.length, 1);
+  for (let attempt = 0; attempt < 20 && !start.redirects.length; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(start.redirects.length, 1, start.elements.cloudTeacherMessage.textContent);
   const authorize = new URL(start.redirects[0]);
   assert.equal(authorize.searchParams.get("provider"), "google");
   assert.equal(authorize.searchParams.get("redirect_to"), "https://school.example/app/");
@@ -1053,6 +1094,37 @@ test("legacy course groups are split by incoming cohort and restored when switch
   context.switchApplicationMenuGrade("2");
   assert.deepEqual(JSON.parse(JSON.stringify(context.getApplicationGroupSettings())).map((group)=>group.name),["2025 선택"]);
   assert.deepEqual(JSON.parse(storage.get("curriculum-color-semester-groups-v3:2026")).map((group)=>group.name),["2026 선택"]);
+});
+
+test("curriculum group creation stores clicked subjects under the matching cohort, grade and semester", () => {
+  const f=fixture();
+  const storage=new Map([["curriculum-color-semester-groups-v3:2025",JSON.stringify([
+    {id:"existing",grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["영어","국어"]}
+  ])]]);
+  const context=vm.createContext({
+    document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
+      createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
+    window:{confirm:()=>true},crypto:webcrypto,
+    selectedApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1"}],"3":[{subject:"영어",semester:"2"}]}),
+    state:{},renderApplicationSubjects(){},renderRoundStatus(){},
+    getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
+    setApplicationTargetGrades(){},
+    localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),context);
+  const created=context.createApplicationGroupFromCurriculum({
+    year:"2025",grade:"3",semester:"2",name:"인문 선택",courses:["영어","영어","사회"]
+  });
+  assert.equal(created.year,"2025");
+  assert.equal(created.movedCount,1);
+  const groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3:2025"));
+  assert.deepEqual(groups.map((group)=>({grade:group.grade,semester:group.semester,name:group.name,count:group.count,courses:group.courses})),[
+    {grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["국어"]},
+    {grade:"3",semester:"2",name:"인문 선택",count:null,courses:["영어","사회"]}
+  ]);
+  assert.throws(()=>context.createApplicationGroupFromCurriculum({
+    year:"2025",grade:"3",semester:"2",name:"인문 선택",courses:["영어"]
+  }),/이미 있습니다/);
 });
 
 test("student chooses first semester before second and saves both selections together", async () => {

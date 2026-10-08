@@ -17,9 +17,16 @@ var updateApplicationGradeControls;
   let pendingRoster = null;
   const gradeDrafts = new Map();
   let controlsGrade = state.applicationMenuGrade || "1";
+  function isOfflineWorkspace() {
+    return new URL(window.location.href).protocol === "file:" || navigator.onLine === false;
+  }
   isDeveloperAccount = () => !!session && session.user.email.toLowerCase() === "lany0665@gmail.com" && Date.now() - lastActivity < IDLE_MS;
   requireTeacherLogin = () => {
     if (session && Date.now() - lastActivity < IDLE_MS) return true;
+    if (isOfflineWorkspace()) {
+      byId("cloudTeacherMessage").textContent = "오프라인입니다. 온라인 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다.";
+      return false;
+    }
     byId("cloudTeacherMessage").textContent = "편제표 업로드 전에 구글 로그인을 해주세요.";
     updateAccountControls();
     byId("teacherLoginMessage").textContent = "오른쪽 위의 구글 로그인 후 이용하세요.";
@@ -39,15 +46,21 @@ var updateApplicationGradeControls;
   }
   function updateAccountControls() {
     const studentRoute = !!eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=");
+    const offlineWorkspace = isOfflineWorkspace();
     const loggedIn = !!session && Date.now() - lastActivity < IDLE_MS && !studentRoute;
+    const workspaceAvailable = loggedIn || offlineWorkspace;
     byId("teacherHeader").classList[studentRoute ? "add" : "remove"]("hidden");
-    byId("teacherWorkspace").classList[loggedIn ? "remove" : "add"]("hidden");
-    byId("teacherLoginGate").classList[loggedIn || studentRoute ? "add" : "remove"]("hidden");
+    byId("teacherWorkspace").classList[workspaceAvailable && !studentRoute ? "remove" : "add"]("hidden");
+    byId("teacherLoginGate").classList[workspaceAvailable || studentRoute ? "add" : "remove"]("hidden");
     byId("headerTeacherLogout").classList[loggedIn ? "remove" : "add"]("hidden");
-    byId("curriculumGoogleLogin").classList[loggedIn ? "add" : "remove"]("hidden");
+    byId("curriculumGoogleLogin").classList[loggedIn || offlineWorkspace ? "add" : "remove"]("hidden");
     byId("developerResultUpload").classList[isDeveloperAccount() ? "remove" : "add"]("hidden");
     byId("curriculumGoogleLogin").disabled = !!session;
-    byId("curriculumLoginStatus").textContent = session ? `${session.user.email} · 로그인 중` : "편제표 업로드 전에 로그인하세요.";
+    byId("curriculumLoginStatus").textContent = session
+      ? `${session.user.email} · 로그인 중`
+      : offlineWorkspace ? "오프라인 · 로컬 기능 사용 가능" : "온라인 신청 관리에만 교사 로그인이 필요합니다.";
+    byId("cloudTeacherGoogleLogin").classList[offlineWorkspace ? "add" : "remove"]("hidden");
+    byId("cloudTeacherOfflineNotice").classList[offlineWorkspace ? "remove" : "add"]("hidden");
   }
   function clearTeacherSession(message) {
     sessionRevision++;
@@ -118,6 +131,8 @@ var updateApplicationGradeControls;
       }
     } catch (error) { clearTeacherSession(`로그인 상태 읽기 실패: ${error.message}`); }
   });
+  window.addEventListener("online", updateAccountControls);
+  window.addEventListener("offline", updateAccountControls);
   const PKCE_STORAGE_KEY = "curriculum-google-pkce";
   let latestCodes = null;
   let activeCode = "";
