@@ -765,9 +765,12 @@
         .replace(/[\[(](?:일반|진로|융합)(?:선택)?[)\]]$/, "");
       const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
       const gradeSettings = settings.filter((group) => group.grade === String(Number(currentGrade) + 1));
-      const matches = gradeSettings.filter((group) =>
-        (!hint || group.semester === hint) &&
+      const courseMatches = gradeSettings.filter((group) =>
         group.courses.some((name) => normalize(name) === normalize(course.name)));
+      const hintedMatches = hint
+        ? courseMatches.filter((group) => group.semester === hint)
+        : courseMatches;
+      const matches = hintedMatches.length ? hintedMatches : courseMatches;
       if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
       if (matches.length > 1) return null;
       if (gradeSettings.length) return null;

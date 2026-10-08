@@ -500,6 +500,22 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   assert.deepEqual(plain(ctx.applicationGroupForCourse({
     name:"물리학", applicationGroups:{"1":{name:"저장된 이전 그룹",semester:"2"}}
   },"1")), {name:"과학 선택",semester:"1"});
+  groups=[{grade:"2",semester:"2",name:"2학기 선택",courses:["물리학"]}];
+  assert.deepEqual(plain(ctx.applicationGroupForCourse({
+    name:"물리학",semesterKey:"1",applicationGroups:{"1":{name:"저장된 이전 그룹",semester:"1"}}
+  },"1")), {name:"2학기 선택",semester:"2"});
+  groups=[
+    {grade:"2",semester:"1",name:"과학 선택",courses:["물리학"]},
+    {grade:"2",semester:"2",name:"2학기 선택",courses:["물리학"]},
+  ];
+  assert.deepEqual(plain(ctx.applicationGroupForCourse({name:"물리학",semesterKey:"2"},"1")),
+    {name:"2학기 선택",semester:"2"});
+  assert.equal(ctx.applicationGroupForCourse({name:"물리학"},"1"),null);
+  groups=[
+    {grade:"2",semester:"1",name:"과학 선택",courses:["물리학","실험 (1학기)"]},
+    {grade:"2",semester:"2",name:"2학기 선택",courses:["실험 (2학기)"]},
+    {grade:"3",semester:"2",name:"3학년 선택",courses:["물리학"]},
+  ];
   assert.equal(ctx.courseGroupLabel({name:"실험 (2학기)",column:5},"1"),"2학기 2학기 선택");
   const course={name:"물리학",column:4};
   const data={courses:[course],students:[{grade:"1",selections:[{...course}]}]};
