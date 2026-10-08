@@ -817,6 +817,41 @@ test("aggregate restores after group scripts load and uses the curriculum semest
   }))),[{name:"3학년 1학기",categories:["과학 선택군"]}]);
 });
 
+test("aggregate separates semester-specific groups sharing an unsuffixed course name and multiplies planned classes by choice count", () => {
+  const ctx=vm.createContext({
+    state:{
+      activeDataSchoolYear:"2026",curriculumPlanAcademicYear:"2026",curriculumPlan:[],
+      groupAssignments:{},semesterAssignments:{},
+    },
+    getApplicationGroupSettings:()=>[
+      {grade:"3",semester:"1",name:"1학기 과학군",count:2,courses:["기후변화와 환경생태 (1학기)"]},
+      {grade:"3",semester:"2",name:"2학기 과학군",count:1,courses:["기후변화와 환경생태 (2학기)"]},
+    ],
+    parseSemesterFromCourseName:(name)=>String(name).match(/([12])학기/)?.[1]||"",
+    normalizeGroupName:(value)=>String(value??"").trim(),
+    UNASSIGNED_GROUP:"미분류",
+    parseAssignedGroupLabel:()=>({semesterKey:"",category:""}),
+  });
+  vm.runInContext(functionSource("function curriculumSemesterForCourse(", "function courseBelongsToCurrentGrade("),ctx);
+  vm.runInContext(functionSource("function courseBelongsToCurrentGrade(", "function coursesForCurrentGrade("),ctx);
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  const course={column:"climate",name:"기후변화와 환경생태",applicationCurrentGrade:"2"};
+  const students=[{grade:"2",classroom:"1",selections:[{column:"climate"}]}];
+  const result=ctx.aggregateRecords(students,[course],90,110,{},{},{},{"3":4});
+  assert.deepEqual(plain(result.reports[0].semesters.map((semester)=>({
+    name:semester.name,
+    groups:semester.groups.map((group)=>({
+      category:group.category,
+      totalClasses:group.totalClasses,
+      courses:group.courses.map((item)=>item.name),
+    })),
+  }))),[
+    {name:"3학년 1학기",groups:[{category:"1학기 과학군",totalClasses:8,courses:["기후변화와 환경생태"]}]},
+    {name:"3학년 2학기",groups:[{category:"2학기 과학군",totalClasses:4,courses:["기후변화와 환경생태"]}]},
+  ]);
+});
+
 test("aggregate and class-assignment views provide separate grade tabs", () => {
   assert.match(html,/id="certificateGradeTabs"[\s\S]*data-certificate-grade="2"[\s\S]*data-certificate-grade="3"/);
   assert.match(html,/id="aggregateGradeTabs"[\s\S]*data-aggregate-grade="2"[\s\S]*data-aggregate-grade="3"/);

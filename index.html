@@ -266,8 +266,9 @@
         <div class="aggregate-settings">
           <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
           <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
+          <div class="field"><label id="plannedClassCountLabel" for="plannedClassCount">2학년 편제 학급수</label><input id="plannedClassCount" type="number" min="1" step="1" value=""></div>
         </div>
-        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 이동수업 반편성은 5단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
+        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 편제 학급수는 학년별로 지정할 수 있으며, 각 선택군의 총 학급수는 편제 학급수 × 해당 그룹에서 선택할 과목 수로 계산됩니다. 선택 수는 2단계 그룹 설정을 따릅니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 과목별 개설 학급수 칸은 직접 수정할 수 있으며 엑셀에 반영됩니다.</p>
         <div class="group-scope-tabs" id="aggregateGradeTabs" role="tablist" aria-label="집계표 학년 선택">
           <button class="button" type="button" role="tab" data-aggregate-grade="2" aria-selected="true">2학년</button>
           <button class="button" type="button" role="tab" data-aggregate-grade="3" aria-selected="false">3학년</button>
@@ -549,12 +550,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261008-restore-before-save-color-groups"></script>
-  <script src="xlsx-parser.js?v=20261008-restore-before-save-color-groups" defer></script>
-  <script src="course-groups.js?v=20261008-restore-before-save-color-groups" defer></script>
-  <script src="curriculum-workbook.js?v=20261008-restore-before-save-color-groups" defer></script>
+  <script defer src="app.js?v=20261008-semester-group-planned-classes"></script>
+  <script src="xlsx-parser.js?v=20261008-semester-group-planned-classes" defer></script>
+  <script src="course-groups.js?v=20261008-semester-group-planned-classes" defer></script>
+  <script src="curriculum-workbook.js?v=20261008-semester-group-planned-classes" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261008-restore-before-save-color-groups" defer></script>
+  <script src="supabase-client.js?v=20261008-semester-group-planned-classes" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

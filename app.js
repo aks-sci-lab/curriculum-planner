@@ -5,6 +5,7 @@
       selectedId: null,
       fileName: "",
       classOverrides: {},
+      plannedClassCounts: {},
       semesterAssignments: {},
       customGroupNames: [],
       customGroupNamesByGrade: { "2": [], "3": [] },
@@ -273,6 +274,7 @@
           selectedId: state.selectedId,
           fileName: state.fileName,
           classOverrides: state.classOverrides,
+          plannedClassCounts: state.plannedClassCounts,
           semesterAssignments: state.semesterAssignments,
           customGroupNames: state.customGroupNames,
           customGroupNamesByGrade: state.customGroupNamesByGrade,
@@ -482,6 +484,7 @@
       state.selectedId = null;
       state.fileName = "";
       state.classOverrides = {};
+      state.plannedClassCounts = {};
       state.currentRound = "1";
       state.rounds = { "1": null };
       state.roundClosures = { "1": {} };
@@ -611,6 +614,11 @@
         state.historyArchivedYears = saved.historyArchivedYears && typeof saved.historyArchivedYears === "object"
           ? saved.historyArchivedYears : {};
         state.classOverrides = activeRound ? { ...activeRound.classOverrides } : {};
+        state.plannedClassCounts = saved.plannedClassCounts && typeof saved.plannedClassCounts === "object"
+          ? Object.fromEntries(["2", "3"]
+            .filter((grade) => Number.isInteger(saved.plannedClassCounts[grade]) && saved.plannedClassCounts[grade] > 0)
+            .map((grade) => [grade, saved.plannedClassCounts[grade]]))
+          : {};
         state.semesterAssignments = (activeRound?.semesterAssignments || saved.semesterAssignments) && typeof (activeRound?.semesterAssignments || saved.semesterAssignments) === "object"
           ? (activeRound?.semesterAssignments || saved.semesterAssignments)
           : {};
@@ -844,9 +852,19 @@
     }
 
     function applicationGroupForCourse(course, currentGrade, groups = null) {
-      const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
-      if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
+      const matches = applicationGroupMatchesForCourse(course, currentGrade, groups);
+      if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
+      if (matches.length > 1) return null;
+      const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
+      const gradeSettings = settings.filter((group) => group.grade === String(Number(currentGrade) + 1));
       const savedGroup = course.applicationGroups?.[String(currentGrade)];
+      if (!gradeSettings.length && savedGroup?.name) return savedGroup;
+      return null;
+    }
+
+    function applicationGroupMatchesForCourse(course, currentGrade, groups = null) {
+      const namedGrade = normalizeRomanNumerals(course.name).match(/\(([23])학년\)$/)?.[1];
+      if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return [];
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
       const normalize = (name) => curriculumCourseNameKey(name)
         .replace(/[\[(](?:일반|진로|융합)(?:선택)?[)\]]$/, "");
@@ -857,12 +875,7 @@
       const hintedMatches = hint
         ? courseMatches.filter((group) => group.semester === hint)
         : courseMatches;
-      const matches = hintedMatches.length ? hintedMatches : courseMatches;
-      if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
-      if (matches.length > 1) return null;
-      if (gradeSettings.length) return null;
-      if (savedGroup?.name) return savedGroup;
-      return null;
+      return hintedMatches.length ? hintedMatches : courseMatches;
     }
 
     function classifyApplicationRecords(data) {
@@ -874,7 +887,12 @@
           student.selections.some((selection) => selection.column === course.column)).map((student) => String(student.grade)))) {
           const group = applicationGroupForCourse(course, grade, groups);
           if (group) course.applicationGroups[grade] = group;
-          else warnings.add(`${Number(grade)+1}학년 ${course.name}`);
+          else {
+            const matches = applicationGroupMatchesForCourse(course, grade, groups);
+            const hasSemesterSpecificMatches = matches.length > 1 &&
+              new Set(matches.map((item) => item.semester)).size > 1;
+            if (!hasSemesterSpecificMatches) warnings.add(`${Number(grade)+1}학년 ${course.name}`);
+          }
         }
       }
       for (const student of data.students) for (const course of student.selections) {
@@ -2025,7 +2043,8 @@
       divisionPercent,
       classOverrides = {},
       semesterAssignments = {},
-      groupAssignments = {}
+      groupAssignments = {},
+      plannedClassCounts = {}
     ) {
       const grades = [...new Set(students.map((student) => student.grade))];
       const reports = grades.map((grade) => {
@@ -2035,6 +2054,10 @@
           grade,
           students: gradeStudents.length,
           classes,
+          plannedClasses: Number.isInteger(plannedClassCounts[String(Number(grade) + 1)]) &&
+            plannedClassCounts[String(Number(grade) + 1)] > 0
+            ? plannedClassCounts[String(Number(grade) + 1)]
+            : classes,
           averageClassSize: classes ? gradeStudents.length / classes : 0,
           openingLimit: classes ? (gradeStudents.length / classes) * openingPercent / 100 : 0,
           divisionLimit: classes ? (gradeStudents.length / classes) * divisionPercent / 100 : 0
@@ -2043,32 +2066,12 @@
         for (const course of courses) {
           if (!courseBelongsToCurrentGrade(course, grade, students)) continue;
           const applicationGroup = applicationGroupForCourse(course, grade);
+          const applicationGroups = typeof applicationGroupMatchesForCourse === "function"
+            ? applicationGroupMatchesForCourse(course, grade) : [];
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
           const displayGrade = Number(grade) + 1;
           const curriculumSemester = curriculumSemesterForCourse(course, displayGrade);
-          const semesterKey = [
-            forcedSemester,
-            parsedAssignedGroup.semesterKey,
-            applicationGroup?.semester,
-            curriculumSemester,
-            course.semesterKey,
-          ].map((value) => String(value || ""))
-            .find((value) => value === "1" || value === "2") || "";
-          const semesterName = semesterKey
-            ? `${displayGrade}학년 ${semesterKey}학기`
-            : `${displayGrade}학년 미분류`;
-          const category = parsedAssignedGroup.category || applicationGroup?.name || UNASSIGNED_GROUP;
-          let semester = semesters.find((item) => item.name === semesterName);
-          if (!semester) {
-            semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
-            semesters.push(semester);
-          }
-          let group = semester.groups.find((item) => item.category === category);
-          if (!group) {
-            group = { category, courses: [] };
-            semester.groups.push(group);
-          }
           const enrollment = gradeStudents.filter((student) =>
             student.selections.some((selection) => selection.column === course.column)).length;
           const recommendedClasses = summary.divisionLimit > 0 && enrollment > 0
@@ -2078,20 +2081,70 @@
           const classCount = Object.prototype.hasOwnProperty.call(classOverrides, overrideKey)
             ? classOverrides[overrideKey]
             : recommendedClasses;
-          group.courses.push({
-            category,
-            column: course.column,
-            name: course.name,
-            enrollment,
-            enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
-            recommendedClasses,
-            classCount,
-            averageClassSize: classCount ? enrollment / classCount : 0
-          });
+          let matchingGroups = applicationGroups;
+          const explicitSemester = [forcedSemester, parsedAssignedGroup.semesterKey]
+            .map((value) => String(value || ""))
+            .find((value) => value === "1" || value === "2");
+          if (matchingGroups.length > 1) {
+            const preferredSemester = explicitSemester ||
+              (curriculumSemester === "1" || curriculumSemester === "2" ? curriculumSemester : "");
+            if (preferredSemester) {
+              const preferredGroups = matchingGroups.filter((item) => item.semester === preferredSemester);
+              matchingGroups = preferredGroups;
+            }
+          }
+          let groupTargets;
+          if (matchingGroups.length > 1 &&
+              new Set(matchingGroups.map((item) => item.semester)).size > 1) {
+            groupTargets = matchingGroups;
+          } else if (matchingGroups.length === 1) {
+            groupTargets = matchingGroups;
+          } else {
+            groupTargets = applicationGroup ? [applicationGroup] : [null];
+          }
+          for (const targetGroup of groupTargets) {
+            const semesterKey = [
+              forcedSemester,
+              parsedAssignedGroup.semesterKey,
+              targetGroup?.semester,
+              curriculumSemester,
+              course.semesterKey,
+            ].map((value) => String(value || ""))
+              .find((value) => value === "1" || value === "2") || "";
+            const semesterName = semesterKey
+              ? `${displayGrade}학년 ${semesterKey}학기`
+              : `${displayGrade}학년 미분류`;
+            const category = parsedAssignedGroup.category || targetGroup?.name || UNASSIGNED_GROUP;
+            let semester = semesters.find((item) => item.name === semesterName);
+            if (!semester) {
+              semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
+              semesters.push(semester);
+            }
+            let group = semester.groups.find((item) => item.category === category);
+            if (!group) {
+              group = { category, courses: [], choiceCount: null };
+              semester.groups.push(group);
+            }
+            if (Number.isInteger(targetGroup?.count) && targetGroup.count >= 0) {
+              group.choiceCount = targetGroup.count;
+            }
+            group.courses.push({
+              category,
+              column: course.column,
+              name: course.name,
+              enrollment,
+              enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
+              recommendedClasses,
+              classCount,
+              averageClassSize: classCount ? enrollment / classCount : 0
+            });
+          }
         }
         for (const semester of semesters) {
           for (const group of semester.groups) {
-            group.totalClasses = group.courses.reduce((total, item) => total + item.classCount, 0);
+            group.totalClasses = group.choiceCount === null
+              ? group.courses.reduce((total, item) => total + item.classCount, 0)
+              : summary.plannedClasses * group.choiceCount;
           }
         }
         semesters.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ko"));
@@ -2500,11 +2553,15 @@
       const targetGrade = ["2", "3"].includes(String(state.aggregateTargetGrade))
         ? String(state.aggregateTargetGrade) : "2";
       const currentGrade = targetGradeCurrentGrade(targetGrade);
+      $("#plannedClassCountLabel").textContent = `${targetGrade}학년 편제 학급수`;
       for (const tab of $("#aggregateGradeTabs")?.querySelectorAll?.("[data-aggregate-grade]") || []) {
         tab.setAttribute("aria-selected", String(tab.dataset.aggregateGrade) === targetGrade ? "true" : "false");
       }
       const students = state.students.filter((student) => String(student.grade) === currentGrade);
       const courses = coursesForCurrentGrade(currentGrade);
+      const plannedClassInput = $("#plannedClassCount");
+      plannedClassInput.value = String(state.plannedClassCounts[targetGrade] ??
+        (students.length ? new Set(students.map((student) => student.classroom)).size : ""));
       if (!students.length || !courses.length) {
         $("#aggregateDescription").textContent = "학생별 신청 명단에서 과목별 인원을 계산했습니다.";
         $("#aggregateContent").innerHTML = `<div class="aggregate-empty">${targetGrade}학년 자료가 없습니다. 해당 학년의 결과를 불러오세요.</div>`;
@@ -2521,7 +2578,7 @@
       }
       const aggregate = aggregateRecords(
         students, courses, openingPercent, divisionPercent,
-        state.classOverrides, state.semesterAssignments, state.groupAssignments
+        state.classOverrides, state.semesterAssignments, state.groupAssignments, state.plannedClassCounts
       );
       let atRiskCount = 0;
       const allCourses = aggregate.reports.flatMap((report) => report.semesters.flatMap((semester) =>
@@ -2566,7 +2623,10 @@
             const riskCount = $("#aggregateContent").querySelectorAll(".aggregate-subject.at-risk").length;
             const riskSummary = $("#aggregateContent").querySelector("[data-aggregate-risk-count]");
             if (riskSummary) riskSummary.textContent = `${riskCount}과목`;
-            return `<table class="aggregate-sheet-table"><caption>${escapeHtml(group.category)}</caption><tbody><tr><th class="aggregate-row-label">과목</th>${headerCells}${paddingCells}${totalCell}</tr>${metricRows}</tbody></table>`;
+            const groupCaption = group.choiceCount === null
+              ? group.category
+              : `${group.category} · ${group.choiceCount}과목 선택`;
+            return `<table class="aggregate-sheet-table"><caption>${escapeHtml(groupCaption)}</caption><tbody><tr><th class="aggregate-row-label">과목</th>${headerCells}${paddingCells}${totalCell}</tr>${metricRows}</tbody></table>`;
           }).join("");
           return `<h3 class="aggregate-semester">${escapeHtml(semester.name)}</h3><div class="aggregate-sheet-wrap">${rows}</div>`;
         }).join("");
@@ -3661,7 +3721,7 @@
         merge(0, row, 1, row);
 
           const courses = semester.groups.flatMap((group) => group.courses);
-          const semesterTotal = courses.reduce((total, course) => total + course.classCount, 0);
+          const semesterTotal = semester.groups.reduce((total, group) => total + group.totalClasses, 0);
           const blocks = [];
           for (let index = 0; index < courses.length; index += BLOCK_SIZE) {
             blocks.push(courses.slice(index, index + BLOCK_SIZE));
@@ -3820,7 +3880,7 @@
       const courses = coursesForCurrentGrade(currentGrade);
       const aggregate = aggregateRecords(
         students, courses, openingPercent, divisionPercent,
-        state.classOverrides, state.semesterAssignments, state.groupAssignments
+        state.classOverrides, state.semesterAssignments, state.groupAssignments, state.plannedClassCounts
       );
       const sheets = aggregate.reports.map((report) => ({
         name: `${Number(report.summary.grade) + 1}학년(현${report.summary.grade}학년)`,
@@ -4732,6 +4792,21 @@
     });
     $("#openingPercent").addEventListener("input", () => { renderAggregate(); persistState(); });
     $("#divisionPercent").addEventListener("input", () => { renderAggregate(); persistState(); });
+    $("#plannedClassCount").addEventListener("change", (event) => {
+      const input = event.target;
+      const value = Number(input.value);
+      if (!Number.isInteger(value) || value < 1) {
+        input.setCustomValidity("1 이상의 정수를 입력하세요.");
+        input.reportValidity();
+        input.setCustomValidity("");
+        renderAggregate();
+        return;
+      }
+      state.plannedClassCounts ||= {};
+      state.plannedClassCounts[String(state.aggregateTargetGrade || "2")] = value;
+      renderAggregate();
+      persistState();
+    });
     $("#aggregateContent").addEventListener("change", (event) => {
       const input = event.target.closest(".aggregate-class-input");
       if (!input) return;
