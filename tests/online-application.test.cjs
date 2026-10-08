@@ -125,6 +125,9 @@ test("large imported curriculum layouts persist in IndexedDB and restore by arch
   assert.match(frontend,/await storeCurriculumLayout\(importedLayout\)/);
   assert.match(frontend,/function scheduleCurriculumLayoutPersistence\(\)/);
   assert.match(frontend,/브라우저 저장 공간이 부족해 변경 내용을 저장하지 못했습니다/);
+  assert.match(frontend,/function persistState\(\) \{[\s\S]*?if \(!statePersistenceReady\) return false;/);
+  assert.match(frontend,/function restorePersistedState\(\) \{[\s\S]*?resetWorkspace\(false\);\s*statePersistenceReady = true;/);
+  assert.match(frontend,/catch \(error\) \{\s*console\.error\("복원한 자료 표시 실패", error\);/);
 });
 
 test("roster supports aliases, sheet grades and multiple sheets", () => {
@@ -204,10 +207,13 @@ test("merged subject header uses actual course names and splits course lists by 
       ["", "영어", "융합", "미디어 영어, 세계 문화와 영어", 4, 4, "", "", "", 4],
       ["", "과학", "융합", "물리학 실험＊", 4, 3, "2학년/1,2학기/3학점"],
       ["", "국어", "진로", "주제 탐구 독서", 4, 4, "", "", "", "", "", 4],
+      ["", "과학", "융합", "기후변화와 환경생태", 3, 3, "", "", "", "", "", ""],
+      ["", "과학", "진로", "행 강조 과목", 3, 3, "", "", 3, "", "", ""],
     ],
     mergedRanges: ["A1:A2", "B1:B2", "C1:D2", "E1:E2", "F1:F2",
       "G1:H1", "I1:J1", "K1:L1", "A4:A8", "G7:L7"],
-    cellFills: {"3:8":"#E2EFD9","4:8":"#E2EFD9","5:9":"#E2EFD9","6:6":"#D6DCE4"},
+    cellFills: {"3:8":"#E2EFD9","4:8":"#E2EFD9","5:9":"#E2EFD9","6:6":"#D6DCE4",
+      "8:10":"#FCE4D6","9:3":"#FFFF00","9:8":"#FFFF00","9:9":"#FFFF00"},
   };
   const ctx = vm.createContext({ state: { curriculumImportedLayout: layout } });
   for (const name of ["columnIndex", "expandCurriculumLayoutRows", "importedPlanColumnMap",
@@ -222,10 +228,16 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.deepEqual(columns.semesters, [6, 7, 8, 9, 10, 11]);
   const subjects = plain(ctx.collectApplicationSubjects());
   assert.deepEqual(subjects["2"].map((c) => c.subject),
-    ["세계사", "사회와 문화", "물리학", "화학", "미디어 영어", "세계 문화와 영어", "물리학 실험"]);
+    ["세계사", "사회와 문화", "물리학", "화학", "미디어 영어", "세계 문화와 영어", "물리학 실험", "행 강조 과목"]);
   assert.equal(subjects["2"].find((c) => c.subject === "물리학 실험").semester, "1·2");
-  assert.deepEqual(subjects["3"].map((c) => c.subject), ["주제 탐구 독서"]);
+  // Row-wide highlighting (same color as the subject cell) does not add an empty semester.
+  assert.equal(subjects["2"].find((c) => c.subject === "행 강조 과목").semester, "1");
+  assert.deepEqual(subjects["3"].map((c) => c.subject), ["주제 탐구 독서", "기후변화와 환경생태"]);
   assert.equal(subjects["3"][0].semester, "2");
+  // An empty semester cell with its own fill color counts as that semester for color grouping.
+  assert.equal(subjects["3"][1].semester, "1");
+  assert.equal(subjects["3"][1].semesterColors["1"], "#FCE4D6");
+  assert.equal(subjects["3"][1].hours, "");
   assert.equal(subjects["2"].find((c)=>c.subject==="세계사").semesterColors["1"],"#E2EFD9");
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학").semesterColors["1"],"#E2EFD9");
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학 실험").semesterColors["2"],"#D6DCE4");

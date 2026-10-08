@@ -49,9 +49,11 @@
     const stateRawTargets = new WeakMap();
     let statePersistenceTimer = null;
     let statePersistenceSuppressed = 0;
+    // 새로고침 직후 저장분을 복원하기 전에는 빈 초기 상태로 저장분을 덮어쓰지 않는다.
+    let statePersistenceReady = false;
 
     function scheduleStatePersistence() {
-      if (statePersistenceSuppressed || statePersistenceTimer !== null) return;
+      if (!statePersistenceReady || statePersistenceSuppressed || statePersistenceTimer !== null) return;
       statePersistenceTimer = window.setTimeout(() => {
         statePersistenceTimer = null;
         persistState();
@@ -257,6 +259,7 @@
         window.clearTimeout(statePersistenceTimer);
         statePersistenceTimer = null;
       }
+      if (!statePersistenceReady) return false;
       try {
         statePersistenceSuppressed++;
         syncActiveRound();
@@ -556,6 +559,7 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) {
         resetWorkspace(false);
+        statePersistenceReady = true;
         return;
       }
       try {
@@ -690,12 +694,20 @@
         $("#classFilter").disabled = !state.students.length;
         applyClassFilterOptions(state.students);
         $("#studentCount").textContent = `${state.students.length} / ${state.students.length}명`;
-        renderRoster();
-        renderPreview();
-        renderCurriculumStep();
-        renderSemesterClassifier();
-        renderAggregate();
-        renderWorkflowLayout();
+        // 화면 표시 오류가 저장 데이터 전체 초기화로 이어지지 않도록 렌더링 실패는 따로 처리한다.
+        try {
+          renderRoster();
+          renderPreview();
+          renderCurriculumStep();
+          renderSemesterClassifier();
+          renderAggregate();
+          renderWorkflowLayout();
+        } catch (error) {
+          console.error("복원한 자료 표시 실패", error);
+          status.style.color = "#a44939";
+          status.textContent = `저장 자료는 복원했지만 일부 화면을 표시하지 못했습니다: ${error?.message || error}`;
+        }
+        statePersistenceReady = true;
         if (persistedLayout) {
           scheduleCurriculumLayoutPersistence();
         } else if (persistedLayoutId) {
@@ -720,12 +732,17 @@
             showAppToast(message);
           });
         }
-        if (state.students.length) {
+        if (state.students.length && !status.textContent.startsWith("저장 자료는 복원했지만")) {
           status.style.color = "#287956";
           status.textContent = `새로고침 이전 파일(${state.fileName || "이전 파일"})을 복원했습니다.`;
         }
       } catch (error) {
+        console.error("저장 자료 복원 실패", error);
+        statePersistenceReady = true;
         resetWorkspace(true);
+        try { localStorage.setItem(`${STORAGE_KEY}-unreadable-backup`, raw); } catch (backupError) { /* 공간 부족 시 백업 생략 */ }
+        status.style.color = "#a44939";
+        status.textContent = "저장 자료 형식을 읽지 못해 초기화했습니다. 원본은 브라우저에 백업해 두었습니다.";
       }
     }
 
@@ -2765,10 +2782,15 @@
         const type = context.selectionType || "";
         // 학년은 학기 열(1-1~3-2) 중 시수가 적힌 위치로 판별하고, 없으면 학년 열 문맥을 사용한다.
         const byGrade = new Map();
+        const subjectFill = curriculumCellFill(layout, context.rowIndex, columns.subject);
         columns.semesters.forEach((column, index) => {
           if (column < 0) return;
           const value = String(context.row[column] ?? "").trim();
-          if (!value || /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
+          // 시수가 비어 있어도 학기 칸에 직접 채운 색이 있으면 해당 학기 편성으로 보고 색상 그룹에 포함한다.
+          // 과목명 칸과 같은 색이면 행 전체 강조로 보고 제외한다.
+          const fill = value ? "" : curriculumCellFill(layout, context.rowIndex, column);
+          const colorOnly = Boolean(fill) && fill !== subjectFill;
+          if ((!value && !colorOnly) || /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
           const grade = Math.floor(index / 2) + 1;
           const sem = String((index % 2) + 1);
           if (/학년/.test(value)) {
@@ -2782,7 +2804,7 @@
           }
           if (!byGrade.has(grade)) byGrade.set(grade, { semesters: [], hours: [] });
           byGrade.get(grade).semesters.push(sem);
-          byGrade.get(grade).hours.push(value);
+          if (value) byGrade.get(grade).hours.push(value);
         });
         if (!byGrade.size && !columns.semesters.some((column) => column >= 0)) {
           const fallback = context.grade.match(/[123]/)?.[0];

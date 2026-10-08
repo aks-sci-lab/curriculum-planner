@@ -21,6 +21,9 @@ test("nested state and array mutations schedule one persistence pass", () => {
     persistState() { persisted++; },
   });
   vm.runInContext(app.slice(start, end), context);
+  vm.runInContext(`state.students.push({ name: "복원 전" });`, context);
+  assert.equal(scheduled, 0, "restoration must finish before automatic saves can overwrite stored data");
+  vm.runInContext(`statePersistenceReady = true;`, context);
   vm.runInContext(`
     state.students.push({ name: "학생" });
     state.curriculumPlanFilters.query = "수학";
