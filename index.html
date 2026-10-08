@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261008-student-centered-ux">
+  <link rel="stylesheet" href="styles.css?v=20261008-teacher-application-ui">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -187,26 +187,47 @@
         </section>
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
           <h3>온라인 신청 관리</h3>
-          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달</p>
+          <p class="note">학년별 그룹을 먼저 확인한 뒤 학생 명렬을 올려 신청을 만드세요. 생성된 신청은 아래 목록에서 관리할 수 있습니다.</p>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
           </div>
           <div class="hidden" id="cloudTeacherControls">
-            <p id="cloudTeacherAccount"></p>
-            <button class="button" id="cloudTeacherLogout" type="button">로그아웃</button>
-            <p class="note">신청을 생성한 뒤 학생별 코드를 저장하고 안내문을 전달하세요.</p>
-            <label class="file-button" for="cloudRosterInput">① 학생 명렬 업로드 · 신청 학년 확인</label>
-            <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
-            <p id="cloudRosterSummary" role="status">명렬을 올리면 해당 진급 학년의 그룹만 설정합니다.</p>
-            <button class="button button-primary" id="cloudCreateEvent" type="button" disabled>② 그룹 설정 완료 · 수강신청 생성</button>
-            <button class="button" id="cloudPreviewStudent" type="button">학생 화면 미리보기</button>
-            <button class="button" id="cloudDownloadCodes" type="button" disabled>방금 생성한 학생 코드 저장</button>
-            <button class="button" id="cloudPrintCodes" type="button">학생 코드 메일머지 출력창</button>
-            <label class="file-button" for="cloudCodeFile">저장한 코드 파일로 출력</label>
-            <input class="hidden" id="cloudCodeFile" type="file" accept=".xlsx,.json">
-            <button class="button" id="cloudRefreshEvents" type="button">내 수강신청 새로고침</button>
-            <p>공통 학생 입구: <a id="cloudStudentLink" href="#student">학생 수강신청</a></p>
-            <div id="cloudEventList"></div>
+            <div class="cloud-teacher-account">
+              <p id="cloudTeacherAccount"></p>
+              <button class="button button-quiet" id="cloudTeacherLogout" type="button">로그아웃</button>
+            </div>
+            <section class="cloud-setup-card" aria-labelledby="cloudSetupTitle">
+              <div class="cloud-section-heading">
+                <span class="cloud-step-number" aria-hidden="true">1</span>
+                <div><h4 id="cloudSetupTitle">새 수강신청 만들기</h4><p>명렬을 올리면 학년과 그룹을 확인한 뒤 신청을 생성합니다.</p></div>
+              </div>
+              <label class="file-button" for="cloudRosterInput">학생 명렬 엑셀 선택</label>
+              <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
+              <p id="cloudRosterSummary" class="cloud-roster-summary" role="status">학생 명렬을 선택하면 업로드한 파일의 학년을 확인합니다.</p>
+              <button class="button button-primary" id="cloudCreateEvent" type="button" disabled>수강신청 생성</button>
+            </section>
+            <section class="cloud-code-tools" aria-label="학생 안내 및 코드 관리">
+              <div class="cloud-section-heading">
+                <span class="cloud-step-number cloud-step-secondary" aria-hidden="true">2</span>
+                <div><h4>학생에게 신청 안내하기</h4><p>신청을 만든 다음 개인 코드를 저장하거나 안내문을 출력하세요.</p></div>
+              </div>
+              <div class="cloud-action-row">
+                <button class="button button-secondary" id="cloudDownloadCodes" type="button" disabled>학생 코드 엑셀 저장</button>
+                <button class="button" id="cloudPrintCodes" type="button">코드 안내문 출력</button>
+                <label class="file-button" for="cloudCodeFile">기존 코드 파일로 출력</label>
+                <input class="hidden" id="cloudCodeFile" type="file" accept=".xlsx,.json">
+                <button class="button button-quiet" id="cloudPreviewStudent" type="button">학생 화면 미리보기</button>
+              </div>
+              <p class="cloud-student-entry">학생 공통 입구: <a id="cloudStudentLink" href="#student">수강신청 페이지</a></p>
+            </section>
+            <section class="cloud-events-section" aria-labelledby="cloudEventsTitle">
+              <div class="cloud-section-heading">
+                <span class="cloud-step-number cloud-step-secondary" aria-hidden="true">3</span>
+                <div><h4 id="cloudEventsTitle">진행 중인 수강신청</h4><p>학생 선택 수정, 집계표 연동, 신청 마감과 결과 백업을 관리합니다.</p></div>
+                <button class="button button-quiet" id="cloudRefreshEvents" type="button">목록 새로고침</button>
+              </div>
+              <div id="cloudEventList"></div>
+            </section>
             <p id="cloudSyncStatus" role="status" aria-live="polite">연동된 신청은 로그인 중 30초마다 집계표에 반영됩니다.</p>
           </div>
           <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
@@ -301,13 +322,21 @@
     <div id="cloudStudentPreviewContent"></div>
   </dialog>
   <dialog id="cloudTeacherEditDialog" aria-labelledby="cloudTeacherEditTitle" style="width:min(850px, calc(100vw - 40px));max-height:90vh;overflow:auto">
-    <div class="main-heading"><h2 id="cloudTeacherEditTitle">학생 선택 과목 변경</h2><button class="button button-secondary" id="cloudTeacherEditClose" type="button">닫기</button></div>
-    <p class="note">해당 신청의 학생 선택을 서버에 저장합니다. 마감 후에도 교사는 수정할 수 있으며 변경 이력이 남습니다.</p>
-    <label for="cloudTeacherEditStudent">변경할 학생</label>
-    <select id="cloudTeacherEditStudent" class="application-link-field"></select>
+    <div class="main-heading"><div><h2 id="cloudTeacherEditTitle">학생 선택 과목 변경</h2><p class="note">학생을 고르고 과목을 조정한 뒤 저장하세요. 변경 이력은 자동으로 기록됩니다.</p></div><button class="button button-secondary" id="cloudTeacherEditClose" type="button">닫기</button></div>
+    <section class="teacher-edit-student-card" aria-label="변경할 학생 선택">
+      <label for="cloudTeacherEditSearch">학생 찾기</label>
+      <input class="application-link-field" id="cloudTeacherEditSearch" type="search" placeholder="이름, 반 또는 번호로 검색" autocomplete="off">
+      <label for="cloudTeacherEditStudent">변경할 학생</label>
+      <select id="cloudTeacherEditStudent" class="application-link-field"></select>
+    </section>
     <form id="cloudTeacherEditForm">
+      <div class="teacher-edit-summary" id="cloudTeacherEditSummary" role="status" aria-live="polite"></div>
+      <p class="teacher-edit-hint">그룹마다 안내된 과목 수를 선택해야 저장할 수 있습니다. 학생을 바꾸면 저장하지 않은 선택은 취소됩니다.</p>
       <div id="cloudTeacherEditChoices"></div>
-      <button class="button button-primary" id="cloudTeacherEditSave" type="submit">선택 과목 변경 저장</button>
+      <div class="teacher-edit-footer">
+        <span>변경 후 집계표에도 자동 반영됩니다.</span>
+        <button class="button button-primary" id="cloudTeacherEditSave" type="submit">변경 내용 저장</button>
+      </div>
     </form>
     <p id="cloudTeacherEditMessage" role="status" aria-live="polite"></p>
   </dialog>
@@ -554,12 +583,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261008-student-centered-ux"></script>
-  <script src="xlsx-parser.js?v=20261008-student-centered-ux" defer></script>
-  <script src="course-groups.js?v=20261008-student-centered-ux" defer></script>
-  <script src="curriculum-workbook.js?v=20261008-student-centered-ux" defer></script>
+  <script defer src="app.js?v=20261008-teacher-application-ui"></script>
+  <script src="xlsx-parser.js?v=20261008-teacher-application-ui" defer></script>
+  <script src="course-groups.js?v=20261008-teacher-application-ui" defer></script>
+  <script src="curriculum-workbook.js?v=20261008-teacher-application-ui" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261008-student-centered-ux" defer></script>
+  <script src="supabase-client.js?v=20261008-teacher-application-ui" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

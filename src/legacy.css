@@ -1062,6 +1062,47 @@
     .application-workflow-guide > span:first-child { margin-right: auto; color: #52627d; font-size: 12px; font-weight: 700; white-space: nowrap; }
     .application-workflow-guide .button { min-height: 34px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
     .application-workflow-guide .button b { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; color: #2852ce; background: #e8eeff; }
+    #cloudTeacherControls { display:grid; gap:16px; }
+    #cloudTeacherControls.hidden { display:none; }
+    .cloud-teacher-account { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; padding:10px 14px; border:1px solid #dce5f5; border-radius:12px; background:#fff; }
+    .cloud-teacher-account p { margin:0; color:#344767; font-size:13px; font-weight:650; }
+    .cloud-setup-card, .cloud-code-tools, .cloud-events-section { min-width:0; padding:16px; border:1px solid #dce5f5; border-radius:14px; background:#fff; }
+    .cloud-setup-card { border-color:#cbd9fb; background:linear-gradient(135deg,#f5f8ff,#fff 70%); }
+    .cloud-section-heading { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+    .cloud-section-heading > div { min-width:0; flex:1; }
+    .cloud-section-heading h4 { margin:0; color:#243653; font-size:15px; }
+    .cloud-section-heading p { margin:4px 0 0; color:#687891; font-size:12px; line-height:1.5; }
+    .cloud-step-number { display:grid; flex:0 0 30px; width:30px; height:30px; place-items:center; border-radius:50%; color:#fff; background:#315bd6; font-size:14px; font-weight:800; }
+    .cloud-step-secondary { color:#315bd6; background:#eaf0ff; }
+    .cloud-setup-card > .file-button { min-height:42px; }
+    .cloud-roster-summary { margin:12px 0; padding:10px 12px; border-radius:9px; color:#52627d; background:#fff; font-size:13px; line-height:1.55; }
+    .cloud-action-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .cloud-student-entry { margin:12px 0 0; color:#64738a; font-size:12px; }
+    .cloud-student-entry a, .cloud-event-link { color:#2852ce; font-weight:700; }
+    .cloud-event-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px 14px; margin-top:12px; padding:14px; border:1px solid #dfe6f1; border-radius:12px; background:#fff; }
+    .cloud-event-title { grid-column:1/-1; margin:0; color:#344767; font-size:13px; font-weight:700; line-height:1.6; }
+    .cloud-event-link { justify-self:start; font-size:13px; }
+    .cloud-event-card > .button { justify-self:end; }
+    .cloud-event-card > .button-primary { grid-column:1; grid-row:3; justify-self:start; }
+    .cloud-event-card > .button-secondary { grid-column:2; grid-row:3; }
+    .cloud-event-card > .button-quiet { min-height:34px; padding:0 9px; font-size:11px; }
+    .cloud-event-card > .button-danger { color:#9a3440; border-color:#edc6cb; background:#fff8f8; }
+    #cloudSyncStatus { padding:10px 12px; border-radius:9px; background:#f2f5fb; color:#61718b; font-size:12px; }
+    #cloudTeacherEditDialog { width:min(760px,calc(100vw - 32px)); padding:clamp(18px,4vw,28px); border:1px solid #d9e2f1; border-radius:18px; box-shadow:0 24px 80px #182b4a33; }
+    #cloudTeacherEditDialog .main-heading { align-items:flex-start; margin-bottom:14px; }
+    #cloudTeacherEditTitle { margin:0; color:#243653; font-size:22px; }
+    #cloudTeacherEditDialog .main-heading .note { margin:6px 0 0; }
+    .teacher-edit-student-card { display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,1.35fr); gap:8px 12px; margin:14px 0; padding:14px; border:1px solid #e0e7f2; border-radius:12px; background:#f7f9fd; }
+    .teacher-edit-student-card label { align-self:end; color:#52627d; font-size:12px; font-weight:700; }
+    .teacher-edit-student-card .application-link-field { min-width:0; min-height:42px; background:#fff; }
+    .teacher-edit-summary { margin:14px 0 8px; padding:12px 14px; border:1px solid #cddafd; border-radius:10px; color:#2c4ca5; background:#f1f5ff; font-size:14px; font-weight:750; }
+    .teacher-edit-hint { margin:8px 0 14px; color:#64738a; font-size:12px; line-height:1.6; }
+    #cloudTeacherEditChoices fieldset { position:relative; min-width:0; margin:0 0 12px; padding:12px; border:1px solid #dce4f0; border-radius:12px; background:#fbfcff; }
+    #cloudTeacherEditChoices legend { max-width:100%; padding:0 6px; color:#2d477f; font-size:13px; font-weight:750; }
+    #cloudTeacherEditChoices .application-subject { margin:7px 0; }
+    .teacher-edit-footer { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; margin-top:16px; padding-top:14px; border-top:1px solid #e2e8f2; }
+    .teacher-edit-footer > span { color:#697991; font-size:12px; }
+    .teacher-edit-footer .button { min-height:44px; }
     .application-guide-arrow { color: #9aa7bb; font-size: 20px; }
     .closure-decision-note { margin: 4px 0 8px; color: #52627d; font-size: 12px; line-height: 1.6; }
     .closure-verdict-open { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f5ee; }
@@ -1075,6 +1116,18 @@
       .application-workflow-guide > span:first-child { flex-basis: 100%; margin-bottom: 4px; }
       .application-workflow-guide .button { flex: 1 1 100%; justify-content: flex-start; min-height: 40px; }
       .application-guide-arrow { display: none; }
+      .cloud-setup-card, .cloud-code-tools, .cloud-events-section { padding:12px; }
+      .cloud-section-heading { align-items:flex-start; gap:9px; }
+      .cloud-section-heading > .button { flex:0 0 auto; }
+      .cloud-event-card { grid-template-columns:minmax(0,1fr); gap:8px; padding:12px; }
+      .cloud-event-title { grid-column:1; }
+      .cloud-event-card > .button, .cloud-event-card > .button-primary, .cloud-event-card > .button-secondary { grid-column:1; grid-row:auto; justify-self:stretch; }
+      .cloud-event-card > .button-primary { order:1; }
+      .cloud-event-card > .button-secondary { order:2; justify-self:start; }
+      .cloud-event-card > .button-quiet { justify-self:start; }
+      .teacher-edit-student-card { grid-template-columns:1fr; }
+      .teacher-edit-footer { align-items:stretch; }
+      .teacher-edit-footer .button { width:100%; }
       .student-progress li small { max-width: 100%; font-size: 10px; }
       .closure-table { display: block; overflow-x: auto; }
       .closure-table th, .closure-table td { min-width: 88px; padding: 8px; }

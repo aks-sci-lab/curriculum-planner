@@ -521,10 +521,10 @@ var updateApplicationGradeControls;
     }
   }
 
-  function button(text, action) {
+  function button(text, action, className = "button") {
     const element = document.createElement("button");
     element.type = "button";
-    element.className = "button";
+    element.className = className;
     element.textContent = text;
     element.addEventListener("click", action);
     return element;
@@ -553,17 +553,20 @@ var updateApplicationGradeControls;
       title.textContent = `${event.school_year} ${event.school_name} ${event.round}차 · ${mixed ? "1·2학년 통합 신청 (관리 작업은 두 학년에 적용)" : `현재 ${Number(grade) - 1}학년 → ${grade}학년 신청`} · ${event.is_open ? "접수 중" : "마감"} · ${new Date(event.created_at).toLocaleString("ko-KR")}`;
       section.appendChild(title);
       const link = document.createElement("a");
+      section.className = "cloud-event-card";
+      title.className = "cloud-event-title";
       link.href = eventLink(event.id);
-      link.textContent = "이 학교·차수 학생 신청 링크";
+      link.className = "cloud-event-link";
+      link.textContent = "학생 신청 링크 열기 ↗";
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       section.appendChild(link);
       section.appendChild(button("학생 화면 미리보기", () => teacherAction(async () => {
         openStudentPreview(event);
-      })));
+      }), "button button-quiet"));
       section.appendChild(button("학생 선택 과목 변경", () => teacherAction(async () => {
         await openTeacherEditor(event);
-      })));
+      }), "button button-primary"));
       section.appendChild(button(linkedEvents.has(event.id) ? "집계표 연동 해제" : "집계표 연동", () => teacherAction(async () => {
         if (linkedEvents.has(event.id)) {
           linkedEvents.delete(event.id);
@@ -572,22 +575,22 @@ var updateApplicationGradeControls;
           await syncLinkedResults();
         } else await linkEvent(event);
         await refreshEvents();
-      })));
+      }), "button button-secondary"));
       section.appendChild(button("신청 로그 · 롤백", () => teacherAction(async () => {
         await showHistory(event, section);
         byId("cloudTeacherMessage").textContent = "이력의 복원 버튼은 해당 기록 시각 직전 상태로 되돌립니다.";
-      })));
+      }), "button button-quiet"));
       section.appendChild(button(event.is_open ? "신청 마감" : "다시 열기", () => teacherAction(async () => {
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: event.is_open ? "close" : "open" }, true);
         await refreshEvents();
         await syncLinkedResults();
         byId("cloudTeacherMessage").textContent = result.message;
-      })));
+      }), "button button-quiet"));
       section.appendChild(button("신청 결과 저장", () => teacherAction(async () => {
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: "export" }, true);
         downloadDataWorkbook(result, "results", `온라인_수강신청_결과_${event.round}차.xlsx`);
         byId("cloudTeacherMessage").textContent = `${result.entries.length}명 결과를 백업 파일로 저장했습니다. 집계표 연동 신청은 파일 업로드 없이 자동 반영됩니다.`;
-      })));
+      }), "button button-quiet"));
       section.appendChild(button("전체 학생 코드 재발급", () => teacherAction(async () => {
         if (!window.confirm("모든 학생의 기존 코드가 무효화됩니다. 신청 결과는 유지됩니다. 전체 코드를 재발급할까요?")) {
           byId("cloudTeacherMessage").textContent = "재발급을 취소했습니다.";
@@ -596,7 +599,7 @@ var updateApplicationGradeControls;
         latestCodes = await rpc("manage_course_event", { p_event: event.id, p_action: "codes" }, true);
         downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
         byId("cloudTeacherMessage").textContent = "전체 코드를 재발급했습니다. 새 코드를 저장하고 각 학생에게 다시 전달하세요. 기존 코드는 사용할 수 없습니다.";
-      })));
+      }), "button button-quiet"));
       section.appendChild(button("명렬·결과 영구 삭제", () => teacherAction(async () => {
         if (!window.confirm(`${event.school_name} ${event.round}차의 모든 명렬과 신청을 영구 삭제할까요? 복구할 수 없습니다.`)) {
           byId("cloudTeacherMessage").textContent = "삭제를 취소했습니다.";
@@ -608,7 +611,7 @@ var updateApplicationGradeControls;
         saveLinkedEvents();
         await refreshEvents();
         byId("cloudTeacherMessage").textContent = result.message;
-      })));
+      }), "button button-danger"));
       list.appendChild(section);
     }
   }
@@ -629,6 +632,8 @@ var updateApplicationGradeControls;
       select.appendChild(option);
     }
     select.value = entries[0].id;
+    byId("cloudTeacherEditSearch").value = "";
+    byId("cloudTeacherEditSearch").addEventListener("input", filterTeacherEditStudents);
     renderTeacherEditor();
     byId("cloudTeacherEditDialog").showModal();
   }
@@ -647,7 +652,10 @@ var updateApplicationGradeControls;
       const legend = document.createElement("legend");
       legend.textContent = `${group.semester && group.semester !== "0" ? group.semester + "학기 · " : ""}${group.name}${group.count === undefined ? "" : ` · 정확히 ${group.count}과목 선택`}`;
       fieldset.appendChild(legend);
-      if (group.count !== undefined) fieldset.dataset.count = String(group.count);
+      if (group.count !== undefined) {
+        fieldset.dataset.count = String(group.count);
+        fieldset.dataset.label = legend.textContent;
+      }
       for (const subject of group.courses) {
         const course = courses.find((item) => item.subject === subject);
         if (!course) throw new Error("그룹 과목 설정이 잘못되었습니다.");
@@ -662,14 +670,52 @@ var updateApplicationGradeControls;
       }
       choices.appendChild(fieldset);
     }
-    byId("cloudTeacherEditMessage").textContent = "과목을 변경한 뒤 저장하세요. 학생을 바꾸면 저장하지 않은 변경은 취소됩니다.";
+    updateTeacherEditSummary();
+    byId("cloudTeacherEditMessage").textContent = "";
+  }
+
+  function filterTeacherEditStudents() {
+    const query = byId("cloudTeacherEditSearch").value.trim().toLocaleLowerCase("ko-KR");
+    const select = byId("cloudTeacherEditStudent");
+    const previous = select.value;
+    let firstMatch = "";
+    for (const option of select.children) {
+      option.hidden = !!query && !option.textContent.toLocaleLowerCase("ko-KR").includes(query);
+      if (!option.hidden && !firstMatch) firstMatch = option.value;
+    }
+    if (select.children.find((option) => option.value === previous)?.hidden) {
+      if (!firstMatch) {
+        byId("cloudTeacherEditMessage").textContent = "검색 결과가 없습니다. 이름이나 번호를 다시 확인하세요.";
+        return;
+      }
+      select.value = firstMatch;
+    }
+    if (!select.value && firstMatch) select.value = firstMatch;
+    if (previous !== select.value) renderTeacherEditor();
+    else byId("cloudTeacherEditMessage").textContent = "";
+  }
+
+  function updateTeacherEditSummary() {
+    if (!teacherEdit) return;
+    const selected = byId("cloudTeacherEditChoices").querySelectorAll("input:checked").length;
+    const groups = [...byId("cloudTeacherEditChoices").children];
+    for (const fieldset of groups) {
+      if (fieldset.dataset.count !== undefined) {
+        fieldset.children[0].textContent = `${fieldset.dataset.label} · ${fieldset.querySelectorAll("input:checked").length}/${fieldset.dataset.count} 선택`;
+      }
+    }
+    const student = teacherEdit.entries.find((entry) => entry.id === byId("cloudTeacherEditStudent").value);
+    const studentLabel = student ? `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}` : "학생 선택";
+    byId("cloudTeacherEditSummary").textContent = `${studentLabel} · 현재 ${selected}과목 선택`;
   }
 
   byId("cloudTeacherEditStudent").addEventListener("change", () => {
     try { renderTeacherEditor(); }
     catch (error) { byId("cloudTeacherEditMessage").textContent = error.message; }
   });
+  byId("cloudTeacherEditChoices").addEventListener("change", updateTeacherEditSummary);
   byId("cloudTeacherEditClose").addEventListener("click", () => byId("cloudTeacherEditDialog").close());
+  byId("cloudTeacherEditSearch").addEventListener("input", filterTeacherEditStudents);
   byId("cloudTeacherEditDialog").addEventListener("close", () => {
     teacherEdit = null;
     byId("cloudTeacherEditChoices").replaceChildren();
