@@ -154,6 +154,12 @@
     .certificate-table .group-cell { width: 31%; text-align: center; line-height: 1.45; }
     .certificate-table .course-cell { width: 54%; }
     .certificate-table .credit-cell { width: 15%; text-align: center; }
+    .history-heading { margin: 15px 0 6px; font-size: 13px; }
+    .history-table { font-size: 11px; }
+    .history-table th, .history-table td { height: 23px; padding: 3px 5px; }
+    .history-table th { text-align: center; }
+    .history-status { max-width: 76px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; font: inherit; }
+    .history-import-panel { display: grid; gap: 8px; }
     .aggregate-panel { margin: 0 0 18px; }
     .workflow-panel { margin: 0; }
     .workflow-panel h2 { margin: 0 0 10px; font-size: 14px; }
@@ -915,6 +921,7 @@
     .paper-total { margin: 25px 0 0; font-size: 14px; line-height: 1.9; }
     .paper-credit-gauge { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #d7e0f2; border-radius: 9px; background: #f8faff; font-size: 12px; }
     .paper-credit-gauge-label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .paper-credit-gauge-label.over-limit { color: #a44939; font-weight: 700; }
     .paper-credit-gauge-track, .student-summary-track, .aggregate-progress-track { display:block; height:8px; overflow:hidden; border-radius:999px; background:#e4eaf5; }
     .paper-credit-gauge-track span, .student-summary-track span, .aggregate-progress-track span { display:block; height:100%; border-radius:inherit; background:#3b68e8; }
     .paper-credit-gauge-track.core span, .student-summary-track.core span { background:#6c55c7; }
@@ -1047,6 +1054,11 @@
       .paper-student { padding-bottom: 2mm; font-size: 12px; }
       .certificate-table { font-size: 12px; }
       .certificate-table th, .certificate-table td { height: 8mm; padding: 1mm 2mm; }
+      .history-heading { margin: 4mm 0 2mm; font-size: 11px; }
+      .history-table { font-size: 9px; }
+      .history-table th, .history-table td { height: 5mm; padding: .5mm 1mm; }
+      .history-status { appearance: none; border: 0; padding: 0; background: transparent; color: #111; }
+      .paper-credit-gauge { margin-top: 3mm; padding: 2mm; }
       .paper-total { margin-top: 7mm; font-size: 12px; }
       .paper-signature { gap: 3mm; margin-top: 14mm; font-size: 12px; }
       .paper-school { margin-top: 20mm; font-size: 15px; }

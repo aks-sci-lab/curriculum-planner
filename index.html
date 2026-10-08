@@ -151,7 +151,7 @@
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
         <p class="note">온라인 신청 결과는 자동으로 집계표에 연동됩니다. 차수를 선택해 해당 결과를 확인하세요.</p>
-        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하며 다른 학년은 유지합니다. 확인서·집계표는 차수별 두 학년 데이터를 함께 사용하며, 차수 데이터 삭제는 두 학년 모두에 적용됩니다.</p>
+        <p class="note">테스트용 결과 엑셀은 선택한 학년만 저장·교체하고 다른 학년 자료는 유지합니다. 확인서·집계표·이동수업 반편성은 학년 탭별로 분리해 표시합니다. 차수 데이터 삭제는 두 학년 자료 전체에 적용됩니다.</p>
         <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택"></div>
         <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
         <div id="developerResultUpload" class="hidden">
@@ -174,7 +174,7 @@
         </section>
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
           <h3>온라인 신청 관리</h3>
-          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달</p>
+          <p class="note">명렬 업로드 → 그룹·선택 수 확인 → 신청 생성 → 학생 코드 전달 · 학번 열은 이수 이력 연결에 사용</p>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
           </div>
@@ -206,6 +206,10 @@
 
       <section id="certificatePanel" class="hidden">
         <div class="certificate-round-line"><span class="count-pill" id="certificateRoundBadge">1차</span><span class="note-inline">차수는 2단계에서 전환할 수 있습니다.</span></div>
+        <div class="group-scope-tabs" id="certificateGradeTabs" role="tablist" aria-label="확인서 발급 학년 선택">
+          <button class="button" type="button" role="tab" data-certificate-grade="2" aria-selected="true">2학년</button>
+          <button class="button" type="button" role="tab" data-certificate-grade="3" aria-selected="false">3학년</button>
+        </div>
         <div class="certificate-setup-grid">
           <div class="certificate-controls">
           <section class="panel settings-panel">
@@ -217,6 +221,13 @@
               <div class="field field-wide"><label for="confirmDate">확인 날짜</label><input id="confirmDate" type="text" value="2026. 9. 28."></div>
               <div class="field field-wide"><label for="schoolName">학교명</label><input id="schoolName" type="text" value="천상고등학교"></div>
             </div>
+          </section>
+          <section class="panel settings-panel history-import-panel">
+            <h2 class="panel-heading">이수 이력</h2>
+            <p class="panel-subtitle">학번으로 학생을 연결합니다. 자동 누적 자료가 없다면 엑셀 이력을 불러오세요.</p>
+            <button class="button" id="downloadHistoryTemplate" type="button">이수 이력 양식 다운로드</button>
+            <label class="file-button" for="historyInput">이수 이력 엑셀 불러오기</label>
+            <input class="hidden" id="historyInput" type="file" accept=".xlsx">
           </section>
           <section class="panel roster-panel">
             <div class="roster-header"><h2>학생 목록</h2><span class="count-pill" id="studentCount">0명</span></div>
@@ -257,6 +268,10 @@
           <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
         </div>
         <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 이동수업 반편성은 5단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
+        <div class="group-scope-tabs" id="aggregateGradeTabs" role="tablist" aria-label="집계표 학년 선택">
+          <button class="button" type="button" role="tab" data-aggregate-grade="2" aria-selected="true">2학년</button>
+          <button class="button" type="button" role="tab" data-aggregate-grade="3" aria-selected="false">3학년</button>
+        </div>
         <div class="aggregate-content" id="aggregateContent"></div>
       </section>
       <section class="panel hidden" id="closurePanel">
@@ -275,7 +290,11 @@
       </section>
       <section class="panel hidden" id="classifierPanel">
         <div class="roster-header">
-          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">새 반을 만든 뒤 과목 카드를 드래그해 이동수업 그룹으로 편성합니다.</p></div>
+          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">학년별 과목을 분리해 새 반을 만들고 과목을 편성합니다.</p></div>
+        </div>
+        <div class="group-scope-tabs" id="classifierGradeTabs" role="tablist" aria-label="이동수업 학년 선택">
+          <button class="button" type="button" role="tab" data-classifier-grade="2" aria-selected="true">2학년</button>
+          <button class="button" type="button" role="tab" data-classifier-grade="3" aria-selected="false">3학년</button>
         </div>
         <div class="semester-classifier" id="semesterClassifier"></div>
       </section>

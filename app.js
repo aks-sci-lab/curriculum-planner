@@ -7,6 +7,7 @@
       classOverrides: {},
       semesterAssignments: {},
       customGroupNames: [],
+      customGroupNamesByGrade: { "2": [], "3": [] },
       groupAssignments: {},
       selectedCourseColumns: [],
       lastSelectedCourseColumn: null,
@@ -14,6 +15,8 @@
       curriculumCatalogQuery: "",
       curriculumFileName: "",
       curriculumPlanFileName: "",
+      curriculumPlanAcademicYear: "",
+      curriculumPlansByYear: {},
       curriculumImportedLayout: null,
       curriculumTemplateRows: [],
       curriculumPlan: [],
@@ -32,9 +35,15 @@
       curriculumPlanFilters: { grade: "", division: "", area: "", detail: "", query: "" },
       workflowStep: 1,
       currentRound: "1",
+      certificateTargetGrade: "2",
+      aggregateTargetGrade: "2",
+      classifierTargetGrade: "2",
       rounds: { "1": null },
       roundClosures: { "1": {} },
       applicationImportRevision: 0,
+      activeDataSchoolYear: "",
+      priorCourseHistory: [],
+      historyArchivedYears: {},
     };
     const stateProxyCache = new WeakMap();
     const stateRawTargets = new WeakMap();
@@ -209,7 +218,10 @@
     }
 
     function applyClassFilterOptions(students) {
-      const classes = [...new Set(students.map((student) => student.classroom))]
+      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
+      const classes = [...new Set(students
+        .filter((student) => String(student.grade) === currentGrade)
+        .map((student) => student.classroom))]
         .sort((a, b) => Number(a) - Number(b));
       $("#classFilter").innerHTML = '<option value="">전체 반</option>' +
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
@@ -221,13 +233,17 @@
       if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
         state.rounds[state.currentRound] = {
           fileName: state.fileName,
+          dataSchoolYear: state.activeDataSchoolYear,
           gradeFiles: state.rounds[state.currentRound]?.gradeFiles || {},
           students: state.students,
           courses: state.courses,
           classOverrides: state.classOverrides,
           semesterAssignments: {...state.semesterAssignments},
           groupAssignments: {...state.groupAssignments},
-          customGroupNames: [...(state.customGroupNames || [])]
+          customGroupNames: [...(state.customGroupNames || [])],
+          customGroupNamesByGrade: normalizeGradeGroupNames(
+            state.customGroupNamesByGrade, state.customGroupNames
+          )
         };
       } else if (state.rounds[state.currentRound]) {
         state.rounds[state.currentRound] = null;
@@ -254,11 +270,14 @@
           classOverrides: state.classOverrides,
           semesterAssignments: state.semesterAssignments,
           customGroupNames: state.customGroupNames,
+          customGroupNamesByGrade: state.customGroupNamesByGrade,
           groupAssignments: state.groupAssignments,
           curriculumCatalog: state.curriculumCatalog,
           curriculumCatalogQuery: state.curriculumCatalogQuery,
           curriculumFileName: state.curriculumFileName,
           curriculumPlanFileName: state.curriculumPlanFileName,
+          curriculumPlanAcademicYear: state.curriculumPlanAcademicYear,
+          curriculumPlansByYear: state.curriculumPlansByYear,
           curriculumImportedLayout: state.curriculumImportedLayout,
           curriculumTemplateRows: state.curriculumTemplateRows,
           curriculumPlan: state.curriculumPlan,
@@ -270,9 +289,15 @@
           curriculumBundleName: state.curriculumBundleName,
           curriculumBundlePick: state.curriculumBundlePick,
           workflowStep: state.workflowStep,
+          certificateTargetGrade: state.certificateTargetGrade,
+          aggregateTargetGrade: state.aggregateTargetGrade,
+          classifierTargetGrade: state.classifierTargetGrade,
           openingPercent: $("#openingPercent").value,
           divisionPercent: $("#divisionPercent").value,
           schoolYear: $("#schoolYear").value,
+          activeDataSchoolYear: state.activeDataSchoolYear,
+          priorCourseHistory: state.priorCourseHistory,
+          historyArchivedYears: state.historyArchivedYears,
           round: $("#round").value,
           confirmDate: $("#confirmDate").value,
           schoolName: $("#schoolName").value
@@ -346,6 +371,7 @@
       syncActiveRound();
       state.currentRound = next;
       const data = state.rounds[next];
+      state.activeDataSchoolYear = String(data?.dataSchoolYear || "");
       state.students = data ? data.students : [];
       state.courses = data ? data.courses : [];
       state.fileName = data ? data.fileName : "";
@@ -353,9 +379,15 @@
       state.semesterAssignments = {...data?.semesterAssignments};
       state.groupAssignments = {...data?.groupAssignments};
       state.customGroupNames = [...(data?.customGroupNames || [])];
+      state.customGroupNamesByGrade = normalizeGradeGroupNames(
+        data?.customGroupNamesByGrade, state.customGroupNames
+      );
+      state.customGroupNames = [];
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
-      state.selectedId = state.students[0]?.id || null;
+      state.selectedId = state.students.find((student) =>
+        String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade || "2"))?.id ||
+        state.students[0]?.id || null;
       $("#round").value = `${next}차`;
       $("#fileName").textContent = state.fileName || "불러온 파일 없음";
       applyClassFilterOptions(state.students);
@@ -377,10 +409,12 @@
       state.courses = [];
       state.selectedId = null;
       state.fileName = "";
+      state.activeDataSchoolYear = "";
       state.classOverrides = {};
       state.semesterAssignments = {};
       state.groupAssignments = {};
       state.customGroupNames = [];
+      state.customGroupNamesByGrade = { "2": [], "3": [] };
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       $("#fileName").textContent = "불러온 파일 없음";
@@ -406,15 +440,23 @@
       state.currentRound = "1";
       state.rounds = { "1": null };
       state.roundClosures = { "1": {} };
+      state.priorCourseHistory = [];
+      state.historyArchivedYears = {};
       state.semesterAssignments = {};
       state.customGroupNames = [];
+      state.customGroupNamesByGrade = { "2": [], "3": [] };
       state.groupAssignments = {};
+      state.aggregateTargetGrade = "2";
+      state.classifierTargetGrade = "2";
+      state.certificateTargetGrade = "2";
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       state.curriculumCatalog = [];
       state.curriculumCatalogQuery = "";
       state.curriculumFileName = "";
       state.curriculumPlanFileName = "";
+      state.curriculumPlanAcademicYear = "";
+      state.curriculumPlansByYear = {};
       state.curriculumImportedLayout = null;
       state.curriculumTemplateRows = [];
       state.curriculumPlan = [];
@@ -481,13 +523,17 @@
           if (!data || !Array.isArray(data.students) || !data.students.length) return null;
           return {
             fileName: String(data.fileName || ""),
+            dataSchoolYear: String(data.dataSchoolYear || ""),
             gradeFiles: data.gradeFiles && typeof data.gradeFiles === "object" ? data.gradeFiles : {},
             students: data.students,
             courses: normalizeCourses(Array.isArray(data.courses) ? data.courses : []),
             classOverrides: data.classOverrides && typeof data.classOverrides === "object" ? data.classOverrides : {},
             semesterAssignments: data.semesterAssignments,
             groupAssignments: data.groupAssignments,
-            customGroupNames: data.customGroupNames
+            customGroupNames: data.customGroupNames,
+            customGroupNamesByGrade: normalizeGradeGroupNames(
+              data.customGroupNamesByGrade, data.customGroupNames
+            )
           };
         };
         if (saved.rounds && typeof saved.rounds === "object") {
@@ -511,6 +557,12 @@
         state.courses = activeRound ? activeRound.courses : [];
         state.selectedId = saved.selectedId || state.students[0]?.id || null;
         state.fileName = activeRound ? activeRound.fileName : "";
+        state.activeDataSchoolYear = String(activeRound?.dataSchoolYear || saved.activeDataSchoolYear || "");
+        state.priorCourseHistory = Array.isArray(saved.priorCourseHistory)
+          ? saved.priorCourseHistory.filter((item) => item && typeof item === "object")
+          : [];
+        state.historyArchivedYears = saved.historyArchivedYears && typeof saved.historyArchivedYears === "object"
+          ? saved.historyArchivedYears : {};
         state.classOverrides = activeRound ? { ...activeRound.classOverrides } : {};
         state.semesterAssignments = (activeRound?.semesterAssignments || saved.semesterAssignments) && typeof (activeRound?.semesterAssignments || saved.semesterAssignments) === "object"
           ? (activeRound?.semesterAssignments || saved.semesterAssignments)
@@ -518,6 +570,23 @@
         state.customGroupNames = Array.isArray(activeRound?.customGroupNames || saved.customGroupNames)
           ? (activeRound?.customGroupNames || saved.customGroupNames).map((name) => String(name ?? "").trim()).filter(Boolean)
           : [];
+        state.customGroupNamesByGrade = normalizeGradeGroupNames(
+          activeRound?.customGroupNamesByGrade || saved.customGroupNamesByGrade,
+          activeRound?.customGroupNames || saved.customGroupNames
+        );
+        state.customGroupNames = [];
+        state.aggregateTargetGrade = ["2", "3"].includes(String(saved.aggregateTargetGrade))
+          ? String(saved.aggregateTargetGrade) : "2";
+        state.classifierTargetGrade = ["2", "3"].includes(String(saved.classifierTargetGrade))
+          ? String(saved.classifierTargetGrade) : "2";
+        state.certificateTargetGrade = ["2", "3"].includes(String(saved.certificateTargetGrade))
+          ? String(saved.certificateTargetGrade) : "2";
+        if (!state.students.some((student) =>
+          student.id === state.selectedId &&
+          String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade))) {
+          state.selectedId = state.students.find((student) =>
+            String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade))?.id || null;
+        }
         state.groupAssignments = (activeRound?.groupAssignments || saved.groupAssignments) && typeof (activeRound?.groupAssignments || saved.groupAssignments) === "object"
           ? (activeRound?.groupAssignments || saved.groupAssignments)
           : {};
@@ -535,6 +604,12 @@
         state.curriculumPlan = Array.isArray(saved.curriculumPlan)
           ? saved.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row))
           : [];
+        state.curriculumPlansByYear = saved.curriculumPlansByYear && typeof saved.curriculumPlansByYear === "object"
+          ? saved.curriculumPlansByYear : {};
+        state.curriculumPlanAcademicYear = String(saved.curriculumPlanAcademicYear || saved.schoolYear || "");
+        if (state.curriculumPlanAcademicYear && !state.curriculumPlansByYear[state.curriculumPlanAcademicYear]) {
+          state.curriculumPlansByYear[state.curriculumPlanAcademicYear] = state.curriculumPlan;
+        }
         state.curriculumPlanFilters = saved.curriculumPlanFilters &&
           typeof saved.curriculumPlanFilters === "object"
           ? {
@@ -684,6 +759,8 @@
     function applicationGroupForCourse(course, currentGrade, groups = null) {
       const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
       if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
+      const savedGroup = course.applicationGroups?.[String(currentGrade)];
+      if (savedGroup?.name) return savedGroup;
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
       const normalize = (name) => String(name ?? "").trim()
         .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
@@ -724,6 +801,52 @@
       const category = resolveCourseCategoryForOutput(course);
       if (!semester) return category;
       return category === "과목" ? `${semester}학기` : `${semester}학기 ${category}`;
+    }
+
+    function courseBelongsToCurrentGrade(course, currentGrade, students) {
+      const grade = String(currentGrade);
+      if (course.applicationCurrentGrade !== undefined && course.applicationCurrentGrade !== null &&
+          String(course.applicationCurrentGrade) !== "") {
+        return String(course.applicationCurrentGrade) === grade;
+      }
+      const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
+      if (namedGrade) return namedGrade === String(Number(grade) + 1);
+      const applicationGroups = course.applicationGroups;
+      if (applicationGroups && typeof applicationGroups === "object" && Object.keys(applicationGroups).length) {
+        return Object.hasOwn(applicationGroups, grade);
+      }
+      const selectedGrades = new Set(students.filter((student) =>
+        student.selections.some((selection) => String(selection.column) === String(course.column)))
+        .map((student) => String(student.grade)));
+      if (selectedGrades.size) return selectedGrades.has(grade);
+      const rosterGrades = new Set(students.map((student) => String(student.grade)));
+      return rosterGrades.size === 1 && rosterGrades.has(grade);
+    }
+
+    function coursesForCurrentGrade(currentGrade, courses = state.courses, students = state.students) {
+      return courses.filter((course) => courseBelongsToCurrentGrade(course, currentGrade, students));
+    }
+
+    function targetGradeCurrentGrade(targetGrade) {
+      return String(Number(targetGrade) - 1);
+    }
+
+    function gradeGroupNames(targetGrade) {
+      const scoped = state.customGroupNamesByGrade?.[String(targetGrade)] || [];
+      const legacy = state.customGroupNames || [];
+      return [...new Set([...legacy, ...scoped].map(normalizeGroupName).filter(Boolean))];
+    }
+
+    function normalizeGradeGroupNames(value, legacyNames = []) {
+      const source = value && typeof value === "object" ? value : null;
+      const normalize = (names) => Array.isArray(names)
+        ? [...new Set(names.map((name) => normalizeGroupName(name)).filter(Boolean))]
+        : [];
+      if (!source || (!Array.isArray(source["2"]) && !Array.isArray(source["3"]))) {
+        const legacy = normalize(legacyNames);
+        return { "2": [...legacy], "3": [...legacy] };
+      }
+      return { "2": normalize(source["2"]), "3": normalize(source["3"]) };
     }
 
     function courseIndexByColumn(columnKey) {
@@ -789,11 +912,13 @@
       }
 
       const creditRow = rows[headerIndex] || [];
-      const findColumn = (matcher) => creditRow.findIndex((value) => matcher(String(value ?? "").trim()));
+      const findColumn = (matcher) => creditRow.findIndex((value) =>
+        matcher(String(value ?? "").replace(/\s+/g, "").trim()));
       const gradeColumn = findColumn((value) => value === "학년");
       const classColumn = findColumn((value) => value === "반");
-      const numberColumn = findColumn((value) => value.includes("번호"));
+      const numberColumn = findColumn((value) => /^(번호|출석번호)$/.test(value));
       const nameColumn = findColumn((value) => value.includes("성명"));
+      const studentIdColumn = findColumn((value) => /학번|학생ID|학생식별번호/.test(value));
       if ([gradeColumn, classColumn, numberColumn, nameColumn].some((column) => column < 0)) {
         throw new Error("학년/반/번호/성명 열을 자동으로 찾지 못했습니다. 헤더명을 확인해 주세요.");
       }
@@ -812,6 +937,7 @@
 
       const courses = [];
       for (let column = courseStartColumn; column < titleRow.length; column++) {
+        if (column === studentIdColumn) continue;
         const name = String(titleRow[column] ?? "").trim();
         if (!name) continue;
         const rawGroup = String(groupRow[column] ?? "").trim();
@@ -836,11 +962,12 @@
         const classroom = String(row[classColumn] ?? "").trim();
         const number = String(row[numberColumn] ?? "").trim();
         const name = String(row[nameColumn] ?? "").trim();
+        const studentId = studentIdColumn >= 0 ? String(row[studentIdColumn] ?? "").trim() : "";
         if (!name || !grade || !classroom || !number) continue;
         const selections = courses.filter((course) => isSelected(row[course.column]));
         students.push({
           id: `${grade}-${classroom}-${number}-${name}`,
-          grade, classroom, number, name, selections,
+          studentId, grade, classroom, number, name, selections,
           totalCredits: selections.reduce((total, course) => total + course.credits, 0)
         });
       }
@@ -1578,12 +1705,24 @@
       state.curriculumTemplateRows = state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row));
     }
 
+    function syncCurriculumPlanYearSnapshot(year = $("#schoolYear").value) {
+      const academicYear = String(year || "").trim();
+      if (!academicYear) return;
+      state.curriculumPlanAcademicYear = academicYear;
+      state.curriculumPlansByYear = {
+        ...(state.curriculumPlansByYear || {}),
+        [academicYear]: state.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row))
+      };
+    }
+
     function curriculumSnapshot() {
       return JSON.parse(JSON.stringify({
         curriculumPlan: state.curriculumPlan,
         curriculumTemplateRows: state.curriculumTemplateRows,
         curriculumImportedLayout: state.curriculumImportedLayout,
-        curriculumPlanFileName: state.curriculumPlanFileName
+        curriculumPlanFileName: state.curriculumPlanFileName,
+        curriculumPlanAcademicYear: state.curriculumPlanAcademicYear,
+        curriculumPlansByYear: state.curriculumPlansByYear
       }));
     }
 
@@ -1600,6 +1739,8 @@
       state.curriculumTemplateRows = snapshot.curriculumTemplateRows;
       state.curriculumImportedLayout = snapshot.curriculumImportedLayout;
       state.curriculumPlanFileName = snapshot.curriculumPlanFileName;
+      state.curriculumPlanAcademicYear = snapshot.curriculumPlanAcademicYear || "";
+      state.curriculumPlansByYear = snapshot.curriculumPlansByYear || {};
       state.curriculumMutationRevision += 1;
       state.curriculumEditBefore = null;
       state.curriculumEditUndoRecorded = false;
@@ -1724,6 +1865,7 @@
         };
         const semesters = [];
         for (const course of courses) {
+          if (!courseBelongsToCurrentGrade(course, grade, students)) continue;
           const applicationGroup = applicationGroupForCourse(course, grade);
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
@@ -1777,22 +1919,32 @@
     }
 
     function currentStudent() {
-      return state.students.find((student) => student.id === state.selectedId) || null;
+      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
+      return state.students.find((student) =>
+        student.id === state.selectedId && String(student.grade) === currentGrade) ||
+        state.students.find((student) => String(student.grade) === currentGrade) || null;
     }
 
     function visibleStudents() {
       const query = $("#searchInput").value.trim().toLocaleLowerCase();
       const classValue = $("#classFilter").value;
+      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
       return state.students.filter((student) => {
         const searchable = `${student.name} ${student.grade} ${student.classroom} ${student.number}`.toLocaleLowerCase();
-        return (!query || searchable.includes(query)) &&
+        return String(student.grade) === currentGrade &&
+          (!query || searchable.includes(query)) &&
           (!classValue || student.classroom === classValue);
       });
     }
 
     function renderRoster() {
       const students = visibleStudents();
-      $("#studentCount").textContent = `${students.length} / ${state.students.length}명`;
+      const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
+      const gradeStudentCount = state.students.filter((student) => String(student.grade) === currentGrade).length;
+      for (const tab of $("#certificateGradeTabs")?.querySelectorAll?.("[data-certificate-grade]") || []) {
+        tab.setAttribute("aria-selected", String(tab.dataset.certificateGrade) === String(state.certificateTargetGrade || "2") ? "true" : "false");
+      }
+      $("#studentCount").textContent = `${students.length} / ${gradeStudentCount}명`;
       const list = $("#studentList");
       if (!students.length) {
         const empty = document.createElement("div");
@@ -1824,7 +1976,182 @@
       list.replaceChildren(fragment);
     }
 
+    function historyRecordKey(record) {
+      return [record.studentId, record.schoolYear, record.grade, record.courseName, record.semester || ""]
+        .map((value) => String(value || "").trim()).join("|");
+    }
+
+    function studentHistory(student) {
+      if (!student.studentId) return [];
+      const targetGrade = Number(student.grade) + 1;
+      return state.priorCourseHistory.filter((record) =>
+        String(record.studentId || "") === String(student.studentId || "") &&
+        Number(record.grade) < targetGrade &&
+        Number(record.schoolYear) < Number($("#schoolYear").value)
+      ).sort((a, b) =>
+        Number(a.schoolYear) - Number(b.schoolYear) || Number(a.grade) - Number(b.grade) ||
+        String(a.courseName).localeCompare(String(b.courseName), "ko"));
+    }
+
+    function addHistoryRecord(record) {
+      const key = historyRecordKey(record);
+      const existing = new Map(state.priorCourseHistory.map((item) => [historyRecordKey(item), item]));
+      if (existing.has(key)) return false;
+      existing.set(key, { ...record, status: record.status === "incomplete" ? "incomplete" : "completed" });
+      state.priorCourseHistory = [...existing.values()];
+      return true;
+    }
+
+    function archiveCurrentAcademicYear(previousYear, nextYear) {
+      const yearKey = String(previousYear);
+      if (!previousYear || state.historyArchivedYears[yearKey]) return { archived: 0, skipped: 0 };
+      let archived = 0;
+      let skipped = 0;
+      for (const student of state.students) {
+        if (!student.studentId) {
+          skipped++;
+          continue;
+        }
+        const targetGrade = String(Number(student.grade) + 1);
+        const studentCourses = new Map();
+        for (const course of student.selections || []) {
+          studentCourses.set(`${course.name}|${course.semesterKey || ""}`, {
+            courseName: course.name,
+            semester: course.semesterKey || "",
+            credit: Number(course.credits) || 0,
+            area: course.area || course.category || ""
+          });
+        }
+        const savedPlan = state.curriculumPlansByYear?.[yearKey];
+        const schoolPlan = Array.isArray(savedPlan)
+          ? savedPlan
+          : (!state.curriculumPlanAcademicYear || state.curriculumPlanAcademicYear === yearKey)
+            ? state.curriculumPlan : [];
+        for (const row of schoolPlan) {
+          if (String(row.grade) !== targetGrade ||
+              normalizeCurriculumDivision(row.division) !== "학교 지정 교육과정") continue;
+          const name = String(row.subject || "").trim();
+          if (!name) continue;
+          for (const [semesterIndex, field] of CURRICULUM_SEMESTER_FIELDS.entries()) {
+            const credit = Number(row[field]) || 0;
+            if (!credit) continue;
+            const semester = `${Math.floor(semesterIndex / 2) + 1}-${semesterIndex % 2 + 1}`;
+            const key = `${name}|${semester}`;
+            studentCourses.set(key, {
+              courseName: name,
+              semester,
+              credit,
+              area: row.area || ""
+            });
+          }
+        }
+        for (const course of studentCourses.values()) {
+          if (addHistoryRecord({
+            studentId: String(student.studentId),
+            schoolYear: yearKey,
+            grade: targetGrade,
+            courseName: course.courseName,
+            semester: course.semester,
+            credit: course.credit,
+            area: course.area,
+            status: "completed"
+          })) archived++;
+        }
+      }
+      state.historyArchivedYears[yearKey] = { nextYear: String(nextYear), archivedAt: new Date().toISOString() };
+      return { archived, skipped };
+    }
+
+    function prepareAcademicYearImport() {
+      const nextYear = String($("#schoolYear").value || "").trim();
+      const previousYear = String(state.activeDataSchoolYear || "").trim();
+      if (!nextYear) return;
+      if (previousYear && previousYear !== nextYear) {
+        state.students = [];
+        state.courses = [];
+        state.selectedId = null;
+        state.fileName = "";
+        state.classOverrides = {};
+        state.semesterAssignments = {};
+        state.groupAssignments = {};
+        state.rounds = { "1": null };
+        state.roundClosures = { "1": {} };
+        state.currentRound = "1";
+        state.activeDataSchoolYear = nextYear;
+      } else if (!previousYear) {
+        state.activeDataSchoolYear = nextYear;
+      }
+    }
+
+    function handleSchoolYearChange() {
+      const nextYear = String($("#schoolYear").value || "").trim();
+      const previousYear = String(state.activeDataSchoolYear || "").trim();
+      if (previousYear && nextYear && Number(nextYear) > Number(previousYear)) {
+        const result = archiveCurrentAcademicYear(previousYear, nextYear);
+        status.style.color = result.skipped ? "#a44939" : "#287956";
+        status.textContent = `${previousYear}학년도 이력을 ${result.archived}개 과목 누적했습니다.` +
+          (result.skipped ? ` 학번이 없어 ${result.skipped}명은 자동 연결하지 못했습니다. 이수 이력 파일을 업로드하세요.` : "");
+      }
+      updateCertificateText();
+    }
+
+    async function handleHistoryWorkbook(file) {
+      if (!file) return;
+      try {
+        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("이수 이력 파일은 .xlsx 형식이어야 합니다.");
+        const sheets = await parseWorkbook(await file.arrayBuffer());
+        const rows = sheets[0]?.rows || [];
+        const compact = (value) => String(value ?? "").replace(/\s+/g, "");
+        const headerIndex = rows.findIndex((row) => {
+          const header = row.map(compact);
+          return header.some((value) => /^(학번|학생ID|학생식별번호)$/.test(value)) &&
+            header.some((value) => /학년도/.test(value)) &&
+            header.some((value) => /^(과목명|과목)$/.test(value));
+        });
+        if (headerIndex < 0) throw new Error("학번·학년도·과목명 머리글이 있는 이수 이력 양식인지 확인하세요.");
+        const header = rows[headerIndex].map(compact);
+        const find = (pattern) => header.findIndex((value) => pattern.test(value));
+        const columns = {
+          studentId: find(/^(학번|학생ID|학생식별번호)$/),
+          schoolYear: find(/학년도/),
+          grade: find(/^학년$/),
+          courseName: find(/^(과목명|과목)$/),
+          credit: find(/학점/),
+          area: find(/^(교과군|교과)$/),
+          semester: find(/학기/),
+          status: find(/이수여부|상태/)
+        };
+        let imported = 0;
+        for (const row of rows.slice(headerIndex + 1)) {
+          const studentId = String(row[columns.studentId] ?? "").trim();
+          const schoolYear = String(row[columns.schoolYear] ?? "").trim().replace(/학년도$/, "");
+          const grade = String(row[columns.grade] ?? "").trim().replace(/학년$/, "");
+          const courseName = String(row[columns.courseName] ?? "").trim();
+          if (!studentId && !schoolYear && !courseName) continue;
+          if (!studentId || !/^\d{4}$/.test(schoolYear) || !/^[1-3]$/.test(grade) || !courseName) {
+            throw new Error("이수 이력의 학번·4자리 학년도·1~3학년·과목명을 확인하세요.");
+          }
+          if (addHistoryRecord({
+            studentId, schoolYear, grade, courseName,
+            credit: Number(row[columns.credit]) || 0,
+            area: columns.area >= 0 ? String(row[columns.area] ?? "").trim() : "",
+            semester: columns.semester >= 0 ? String(row[columns.semester] ?? "").trim() : "",
+            status: columns.status >= 0 && /미이수|미완료/.test(String(row[columns.status] ?? "")) ? "incomplete" : "completed"
+          })) imported++;
+        }
+        status.style.color = "#287956";
+        status.textContent = `${file.name}에서 이수 이력 ${imported}개 과목을 추가했습니다.`;
+        renderPreview();
+        persistState();
+      } catch (error) {
+        status.style.color = "#a44939";
+        status.textContent = error instanceof Error ? error.message : "이수 이력 파일을 처리하지 못했습니다.";
+      }
+    }
+
     function certificateMarkup(student, printMode = false) {
+      const history = studentHistory(student);
+      const completedHistory = history.filter((record) => record.status !== "incomplete");
       const groups = [];
       for (const course of student.selections) {
         const groupName = courseGroupLabel(course, student.grade);
@@ -1837,13 +2164,36 @@
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
               <td class="course-cell">${escapeHtml(course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
-      const coreCredits = student.selections.reduce((sum, course) =>
+      const historyBody = history.length
+        ? history.map((record) => `<tr>
+            <td>${escapeHtml(record.schoolYear)} · ${escapeHtml(record.grade)}학년</td>
+            <td>${escapeHtml(record.area || "이전 이수")}</td>
+            <td>${escapeHtml(record.courseName)}${record.semester ? ` (${escapeHtml(record.semester)})` : ""}</td>
+            <td>${Number(record.credit) || "—"}</td>
+            <td>${printMode ? (record.status === "incomplete" ? "미이수" : "이수") :
+              `<select class="history-status" data-history-key="${escapeHtml(historyRecordKey(record))}" aria-label="${escapeHtml(record.courseName)} 이수 상태">
+                <option value="completed"${record.status !== "incomplete" ? " selected" : ""}>이수</option>
+                <option value="incomplete"${record.status === "incomplete" ? " selected" : ""}>미이수</option>
+              </select>`}</td>
+          </tr>`).join("")
+        : `<tr><td colspan="5">${student.studentId ? "등록된 이전 이수 내역이 없습니다." : "학번이 없어 이전 이수 내역과 자동 연결할 수 없습니다."}</td></tr>`;
+      const historicalCredits = completedHistory.reduce((sum, course) => sum + (Number(course.credit) || 0), 0);
+      const currentCoreCredits = student.selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
-      const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
-      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+      const historicalCoreCredits = completedHistory.reduce((sum, course) =>
+        sum + (isCoreCourse({ area: course.area, category: course.area, name: course.courseName }) ? Number(course.credit) || 0 : 0), 0);
+      const totalCredits = historicalCredits + student.totalCredits;
+      const coreCredits = historicalCoreCredits + currentCoreCredits;
+      const corePercent = totalCredits ? Math.round(coreCredits / totalCredits * 100) : 0;
+      const additionalCoreCredits = Math.max(0, totalCredits - coreCredits * 2);
+      const coreLimitStatus = coreCredits * 2 > totalCredits
+        ? "현재 국·영·수 비율이 50% 권고를 초과했습니다."
+        : "현재 국·영·수 비율은 50% 권고 범위입니다.";
+      const gauge = `<div class="paper-credit-gauge" aria-label="총 이수 및 신청 ${totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
+        <div class="paper-credit-gauge-label"><strong>이전 이수 ${historicalCredits}학점 + 현재 신청 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
-      </div>` : "";
+        <div class="paper-credit-gauge-label${coreCredits * 2 > totalCredits ? " over-limit" : ""}"><span>${coreLimitStatus}</span><strong>추가 가능 ${additionalCoreCredits}학점</strong></div>
+      </div>`;
       return `<article class="${printMode ? "print-page" : "preview-paper"}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
@@ -1852,6 +2202,11 @@
           <table class="certificate-table">
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
             <tbody>${body}</tbody>
+          </table>
+          <h3 class="history-heading">이전 이수 내역</h3>
+          <table class="certificate-table history-table">
+            <thead><tr><th>학년도·학년</th><th>교과군</th><th>과목명</th><th>학점</th><th>상태</th></tr></thead>
+            <tbody>${historyBody}</tbody>
           </table>
           ${gauge}
           <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
@@ -1871,7 +2226,9 @@
       if (!student) {
         preview.className = "placeholder";
         preview.innerHTML = '<div class="placeholder-icon" aria-hidden="true">▤</div><strong>확인서 미리보기</strong><span>학생 목록에서 확인할 학생을 선택하세요.</span>';
-        $("#previewSubheading").textContent = `${state.students.length}명의 확인서를 준비했습니다.`;
+        const currentGrade = targetGradeCurrentGrade(state.certificateTargetGrade || "2");
+        const gradeStudentCount = state.students.filter((item) => String(item.grade) === currentGrade).length;
+        $("#previewSubheading").textContent = `${gradeStudentCount}명의 확인서를 준비했습니다.`;
         $("#printSelected").disabled = true;
         $("#printAll").disabled = visibleStudents().length === 0;
         return;
@@ -1885,14 +2242,25 @@
 
     function renderSemesterClassifier() {
       const container = $("#semesterClassifier");
-      if (!state.courses.length) {
-        container.innerHTML = "";
+      const targetGrade = ["2", "3"].includes(String(state.classifierTargetGrade))
+        ? String(state.classifierTargetGrade) : "2";
+      const currentGrade = targetGradeCurrentGrade(targetGrade);
+      for (const tab of $("#classifierGradeTabs")?.querySelectorAll?.("[data-classifier-grade]") || []) {
+        tab.setAttribute("aria-selected", String(tab.dataset.classifierGrade) === targetGrade ? "true" : "false");
+      }
+      const courses = coursesForCurrentGrade(currentGrade);
+      if (!courses.length) {
+        container.innerHTML = `<div class="aggregate-empty">${targetGrade}학년 과목 자료가 없습니다.</div>`;
         return;
       }
-      const customAndAssigned = availableGroupNames(state.courses).filter((name) => name !== UNASSIGNED_GROUP);
+      const customNames = gradeGroupNames(targetGrade);
+      const customAndAssigned = [...new Set([
+        ...customNames,
+        ...courses.map((course) => normalizeGroupName(state.groupAssignments[String(course.column)]))
+      ])].filter((name) => name && name !== UNASSIGNED_GROUP);
       const groupNames = [UNASSIGNED_GROUP, ...customAndAssigned];
       const groupedCourses = new Map(groupNames.map((name) => [name, []]));
-      for (const course of state.courses) {
+      for (const course of courses) {
         const category = resolveCourseCategory(course);
         if (!groupedCourses.has(category)) groupedCourses.set(category, []);
         groupedCourses.get(category).push(course);
@@ -1902,7 +2270,7 @@
       const renderCards = (list) => list.length
         ? list.map((course) => {
           const selectedClass = selectedSet.has(String(course.column)) ? " selected" : "";
-          return `<div class="group-course-card${selectedClass}" draggable="true" data-drag-course-column="${course.column}">
+          return `<div class="group-course-card${selectedClass}" draggable="true" data-drag-course-column="${course.column}" data-course-grade="${currentGrade}">
             <span title="${escapeHtml(course.name)}">${escapeHtml(course.name)}</span>
             <span class="group-course-meta">${escapeHtml(course.credits || 0)}학점</span>
           </div>`;
@@ -1914,12 +2282,12 @@
         </div>
         <div class="group-manager">
           <div class="group-manager-form">
-            <input id="newGroupName" type="text" placeholder="새 선택과목 그룹명 입력 (예: 융합탐구군)">
+            <input id="newGroupName" type="text" placeholder="${targetGrade}학년 새 이동수업 반 이름 입력">
             <button class="button" type="button" data-action="add-group">그룹 추가</button>
           </div>
           <div class="group-chip-list">
-            ${state.customGroupNames.length
-              ? state.customGroupNames.map((name) =>
+            ${customNames.length
+              ? customNames.map((name) =>
                 `<span class="group-chip">${escapeHtml(name)}<button type="button" aria-label="${escapeHtml(name)} 그룹 삭제" data-action="remove-group" data-group-name="${escapeHtml(name)}">×</button></span>`).join("")
               : '<span class="group-chip-empty">추가된 사용자 그룹 없음</span>'}
           </div>
@@ -1947,9 +2315,17 @@
     }
 
     function renderAggregate() {
-      if (!state.students.length || !state.courses.length) {
+      const targetGrade = ["2", "3"].includes(String(state.aggregateTargetGrade))
+        ? String(state.aggregateTargetGrade) : "2";
+      const currentGrade = targetGradeCurrentGrade(targetGrade);
+      for (const tab of $("#aggregateGradeTabs")?.querySelectorAll?.("[data-aggregate-grade]") || []) {
+        tab.setAttribute("aria-selected", String(tab.dataset.aggregateGrade) === targetGrade ? "true" : "false");
+      }
+      const students = state.students.filter((student) => String(student.grade) === currentGrade);
+      const courses = coursesForCurrentGrade(currentGrade);
+      if (!students.length || !courses.length) {
         $("#aggregateDescription").textContent = "학생별 신청 명단에서 과목별 인원을 계산했습니다.";
-        $("#aggregateContent").innerHTML = '<div class="aggregate-empty">학생별 신청 명단을 불러오면 집계표가 표시됩니다.</div>';
+        $("#aggregateContent").innerHTML = `<div class="aggregate-empty">${targetGrade}학년 자료가 없습니다. 해당 학년의 결과를 불러오세요.</div>`;
         $("#downloadAggregate").disabled = true;
         return;
       }
@@ -1962,7 +2338,7 @@
         return;
       }
       const aggregate = aggregateRecords(
-        state.students, state.courses, openingPercent, divisionPercent,
+        students, courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments
       );
       let atRiskCount = 0;
@@ -2026,7 +2402,7 @@
         </section>`;
       }).join("");
       $("#aggregateDescription").textContent =
-        `${state.currentRound}차 · ${aggregate.reports.length}개 학년 · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 폐강 예정 ${atRiskCount}과목`;
+        `${state.currentRound}차 · ${targetGrade}학년 · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 폐강 예정 ${atRiskCount}과목`;
       $("#downloadAggregate").disabled = false;
     }
 
@@ -2069,8 +2445,15 @@
       description.textContent = `${round}차 결과 기준입니다. 개설기준과 자동 판정을 참고해 과목별 개설/폐강 여부를 검토하세요.`;
       const openingPercent = Number($("#openingPercent").value) || 90;
       const divisionPercent = Number($("#divisionPercent").value) || 110;
+      const currentGrade = targetGradeCurrentGrade(state.aggregateTargetGrade || "2");
+      const students = data.students.filter((student) => String(student.grade) === currentGrade);
+      if (!students.length) {
+        description.textContent = `${Number(currentGrade) + 1}학년 수강신청 데이터가 없습니다.`;
+        content.innerHTML = "";
+        return;
+      }
       const aggregate = aggregateRecords(
-        data.students, data.courses, openingPercent, divisionPercent,
+        students, data.courses, openingPercent, divisionPercent,
         data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}
       );
       const closures = state.roundClosures[round] || {};
@@ -2359,6 +2742,7 @@
         '<label class="field">반<input id="classroom" type="number" min="1" max="30"></label>',
         '<label class="field">번호<input id="number" type="number" min="1" max="99"></label>',
         '<label class="field">이름<input id="name" type="text" maxlength="20"></label>',
+        '<label class="field">학번<input id="studentId" type="text" maxlength="30" placeholder="이수 이력 연결용"></label>',
         "</section>",
         '<p id="targetInfo"></p>',
         '<div id="courseList"></div>',
@@ -2404,7 +2788,8 @@
         "var sel=selectedCourses().map(function(box){return box.value;});",
         "if(!classroom||!number||!name){err.textContent='반, 번호, 이름을 모두 입력하세요.';return;}",
         "if(!sel.length){err.textContent='신청할 과목을 1개 이상 선택하세요.';return;}",
-        "var payload={type:'course-application',grade:gradeSel.value,classroom:classroom,number:number,name:name,selections:sel};",
+        "var studentId=document.getElementById('studentId').value.trim();",
+        "var payload={type:'course-application',grade:gradeSel.value,classroom:classroom,number:number,name:name,studentId:studentId,selections:sel};",
         "var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});",
         "var a=document.createElement('a');a.href=URL.createObjectURL(blob);",
         "a.download='수강신청_'+gradeSel.value+'학년_'+classroom+'반_'+number+'번_'+name+'.json';a.click();",
@@ -2480,6 +2865,7 @@
         }
         students.push({
           id: `app-${grade}-${classroom}-${number}-${name}`,
+          studentId: String(entry?.studentId || entry?.학번 || "").trim(),
           grade, classroom, number, name,
           selections: picked,
           totalCredits: picked.reduce((total, course) => total + (course.credits || 0), 0)
@@ -2525,6 +2911,7 @@
         const classroomColumn = header.indexOf("반");
         const numberColumn = header.findIndex((value) => /^(번호|출석번호)$/.test(value));
         const nameColumn = header.findIndex((value) => /^(이름|성명|학생명)$/.test(value));
+        const studentIdColumn = header.findIndex((value) => /^(학번|학생ID|학생식별번호)$/.test(value));
         const sheetGrade = String(sheet.name).match(/([123])\s*학년/)?.[1] || "";
         for (let index = headerIndex + 1; index < sheet.rows.length; index++) {
           const row = sheet.rows[index];
@@ -2540,7 +2927,8 @@
           const identity = `${grade}:${classroom}:${number}`;
           if (identities.has(identity)) throw new Error(`${location}: 학년·반·번호가 중복됩니다 (${identity}).`);
           identities.add(identity);
-          students.push({ grade, classroom, number, name });
+          const studentId = studentIdColumn >= 0 ? String(row[studentIdColumn] ?? "").trim() : "";
+          students.push({ ...(studentId ? { studentId } : {}), grade, classroom, number, name });
         }
       }
       if (!students.length) throw new Error("학생 명렬에서 학년·반·번호·이름 머리글과 학생을 찾지 못했습니다.");
@@ -2659,9 +3047,11 @@
     function applyCloudApplicationResults(round, entries, subjects) {
       round = String(round);
       if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
+      prepareAcademicYearImport();
       const merged = mergeApplications(entries, subjects);
       if (merged.errors.length) throw new Error(`집계표 연동 실패: ${merged.errors[0]}`);
       state.rounds ||= {"1":null};
+      state.activeDataSchoolYear = String($("#schoolYear").value || "");
       state.rounds[round] ||= null;
       state.roundClosures ||= {};
       state.roundClosures[round] ||= {};
@@ -2673,6 +3063,10 @@
         semesterAssignments: previous?.semesterAssignments || {},
         groupAssignments: previous?.groupAssignments || {},
         customGroupNames: previous?.customGroupNames || [],
+        customGroupNamesByGrade: normalizeGradeGroupNames(
+          previous?.customGroupNamesByGrade, previous?.customGroupNames
+        ),
+        dataSchoolYear: state.activeDataSchoolYear,
         fileName: `온라인 자동 연동 ${merged.students.length}명`
       };
       state.rounds[round] = data;
@@ -2682,9 +3076,22 @@
         state.classOverrides = data.classOverrides;
         state.semesterAssignments = {...data.semesterAssignments};
         state.groupAssignments = {...data.groupAssignments};
-        state.customGroupNames = [...data.customGroupNames];
+        state.customGroupNames = [];
+        state.customGroupNamesByGrade = normalizeGradeGroupNames(
+          data.customGroupNamesByGrade, data.customGroupNames
+        );
+        const loadedGrades = [...new Set(data.students.map((student) => String(student.grade)))];
+        if (loadedGrades.length === 1) {
+          state.certificateTargetGrade = String(Number(loadedGrades[0]) + 1);
+          state.selectedId = data.students[0]?.id || null;
+        }
         state.fileName = data.fileName;
-        if (!state.students.some((student) => student.id === state.selectedId)) state.selectedId = state.students[0]?.id || null;
+        if (!state.students.some((student) =>
+          student.id === state.selectedId &&
+          String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade || "2"))) {
+          state.selectedId = state.students.find((student) =>
+            String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade || "2"))?.id || null;
+        }
         $("#fileName").textContent = state.fileName;
         $("#searchInput").disabled = !state.students.length;
         $("#classFilter").disabled = !state.students.length;
@@ -2699,6 +3106,7 @@
     }
 
     function applyMergedApplications(entries, sourceLabel) {
+      prepareAcademicYearImport();
       const merged = mergeApplications(entries);
       if (!merged.students.length) {
         status.style.color = "#a44939";
@@ -2708,13 +3116,20 @@
       const unclassified = classifyApplicationRecords(merged);
       state.students = merged.students;
       state.courses = merged.courses;
+      const loadedGrades = [...new Set(merged.students.map((student) => String(student.grade)))];
+      if (loadedGrades.length === 1) {
+        state.certificateTargetGrade = String(Number(loadedGrades[0]) + 1);
+        state.selectedId = merged.students[0]?.id || null;
+      }
       state.classOverrides = {};
       state.semesterAssignments = {};
       state.groupAssignments = {};
       state.customGroupNames = [];
+      state.customGroupNamesByGrade = { "2": [], "3": [] };
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       state.fileName = `${sourceLabel} ${merged.students.length}명`;
+      state.activeDataSchoolYear = String($("#schoolYear").value || "");
       state.selectedId = merged.students[0].id;
       $("#round").value = `${state.currentRound}차`;
       applyClassFilterOptions(merged.students);
@@ -2733,6 +3148,7 @@
     }
 
     function storeDeveloperGradeResults(data, sourceLabel, grade) {
+      prepareAcademicYearImport();
       grade = String(grade);
       const students = data.students.filter((student) => String(student.grade) === grade);
       if (!students.length) throw new Error(`현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
@@ -2744,7 +3160,8 @@
         course.applicationCurrentGrade ? course.applicationCurrentGrade !== grade : otherColumns.has(course.column));
       for (const course of otherCourses) otherColumns.add(course.column);
       const occupied = new Set([...otherCourses.map((course) => String(course.column)),
-        ...Object.keys(state.classOverrides || {}), ...Object.keys(state.semesterAssignments || {}),
+        ...Object.keys(state.classOverrides || {}).map((key) => key.includes(":") ? key.slice(key.indexOf(":") + 1) : key),
+        ...Object.keys(state.semesterAssignments || {}),
         ...Object.keys(state.groupAssignments || {})]);
       const remapped = new Map();
       courses.forEach((course, index) => {
@@ -2759,11 +3176,23 @@
       state.students = [...otherStudents, ...nextStudents].sort((a,b) =>
         Number(a.grade)-Number(b.grade) || Number(a.classroom)-Number(b.classroom) || Number(a.number)-Number(b.number));
       state.courses = [...otherCourses, ...remapped.values()];
-      for (const key of ["classOverrides", "semesterAssignments", "groupAssignments"]) {
+      state.certificateTargetGrade = String(Number(grade) + 1);
+      $("#searchInput").value = "";
+      $("#classFilter").value = "";
+      state.classOverrides = Object.fromEntries(Object.entries(state.classOverrides || {}).filter(([key]) => {
+        const column = key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
+        return otherColumns.has(column);
+      }));
+      for (const key of ["semesterAssignments", "groupAssignments"]) {
         state[key] = Object.fromEntries(Object.entries(state[key] || {}).filter(([column]) => otherColumns.has(column)));
       }
-      state.customGroupNames ||= [];
+      state.customGroupNamesByGrade = normalizeGradeGroupNames(
+        state.customGroupNamesByGrade, state.customGroupNames
+      );
+      state.customGroupNames = [];
+      state.customGroupNamesByGrade[String(Number(grade) + 1)] = [];
       state.rounds ||= {"1":null};
+      state.activeDataSchoolYear = String($("#schoolYear").value || "");
       const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
       state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
       state.fileName = Object.entries(gradeFiles).map(([g,name]) => `${g}학년: ${name}`).join(" / ");
@@ -3199,8 +3628,11 @@
     function buildAggregateXlsxFiles() {
       const openingPercent = Number($("#openingPercent").value);
       const divisionPercent = Number($("#divisionPercent").value);
+      const currentGrade = targetGradeCurrentGrade(state.aggregateTargetGrade || "2");
+      const students = state.students.filter((student) => String(student.grade) === currentGrade);
+      const courses = coursesForCurrentGrade(currentGrade);
       const aggregate = aggregateRecords(
-        state.students, state.courses, openingPercent, divisionPercent,
+        students, courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments
       );
       const sheets = aggregate.reports.map((report) => ({
@@ -3234,6 +3666,13 @@
       link.download = "과목별_수강신청_집계표.xlsx";
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function downloadHistoryTemplate() {
+      downloadRowsXlsx([
+        ["학번", "학년도", "학년", "과목명", "학점", "교과군", "학기", "이수여부"],
+        ["20260001", "2026", "1", "예시 과목", "3", "국어", "1-1", "이수"]
+      ], "학생별_이수이력_양식.xlsx");
     }
 
     function updateCertificateText() {
@@ -3277,6 +3716,7 @@
             if (!gradeRows.length) throw new Error(`현재 ${uploadGrade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
             const entries = gradeRows.map((row) => ({
               grade:String(row[1]), classroom:String(row[2]), number:String(row[3]), name:String(row[4]),
+              studentId:String(row[6] ?? "").trim(),
               selections: splitGoogleFormSelections(row[5], new Set([
                 ...(subjects?.[String(Number(row[1])+1)] || []).map((course) => course.subject),
                 ...(subjects?.[String(Number(row[1])+1)] || []).flatMap((course) =>
@@ -3519,6 +3959,7 @@
       const nextPlan = [...state.curriculumPlan];
       nextPlan.splice(planIndex > 0 ? planIndex : state.curriculumPlan.length, 0, planRow);
       state.curriculumPlan = nextPlan;
+      syncCurriculumPlanYearSnapshot();
       state.curriculumImportedLayout = nextLayout;
       state.curriculumMutationRevision += 1;
       syncCurriculumTemplateRows();
@@ -3796,6 +4237,7 @@
           state.curriculumMutationRevision += 1;
           state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
           state.curriculumPlan = plan;
+          syncCurriculumPlanYearSnapshot();
           state.curriculumTemplateRows = plan.map((row) => normalizeCurriculumPlanRow(row));
           state.curriculumPlanFileName = file.name;
           state.curriculumImportedLayout = importedLayout;
@@ -4006,6 +4448,7 @@
             `${state.curriculumPlanFileName} ${state.curriculumImportedLayout.sheetName || ""}`
           );
           state.curriculumPlan = plan;
+          syncCurriculumPlanYearSnapshot();
           state.curriculumTemplateRows = plan.map((row) => normalizeCurriculumPlanRow(row));
           renderCurriculumStep();
           persistState();
@@ -4021,6 +4464,7 @@
     $("#clearCurriculumPlan").addEventListener("click", () => {
       if (state.curriculumImportedLayout || state.curriculumPlan.length) recordCurriculumUndo();
       state.curriculumPlan = [];
+      syncCurriculumPlanYearSnapshot();
       state.curriculumTemplateRows = [];
       state.curriculumPlanFileName = "";
       state.curriculumImportedLayout = null;
@@ -4033,11 +4477,38 @@
       status.textContent = "편제표를 초기화했습니다.";
     });
     $("#searchInput").addEventListener("input", () => { renderRoster(); renderPreview(); });
+    $("#preview").addEventListener("change", (event) => {
+      const selector = event.target.closest(".history-status");
+      if (!selector) return;
+      const record = state.priorCourseHistory.find((item) => historyRecordKey(item) === selector.dataset.historyKey);
+      if (!record) return;
+      record.status = selector.value === "incomplete" ? "incomplete" : "completed";
+      renderPreview();
+      persistState();
+    });
+    $("#historyInput").addEventListener("change", (event) => {
+      handleHistoryWorkbook(event.target.files[0]);
+      event.target.value = "";
+    });
+    $("#downloadHistoryTemplate").addEventListener("click", downloadHistoryTemplate);
     $("#classFilter").addEventListener("change", () => { renderRoster(); renderPreview(); });
     $("#studentList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-student-id]");
       if (!button) return;
       state.selectedId = button.dataset.studentId;
+      renderRoster();
+      renderPreview();
+      persistState();
+    });
+    $("#certificateGradeTabs").addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-certificate-grade]");
+      if (!tab || !["2", "3"].includes(tab.dataset.certificateGrade)) return;
+      state.certificateTargetGrade = tab.dataset.certificateGrade;
+      $("#searchInput").value = "";
+      $("#classFilter").value = "";
+      state.selectedId = state.students.find((student) =>
+        String(student.grade) === targetGradeCurrentGrade(state.certificateTargetGrade))?.id || null;
+      applyClassFilterOptions(state.students);
       renderRoster();
       renderPreview();
       persistState();
@@ -4048,6 +4519,23 @@
     });
     $("#printAll").addEventListener("click", () => printStudents(visibleStudents()));
     $("#downloadAggregate").addEventListener("click", downloadAggregate);
+    $("#aggregateGradeTabs").addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-aggregate-grade]");
+      if (!tab || !["2", "3"].includes(tab.dataset.aggregateGrade)) return;
+      state.aggregateTargetGrade = tab.dataset.aggregateGrade;
+      renderAggregate();
+      renderClosurePanel(state.currentRound);
+      persistState();
+    });
+    $("#classifierGradeTabs").addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-classifier-grade]");
+      if (!tab || !["2", "3"].includes(tab.dataset.classifierGrade)) return;
+      state.classifierTargetGrade = tab.dataset.classifierGrade;
+      state.selectedCourseColumns = [];
+      state.lastSelectedCourseColumn = null;
+      renderSemesterClassifier();
+      persistState();
+    });
     $("#openingPercent").addEventListener("input", () => { renderAggregate(); persistState(); });
     $("#divisionPercent").addEventListener("input", () => { renderAggregate(); persistState(); });
     $("#aggregateContent").addEventListener("change", (event) => {
@@ -4086,10 +4574,11 @@
         const input = $("#newGroupName");
         const nextName = normalizeGroupName(input?.value);
         if (!nextName || nextName === UNASSIGNED_GROUP) return;
-        if (!state.customGroupNames.includes(nextName)) state.customGroupNames.push(nextName);
+        const grade = String(state.classifierTargetGrade || "2");
+        const names = state.customGroupNamesByGrade[grade] ||= [];
+        if (!names.includes(nextName)) names.push(nextName);
         if (input) input.value = "";
         renderSemesterClassifier();
-        renderAggregate();
         persistState();
         return;
       }
@@ -4097,9 +4586,15 @@
       if (!removeButton) return;
       const name = normalizeGroupName(removeButton.dataset.groupName);
       if (!name) return;
-      state.customGroupNames = state.customGroupNames.filter((item) => item !== name);
+      const grade = String(state.classifierTargetGrade || "2");
+      state.customGroupNamesByGrade[grade] =
+        (state.customGroupNamesByGrade[grade] || []).filter((item) => item !== name);
+      const currentGrade = targetGradeCurrentGrade(grade);
+      const gradeColumns = new Set(coursesForCurrentGrade(currentGrade).map((course) => String(course.column)));
       for (const [column, assigned] of Object.entries(state.groupAssignments)) {
-        if (normalizeGroupName(assigned) === name) delete state.groupAssignments[column];
+        if (gradeColumns.has(String(column)) && normalizeGroupName(assigned) === name) {
+          delete state.groupAssignments[column];
+        }
       }
       renderPreview();
       renderSemesterClassifier();
@@ -4167,9 +4662,10 @@
       if (!key) return;
       const selectedKeys = state.selectedCourseColumns.map((value) => String(value));
       const movedKeys = selectedKeys.includes(key) ? selectedKeys : [key];
+      const currentGrade = targetGradeCurrentGrade(state.classifierTargetGrade || "2");
       for (const movedKey of movedKeys) {
         const course = state.courses.find((item) => String(item.column) === movedKey);
-        if (!course) continue;
+        if (!course || !courseBelongsToCurrentGrade(course, currentGrade, state.students)) continue;
         if (targetGroup === UNASSIGNED_GROUP) delete state.groupAssignments[movedKey];
         else state.groupAssignments[movedKey] = targetGroup;
       }
@@ -4182,6 +4678,7 @@
     for (const selector of ["#schoolYear", "#round", "#confirmDate", "#schoolName"]) {
       $(selector).addEventListener("input", updateCertificateText);
     }
+    $("#schoolYear").addEventListener("change", handleSchoolYearChange);
     workflowSteps.addEventListener("click", (event) => {
       const button = event.target.closest("[data-workflow-step]");
       if (!button) return;

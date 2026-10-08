@@ -31,8 +31,8 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
       type: "course-application-setup", schoolName: "가상학교", schoolYear: "2026", round: "1",
       subjects: { "2": [{ subject: "A", credit: 3 }, { subject: "B", credit: 4 }], "3": [] },
       roster: [
-        { grade: "1", classroom: "1", number: "1", name: "가상1" },
-        { grade: "1", classroom: "2", number: "2", name: "가상2" },
+        { grade: "1", classroom: "1", number: "1", name: "가상1", studentId: "20260001" },
+        { grade: "1", classroom: "2", number: "2", name: "가상2", studentId: "20260002" },
       ],
     };
     const create = async () => (await db.query("select public.create_course_event($1::jsonb) r", [JSON.stringify(setup)])).rows[0].r;
@@ -41,6 +41,7 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
     await db.query("select public.save_course_application($1,$2::jsonb)", [legacy.students[0].code, '["A"]']);
     await db.exec("reset role");
     await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "upgrade-codes-history.sql"), "utf8"));
+    await db.exec(fs.readFileSync(path.join(__dirname, "..", "supabase", "upgrade-stable-student-ids.sql"), "utf8"));
     await as("authenticated", owner);
     const event = await create();
     assert.equal(new Set(event.students.map((s) => s.code)).size, 2);
@@ -62,6 +63,9 @@ test("six-digit scoped codes, immutable history, individual and full point-in-ti
     await save(second, ["A"]);
     await save(first, ["B"]);
     await as("authenticated", owner);
+    const exported = (await db.query("select public.manage_course_event($1::uuid,'export') r", [event.id])).rows[0].r;
+    assert.equal(exported.entries.find((entry) => entry.number === "1").studentId, "20260001");
+    assert.equal(exported.entries.find((entry) => entry.number === "2").studentId, "20260002");
     let log = await history();
     const cutoff = log.entries.find((r) => r.studentId === first.id && r.action === "submit" && r.selections[0] === "B").at;
     await rollback(cutoff, first.id);

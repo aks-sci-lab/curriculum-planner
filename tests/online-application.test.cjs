@@ -15,6 +15,14 @@ function functionSource(start, end) {
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
+function normalizeGradeGroupNamesForTest(value, legacyNames = []) {
+  const normalize = (names) => Array.isArray(names)
+    ? [...new Set(names.map((name) => String(name ?? "").replace(/\s+/g, " ").trim()).filter(Boolean))]
+    : [];
+  return value
+    ? { "2": normalize(value["2"]), "3": normalize(value["3"]) }
+    : { "2": normalize(legacyNames), "3": normalize(legacyNames) };
+}
 
 class Sheet {
   constructor(name) { this.name = name; this.rows = []; }
@@ -111,10 +119,12 @@ test("roster supports aliases, sheet grades and multiple sheets", () => {
   vm.runInContext(functionSource("function parseApplicationRoster(", "function downloadTextFile("), ctx);
   const result = ctx.parseApplicationRoster([
     { name: "명렬", rows: [["학년", "반", "번호", "성명"], [1, 2, 3, "가상학생1"], []] },
-    { name: "2학년", rows: [["반", "출석번호", "학생명"], [2, 4, "가상학생2"]] },
+    { name: "2학년", rows: [["반", "출석번호", "학생명", "학번"], [2, 4, "가상학생2", "20260004"]] },
   ]);
   assert.equal(result.length, 2);
-  assert.deepEqual(plain(result[1]), { grade: "2", classroom: "2", number: "4", name: "가상학생2" });
+  assert.deepEqual(plain(result[1]), {
+    studentId: "20260004", grade: "2", classroom: "2", number: "4", name: "가상학생2"
+  });
   assert.throws(() => ctx.parseApplicationRoster([
     { name: "명렬", rows: [["학년", "반", "번호", "이름"], [1, 1, 1, "A"], [1, 1, 1, "B"]] },
   ]), /중복/);
@@ -126,6 +136,22 @@ test("roster supports aliases, sheet grades and multiple sheets", () => {
   assert.throws(() => ctx.parseApplicationRoster([
     { name: "명렬", rows: [["학년", "반", "번호", "성명"], []] },
   ]), /찾지 못/);
+});
+
+test("result workbook preserves the stable student ID column", () => {
+  const ctx = vm.createContext({
+    parseCourseGroup: () => ({}),
+    parseSemesterFromCourseName: () => "",
+    isSelected: (value) => value === "O",
+  });
+  vm.runInContext(functionSource("function createRecords(", "function createCurriculumRecords("), ctx);
+  const parsed = ctx.createRecords([
+    ["", "", "", "", "", "수학"],
+    ["학년", "반", "번호", "성명", "학번", 3],
+    ["1", "2", "4", "가상학생", "20260024", "O"],
+  ]);
+  assert.equal(parsed.students[0].studentId, "20260024");
+  assert.equal(parsed.students[0].selections[0].name, "수학");
 });
 
 test("application subjects include every student-choice course in promoted grades, ignoring old exclusions", () => {
@@ -355,14 +381,55 @@ test("cell fill positions survive layout cropping and inserted rows", () => {
 test("semester-qualified result imports retain separate courses, credits and semester keys", () => {
   const ctx=vm.createContext({collectApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1·2",credit:3,area:"수학"}],"3":[]})});
   vm.runInContext(functionSource("function mergeApplications(","function downloadApplicationForm("),ctx);
-  const common={grade:"1",classroom:"1",number:"1",name:"가상"};
+  const common={grade:"1",classroom:"1",number:"1",name:"가상",studentId:"20260001"};
   const result=ctx.mergeApplications([{...common,selections:["수학 (1학기)","수학 (2학기)"]}]);
   assert.deepEqual(plain(result.errors),[]);
   assert.deepEqual(plain(result.students[0].selections.map((c)=>c.semesterKey)),["1","2"]);
   assert.equal(result.students[0].totalCredits,6);
+  assert.equal(result.students[0].studentId,"20260001");
   const legacy=ctx.mergeApplications([{...common,selections:["수학"]}]);
   assert.equal(legacy.courses.length,1);
   assert.deepEqual(plain(legacy.errors),[]);
+});
+
+test("year rollover archives student selections and school-designated courses once by student ID", () => {
+  const start = frontend.indexOf("function historyRecordKey(");
+  const end = frontend.indexOf("\n    function certificateMarkup(", start);
+  const ctx = vm.createContext({
+    state: {
+      priorCourseHistory: [],
+      historyArchivedYears: {},
+      students: [
+        { studentId: "20260001", grade: "1", selections: [
+          { name: "선택 수학", credits: 3, category: "수학", semesterKey: "1" }
+        ] },
+        { grade: "1", selections: [] },
+      ],
+      curriculumPlanAcademicYear: "2027",
+      curriculumPlan: [{
+        grade: "2", division: "학교 지정 교육과정", subject: "다음 연도 과목",
+        area: "영어", sem11: 3,
+      }],
+      curriculumPlansByYear: {
+        "2026": [{
+          grade: "2", division: "학교 지정 교육과정", subject: "학교 영어",
+          area: "영어", sem11: 3,
+        }]
+      },
+    },
+    CURRICULUM_SEMESTER_FIELDS: ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"],
+    normalizeCurriculumDivision: (value) => value,
+  });
+  vm.runInContext(frontend.slice(start, end), ctx);
+  const archived = ctx.archiveCurrentAcademicYear("2026", "2027");
+  assert.deepEqual(plain(archived), { archived: 2, skipped: 1 });
+  assert.deepEqual(plain(ctx.state.priorCourseHistory.map((record) => [
+    record.studentId, record.schoolYear, record.grade, record.courseName, record.credit
+  ])), [
+    ["20260001", "2026", "2", "선택 수학", 3],
+    ["20260001", "2026", "2", "학교 영어", 3],
+  ]);
+  assert.deepEqual(plain(ctx.archiveCurrentAcademicYear("2026", "2027")), { archived: 0, skipped: 0 });
 });
 
 test("cloud aggregation updates its own round, clears rollback results and preserves overrides", () => {
@@ -370,10 +437,10 @@ test("cloud aggregation updates its own round, clears rollback results and prese
     "2":{students:[{id:"existing"}],courses:[]}},students:[{id:"existing"}],courses:[]};
   let saves=0,renders=0;
   const elements=new Map();
-  const ctx=vm.createContext({state,$:(id)=>{
+  const ctx=vm.createContext({state,normalizeGradeGroupNames:normalizeGradeGroupNamesForTest,$:(id)=>{
     if(!elements.has(id)) elements.set(id,{textContent:"",disabled:false});
     return elements.get(id);
-  },syncActiveRound(){},persistState(){saves++;},renderRoundStatus(){},
+  },prepareAcademicYearImport(){},syncActiveRound(){},persistState(){saves++;},renderRoundStatus(){},
     applyClassFilterOptions(){},renderRoster(){renders++;},renderPreview(){},
     renderSemesterClassifier(){},renderAggregate(){},
   });
@@ -430,6 +497,9 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   assert.equal(ctx.applicationGroupForCourse({name:"실험"},"1"),null);
   assert.equal(ctx.applicationGroupForCourse({name:"없는 과목"},"1"),null);
   assert.equal(ctx.applicationGroupForCourse({name:"물리학(3학년)"},"1"),null);
+  assert.deepEqual(plain(ctx.applicationGroupForCourse({
+    name:"물리학", applicationGroups:{"1":{name:"저장된 2학년 그룹",semester:"2"}}
+  },"1")), {name:"저장된 2학년 그룹",semester:"2"});
   assert.equal(ctx.courseGroupLabel({name:"실험 (2학기)",column:5},"1"),"2학기 2학기 선택");
   const course={name:"물리학",column:4};
   const data={courses:[course],students:[{grade:"1",selections:[{...course}]}]};
@@ -441,6 +511,20 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   assert.equal(ctx.courseGroupLabel(course,"1"),"미분류");
 });
 
+test("certificate preview uses the saved grade-specific application group before an unassigned fallback", () => {
+  const ctx=vm.createContext({
+    state:{groupAssignments:{},semesterAssignments:{}},
+    getApplicationGroupSettings:()=>[],
+    resolveSemesterKey:()=>"",
+    resolveCourseCategoryForOutput:()=>"미분류",
+    applicationGroupForCourse:()=>({name:"융합탐구군",semester:"1"}),
+  });
+  vm.runInContext(functionSource("function courseGroupLabel(", "function courseBelongsToCurrentGrade("),ctx);
+  assert.equal(ctx.courseGroupLabel({
+    name:"물리학 실험",column:7,applicationGroups:{"1":{name:"융합탐구군",semester:"1"}}
+  },"1"),"1학기 융합탐구군");
+});
+
 test("round deletion retains curriculum, other rounds and their classification settings", () => {
   const other={students:[{id:"other"}],courses:[{column:3}],fileName:"other.xlsx",classOverrides:{3:2},
     semesterAssignments:{3:"2"},groupAssignments:{3:"2학기 보존"},customGroupNames:["보존"]};
@@ -450,7 +534,9 @@ test("round deletion retains curriculum, other rounds and their classification s
     fileName:"delete.xlsx",classOverrides:{},semesterAssignments:{},groupAssignments:{},customGroupNames:[],
     curriculumPlan:plan,curriculumImportedLayout:layout,applicationImportRevision:0};
   const elements=new Map();let saves=0;
-  const ctx=vm.createContext({state,$:(id)=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+  const ctx=vm.createContext({state,normalizeGradeGroupNames:normalizeGradeGroupNamesForTest,
+    targetGradeCurrentGrade:(grade)=>String(Number(grade)-1),
+    $:(id)=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
     applyClassFilterOptions(){},renderRoster(){},renderPreview(){},renderSemesterClassifier(){},
     renderAggregate(){},renderRoundStatus(){},renderWorkflowLayout(){},persistState(){saves++;}});
   vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
@@ -535,6 +621,8 @@ test("developer result Excel imports both layouts and rejects invalid or expired
 test("developer results replace only the chosen grade and retain courses, settings and round storage", () => {
   const state={currentRound:"1",students:[],courses:[],rounds:{"1":null,"2":{students:[{id:"other-round"}]}}};
   const ctx=vm.createContext({
+    normalizeGradeGroupNames:normalizeGradeGroupNamesForTest,
+    prepareAcademicYearImport(){},
     state,$:()=>({}),normalizeCourses:(courses)=>courses,
     applyClassFilterOptions(){},renderRoster(){},renderPreview(){},renderSemesterClassifier(){},renderAggregate(){},
     renderRoundStatus(){},
@@ -550,6 +638,7 @@ test("developer results replace only the chosen grade and retain courses, settin
   ctx.storeDeveloperGradeResults(data("1","첫학생"),"1학년.xlsx","1");
   const firstColumn=state.students[0].selections[0].column;
   state.classOverrides[firstColumn]=2;
+  state.classOverrides[`1:${firstColumn}`]=4;
   state.semesterAssignments[firstColumn]="1";
   state.groupAssignments[firstColumn]="유지할 그룹";
   ctx.storeDeveloperGradeResults(data("2","둘째학생"),"2학년.xlsx","2");
@@ -557,12 +646,14 @@ test("developer results replace only the chosen grade and retain courses, settin
   assert.equal(state.courses.length,4); // Keep zero-enrollment courses in aggregate reports.
   assert.equal(new Set(state.courses.map((course)=>course.column)).size,4);
   assert.equal(state.classOverrides[firstColumn],2);
+  assert.equal(state.classOverrides[`1:${firstColumn}`],4);
   assert.equal(state.groupAssignments[firstColumn],"유지할 그룹");
   const secondColumn=state.students[1].selections[0].column;
   state.classOverrides[secondColumn]=3;
   ctx.storeDeveloperGradeResults(data("1","새학생"),"1학년_수정.xlsx","1");
   assert.deepEqual(plain(state.students.map((s)=>s.name)),["새학생","둘째학생"]);
   assert.equal(state.classOverrides[firstColumn],undefined);
+  assert.equal(state.classOverrides[`1:${firstColumn}`],undefined);
   assert.equal(state.classOverrides[secondColumn],3);
   assert.equal(state.courses.length,4);
   assert.deepEqual(plain(state.rounds["1"].gradeFiles),{"1":"1학년_수정.xlsx","2":"2학년.xlsx"});
@@ -572,6 +663,44 @@ test("developer results replace only the chosen grade and retain courses, settin
   const previous=plain(state);
   assert.throws(()=>ctx.storeDeveloperGradeResults(data("2","잘못된학년"),"wrong.xlsx","1"),/학생이 없는/);
   assert.deepEqual(plain(state),previous);
+});
+
+test("aggregate reports and course boards isolate second- and third-year data", () => {
+  const ctx=vm.createContext({
+    state:{customGroupNames:[],customGroupNamesByGrade:{"2":["2학년 반 A"],"3":["3학년 반 B"]}},
+    normalizeGroupName:(value)=>String(value??"").trim(),
+    UNASSIGNED_GROUP:"미분류",
+    applicationGroupForCourse:()=>null,
+    parseAssignedGroupLabel:()=>({semesterKey:"",category:""}),
+  });
+  vm.runInContext(functionSource("function courseBelongsToCurrentGrade(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  const students=[
+    {grade:"1",classroom:"1",selections:[{column:"second"}]},
+    {grade:"2",classroom:"1",selections:[{column:"third"}]},
+  ];
+  const courses=[
+    {column:"second",name:"2학년 과목",applicationCurrentGrade:"1"},
+    {column:"third",name:"3학년 과목",applicationCurrentGrade:"2"},
+  ];
+  const result=ctx.aggregateRecords(students,courses,90,110,{},{},{});
+  assert.deepEqual(plain(result.reports.map(({summary,semesters})=>({
+    grade:summary.grade,
+    courses:semesters.flatMap((semester)=>semester.groups.flatMap((group)=>group.courses.map((course)=>course.name)))
+  }))),[
+    {grade:"1",courses:["2학년 과목"]},
+    {grade:"2",courses:["3학년 과목"]},
+  ]);
+  assert.deepEqual(plain(ctx.coursesForCurrentGrade("1",courses,students).map((course)=>course.name)),["2학년 과목"]);
+  assert.deepEqual(plain(ctx.coursesForCurrentGrade("2",courses,students).map((course)=>course.name)),["3학년 과목"]);
+  assert.deepEqual(plain(ctx.gradeGroupNames("2")),["2학년 반 A"]);
+  assert.deepEqual(plain(ctx.gradeGroupNames("3")),["3학년 반 B"]);
+});
+
+test("aggregate and class-assignment views provide separate grade tabs", () => {
+  assert.match(html,/id="certificateGradeTabs"[\s\S]*data-certificate-grade="2"[\s\S]*data-certificate-grade="3"/);
+  assert.match(html,/id="aggregateGradeTabs"[\s\S]*data-aggregate-grade="2"[\s\S]*data-aggregate-grade="3"/);
+  assert.match(html,/id="classifierGradeTabs"[\s\S]*data-classifier-grade="2"[\s\S]*data-classifier-grade="3"/);
 });
 
 test("six workflow menus reveal their matching panels without changing the selected round", () => {
