@@ -1032,6 +1032,29 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");
 });
 
+test("legacy course groups are split by incoming cohort and restored when switching application grades", () => {
+  const f=fixture();
+  const storage=new Map([["curriculum-color-semester-groups-v3",JSON.stringify([
+    {id:"g2",grade:"2",semester:"1",name:"2026 선택",count:1,courses:["수학"]},
+    {id:"g3",grade:"3",semester:"1",name:"2025 선택",count:1,courses:["영어"]}
+  ])]]);
+  const context=vm.createContext({
+    document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
+      createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
+    window:{confirm:()=>true},crypto:webcrypto,
+    selectedApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1"}],"3":[{subject:"영어",semester:"1"}]}),
+    state:{},renderApplicationSubjects(){},renderRoundStatus(){},
+    getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
+    setApplicationTargetGrades(){},
+    localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),context);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getApplicationGroupSettings())).map((group)=>group.name),["2026 선택"]);
+  context.switchApplicationMenuGrade("2");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getApplicationGroupSettings())).map((group)=>group.name),["2025 선택"]);
+  assert.deepEqual(JSON.parse(storage.get("curriculum-color-semester-groups-v3:2026")).map((group)=>group.name),["2026 선택"]);
+});
+
 test("student chooses first semester before second and saves both selections together", async () => {
   const f=fixture();
   const data={student:{grade:"1",classroom:"1",number:"1",name:"가상"},schoolName:"학교",schoolYear:"2026",round:"1",

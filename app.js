@@ -1,4 +1,5 @@
     "use strict";
+    var getApplicationCohortYear;
     const rawState = {
       students: [],
       courses: [],
@@ -17,6 +18,8 @@
       curriculumImportedLayout: null,
       curriculumTemplateRows: [],
       curriculumPlan: [],
+      curriculumCohortYear: "2026",
+      curriculumCohorts: {},
       curriculumTargetGrade: "1",
       curriculumTargetDivision: "학생 선택 교육과정",
       curriculumTargetArea: "",
@@ -242,6 +245,7 @@
       try {
         statePersistenceSuppressed++;
         syncActiveRound();
+        syncActiveCurriculumCohort();
         statePersistenceSuppressed--;
         const payload = {
           currentRound: state.currentRound,
@@ -262,6 +266,8 @@
           curriculumImportedLayout: state.curriculumImportedLayout,
           curriculumTemplateRows: state.curriculumTemplateRows,
           curriculumPlan: state.curriculumPlan,
+          curriculumCohortYear: state.curriculumCohortYear,
+          curriculumCohorts: state.curriculumCohorts,
           curriculumPlanFilters: state.curriculumPlanFilters,
           curriculumTargetGrade: state.curriculumTargetGrade,
           curriculumTargetDivision: state.curriculumTargetDivision,
@@ -418,6 +424,9 @@
       state.curriculumImportedLayout = null;
       state.curriculumTemplateRows = [];
       state.curriculumPlan = [];
+      state.curriculumCohortYear = String($("#schoolYear").value || "2026");
+      state.curriculumCohorts = {};
+      $("#curriculumCohortYear").value = state.curriculumCohortYear;
       state.curriculumTargetGrade = "1";
       state.curriculumTargetDivision = "학생 선택 교육과정";
       state.curriculumTargetArea = "";
@@ -427,9 +436,9 @@
       state.curriculumUndoStack = [];
       state.curriculumEditBefore = null;
       state.curriculumEditUndoRecorded = false;
-      state.curriculumMutationRevision += 1;
       state.curriculumSelectedRow = null;
       state.curriculumSelectedColumn = null;
+      state.curriculumMutationRevision += 1;
       state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
       state.workflowStep = 1;
       $("#fileName").textContent = "불러온 파일 없음";
@@ -535,6 +544,15 @@
         state.curriculumPlan = Array.isArray(saved.curriculumPlan)
           ? saved.curriculumPlan.map((row) => normalizeCurriculumPlanRow(row))
           : [];
+        state.curriculumCohorts = saved.curriculumCohorts && typeof saved.curriculumCohorts === "object"
+          ? Object.fromEntries(Object.entries(saved.curriculumCohorts).filter(([year, cohort]) =>
+            /^\d{4}$/.test(year) && cohort && typeof cohort === "object").map(([year, cohort]) => [year, {
+            fileName: String(cohort.fileName || ""),
+            importedLayout: cohort.importedLayout && Array.isArray(cohort.importedLayout.rows) ? cohort.importedLayout : null,
+            templateRows: Array.isArray(cohort.templateRows) ? cohort.templateRows.map((row) => normalizeCurriculumPlanRow(row)) : [],
+            plan: Array.isArray(cohort.plan) ? cohort.plan.map((row) => normalizeCurriculumPlanRow(row)) : []
+          }]))
+          : {};
         state.curriculumPlanFilters = saved.curriculumPlanFilters &&
           typeof saved.curriculumPlanFilters === "object"
           ? {
@@ -562,6 +580,20 @@
         $("#openingPercent").value = saved.openingPercent || "90";
         $("#divisionPercent").value = saved.divisionPercent || "110";
         $("#schoolYear").value = saved.schoolYear || $("#schoolYear").value;
+        const activeCohortYear = /^\d{4}$/.test(String(saved.curriculumCohortYear || ""))
+          ? String(saved.curriculumCohortYear)
+          : String($("#schoolYear").value || "2026");
+        if (!Object.keys(state.curriculumCohorts).length && (state.curriculumImportedLayout || state.curriculumPlan.length)) {
+          state.curriculumCohorts[activeCohortYear] = {
+            fileName: state.curriculumPlanFileName,
+            importedLayout: state.curriculumImportedLayout,
+            templateRows: state.curriculumTemplateRows,
+            plan: state.curriculumPlan
+          };
+        }
+        state.curriculumCohortYear = activeCohortYear;
+        loadCurriculumCohortData(activeCohortYear);
+        $("#curriculumCohortYear").value = activeCohortYear;
         $("#round").value = `${state.currentRound}차`;
         $("#confirmDate").value = saved.confirmDate || $("#confirmDate").value;
         $("#schoolName").value = saved.schoolName || $("#schoolName").value;
@@ -1686,8 +1718,8 @@
       renderCurriculumCatalog();
       updateCurriculumFilterOptions();
       $("#curriculumTemplateFileName").textContent = state.curriculumPlanFileName
-        ? `불러온 편제표: ${state.curriculumPlanFileName}`
-        : "편제표를 불러오지 않았습니다.";
+        ? `${state.curriculumCohortYear}학년도 신입생 · ${state.curriculumPlanFileName}`
+        : `${state.curriculumCohortYear}학년도 신입생 편제표를 불러오지 않았습니다.`;
       const importedLayout = state.curriculumImportedLayout;
       if (importedLayout) {
         const planRows = state.curriculumPlan.map((item, index) => ({ item, index }));
@@ -2195,8 +2227,70 @@
     }
 
     // 기존 신청 결과를 읽을 때는 제외 대상 과목도 매핑할 수 있도록 유지한다.
+    function applicationCohortYear(currentGrade = state.applicationMenuGrade || "1") {
+      const schoolYear = Number(typeof $ === "function" ? $("#schoolYear")?.value || "2026" : "2026");
+      const grade = Number(currentGrade);
+      return Number.isInteger(schoolYear) && Number.isInteger(grade) && grade >= 1 && grade <= 3
+        ? String(schoolYear - grade + 1)
+        : String(state.curriculumCohortYear || schoolYear);
+    }
+
+    function syncActiveCurriculumCohort() {
+      const year = String(state.curriculumCohortYear || (typeof $ === "function" ? $("#schoolYear")?.value : "") || "2026");
+      if (!/^\d{4}$/.test(year)) return;
+      if (!state.curriculumCohorts || typeof state.curriculumCohorts !== "object") state.curriculumCohorts = {};
+      state.curriculumCohorts[year] = {
+        fileName: state.curriculumPlanFileName || "",
+        importedLayout: state.curriculumImportedLayout || null,
+        templateRows: state.curriculumTemplateRows || [],
+        plan: state.curriculumPlan || []
+      };
+    }
+
+    function loadCurriculumCohortData(year) {
+      const cohort = state.curriculumCohorts?.[String(year)];
+      state.curriculumPlanFileName = cohort?.fileName || "";
+      state.curriculumImportedLayout = cohort?.importedLayout || null;
+      state.curriculumTemplateRows = cohort?.templateRows || [];
+      state.curriculumPlan = cohort?.plan || [];
+      state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
+      state.curriculumUndoStack = [];
+      state.curriculumEditBefore = null;
+      state.curriculumEditUndoRecorded = false;
+      state.curriculumSelectedRow = null;
+      state.curriculumSelectedColumn = null;
+      state.curriculumMutationRevision += 1;
+    }
+
+    function switchCurriculumCohort(year) {
+      const normalized = String(year || "").trim();
+      if (!/^\d{4}$/.test(normalized)) {
+        status.textContent = "신입생 학년도를 4자리 연도로 입력하세요.";
+        $("#curriculumCohortYear").value = state.curriculumCohortYear;
+        return;
+      }
+      if (normalized === state.curriculumCohortYear) return;
+      syncActiveCurriculumCohort();
+      state.curriculumCohortYear = normalized;
+      loadCurriculumCohortData(normalized);
+      renderCurriculumStep();
+      renderApplicationSubjects();
+      persistState();
+      status.style.color = "#596780";
+      status.textContent = state.curriculumImportedLayout
+        ? `${normalized}학년도 신입생 편제표를 불러왔습니다.`
+        : `${normalized}학년도 신입생 편제표가 없습니다. 이 학년도의 3개년 편제표를 업로드하세요.`;
+    }
+
     function collectApplicationSubjects({ includeExcluded = false } = {}) {
-      const layout = state.curriculumImportedLayout;
+      if (typeof syncActiveCurriculumCohort === "function") syncActiveCurriculumCohort();
+      const currentGrade = String(state.applicationMenuGrade || "1");
+      const schoolYear = Number(typeof $ === "function" ? $("#schoolYear")?.value || "2026" : "2026");
+      const cohortYear = String(schoolYear - Number(currentGrade) + 1);
+      const cohortLayout = state.curriculumCohorts?.[cohortYear]?.importedLayout;
+      const layout = cohortLayout || (String(state.curriculumCohortYear) === cohortYear
+        ? state.curriculumImportedLayout
+        : Object.keys(state.curriculumCohorts || {}).length ? null : state.curriculumImportedLayout);
       if (!layout) return null;
       const columns = importedPlanColumnMap(layout);
       if (columns.subject < 0) return null;
@@ -2291,7 +2385,8 @@
       const subjects = collectApplicationSubjects();
       const total = subjects ? subjects["1"].length + subjects["2"].length + subjects["3"].length : 0;
       if (!total) {
-        container.innerHTML = '<div class="curriculum-empty">1단계 편제표의 학생선택교육과정에서 2·3학년에 편제된 과목을 자동 표시합니다. 교육과정 구분과 학년별 학기 시수를 확인하세요.</div>';
+        const year = applicationCohortYear();
+        container.innerHTML = `<div class="curriculum-empty">${escapeHtml(year)}학년도 신입생 편제표의 학생선택교육과정에서 신청 학년 과목을 가져옵니다. 1단계에서 해당 코호트의 3개년 편제표를 업로드하세요.</div>`;
         if (typeof renderCourseGroups === "function") renderCourseGroups();
         return;
       }
@@ -2309,7 +2404,8 @@
           }).join("");
           return `<div class="application-semester">${semester === "0" ? "학기 미정" : `${semester}학기`}</div>${items}`;
         }).join("");
-        return `<div class="application-grade">${grade}학년 과목(현재 ${Number(grade) - 1}학년이 신청)</div>${semesterHtml}`;
+        const cohortYear = applicationCohortYear();
+        return `<div class="application-grade">${grade}학년 과목 · ${escapeHtml(cohortYear)}학년도 신입생 편제표(현재 ${Number(grade) - 1}학년이 신청)</div>${semesterHtml}`;
       }).join("");
       if (!container.innerHTML) container.innerHTML = `<div class="curriculum-empty">${Number(state.applicationMenuGrade || "1") + 1}학년 학생선택교육과정 과목이 없습니다. 편제표를 확인하세요.</div>`;
       if (typeof renderCourseGroups === "function") renderCourseGroups();
@@ -3804,7 +3900,7 @@
           persistState();
           status.style.color = plan.length ? "#287956" : "#a44939";
           status.textContent = plan.length
-            ? `편제표 ${plan.length}개 과목을 불러와 반영했습니다.`
+            ? `${state.curriculumCohortYear}학년도 신입생 편제표 ${plan.length}개 과목을 불러왔습니다.`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
           const message = error instanceof Error ? error.message : "편제표 파일 처리 중 오류가 발생했습니다.";
@@ -3825,6 +3921,7 @@
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     $("#curriculumInput").addEventListener("change", (event) => { handleCurriculumWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
+    $("#curriculumCohortYear").addEventListener("change", (event) => switchCurriculumCohort(event.target.value));
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
     const curriculumDropZone = $("#curriculumPlanDropZone");
     $("#curriculumPickList").addEventListener("click", (event) => {

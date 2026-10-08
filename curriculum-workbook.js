@@ -209,7 +209,7 @@ document.getElementById("exportCurriculumPlan").addEventListener("click",async()
     const blob=await buildOriginalCurriculumWorkbook(state.curriculumImportedLayout);
     if(!requireTeacherLogin())throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
     const url=URL.createObjectURL(blob),link=document.createElement("a");
-    link.href=url;link.download=state.curriculumPlanFileName.replace(/\.xlsx$/i,"_수정.xlsx");
+    link.href=url;    link.download=state.curriculumPlanFileName.replace(/\.xlsx$/i,`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`);
     link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     status.textContent="원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
   }catch(error){status.textContent=`편제표 내보내기 실패: ${error.message}`;}

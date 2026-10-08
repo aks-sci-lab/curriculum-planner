@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261008-teacher-application-ui">
+  <link rel="stylesheet" href="styles.css?v=20261008-cohort-curricula">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -89,12 +89,17 @@
         <p class="note">교육과정 목록과 편제표를 불러와 과목을 편성하고, 편제표 셀을 직접 수정할 수 있습니다.</p>
         <div class="curriculum-toolbar">
           <label class="file-button" for="curriculumInput">저장된 교육과정 불러오기</label>
-          <label class="file-button" for="curriculumPlanInput">편제표 불러오기</label>
+          <label class="file-button" for="curriculumPlanInput">선택한 신입생 학년도 편제표 업로드</label>
           <button class="button" id="clearCurriculumPlan" type="button">편제표 초기화</button>
           <button class="button" id="exportCurriculumPlan" type="button">편제표 엑셀 내보내기</button>
           <input class="hidden" id="curriculumInput" type="file" accept=".xlsx">
           <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx">
         </div>
+        </div>
+        <div class="curriculum-cohort-bar">
+          <label for="curriculumCohortYear">편제표 대상 신입생 학년도</label>
+          <input id="curriculumCohortYear" type="number" min="2000" max="2100" step="1" value="2026">
+          <span>각 신입생 학년도의 1~3학년 편제표를 각각 업로드하세요. 수강신청 과목은 현재 학년에 맞는 코호트에서 불러옵니다.</span>
         </div>
         <div class="curriculum-filename" id="curriculumFileName">저장된 교육과정 목록 없음</div>
         <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
@@ -286,11 +291,13 @@
           <div><h2 class="panel-heading">과목별 수강 신청 집계 <span class="count-pill" id="aggregateRoundBadge">1차</span></h2><p class="panel-subtitle" id="aggregateDescription">학생별 신청 명단에서 과목별 인원을 계산했습니다.</p></div>
           <button class="button button-primary" id="downloadAggregate" type="button">집계표 엑셀 다운로드</button>
         </div>
-        <div class="aggregate-settings">
-          <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
-          <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
+        <div class="aggregate-context-grid">
+          <div class="aggregate-settings">
+            <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
+            <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
+          </div>
+          <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 이동수업 반편성은 5단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
         </div>
-        <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 명단의 반 수로 계산합니다. 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">폐강 예정</b>으로 표시됩니다. 이동수업 반편성은 5단계에서 관리하며, 과목별 개설 학급수 칸은 직접 수정할 수 있습니다. 변경값은 총 학급수와 학급당 학생수, 엑셀 다운로드에 반영됩니다.</p>
         <div class="aggregate-content" id="aggregateContent"></div>
       </section>
       <section class="panel hidden" id="closurePanel">
@@ -583,12 +590,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261008-teacher-application-ui"></script>
-  <script src="xlsx-parser.js?v=20261008-teacher-application-ui" defer></script>
-  <script src="course-groups.js?v=20261008-teacher-application-ui" defer></script>
-  <script src="curriculum-workbook.js?v=20261008-teacher-application-ui" defer></script>
+  <script defer src="app.js?v=20261008-cohort-curricula"></script>
+  <script src="xlsx-parser.js?v=20261008-cohort-curricula" defer></script>
+  <script src="course-groups.js?v=20261008-cohort-curricula" defer></script>
+  <script src="curriculum-workbook.js?v=20261008-cohort-curricula" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261008-teacher-application-ui" defer></script>
+  <script src="supabase-client.js?v=20261008-cohort-curricula" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

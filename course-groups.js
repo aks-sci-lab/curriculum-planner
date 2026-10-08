@@ -5,6 +5,7 @@ var getGroupedApplicationSubjects;
 var setApplicationTargetGrades;
 var getApplicationGroupSettings;
 var switchApplicationMenuGrade;
+var switchApplicationGroupCohort;
 (() => {
   const workspaceTabs = ["Groups", "Online", "Results"]
     .map((name) => document.getElementById(`application${name}Tab`));
@@ -29,6 +30,12 @@ var switchApplicationMenuGrade;
   });
   openWorkspaceTab(0);
   const key = "curriculum-color-semester-groups-v3";
+  function cohortYearForPlanGrade(grade) {
+    const currentGrade = grade === "2" ? "1" : "2";
+    return typeof getApplicationCohortYear === "function" ? getApplicationCohortYear(currentGrade) : "";
+  }
+  function cohortStorageKey(year) { return year ? `${key}:${year}` : key; }
+  let activeCohortYear = cohortYearForPlanGrade("2");
   const container = document.getElementById("courseGroupEditor");
   const message = document.getElementById("courseGroupMessage");
   let groups = [];
@@ -43,6 +50,29 @@ var switchApplicationMenuGrade;
     renderCourseGroups();
   };
   let seeded = new Set();
+  function readGroupData(year) {
+    const groupKey = cohortStorageKey(year);
+    groups = JSON.parse(localStorage.getItem(groupKey) || "[]");
+    seeded = new Set(JSON.parse(localStorage.getItem(groupKey+"-seeded") || "[]"));
+    if (!Array.isArray(groups) || groups.some((g) => !g || !Array.isArray(g.courses) ||
+      typeof g.name !== "string" || typeof g.id !== "string" || !["2", "3"].includes(g.grade) ||
+      !["0", "1", "2"].includes(g.semester) || g.courses.some((name) => typeof name !== "string"))) {
+      throw new Error("그룹 저장 형식이 잘못되었습니다.");
+    }
+  }
+  function migrateLegacyGroupData() {
+    if (!activeCohortYear || ["2", "3"].some((grade) => localStorage.getItem(cohortStorageKey(cohortYearForPlanGrade(grade))))) return;
+    const legacyGroups = JSON.parse(localStorage.getItem(key) || "[]");
+    const legacySeeded = JSON.parse(localStorage.getItem(key+"-seeded") || "[]");
+    if (!Array.isArray(legacyGroups) || !legacyGroups.length) return;
+    for (const grade of ["2", "3"]) {
+      const year = cohortYearForPlanGrade(grade);
+      if (!year) continue;
+      const groupKey = cohortStorageKey(year);
+      localStorage.setItem(groupKey, JSON.stringify(legacyGroups.filter((group) => group.grade === grade)));
+      localStorage.setItem(groupKey+"-seeded", JSON.stringify(legacySeeded.filter((id) => id.startsWith(`${grade}:`))));
+    }
+  }
   getGroupedApplicationSubjects = () => {
     const subjects = selectedApplicationSubjects();
     if (!subjects) return null;
@@ -58,13 +88,8 @@ var switchApplicationMenuGrade;
     return result;
   };
   try {
-    groups = JSON.parse(localStorage.getItem(key) || "[]");
-    seeded = new Set(JSON.parse(localStorage.getItem(key+"-seeded") || "[]"));
-    if (!Array.isArray(groups) || groups.some((g) => !g || !Array.isArray(g.courses) ||
-      typeof g.name !== "string" || typeof g.id !== "string" || !["2", "3"].includes(g.grade) ||
-      !["0", "1", "2"].includes(g.semester) || g.courses.some((name) => typeof name !== "string"))) {
-      throw new Error("그룹 저장 형식이 잘못되었습니다.");
-    }
+    migrateLegacyGroupData();
+    readGroupData(activeCohortYear);
   } catch (error) {
     message.textContent = `그룹 설정 읽기 실패: ${error.message}`;
     groups = [];
@@ -107,11 +132,33 @@ var switchApplicationMenuGrade;
     for (const id of selected) if (!available.has(id)) selected.delete(id);
   }
   function persist() {
-    try { localStorage.setItem(key, JSON.stringify(groups)); localStorage.setItem(key+"-seeded",JSON.stringify([...seeded])); }
+    try {
+      const groupKey = cohortStorageKey(activeCohortYear);
+      localStorage.setItem(groupKey, JSON.stringify(groups));
+      localStorage.setItem(groupKey+"-seeded",JSON.stringify([...seeded]));
+      localStorage.setItem(key, JSON.stringify(groups));
+      localStorage.setItem(key+"-seeded",JSON.stringify([...seeded]));
+    }
     catch (error) {
       message.textContent = `그룹 저장 실패: ${error.message}`;
     }
   }
+  switchApplicationGroupCohort = (year) => {
+    year = String(year || "");
+    if (year === activeCohortYear) return;
+    persist();
+    activeCohortYear = year;
+    selected.clear();
+    try {
+      readGroupData(activeCohortYear);
+      renderCourseGroups();
+    } catch (error) {
+      message.textContent = `그룹 설정 읽기 실패: ${error.message}`;
+      groups = [];
+      seeded = new Set();
+      renderCourseGroups();
+    }
+  };
   getApplicationGroupSettings = () => {
     sync();
     return JSON.parse(JSON.stringify(groups));
@@ -279,8 +326,12 @@ var switchApplicationMenuGrade;
       tab.setAttribute("tabindex", i === index ? "0" : "-1");
     });
     document.getElementById("applicationGradeWorkspace").setAttribute("aria-labelledby", `applicationGrade${grade}Tab`);
+    if (typeof switchApplicationGroupCohort === "function") {
+      switchApplicationGroupCohort(cohortYearForPlanGrade(String(Number(grade) + 1)));
+    }
+    const cohortYear = typeof getApplicationCohortYear === "function" ? getApplicationCohortYear(grade) : "";
     document.getElementById("applicationGradeDescription").textContent =
-      `현재 ${grade}학년 학생의 ${Number(grade) + 1}학년 과목·그룹과 온라인 신청을 관리합니다.`;
+      `현재 ${grade}학년 학생(${cohortYear}학년도 신입생)의 ${Number(grade) + 1}학년 과목·그룹과 온라인 신청을 관리합니다.`;
     setApplicationTargetGrades([String(Number(grade) + 1)]);
     renderApplicationSubjects();
     renderRoundStatus();

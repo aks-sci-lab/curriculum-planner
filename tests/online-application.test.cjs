@@ -202,6 +202,28 @@ test("application subjects include every student-choice course in promoted grade
   assert.deepEqual(result["3"].map((c) => c.subject), ["과학"]);
 });
 
+test("application subjects are read from the curriculum cohort matching the current student grade", () => {
+  const contexts = {
+    2026: [{ subject:"2026코호트 2학년 과목", division:"학생 선택 교육과정",
+      row:[3,"", "",3,"","",""], grade:"2", area:"과학", selectionType:"일반선택" }],
+    2025: [{ subject:"2025코호트 3학년 과목", division:"학생 선택 교육과정",
+      row:[3,"","","","","",3], grade:"3", area:"과학", selectionType:"일반선택" }],
+  };
+  const state = { curriculumCohortYear:"2026", curriculumCohorts:{
+    2026:{importedLayout:{year:"2026"}}, 2025:{importedLayout:{year:"2025"}}
+  }, curriculumImportedLayout:{year:"2026"}, applicationMenuGrade:"1" };
+  const ctx = vm.createContext({
+    state, $:()=>({value:"2026"}),
+    importedPlanColumnMap:()=>({subject:0,opCredit:0,baseCredit:-1,semesters:[1,2,3,4,5,6]}),
+    importedPlanCourseContexts:(layout)=>contexts[layout.year],
+    curriculumCellFill:()=>""
+  });
+  vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("),ctx);
+  assert.deepEqual(plain(ctx.collectApplicationSubjects())["2"].map((item)=>item.subject),["2026코호트 2학년 과목"]);
+  state.applicationMenuGrade="2";
+  assert.deepEqual(plain(ctx.collectApplicationSubjects())["3"].map((item)=>item.subject),["2025코호트 3학년 과목"]);
+});
+
 test("merged subject header uses actual course names and splits course lists by promoted semester", () => {
   const layout = {
     rows: [
