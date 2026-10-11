@@ -1552,6 +1552,7 @@
     }
 
     function renderCurriculumStep() {
+      renderCurriculumCohortUploads();
       $("#undoCurriculumEdit").disabled = !state.curriculumUndoStack.length;
       renderCurriculumGroupCreator();
       updateCurriculumFilterOptions();
@@ -2135,6 +2136,26 @@
         : String(state.curriculumCohortYear || schoolYear);
     }
 
+    function renderCurriculumCohortUploads() {
+      const schoolYear = Number($("#schoolYear").value);
+      if (!Number.isInteger(schoolYear) || schoolYear < 2000 || schoolYear > 2100) return;
+      $("#curriculumCohortUploads").innerHTML = ["1", "2", "3"].map((grade) => {
+        const year = String(schoolYear - Number(grade) + 1);
+        const active = year === String(state.curriculumCohortYear);
+        const fileName = active ? state.curriculumPlanFileName : state.curriculumCohorts?.[year]?.fileName;
+        const description = grade === "3"
+          ? "현 3학년의 3개년 편제표 보관용"
+          : `현 ${grade}학년 → 이 편제표의 ${Number(grade) + 1}학년 과목 신청`;
+        return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
+          <h4>${year}학년도 입학생 · 현 ${grade}학년</h4>
+          <p>${description}</p>
+          <p class="curriculum-cohort-file">${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}</p>
+          <div><button class="button button-primary" type="button" data-cohort-upload="${year}">3개년 편제표 업로드</button>
+          <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}">편제표 보기</button></div>
+        </article>`;
+      }).join("");
+    }
+
     function syncActiveCurriculumCohort() {
       const year = String(state.curriculumCohortYear || (typeof $ === "function" ? $("#schoolYear")?.value : "") || "2026");
       if (!/^\d{4}$/.test(year)) return;
@@ -2190,7 +2211,7 @@
       const cohortLayout = state.curriculumCohorts?.[cohortYear]?.importedLayout;
       const layout = cohortLayout || (String(state.curriculumCohortYear) === cohortYear
         ? state.curriculumImportedLayout
-        : Object.keys(state.curriculumCohorts || {}).length ? null : state.curriculumImportedLayout);
+        : null);
       if (!layout) return null;
       const columns = importedPlanColumnMap(layout);
       if (columns.subject < 0) return null;
@@ -2544,6 +2565,18 @@
       return students;
     }
 
+    function validateApplicationRosterGrade(roster, currentGrade) {
+      const grade = String(currentGrade);
+      if (!["1", "2"].includes(grade)) throw new Error("수강신청 대상 학년 메뉴를 확인하세요.");
+      if (!roster.length) throw new Error("학생 명렬이 비어 있습니다.");
+      const mismatched = roster.filter((student) => String(student.grade) !== grade);
+      if (mismatched.length) {
+        const found = [...new Set(mismatched.map((student) => String(student.grade)))].join("·");
+        throw new Error(`${Number(grade) + 1}학년 수강신청에는 현재 ${grade}학년 명렬만 업로드할 수 있습니다. 현재 ${found}학년 학생 ${mismatched.length}명이 포함되어 있습니다. 다른 학년을 제외한 명렬을 다시 업로드하세요.`);
+      }
+      return roster;
+    }
+
     function downloadTextFile(text, filename, type) {
       const url = URL.createObjectURL(new Blob([text], { type }));
       const link = document.createElement("a");
@@ -2627,6 +2660,7 @@
 
     async function handleApplicationRoster(file) {
       if (!file) return;
+      const currentGrade = String(state.applicationMenuGrade || "1");
       try {
         if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식으로 선택하세요.");
         const subjects = selectedApplicationSubjects();
@@ -2637,6 +2671,10 @@
         const schoolName = String($("#schoolName").value || "").trim();
         const schoolYear = String($("#schoolYear").value || "").trim();
         const roster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
+        if (String(state.applicationMenuGrade || "1") !== currentGrade) {
+          throw new Error("파일을 읽는 중 학년 메뉴가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
+        }
+        validateApplicationRosterGrade(roster, currentGrade);
         for (const student of roster) {
           if (!subjects[String(Number(student.grade) + 1)].length) {
             throw new Error(`현재 ${student.grade}학년이 신청할 ${Number(student.grade) + 1}학년 학생선택교육과정 과목이 없습니다. 편제표의 교육과정 구분과 학기 시수를 확인하세요.`);
@@ -3606,6 +3644,7 @@
     function handleCurriculumPlanWorkbook(file) {
       if (!file) return;
       if (typeof requireTeacherLogin !== "function" || !requireTeacherLogin()) return;
+      const cohortYear = String(state.curriculumCohortYear);
       status.textContent = "";
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
         status.style.color = "#a44939";
@@ -3649,6 +3688,7 @@
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
           importedLayout.archiveId = await storeCurriculumArchive(reader.result);
           if (!requireTeacherLogin()) throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
+          if (String(state.curriculumCohortYear) !== cohortYear) throw new Error("파일을 읽는 중 입학연도가 바뀌었습니다. 해당 연도에서 다시 업로드하세요.");
           recordCurriculumUndo();
           state.curriculumMutationRevision += 1;
           state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
@@ -3681,6 +3721,12 @@
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
     $("#curriculumCohortYear").addEventListener("change", (event) => switchCurriculumCohort(event.target.value));
+    $("#curriculumCohortUploads").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-cohort-upload], [data-cohort-view]");
+      if (!button) return;
+      switchCurriculumCohort(button.dataset.cohortUpload || button.dataset.cohortView);
+      if (button.dataset.cohortUpload) curriculumPlanInput.click();
+    });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
     $("#curriculumGroupName").addEventListener("input", (event) => {
       curriculumSelectionGroupDraft.name = event.target.value;
@@ -4021,6 +4067,17 @@
     for (const selector of ["#schoolYear", "#round", "#confirmDate", "#schoolName"]) {
       $(selector).addEventListener("input", updateCertificateText);
     }
+    $("#schoolYear").addEventListener("change", () => {
+      const year = Number($("#schoolYear").value);
+      if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+        status.style.color = "#a44939";
+        status.textContent = "학년도는 2000~2100 사이의 정수로 입력하세요.";
+        return;
+      }
+      renderCurriculumCohortUploads();
+      if (typeof switchApplicationMenuGrade === "function") switchApplicationMenuGrade(state.applicationMenuGrade || "1");
+      persistState();
+    });
     workflowSteps.addEventListener("click", (event) => {
       const button = event.target.closest("[data-workflow-step]");
       if (!button) return;

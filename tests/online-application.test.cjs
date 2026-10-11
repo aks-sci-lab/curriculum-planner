@@ -176,6 +176,76 @@ test("roster parser accepts ten synthetic classes of 35 students", () => {
   assert.equal(new Set(roster.map((student) => `${student.grade}:${student.classroom}:${student.number}`)).size, 350);
 });
 
+test("application roster validation rejects wrong or mixed current grades", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functionSource("function validateApplicationRosterGrade(", "function downloadTextFile("), ctx);
+  const first = [{ grade: "1" }];
+  const second = [{ grade: "2" }];
+  assert.equal(ctx.validateApplicationRosterGrade(first, "1"), first);
+  assert.equal(ctx.validateApplicationRosterGrade(second, "2"), second);
+  assert.throws(() => ctx.validateApplicationRosterGrade(second, "1"), /2학년 수강신청에는 현재 1학년 명렬만/);
+  assert.throws(() => ctx.validateApplicationRosterGrade(first, "2"), /3학년 수강신청에는 현재 2학년 명렬만/);
+  assert.throws(() => ctx.validateApplicationRosterGrade([...first, ...second], "1"), /포함되어/);
+  assert.throws(() => ctx.validateApplicationRosterGrade([], "1"), /비어/);
+});
+
+test("three cohort upload cards show incoming years, saved status and promoted course mapping", () => {
+  const elements = {
+    "#schoolYear": { value: "2026" },
+    "#curriculumCohortUploads": {},
+  };
+  const ctx = vm.createContext({
+    $: (id) => elements[id], escapeHtml: String,
+    state: { curriculumCohortYear: "2026", curriculumPlanFileName: "2026.xlsx",
+      curriculumCohorts: { "2025": { fileName: "2025.xlsx" } } },
+  });
+  vm.runInContext(functionSource("function renderCurriculumCohortUploads(", "function syncActiveCurriculumCohort("), ctx);
+  ctx.renderCurriculumCohortUploads();
+  const markup = elements["#curriculumCohortUploads"].innerHTML;
+  assert.deepEqual([...markup.matchAll(/data-cohort-upload="(\d+)"/g)].map((match) => match[1]), ["2026", "2025", "2024"]);
+  assert.match(markup, /현 1학년 → 이 편제표의 2학년 과목 신청/);
+  assert.match(markup, /현 2학년 → 이 편제표의 3학년 과목 신청/);
+  assert.match(markup, /2026.xlsx/);
+  assert.match(markup, /2025.xlsx/);
+  assert.match(markup, /미업로드/);
+  elements["#schoolYear"].value = "2027";
+  ctx.renderCurriculumCohortUploads();
+  assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]
+    .map((match) => match[1]), ["2027", "2026", "2025"]);
+  elements["#schoolYear"].value = "2028";
+  ctx.renderCurriculumCohortUploads();
+  assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]
+    .map((match) => match[1]), ["2028", "2027", "2026"]);
+});
+
+test("switching incoming cohort plans preserves each of the three uploads independently", () => {
+  const state = {
+    curriculumCohortYear: "2026", curriculumPlanFileName: "2026.xlsx",
+    curriculumImportedLayout: { year: "2026" }, curriculumPlan: [{ subject: "2026 과목" }],
+    curriculumTemplateRows: [], curriculumMutationRevision: 0, curriculumCohorts: {},
+  };
+  const ctx = vm.createContext({
+    state, status: { style: {} }, $: () => ({}),
+    renderCurriculumStep() {}, renderApplicationSubjects() {}, persistState() {},
+  });
+  vm.runInContext(functionSource("function syncActiveCurriculumCohort(", "function collectApplicationSubjects("), ctx);
+  for (const year of ["2025", "2024"]) {
+    ctx.switchCurriculumCohort(year);
+    assert.equal(state.curriculumImportedLayout, null);
+    state.curriculumPlanFileName = `${year}.xlsx`;
+    state.curriculumImportedLayout = { year };
+    state.curriculumPlan = [{ subject: `${year} 과목` }];
+  }
+  ctx.switchCurriculumCohort("2026");
+  assert.deepEqual(Object.keys(state.curriculumCohorts).sort(), ["2024", "2025", "2026"]);
+  for (const year of ["2026", "2025", "2024"]) {
+    ctx.switchCurriculumCohort(year);
+    assert.equal(state.curriculumPlanFileName, `${year}.xlsx`);
+    assert.equal(state.curriculumImportedLayout.year, year);
+    assert.equal(state.curriculumPlan[0].subject, `${year} 과목`);
+  }
+});
+
 test("application subjects include every student-choice course in promoted grades, ignoring old exclusions", () => {
   const course = (subject, division, hours, grade = "") => ({
     subject, division, row: [3, ...hours], grade, area: "교과", selectionType: "일반선택",
@@ -189,7 +259,7 @@ test("application subjects include every student-choice course in promoted grade
     course("구분없음", "", ["", "", 3, "", "", ""]),
   ];
   const ctx = vm.createContext({
-    state: { curriculumImportedLayout: {}, applicationExcluded: { "2:수학": true } },
+    state: { curriculumCohortYear: "2026", curriculumImportedLayout: {}, applicationExcluded: { "2:수학": true } },
     importedPlanColumnMap: () => ({ subject: 0, opCredit: 0, baseCredit: -1, semesters: [1, 2, 3, 4, 5, 6] }),
     importedPlanCourseContexts: () => contexts,
     curriculumCellFill: () => "",
@@ -222,8 +292,32 @@ test("application subjects are read from the curriculum cohort matching the curr
   assert.deepEqual(plain(ctx.collectApplicationSubjects())["2"].map((item)=>item.subject),["2026코호트 2학년 과목"]);
   state.applicationMenuGrade="2";
   assert.deepEqual(plain(ctx.collectApplicationSubjects())["3"].map((item)=>item.subject),["2025코호트 3학년 과목"]);
+  delete state.curriculumCohorts["2025"];
+  assert.equal(ctx.collectApplicationSubjects(), null, "A missing incoming cohort must not use the visible 2026 plan");
+  state.curriculumCohorts = {};
+  assert.equal(ctx.collectApplicationSubjects(), null, "An empty cohort collection must not bypass the incoming year");
 });
 
+test("2027 and 2028 applications use their incoming cohort's promoted-grade courses", () => {
+  for (const year of [2027, 2028]) {
+    const state = { curriculumCohortYear: String(year), curriculumImportedLayout: { year },
+      curriculumCohorts: Object.fromEntries([year, year - 1, year - 2].map((incoming) =>
+        [incoming, { importedLayout: { year: incoming } }])), applicationMenuGrade: "1" };
+    const ctx = vm.createContext({
+      state, $: () => ({ value: String(year) }),
+      importedPlanColumnMap: () => ({subject:0,opCredit:0,semesters:[1,2,3,4,5,6]}),
+      importedPlanCourseContexts: (layout) => [2,3].map((grade) => ({
+        subject: `${layout.year} 입학생 ${grade}학년 과목`, division: "학생 선택 교육과정",
+        grade:String(grade),area:"과학",selectionType:"일반선택",
+        row:[3,...Array.from({length:6},(_,index)=>index===(grade-1)*2?3:"")],
+      })), curriculumCellFill: () => "",
+    });
+    vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("), ctx);
+    assert.equal(ctx.collectApplicationSubjects()["2"][0].subject, `${year} 입학생 2학년 과목`);
+    state.applicationMenuGrade = "2";
+    assert.equal(ctx.collectApplicationSubjects()["3"][0].subject, `${year-1} 입학생 3학년 과목`);
+  }
+});
 test("curriculum group course choices fall back to the uploaded layout and keep subject names unchanged", () => {
   const ctx = vm.createContext({
     curriculumSelectionGroupDraft: { grade: "2", semester: "1" },
@@ -270,7 +364,7 @@ test("merged subject header uses actual course names and splits course lists by 
       "G1:H1", "I1:J1", "K1:L1", "A4:A8", "G7:L7"],
     cellFills: {"3:8":"#E2EFD9","4:8":"#E2EFD9","5:9":"#E2EFD9","6:6":"#D6DCE4"},
   };
-  const ctx = vm.createContext({ state: { curriculumImportedLayout: layout } });
+  const ctx = vm.createContext({ state: { curriculumCohortYear: "2026", curriculumImportedLayout: layout } });
   for (const name of ["columnIndex", "expandCurriculumLayoutRows", "importedPlanColumnMap",
     "importedPlanCoveredCells", "curriculumSelectionType", "importedPlanCourseContexts", "curriculumCellFill", "collectApplicationSubjects"]) {
     const start = frontend.indexOf(`function ${name}(`);
@@ -306,7 +400,7 @@ test("joint and small-enrollment courses are excluded from new applications, not
       row:[3,"공동/2학년/1학기/3학점",""],grade:"2",area:"과학"},
   ];
   const ctx = vm.createContext({
-    state:{curriculumImportedLayout:{}},
+    state:{curriculumCohortYear:"2026",curriculumImportedLayout:{}},
     importedPlanColumnMap:()=>({subject:0,opCredit:0,semesters:[-1,-1,1,-1,-1,-1]}),
     importedPlanCourseContexts:()=>contexts,curriculumCellFill:()=>"",
   });

@@ -345,6 +345,13 @@
       color: #334a76;
       font-size: 11px;
     }
+    .curriculum-cohort-uploads { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin: 12px 0; }
+    .curriculum-cohort-card { min-width: 0; padding: 14px; border: 1px solid #d7dfed; border-radius: 12px; background: #fff; }
+    .curriculum-cohort-card.is-active { border-color: #3b68e8; background: #f8fbff; }
+    .curriculum-cohort-card h4 { margin: 0; color: #263e68; font-size: 14px; }
+    .curriculum-cohort-card p { color: #596983; font-size: 12px; line-height: 1.5; }
+    .curriculum-cohort-file { overflow-wrap: anywhere; }
+    .curriculum-cohort-card > div { display: flex; flex-wrap: wrap; gap: 6px; }
     .curriculum-group-creator { margin: 12px 0; padding: 14px; border: 1px solid #cfdaf2; border-radius: 12px; background: #f8fbff; }
     .curriculum-group-creator-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
     .curriculum-group-creator-heading h4 { margin: 0; color: #263e68; font-size: 14px; }

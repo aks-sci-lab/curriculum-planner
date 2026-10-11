@@ -17,6 +17,7 @@ var updateApplicationGradeControls;
   let pendingRoster = null;
   const gradeDrafts = new Map();
   let controlsGrade = state.applicationMenuGrade || "1";
+  let controlsYear = byId("schoolYear").value;
   function isOfflineWorkspace() {
     return new URL(window.location.href).protocol === "file:" || navigator.onLine === false;
   }
@@ -783,14 +784,16 @@ var updateApplicationGradeControls;
 
   updateApplicationGradeControls = () => {
     const grade = state.applicationMenuGrade || "1";
-    if (grade !== controlsGrade) {
-      gradeDrafts.set(controlsGrade, { roster: pendingRoster, codes: latestCodes, summary: byId("cloudRosterSummary").textContent });
-      const draft = gradeDrafts.get(grade);
+    const year = byId("schoolYear").value;
+    if (grade !== controlsGrade || year !== controlsYear) {
+      gradeDrafts.set(`${controlsYear}:${controlsGrade}`, { roster: pendingRoster, codes: latestCodes, summary: byId("cloudRosterSummary").textContent });
+      const draft = gradeDrafts.get(`${year}:${grade}`);
       pendingRoster = draft?.roster || null;
       latestCodes = draft?.codes || null;
       byId("cloudRosterSummary").textContent = draft?.summary || `현재 ${grade}학년 명렬을 업로드하세요.`;
       byId("cloudTeacherMessage").textContent = "";
       controlsGrade = grade;
+      controlsYear = year;
     }
     byId("cloudCreateEvent").disabled = !pendingRoster || !session;
     byId("cloudDownloadCodes").disabled = !latestCodes;
@@ -870,6 +873,8 @@ var updateApplicationGradeControls;
     const file = event.target.files[0];
     event.target.value = "";
     if (!file) return;
+    const uploadGrade = String(state.applicationMenuGrade || "1");
+    const uploadYear = byId("schoolYear").value;
     teacherAction(async () => {
       pendingRoster = null;
       byId("cloudCreateEvent").disabled = true;
@@ -877,9 +882,11 @@ var updateApplicationGradeControls;
       if (!session) throw new Error("교사 로그인이 필요합니다.");
       if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
       const allRoster = parseApplicationRoster(await parseWorkbook(await file.arrayBuffer()));
-      const currentGrade = state.applicationMenuGrade || "1";
-      const roster = allRoster.filter((student) => String(student.grade) === currentGrade);
-      if (!roster.length) throw new Error(`현재 ${currentGrade}학년 학생이 없는 명렬입니다. 해당 학년 메뉴에서 업로드하세요.`);
+      const currentGrade = String(state.applicationMenuGrade || "1");
+      if (currentGrade !== uploadGrade || byId("schoolYear").value !== uploadYear) {
+        throw new Error("파일을 읽는 중 학년 메뉴 또는 학년도가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
+      }
+      const roster = validateApplicationRosterGrade(allRoster, currentGrade);
       const grades = [...new Set(roster.map((student) => String(Number(student.grade) + 1)))].sort();
       const subjects = getGroupedApplicationSubjects();
       if (!subjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
@@ -889,8 +896,7 @@ var updateApplicationGradeControls;
       setApplicationTargetGrades(grades);
       pendingRoster = roster;
       byId("cloudCreateEvent").disabled = false;
-      byId("cloudRosterSummary").textContent = `${file.name} · 현재 ${currentGrade}학년 ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만` +
-        (allRoster.length > roster.length ? ` · 다른 학년 ${allRoster.length - roster.length}명 제외 (해당 학년 메뉴에서 별도 업로드)` : "");
+      byId("cloudRosterSummary").textContent = `${file.name} · 현재 ${currentGrade}학년 ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만`;
       byId("applicationGroupsTab").click();
       byId("cloudTeacherMessage").textContent = "해당 학년의 그룹·선택 수를 설정한 뒤 온라인 신청 관리 탭에서 수강신청 생성을 누르세요.";
       byId("courseGroupMessage").textContent = `명렬 기준 ${grades.map((g) => `${g}학년`).join(", ")} 그룹만 설정하세요. 설정 후 온라인 신청 관리 탭에서 신청을 생성합니다.`;
@@ -900,6 +906,7 @@ var updateApplicationGradeControls;
     teacherAction(async () => {
       if (!session) throw new Error("교사 로그인이 필요합니다.");
       if (!pendingRoster) throw new Error("학생 명렬을 먼저 업로드하세요.");
+      validateApplicationRosterGrade(pendingRoster, state.applicationMenuGrade || "1");
       if (latestCodes && !window.confirm("이전에 생성한 학생 코드를 저장했나요? 새 신청을 생성하면 이전 코드 다운로드 버튼은 대체됩니다.")) {
         byId("cloudTeacherMessage").textContent = "생성을 취소했습니다. 이전 코드를 먼저 저장하세요.";
         return;

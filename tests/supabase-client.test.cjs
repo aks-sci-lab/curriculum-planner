@@ -165,6 +165,9 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
     requireLogin() { return context.requireTeacherLogin(); },
   };
+  const frontend = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  vm.runInContext(frontend.slice(frontend.indexOf("function validateApplicationRosterGrade("),
+    frontend.indexOf("function downloadTextFile(")), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor", "qrcode.js"), "utf8"), context);
   const generateQR=context.qrcode;
   context.qrcode=(...args)=>{
@@ -322,7 +325,7 @@ test("teacher student preview uses real selection flow without submitting to ser
   assert.equal(f.elements.cloudStudentChoices.children.length,0);
 });
 
-test("grade menus filter online events, roster uploads and preserve each grade's draft", async () => {
+test("grade menus reject mixed and wrong-grade rosters and preserve each valid grade draft", async () => {
   const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
     access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,user:{email:"teacher@example.invalid"}
   }})]]);
@@ -338,12 +341,20 @@ test("grade menus filter online events, roster uploads and preserve each grade's
   f.roster.push({grade:"2",classroom:"1",number:"1",name:"2학년 학생"});
   const upload=()=>{f.elements.cloudRosterInput.files=[{name:"명렬.xlsx",arrayBuffer:async()=>new ArrayBuffer(0)}];return f.fire("cloudRosterInput","change");};
   await upload();
-  assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명.*다른 학년 1명 제외/);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/2학년 수강신청에는 현재 1학년 명렬만/);
+  assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  f.roster = [{grade:"1",classroom:"1",number:"1",name:"1학년 학생"}];
+  await upload();
+  assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명/);
   const first=f.elements.cloudRosterSummary.textContent;
   f.setGrade("2");
   assert.equal(f.elements.cloudCreateEvent.disabled,true);
   assert.equal(f.elements.cloudEventList.children.length,1);
   assert.match(f.elements.cloudEventList.children[0].children[0].textContent,/현재 2학년/);
+  await upload();
+  assert.match(f.elements.cloudTeacherMessage.textContent,/3학년 수강신청에는 현재 2학년 명렬만/);
+  assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  f.roster = [{grade:"2",classroom:"1",number:"1",name:"2학년 학생"}];
   await upload();
   assert.match(f.elements.cloudRosterSummary.textContent,/현재 2학년 1명/);
   f.setGrade("1");
@@ -351,8 +362,31 @@ test("grade menus filter online events, roster uploads and preserve each grade's
   assert.equal(f.elements.cloudCreateEvent.disabled,false);
   f.roster=[{grade:"2",classroom:"1",number:"1",name:"다른 학년"}];
   await upload();
-  assert.match(f.elements.cloudTeacherMessage.textContent,/현재 1학년 학생이 없는 명렬/);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/2학년 수강신청에는 현재 1학년 명렬만/);
   assert.equal(f.elements.cloudCreateEvent.disabled,true);
+});
+
+test("academic-year changes isolate roster drafts and restore them only in the original year", async () => {
+  const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
+    access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,user:{email:"teacher@example.invalid"}
+  }})]]);
+  const f=fixture({storage});
+  await f.settle();
+  f.elements.schoolYear.value="2026";
+  f.setGrade("1");
+  f.elements.cloudRosterInput.files=[{name:"2026.xlsx",arrayBuffer:async()=>new ArrayBuffer(0)}];
+  await f.fire("cloudRosterInput","change");
+  assert.equal(f.elements.cloudCreateEvent.disabled,false);
+  const summary=f.elements.cloudRosterSummary.textContent;
+  for (const year of ["2027","2028"]) {
+    f.elements.schoolYear.value=year;
+    f.setGrade("1");
+    assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  }
+  f.elements.schoolYear.value="2026";
+  f.setGrade("1");
+  assert.equal(f.elements.cloudCreateEvent.disabled,false);
+  assert.equal(f.elements.cloudRosterSummary.textContent,summary);
 });
 
 test("student flow uses public RPC only, displays own data and submits selections", async () => {
