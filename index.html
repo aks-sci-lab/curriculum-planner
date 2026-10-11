@@ -213,6 +213,13 @@
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
           <h3>온라인 신청 관리</h3>
           <p class="note">학년별 그룹을 먼저 확인한 뒤 학생 명렬을 올려 신청을 만드세요. 생성된 신청은 아래 목록에서 관리할 수 있습니다.</p>
+          <details class="note">
+            <summary>학년도별 접근 만료 정책 · 서버 업데이트 안내</summary>
+            <p>서버 업데이트 적용 후에는 다음 해 3월 1일 00:00(한국 시간)부터 해당 학년도의 교사 관리와 학생 코드 접속이 차단됩니다. 데이터는 삭제하지 않으며 다음 학년도 신청은 같은 계정으로 계속 운영할 수 있습니다.</p>
+            <p>운영자는 기존 SQL 업데이트를 모두 적용한 뒤 Supabase SQL Editor에서
+              <a href="supabase/upgrade-academic-year-access.sql" download>학년도 접근 만료 SQL</a>을 한 번 실행하세요.
+              웹페이지 업데이트만으로 서버 차단이 활성화되지는 않습니다. 내려받은 파일과 로컬 자료에는 적용되지 않습니다.</p>
+          </details>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
             <p class="note hidden" id="cloudTeacherOfflineNotice" role="status">오프라인입니다. 편제표·학생 명단·집계 등 로컬 기능은 사용할 수 있지만, 온라인 수강신청 생성·동기화에는 인터넷과 교사 로그인이 필요합니다.</p>
