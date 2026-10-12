@@ -158,7 +158,7 @@ var createApplicationGroupFromCurriculum;
     sync();
     return JSON.parse(JSON.stringify(groups));
   };
-  createApplicationGroupFromCurriculum = ({ year, grade, semester, name, courses }) => {
+  createApplicationGroupFromCurriculum = ({ year, grade, semester, name, count = null, courses }) => {
     year = String(year || "").trim();
     grade = String(grade || "");
     semester = String(semester || "");
@@ -170,6 +170,9 @@ var createApplicationGroupFromCurriculum;
     }
     if (!name || name === "미분류" || name.length > 100) throw new Error("선택과목군 이름을 1~100자로 입력하세요.");
     if (!courses.length) throw new Error("선택과목군에 넣을 과목을 하나 이상 클릭하세요.");
+    if (count !== null && (!Number.isInteger(count) || count < 0 || count > courses.length)) {
+      throw new Error(`선택 과목 수는 0~${courses.length} 사이의 정수여야 합니다.`);
+    }
 
     const groupKey = cohortStorageKey(year);
     let cohortGroups;
@@ -196,7 +199,7 @@ var createApplicationGroupFromCurriculum;
       if (existing.count > existing.courses.length) existing.count = null;
     }
     cohortGroups = cohortGroups.filter((existing) => existing.courses.length || existing.grade !== grade || existing.semester !== semester);
-    const group = { id: crypto.randomUUID(), grade, semester, name, count: null, courses };
+    const group = { id: crypto.randomUUID(), grade, semester, name, count, courses };
     cohortGroups.push(group);
     localStorage.setItem(groupKey, JSON.stringify(cohortGroups));
     if (year === activeCohortYear) {

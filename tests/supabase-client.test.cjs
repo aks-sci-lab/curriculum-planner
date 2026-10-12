@@ -299,7 +299,7 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261012-curriculum-groups"/);
+  assert.match(html,/href="styles\.css\?v=20261012-color-groups"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -1153,17 +1153,20 @@ test("curriculum group creation stores clicked subjects under the matching cohor
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),context);
   const created=context.createApplicationGroupFromCurriculum({
-    year:"2025",grade:"3",semester:"2",name:"인문 선택",courses:["영어","영어","사회"]
+    year:"2025",grade:"3",semester:"2",name:"택3",count:2,courses:["영어","영어","사회"]
   });
   assert.equal(created.year,"2025");
   assert.equal(created.movedCount,1);
   const groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3:2025"));
   assert.deepEqual(groups.map((group)=>({grade:group.grade,semester:group.semester,name:group.name,count:group.count,courses:group.courses})),[
     {grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["국어"]},
-    {grade:"3",semester:"2",name:"인문 선택",count:null,courses:["영어","사회"]}
+    {grade:"3",semester:"2",name:"택3",count:2,courses:["영어","사회"]}
   ]);
   assert.throws(()=>context.createApplicationGroupFromCurriculum({
-    year:"2025",grade:"3",semester:"2",name:"인문 선택",courses:["영어"]
+    year:"2025",grade:"3",semester:"2",name:"택5",count:5,courses:["영어","사회"]
+  }),/0~2/);
+  assert.throws(()=>context.createApplicationGroupFromCurriculum({
+    year:"2025",grade:"3",semester:"2",name:"택3",courses:["영어"]
   }),/이미 있습니다/);
 });
 

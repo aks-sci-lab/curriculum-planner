@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261012-curriculum-groups">
+  <link rel="stylesheet" href="styles.css?v=20261012-color-groups">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -104,7 +104,7 @@
           <div class="curriculum-group-creator-heading">
             <div>
               <h4 id="curriculumGroupCreatorTitle">선택과목군 빠르게 만들기</h4>
-              <p>그룹명과 대상 학년·학기를 정한 뒤 아래 편제표에서 과목 행을 눌러 담으세요.</p>
+              <p>대상 학년·학기를 정한 뒤 편제표에서 같은 색으로 표시된 택3·택5 과목군 버튼을 누르세요.</p>
             </div>
             <button class="button button-primary" id="completeCurriculumGroup" type="button" disabled>선택과목군 완료</button>
           </div>
@@ -128,7 +128,7 @@
           </div>
           <div class="curriculum-group-creator-footer">
             <span id="curriculumGroupSelectionSummary" aria-live="polite"></span>
-            <span>선택할 과목 수는 2단계에서 확인·지정합니다. 편제표의 과목군 칸을 눌러 추가하거나 해제하세요.</span>
+            <span>색이 같은 해당 학기 과목만 자동으로 묶고, 택3·택5의 선택 수를 설정합니다. 다른 학기 과목은 포함되지 않습니다.</span>
           </div>
         </section>
         <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
@@ -617,12 +617,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261012-curriculum-groups"></script>
-  <script src="xlsx-parser.js?v=20261012-curriculum-groups" defer></script>
-  <script src="course-groups.js?v=20261012-curriculum-groups" defer></script>
-  <script src="curriculum-workbook.js?v=20261012-curriculum-groups" defer></script>
+  <script defer src="app.js?v=20261012-color-groups"></script>
+  <script src="xlsx-parser.js?v=20261012-color-groups" defer></script>
+  <script src="course-groups.js?v=20261012-color-groups" defer></script>
+  <script src="curriculum-workbook.js?v=20261012-color-groups" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261012-curriculum-groups" defer></script>
+  <script src="supabase-client.js?v=20261012-color-groups" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

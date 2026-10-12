@@ -396,6 +396,19 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.equal(subjects["2"].find((c)=>c.subject==="세계사").semesterColors["1"],"#E2EFD9");
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학").semesterColors["1"],"#E2EFD9");
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학 실험").semesterColors["2"],"#D6DCE4");
+  ctx.normalizeCurriculumDivision=(value)=>String(value).includes("학생")?"학생 선택 교육과정":"학교 지정 교육과정";
+  ctx.isSelectableDetail=(value)=>["일반선택","진로선택","융합선택"].includes(value);
+  vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function renderCurriculumGroupCreator("),ctx);
+  layout.rows[3][8]="택3";
+  layout.cellFills["3:8"]="#E2EFD9";
+  layout.cellFills["4:8"]="#E2EFD9";
+  layout.cellFills["5:9"]="#E2EFD9";
+  assert.deepEqual(plain(ctx.curriculumColorGroupOptions(layout,"2","1")).map((group)=>({
+    name:group.name,count:group.count,grade:group.grade,semester:group.semester,courses:group.courses
+  })),[{
+    name:"택3",count:3,grade:"2",semester:"1",courses:["세계사","사회와 문화","물리학","화학"]
+  }]);
+  assert.deepEqual(plain(ctx.curriculumColorGroupOptions(layout,"2","2")),[]);
 });
 
 test("joint and small-enrollment courses are excluded from new applications, not historical imports", () => {

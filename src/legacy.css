@@ -371,6 +371,9 @@
     .curriculum-group-action-cell { min-width: 170px; background: #f8fbff !important; }
     .curriculum-group-action-cell .curriculum-group-course { width: 100%; min-height: 30px; border-radius: 7px; white-space: normal; }
     .curriculum-group-action-cell .curriculum-group-course[aria-pressed="true"] { border-color: #3b68e8; color: #244ba0; background: #eaf0ff; }
+    .curriculum-color-group-button { width: 100%; min-height: 34px; margin-bottom: 5px; border: 1px solid #a8bf75; border-radius: 7px; padding: 5px 8px; color: #35551d; background: #f0f7e6; font-size: 12px; font-weight: 700; white-space: normal; }
+    .curriculum-color-group-button:hover:not(:disabled) { border-color: #789b45; background: #e5f1d3; }
+    .curriculum-color-group-button:disabled { cursor: not-allowed; opacity: .55; }
     .curriculum-grid {
       display: grid;
       grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2.2fr);
