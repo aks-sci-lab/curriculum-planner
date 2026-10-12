@@ -30,6 +30,8 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   getAttribute(name) { return this[name]; }
+  setCustomValidity(message) { this.validationMessage = message; }
+  reportValidity() { return !this.validationMessage; }
   showModal() { this.open = true; }
   close() { this.open = false; }
   click() { this.clicked = true; }
@@ -257,7 +259,7 @@ test("offline workspaces bypass teacher login and keep cloud application control
   assert.equal(reconnectingWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), false);
 });
 
-test("grade menus scope groups and rebuild colors without removing the other grade", async () => {
+test("grade menus scope curriculum groups and offer table-based assignment for unassigned courses", async () => {
   const key = "curriculum-color-semester-groups-v3";
   const storage = new Map([[key, JSON.stringify([
     {id:"g2",grade:"2",semester:"1",name:"2학년 보관",count:1,courses:["수학"]},
@@ -269,13 +271,14 @@ test("grade menus scope groups and rebuild colors without removing the other gra
   assert.equal(f.renderedGrade,"1");
   assert.equal(f.elements.applicationGrade1Tab["aria-selected"],"true");
   const grid=f.elements.courseGroupEditor.children.find((child)=>child.className==="course-group-grid");
-  assert.equal(grid.children[0].className,"course-group-empty");
-  assert.equal(grid.children[0].children.find((child)=>child.textContent==="표시 과목 전체 선택").disabled,true);
-  assert.equal(grid.children[1].children[1].className,"course-group-name");
-  assert.equal(grid.children[1].children[2].className,"course-group-count");
+  assert.equal(grid.children.length,1);
+  assert.equal(grid.children[0].className,"course-group-card");
+  assert.equal(grid.children[0].children[1].className,"course-group-name");
+  assert.equal(grid.children[0].children[2].className,"course-group-count");
   const tabs=f.elements.courseGroupEditor.children.find((child)=>child.className==="group-scope-tabs");
   assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
-  f.elements.courseGroupEditor.children.find((child)=>child.textContent==="편제표 색상으로 다시 구성").onclick();
+  assert.equal(f.elements.courseGroupEditor.children.some((child)=>child.tag==="select"),false);
+  assert.equal(f.elements.courseGroupEditor.children.some((child)=>child.textContent==="편제표에서 과목군 편성"),false);
   assert.ok(f.groupSettings().some((group)=>group.grade==="3" && group.name==="3학년 보관"));
   await f.fire("applicationGrade2Tab","click");
   assert.equal(f.renderedGrade,"2");
@@ -841,7 +844,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
     assert.equal(f.requests.length,2);
   });
 
-  test("group editor starts unassigned and requires manual groups and counts", () => {
+  test("group editor reflects curriculum assignments and validates configured counts", () => {
     const f=fixture();
     const storage=new Map();
     const subjects={"2":[{subject:"A",semester:"1",area:"사회"},{subject:"B",semester:"1",area:"사회"},
@@ -853,23 +856,23 @@ test("teacher log controls send the exact server cutoff and optional student id"
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
       crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
       state:{},renderApplicationSubjects:()=>{},renderRoundStatus:()=>{},
+      getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
     ctx.setApplicationTargetGrades(["2"]);
     assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
+    ctx.createApplicationGroupFromCurriculum({
+      year:"2026",grade:"2",semester:"1",name:"사회·과학",courses:["A","B","C"]
+    });
     const editor=f.elements.courseGroupEditor;
     const grid=()=>editor.children.find((e)=>e.className==="course-group-grid");
-    assert.equal(grid().children.filter((e)=>e.tag==="fieldset").length,1);
-    editor.children.find((e)=>e.placeholder?.startsWith("새 그룹명")).value="사회·과학";
-    editor.children.find((e)=>e.textContent==="그룹 만들기").onclick();
-    let panels=grid().children.filter((e)=>e.tag==="fieldset");
-    panels[0].children.find((e)=>e.textContent==="표시 과목 전체 선택").onclick();
-    const destination=editor.children.find((e)=>e.tag==="select");
-    destination.value=destination.children[1].value;
-    editor.children.find((e)=>e.textContent==="선택 과목 일괄 이동").onclick();
-    assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
-    panels=grid().children.filter((e)=>e.tag==="fieldset");
-    const count=panels[1].children[2].children[0];
+    assert.equal(grid().children.length,1);
+    const panel=grid().children[0];
+    assert.equal(panel.className,"course-group-card");
+    assert.equal(panel.children[1].children[0].value,"사회·과학");
+    assert.equal(editor.children.some((e)=>e.tag==="select"),false);
+    assert.equal(panel.children.some((e)=>e.tag==="input" && e.type==="checkbox"),false);
+    const count=panel.children[2].children[0];
     count.value="2";count.onchange();
     const groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
     assert.equal(groups[0].count,2);
@@ -877,7 +880,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
     assert.equal(editor.children.find((e)=>e.className==="group-scope-tabs").children.length,1);
     assert.throws(()=>ctx.getCourseApplicationGroups(["2","3"]),/미분류/);
     count.value="4";count.onchange();
-    assert.throws(()=>ctx.getCourseApplicationGroups(),/選択|선택 수/);
+    assert.equal(ctx.getCourseApplicationGroups()[0].count,2);
     assert.ok(storage.size);
   });
 
@@ -1069,24 +1072,26 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.ok(groups.every((g)=>g.count===null));
   assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
   const editor=f.elements.courseGroupEditor;
-  const targets=editor.children.find((e)=>e.tag==="select");
-  assert.equal(targets.children.length,2); // Only unassigned and the current semester's group.
   const grid=editor.children.find((e)=>e.className==="course-group-grid");
-  grid.children[1].children.find((e)=>e.textContent==="표시 과목 전체 선택").onclick();
-  const invalidTarget=editor.children.find((e)=>e.tag==="select");
-  invalidTarget.value=groups[1].id;
-  editor.children.find((e)=>e.textContent==="선택 과목 일괄 이동").onclick();
-  assert.match(f.elements.courseGroupMessage.textContent,/같은 학년·학기/);
-  const currentGrid=editor.children.find((e)=>e.className==="course-group-grid");
-  currentGrid.children[1].children.find((e)=>e.textContent==="그룹 삭제 · 과목은 미분류로").onclick();
-  ctx=load();
-  groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3"));
-  assert.equal(groups.length,2);
-  assert.equal(groups[0].semester,"2");
+  assert.equal(grid.children.length,1);
+  const firstCount=grid.children[0].children[2].children[0];
+  firstCount.value="1";firstCount.onchange();
+  assert.equal(ctx.getApplicationGroupSettings().find((group)=>group.semester==="1").count,1);
+  assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
   const tabs=editor.children.find((e)=>e.className==="group-scope-tabs");
   tabs.children[1].onclick();
   assert.match(editor.children.find((e)=>e.tag==="h4").textContent,/2학기/);
-  assert.equal(editor.children.find((e)=>e.tag==="select").children.length,2);
+  assert.equal(editor.children.some((e)=>e.className==="course-group-unassigned"),true);
+  const secondGrid=editor.children.find((e)=>e.className==="course-group-grid");
+  assert.equal(secondGrid.children.length,1);
+  const secondCount=secondGrid.children[0].children[2].children[0];
+  secondCount.value="1";secondCount.onchange();
+  assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
+  secondGrid.children[0].children.find((e)=>e.textContent==="그룹 삭제").onclick();
+  ctx=load();
+  groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3"));
+  assert.equal(groups.length,2);
+  assert.ok(groups.every((g)=>g.semester==="1"));
   f.elements.applicationResultsTab.listeners.click();
   assert.equal(f.elements.applicationGroupsPanel.classList.contains("hidden"),true);
   assert.equal(f.elements.applicationResultsPanel.classList.contains("hidden"),false);
@@ -1101,7 +1106,7 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.match(scopedTabs.children[0].textContent,/3학년/);
   assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
   const scopedGrid=editor.children.find((e)=>e.className==="course-group-grid");
-  const count=scopedGrid.children[1].children[2].children[0];
+  const count=scopedGrid.children[0].children[2].children[0];
   count.value="1";count.onchange();
   assert.equal(ctx.getCourseApplicationGroups().length,1);
   assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");

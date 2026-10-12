@@ -41,13 +41,10 @@ var createApplicationGroupFromCurriculum;
   const message = document.getElementById("courseGroupMessage");
   let groups = [];
   let available = new Map();
-  const selected = new Set();
-  let query = "";
   let activeScope = "";
   let targetGrades = ["2"];
   setApplicationTargetGrades = (grades) => {
     targetGrades = [...new Set(grades.map(String))];
-    selected.clear();
     renderCourseGroups();
   };
   let seeded = new Set();
@@ -129,7 +126,6 @@ var createApplicationGroupFromCurriculum;
       group.courses.push(course.subject); assigned.add(id);
     }
     for (const id of available.keys()) seeded.add(id);
-    for (const id of selected) if (!available.has(id)) selected.delete(id);
   }
   function persist() {
     try {
@@ -148,7 +144,6 @@ var createApplicationGroupFromCurriculum;
     if (year === activeCohortYear) return;
     persist();
     activeCohortYear = year;
-    selected.clear();
     try {
       readGroupData(activeCohortYear);
       renderCourseGroups();
@@ -198,6 +193,7 @@ var createApplicationGroupFromCurriculum;
       const before = existing.courses.length;
       existing.courses = existing.courses.filter((course) => !selectedCourses.has(course));
       movedCount += before - existing.courses.length;
+      if (existing.count > existing.courses.length) existing.count = null;
     }
     cohortGroups = cohortGroups.filter((existing) => existing.courses.length || existing.grade !== grade || existing.semester !== semester);
     const group = { id: crypto.randomUUID(), grade, semester, name, count: null, courses };
@@ -214,55 +210,19 @@ var createApplicationGroupFromCurriculum;
     b.type = "button"; b.className = "button"; b.textContent = text; b.onclick = action;
     return b;
   }
-  function move(grade, semester, targetId) {
-    const prefix=`${grade}:${semester}:`;
-    const names = [...selected].filter((id) => id.startsWith(prefix)).map((id) => id.slice(prefix.length));
-    if (!names.length) { message.textContent = "이동할 과목을 체크하세요."; return; }
-    const target = groups.find((g) => g.id === targetId);
-    if (targetId && (!target || target.grade !== grade || target.semester !== semester)) {
-      message.textContent = "같은 학년·학기의 그룹으로만 이동할 수 있습니다.";
-      return;
-    }
-    for (const group of groups.filter((g) => g.grade === grade && g.semester === semester)) {
-      group.courses = group.courses.filter((name) => !names.includes(name));
-    }
-    if (target) target.courses.push(...names);
-    selected.clear(); persist(); renderCourseGroups();
-    message.textContent = `${names.length}과목을 ${target ? target.name : "미분류"}로 이동했습니다. 그룹별 선택 수를 확인하세요.`;
-  }
-  function courseRow(course) {
-    const label = document.createElement("label"); label.className = "application-subject";
-    const box = document.createElement("input"); box.type = "checkbox";
-    const id = `${course.grade}:${course.semester}:${course.subject}`; box.checked = selected.has(id);
-    box.onchange = () => {
-      if (box.checked) selected.add(id); else selected.delete(id);
-      message.textContent = `${selected.size}과목 선택됨 · 위 이동 버튼으로 일괄 배치하세요.`;
-    };
-    label.append(box, document.createTextNode(`${course.subject} · ${course.semester || "미정"}학기 · ${course.area || "교과군 미정"}`));
-    return label;
-  }
   renderCourseGroups = () => {
     sync(); container.replaceChildren();
     persist();
     if (!available.size) { container.textContent = "편제표를 불러오면 과목이 미분류 목록에 표시됩니다."; return; }
-    const search = document.createElement("input"); search.type = "search"; search.placeholder = "과목·교과군 검색";
-    search.setAttribute("aria-label", "그룹 설정 과목 검색"); search.value = query;
-    search.onchange = () => { query = search.value.trim(); renderCourseGroups(); };
-    container.appendChild(search);
-    container.appendChild(button("편제표 색상으로 다시 구성",()=>{
-      if (!window.confirm(`${targetGrades.join("·")}학년 과목의 그룹 배치와 선택 수를 지우고 편제표 색상으로 다시 구성할까요? 다른 학년은 유지됩니다.`)) return;
-      groups=groups.filter((group)=>!targetGrades.includes(group.grade));
-      seeded=new Set([...seeded].filter((id)=>!targetGrades.includes(id.split(":")[0])));
-      selected.clear();renderCourseGroups();
-    }));
     const scopes=[...new Set([...available.values()].filter((c)=>targetGrades.includes(c.grade)).map((c)=>`${c.grade}:${c.semester}`))].sort();
     if (!scopes.includes(activeScope)) activeScope=scopes[0];
+    if (!activeScope) { container.textContent = "현재 학년의 편제표 과목이 없습니다."; return; }
     const tabs=document.createElement("div");tabs.className="group-scope-tabs"; tabs.setAttribute("role","tablist");
     tabs.setAttribute("aria-label","학년·학기 선택");
     for (const [scopeIndex,scope] of scopes.entries()) {
       const [grade,semester]=scope.split(":");
       const tab=button(`${grade}학년 ${semester==="0"?"학기 미정":semester+"학기"}`,()=>{
-        activeScope=scope;selected.clear();renderCourseGroups();
+        activeScope=scope;renderCourseGroups();
       });
       tab.setAttribute("role","tab");tab.setAttribute("aria-selected",String(activeScope===scope));tabs.appendChild(tab);
       tab.setAttribute("tabindex",activeScope===scope?"0":"-1");
@@ -271,7 +231,7 @@ var createApplicationGroupFromCurriculum;
           event.key==="ArrowLeft"?(scopeIndex+scopes.length-1)%scopes.length:
           event.key==="Home"?0:event.key==="End"?scopes.length-1:null;
         if (next===null) return;
-        event.preventDefault();activeScope=scopes[next];selected.clear();renderCourseGroups();
+        event.preventDefault();activeScope=scopes[next];renderCourseGroups();
         [...container.children].find((child) => child.className === "group-scope-tabs").children[next].focus();
       };
     }
@@ -284,59 +244,57 @@ var createApplicationGroupFromCurriculum;
       const heading = document.createElement("h4");
       heading.textContent = `${grade}학년 ${semester==="0"?"학기 미정":semester+"학기"} · 현재 ${Number(grade)-1}학년 신청`;
       container.appendChild(heading);
-      const name = document.createElement("input"); name.placeholder = "새 그룹명 (예: 사회·과학 선택)";
-      name.setAttribute("aria-label", `${grade}학년 새 그룹명`); name.maxLength = 100;
-      container.appendChild(name);
-      container.appendChild(button("그룹 만들기", () => {
-        if (!name.value.trim()) { message.textContent = "새 그룹명을 입력하세요."; name.focus(); return; }
-        groups.push({ id: crypto.randomUUID(), grade, semester, name: name.value.trim(), count: null, courses: [] });
-        persist(); renderCourseGroups();
-      }));
-      const target = document.createElement("select");
-      target.setAttribute("aria-label", `${grade}학년 선택 과목 이동 대상`);
-      const unassigned = document.createElement("option"); unassigned.value = ""; unassigned.textContent = "미분류";
-      target.appendChild(unassigned);
-      for (const g of gradeGroups) {
-        const option = document.createElement("option"); option.value = g.id; option.textContent = g.name; target.appendChild(option);
-      }
-      container.appendChild(target);
-      container.appendChild(button("선택 과목 일괄 이동", () => move(grade, semester, target.value)));
       const assigned = new Set(gradeGroups.flatMap((g) => g.courses));
-      const buckets = [{ name: "미분류", courses: courses.filter((c) => !assigned.has(c.subject)).map((c) => c.subject) }, ...gradeGroups];
+      const unassigned = courses.filter((course) => !assigned.has(course.subject));
       const grid=document.createElement("div");grid.className="course-group-grid";container.appendChild(grid);
-      for (const group of buckets) {
+      for (const group of gradeGroups) {
         const panel = document.createElement("fieldset");
-        panel.className = !group.id && !group.courses.length ? "course-group-empty" : "course-group-card";
+        panel.className = "course-group-card";
         if (group.fill) panel.style.borderTop=`6px solid ${group.fill}`;
         const legend = document.createElement("legend");
         legend.textContent = `${group.name} (${group.courses.length}과목)`; panel.appendChild(legend);
-        if (group.id) {
-          const nameLabel = document.createElement("label"); nameLabel.textContent = "그룹명 ";
-          nameLabel.className = "course-group-name";
-          const input = document.createElement("input"); input.value = group.name; input.maxLength = 100;
-          input.onchange = () => { group.name = input.value.trim(); persist(); };
-          nameLabel.appendChild(input); panel.appendChild(nameLabel);
-          const countLabel = document.createElement("label"); countLabel.textContent = "선택할 과목 수 (정확히)";
-          countLabel.className = "course-group-count";
-          const count = document.createElement("input"); count.type = "number"; count.min = "0"; count.max = String(group.courses.length);
-          count.placeholder = "직접 지정"; count.value = group.count ?? "";
-          count.onchange = () => { group.count = count.value === "" ? null : Number(count.value); persist(); };
-          countLabel.appendChild(count); panel.appendChild(countLabel);
-          grid.appendChild(panel);
-          panel.appendChild(button("그룹 삭제 · 과목은 미분류로", () => {
-            if (!window.confirm(`${group.name} 그룹을 삭제할까요? 과목은 미분류로 이동합니다.`)) return;
-            groups = groups.filter((g) => g.id !== group.id); persist(); renderCourseGroups();
-          }));
-        } else grid.appendChild(panel);
-        const visible = group.courses.map((subject) => available.get(`${grade}:${semester}:${subject}`))
-          .filter((c) => !query || `${c.subject} ${c.area}`.includes(query));
-        const selectVisible = button("표시 과목 전체 선택", () => {
-          for (const c of visible) selected.add(`${grade}:${semester}:${c.subject}`);
-          renderCourseGroups(); message.textContent = `${selected.size}과목 선택됨`;
-        });
-        selectVisible.disabled = !visible.length;
-        panel.appendChild(selectVisible);
-        for (const course of visible) panel.appendChild(courseRow(course));
+        const nameLabel = document.createElement("label"); nameLabel.textContent = "그룹명 ";
+        nameLabel.className = "course-group-name";
+        const input = document.createElement("input"); input.value = group.name; input.maxLength = 100;
+        input.onchange = () => { group.name = input.value.trim(); persist(); renderCourseGroups(); };
+        nameLabel.appendChild(input); panel.appendChild(nameLabel);
+        const countLabel = document.createElement("label"); countLabel.textContent = "선택할 과목 수 (정확히)";
+        countLabel.className = "course-group-count";
+        const count = document.createElement("input"); count.type = "number"; count.min = "0"; count.max = String(group.courses.length);
+        count.placeholder = "직접 지정"; count.value = group.count ?? "";
+        count.onchange = () => {
+          const value = count.value === "" ? null : Number(count.value);
+          if (value !== null && (!Number.isInteger(value) || value < 0 || value > group.courses.length)) {
+            count.setCustomValidity(`0~${group.courses.length} 사이의 정수를 입력하세요.`);
+            count.reportValidity();
+            count.setCustomValidity("");
+            count.value = group.count ?? "";
+            return;
+          }
+          group.count = value; persist(); renderCourseGroups();
+        };
+        countLabel.appendChild(count); panel.appendChild(countLabel);
+        const subjectList = document.createElement("p");
+        subjectList.className = "course-group-subject-summary";
+        subjectList.textContent = group.courses.join(" · ");
+        panel.appendChild(subjectList);
+        panel.appendChild(button("그룹 삭제", () => {
+          if (!window.confirm(`${group.name} 그룹을 삭제할까요? 소속 과목은 미분류로 돌아가며, 편제표에서 다시 배치할 수 있습니다.`)) return;
+          groups = groups.filter((g) => g.id !== group.id); persist(); renderCourseGroups();
+        }));
+        grid.appendChild(panel);
+      }
+      if (unassigned.length) {
+        const panel = document.createElement("section");
+        panel.className = "course-group-unassigned";
+        const title = document.createElement("strong");
+        title.textContent = `과목군 미지정 ${unassigned.length}과목`;
+        const list = document.createElement("p");
+        list.textContent = unassigned.map((course) => course.subject).join(" · ");
+        const edit = button("편제표에서 과목군 편성", () =>
+          document.querySelector('[data-workflow-step="1"]')?.click());
+        panel.append(title, list, edit);
+        container.appendChild(panel);
       }
     }
   };

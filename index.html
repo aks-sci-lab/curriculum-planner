@@ -104,7 +104,7 @@
           <div class="curriculum-group-creator-heading">
             <div>
               <h4 id="curriculumGroupCreatorTitle">선택과목군 빠르게 만들기</h4>
-              <p>그룹명과 대상 학년·학기를 정한 뒤 아래 과목을 클릭해 선택하고 완료를 누르세요.</p>
+              <p>그룹명과 대상 학년·학기를 정한 뒤 아래 편제표에서 과목 행을 눌러 담으세요.</p>
             </div>
             <button class="button button-primary" id="completeCurriculumGroup" type="button" disabled>선택과목군 완료</button>
           </div>
@@ -126,10 +126,9 @@
             </label>
             <span class="curriculum-group-cohort" id="curriculumGroupCohort"></span>
           </div>
-          <div class="curriculum-group-course-list" id="curriculumGroupCourseList" aria-label="선택과목군에 넣을 과목"></div>
           <div class="curriculum-group-creator-footer">
             <span id="curriculumGroupSelectionSummary" aria-live="polite"></span>
-            <span>선택할 과목 수는 생성 후 ‘과목·선택 그룹 확인’에서 지정할 수 있습니다.</span>
+            <span>선택할 과목 수는 2단계에서 확인·지정합니다. 편제표의 과목군 칸을 눌러 추가하거나 해제하세요.</span>
           </div>
         </section>
         <div class="curriculum-filename" id="curriculumTemplateFileName">편제표를 불러오지 않았습니다.</div>
@@ -183,7 +182,7 @@
           <div id="applicationSubjectList" class="application-subject-list"></div>
           </details>
           <h3>수강신청 선택 그룹 설정</h3>
-          <p class="note">같은 학기 열의 같은 배경색으로 선택 그룹을 구성합니다. 색 없는 과목은 학기별 미분류에서 편집·배치하세요. 선택 수는 직접 지정하며 다른 학기의 그룹으로 이동할 수 없습니다. 이전 그룹 설정은 학기별로 새로 지정해야 합니다. 색상 정보가 없는 기존 편제표는 다시 업로드한 뒤 색상으로 다시 구성하세요.</p>
+          <p class="note">과목군과 과목 배치는 1단계 편제표에서 구성합니다. 여기서는 그룹명·선택할 과목 수를 확인·수정하고, 과목군이 지정되지 않은 과목을 확인할 수 있습니다. 배치를 바꾸려면 1단계 편제표에서 대상 학년·학기를 고르고 과목 행을 눌러 그룹에 담으세요.</p>
           <div id="courseGroupEditor"></div>
           <p id="courseGroupMessage" role="status"></p>
         </section>
@@ -344,7 +343,7 @@
       </section>
       <section class="panel hidden" id="classifierPanel">
         <div class="roster-header">
-          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">새 반을 만든 뒤 과목 카드를 드래그해 이동수업 그룹으로 편성합니다.</p></div>
+          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">시간표용 이동수업 과목 분류입니다. 학생 선택과목군은 1단계 편제표에서 편성하고, 두 설정은 서로 구분해 관리합니다.</p></div>
         </div>
         <div class="semester-classifier" id="semesterClassifier"></div>
       </section>
@@ -618,12 +617,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261011-cohort-roster"></script>
-  <script src="xlsx-parser.js?v=20261011-cohort-roster" defer></script>
-  <script src="course-groups.js?v=20261011-cohort-roster" defer></script>
-  <script src="curriculum-workbook.js?v=20261011-cohort-roster" defer></script>
+  <script defer src="app.js?v=20261012-curriculum-groups"></script>
+  <script src="xlsx-parser.js?v=20261012-curriculum-groups" defer></script>
+  <script src="course-groups.js?v=20261012-curriculum-groups" defer></script>
+  <script src="curriculum-workbook.js?v=20261012-curriculum-groups" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261011-cohort-roster" defer></script>
+  <script src="supabase-client.js?v=20261012-curriculum-groups" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

@@ -218,6 +218,18 @@ test("three cohort upload cards show incoming years, saved status and promoted c
     .map((match) => match[1]), ["2028", "2027", "2026"]);
 });
 
+test("application cohort lookup is exposed for semester-group storage", () => {
+  const ctx=vm.createContext({
+    state:{applicationMenuGrade:"1",curriculumCohortYear:"2026"},
+    $:(selector)=>({value:selector==="#schoolYear"?"2027":""})
+  });
+  const source=functionSource("function applicationCohortYear(", "function renderCurriculumCohortUploads(");
+  assert.match(source,/getApplicationCohortYear = applicationCohortYear;/);
+  vm.runInContext(`var getApplicationCohortYear; ${source}`,ctx);
+  assert.equal(ctx.getApplicationCohortYear("1"),"2027");
+  assert.equal(ctx.getApplicationCohortYear("2"),"2026");
+});
+
 test("switching incoming cohort plans preserves each of the three uploads independently", () => {
   const state = {
     curriculumCohortYear: "2026", curriculumPlanFileName: "2026.xlsx",
@@ -632,7 +644,9 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   groups=[];
   assert.equal(ctx.courseGroupLabel(data.students[0].selections[0],"1"),"1학기 과학 선택");
   ctx.state.groupAssignments["4"]="manual";
-  assert.equal(ctx.courseGroupLabel(course,"1"),"미분류");
+  assert.equal(ctx.courseGroupLabel(course,"1"),"1학기 과학 선택");
+  ctx.state.groupAssignments["5"]="manual";
+  assert.equal(ctx.courseGroupLabel({name:"다른 과목",column:5,semesterKey:"1"},"1"),"1학기 미분류");
 });
 
 test("round deletion retains curriculum, other rounds and their classification settings", () => {
