@@ -299,6 +299,7 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
+  assert.match(html,/href="styles\.css\?v=20261012-curriculum-groups"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
