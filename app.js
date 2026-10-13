@@ -1,12 +1,7 @@
     "use strict";
     var getApplicationCohortYear;
     var createApplicationGroupFromCurriculum;
-    const curriculumSelectionGroupDraft = {
-      name: "",
-      grade: "2",
-      semester: "1",
-      courses: new Set()
-    };
+    let curriculumGroupTargetGrade = "2";
     const rawState = {
       students: [],
       courses: [],
@@ -1151,27 +1146,21 @@
       const columns = importedPlanColumnMap(layout);
       const courseRows = new Set();
       const matchingRows = new Set();
-      const selectableGroupCourses = new Set(curriculumGroupCourseOptions().map(([subject]) => subject));
-      const colorGroups = curriculumColorGroupOptions(layout, curriculumSelectionGroupDraft.grade,
-        curriculumSelectionGroupDraft.semester);
-      const colorGroupCourses = new Set(colorGroups.flatMap((group) => group.courses));
-      const colorGroupsByRow = new Map();
-      colorGroups.forEach((group, index) => {
-        if (!colorGroupsByRow.has(group.rowIndex)) colorGroupsByRow.set(group.rowIndex, []);
-        colorGroupsByRow.get(group.rowIndex).push({ ...group, index });
+      const colorGroupsBySemester = new Map(["1", "2"].map((semester) => [
+        semester,
+        curriculumColorGroupOptions(layout, curriculumGroupTargetGrade, semester)
+      ]));
+      const colorGroupsByRow = new Map(["1", "2"].map((semester) => [semester, new Map()]));
+      colorGroupsBySemester.forEach((groups, semester) => {
+        groups.forEach((group, index) => {
+          const byRow = colorGroupsByRow.get(semester);
+          if (!byRow.has(group.rowIndex)) byRow.set(group.rowIndex, []);
+          byRow.get(group.rowIndex).push({ ...group, index });
+        });
       });
-      const groupCoursesByRow = new Map();
       for (const context of importedPlanCourseContexts(layout, columns)) {
         const { rowIndex, row, grade: lastGrade, division: lastDivision, area: lastArea, detail: lastDetail, selectionType } = context;
         courseRows.add(rowIndex);
-        if (lastGrade.match(/[23]/)?.[0] === curriculumSelectionGroupDraft.grade &&
-            normalizeCurriculumDivision(lastDivision) === "학생 선택 교육과정" &&
-            isSelectableDetail(selectionType)) {
-          const subjects = String(context.subject).split(/[,，]/)
-            .map((subject) => subject.replace(/↔/g, " ").trim())
-            .filter((subject) => selectableGroupCourses.has(subject) && !colorGroupCourses.has(subject));
-          if (subjects.length) groupCoursesByRow.set(rowIndex, subjects);
-        }
         const rowGrade = lastGrade.match(/[123]/)?.[0] || "";
         const matchesGrade = !filters.grade || rowGrade === filters.grade;
         const normalizedDivision = lastDivision.replace(/↔/g, " ").trim();
@@ -1233,7 +1222,7 @@
           ? `${Math.max(44, Math.min(360, Math.round(excelWidth * 7 + 12)))}px`
           : "100px";
         return `<col style="width:${width}">`;
-      }).join("") + '<col class="curriculum-group-action-column">';
+      }      ).join("") + '<col class="curriculum-group-action-column"><col class="curriculum-group-action-column">';
       const tableRows = visibleRowIndexes.map((rowIndex) => {
         const row = rows[rowIndex] || [];
         const hasHeader = row.some((value) => /과목명|기준학점|운영학점|세부과목/.test(String(value ?? "")));
@@ -1258,17 +1247,17 @@
             : "";
           cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${sourceRow}" data-source-column="${column}"${span}${fillStyle}>${escapeHtml(value)}</td>`);
         }
-        const subjects = groupCoursesByRow.get(rowIndex) || [];
-        const groupButtons = subjects.map((subject) => {
-          const selected = curriculumSelectionGroupDraft.courses.has(subject);
-          return `<button class="curriculum-group-course" type="button" data-curriculum-group-course="${escapeHtml(subject)}" aria-pressed="${selected}">${selected ? "선택됨 · 해제" : "이 과목군에 담기"}</button>`;
-        }).join("");
-        const colorGroupButtons = (colorGroupsByRow.get(rowIndex) || []).map((group) =>
-          `<button class="curriculum-color-group-button" type="button" data-curriculum-color-group="${group.index}"${group.count > group.courses.length ? " disabled" : ""} title="${escapeHtml(group.courses.join(" · "))}">${escapeHtml(group.name)} 그룹 만들기 · ${group.courses.length}과목</button>`
-        ).join("");
-        cells.push(hasHeader && rowIndex === visibleRowIndexes[0]
-          ? '<th class="curriculum-group-action-heading">과목군 구성</th>'
-          : `<td class="curriculum-group-action-cell">${colorGroupButtons}${groupButtons}</td>`);
+        for (const semester of ["1", "2"]) {
+          if (hasHeader && rowIndex === visibleRowIndexes[0]) {
+            cells.push(`<th class="curriculum-group-action-heading">${semester}학기 그룹 만들기</th>`);
+            continue;
+          }
+          const groups = colorGroupsByRow.get(semester).get(rowIndex) || [];
+          const buttons = groups.map((group) =>
+            `<button class="curriculum-color-group-button" type="button" data-curriculum-color-group="${group.index}" data-curriculum-color-semester="${semester}"${group.count > group.courses.length ? " disabled" : ""} title="${escapeHtml(group.courses.join(" · "))}">${escapeHtml(group.name)} · ${group.courses.length}과목</button>`
+          ).join("");
+          cells.push(`<td class="curriculum-group-action-cell curriculum-group-semester-${semester}">${buttons}</td>`);
+        }
         return `<tr${hasHeader ? ' class="curriculum-source-header"' : ""}${rowStyle}>${cells.join("")}</tr>`;
       }).join("");
       return `<div class="curriculum-imported-sheet" aria-label="${escapeHtml(layout.sheetName || "불러온 편제표")}"><table class="curriculum-source-table"><colgroup>${colGroup}</colgroup><tbody>${tableRows}</tbody></table></div>`;
@@ -1581,7 +1570,9 @@
     function renderCurriculumStep() {
       renderCurriculumCohortUploads();
       $("#undoCurriculumEdit").disabled = !state.curriculumUndoStack.length;
-      renderCurriculumGroupCreator();
+      $("#curriculumGroupGrade").value = curriculumGroupTargetGrade;
+      $("#curriculumGroupCohort").textContent =
+        `${Number(state.curriculumCohortYear)}학년도 신입생 그룹으로 저장됩니다.`;
       updateCurriculumFilterOptions();
       $("#curriculumTemplateFileName").textContent = state.curriculumPlanFileName
         ? `${state.curriculumCohortYear}학년도 신입생 · ${state.curriculumPlanFileName}`
@@ -1597,47 +1588,6 @@
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
         $("#curriculumFilterCount").textContent = "0개 과목 표시";
       }
-    }
-
-    function curriculumGroupCourseOptions() {
-      const grade = curriculumSelectionGroupDraft.grade;
-      const semester = curriculumSelectionGroupDraft.semester;
-      const field = `sem${grade}${semester}`;
-      const options = new Map();
-      const hasHours = (value) => {
-        const normalized = String(value || "").trim();
-        return Boolean(normalized) && !/^[-–—]+$/.test(normalized) && !/^0(?:\.0+)?$/.test(normalized);
-      };
-      const addSubject = (subject, area) => {
-        for (const name of String(subject || "").split(/[,，]/)
-          .map((part) => part.replace(/↔/g, " ").trim()).filter(Boolean)) {
-          if (!options.has(name)) options.set(name, `${name} · ${area || "교과군 미정"}`);
-        }
-      };
-      for (const row of state.curriculumPlan) {
-        if (String(row.grade) !== grade ||
-          normalizeCurriculumDivision(row.division) !== "학생 선택 교육과정" ||
-          !isSelectableDetail(row.detail) || !hasHours(row[field])) continue;
-        addSubject(row.subject, row.area);
-      }
-      if (!options.size && state.curriculumImportedLayout) {
-        const layout = state.curriculumImportedLayout;
-        const columns = importedPlanColumnMap(layout);
-        const semesterColumn = columns.semesters[(Number(grade) - 1) * 2 + Number(semester) - 1];
-        if (semesterColumn >= 0) {
-          for (const context of importedPlanCourseContexts(layout, columns)) {
-            if (normalizeCurriculumDivision(context.division) !== "학생 선택 교육과정" ||
-              !isSelectableDetail(context.selectionType || context.detail)) continue;
-            const value = String(context.row[semesterColumn] ?? "").trim();
-            const schedule = value.match(/([123])\s*학년\s*[/／]\s*([12](?:\s*[,，·]\s*[12])*)\s*학기/);
-            const matchesSchedule = schedule
-              ? schedule[1] === grade && schedule[2].split(/[,，·]/).map((term) => term.trim()).includes(semester)
-              : hasHours(value);
-            if (matchesSchedule) addSubject(context.subject, context.area);
-          }
-        }
-      }
-      return [...options.entries()].sort(([a], [b]) => a.localeCompare(b, "ko"));
     }
 
     function curriculumColorGroupOptions(layout, grade, semester) {
@@ -1678,21 +1628,6 @@
         }
       }
       return [...groups.values()].map((group) => ({ ...group, courses: [...group.courses] }));
-    }
-
-    function renderCurriculumGroupCreator() {
-      const grade = curriculumSelectionGroupDraft.grade;
-      const semester = curriculumSelectionGroupDraft.semester;
-      const cohortYear = Number(state.curriculumCohortYear);
-      $("#curriculumGroupName").value = curriculumSelectionGroupDraft.name;
-      $("#curriculumGroupGrade").value = grade;
-      $("#curriculumGroupSemester").value = semester;
-      $("#curriculumGroupCohort").textContent = `${cohortYear}학년도 신입생 그룹으로 저장됩니다.`;
-      $("#curriculumGroupSelectionSummary").textContent = curriculumSelectionGroupDraft.courses.size
-        ? `과목군에 담을 과목 ${curriculumSelectionGroupDraft.courses.size}개: ${[...curriculumSelectionGroupDraft.courses].join(", ")}`
-        : `${grade}학년 ${semester}학기 학생 선택 과목의 과목군 구성 버튼을 편제표에서 누르세요.`;
-      $("#completeCurriculumGroup").disabled = !curriculumSelectionGroupDraft.name.trim() ||
-        curriculumSelectionGroupDraft.courses.size === 0;
     }
 
     function aggregateRecords(
@@ -3790,29 +3725,20 @@
       if (button.dataset.cohortUpload) curriculumPlanInput.click();
     });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
-    $("#curriculumGroupName").addEventListener("input", (event) => {
-      curriculumSelectionGroupDraft.name = event.target.value;
-      $("#completeCurriculumGroup").disabled = !curriculumSelectionGroupDraft.name.trim() ||
-        curriculumSelectionGroupDraft.courses.size === 0;
-    });
     $("#curriculumGroupGrade").addEventListener("change", (event) => {
-      curriculumSelectionGroupDraft.grade = event.target.value;
-      curriculumSelectionGroupDraft.courses.clear();
-      renderCurriculumGroupCreator();
-    });
-    $("#curriculumGroupSemester").addEventListener("change", (event) => {
-      curriculumSelectionGroupDraft.semester = event.target.value;
-      curriculumSelectionGroupDraft.courses.clear();
-      renderCurriculumGroupCreator();
+      curriculumGroupTargetGrade = event.target.value;
       renderCurriculumStep();
     });
-    $("#curriculumGroupGrade").addEventListener("change", () => renderCurriculumStep());
     $("#curriculumPlanWrap").addEventListener("click", (event) => {
       const colorGroupButton = event.target.closest("[data-curriculum-color-group]");
       if (colorGroupButton) {
         try {
+          if (typeof createApplicationGroupFromCurriculum !== "function") {
+            throw new Error("선택과목군 기능을 불러오지 못했습니다. 페이지를 새로고침하세요.");
+          }
+          const semester = colorGroupButton.dataset.curriculumColorSemester;
           const group = curriculumColorGroupOptions(state.curriculumImportedLayout,
-            curriculumSelectionGroupDraft.grade, curriculumSelectionGroupDraft.semester)[Number(colorGroupButton.dataset.curriculumColorGroup)];
+            curriculumGroupTargetGrade, semester)[Number(colorGroupButton.dataset.curriculumColorGroup)];
           if (!group || !group.courses.length) throw new Error("같은 색의 선택과목군 구성 과목을 찾지 못했습니다.");
           if (group.count > group.courses.length) {
             throw new Error(`${group.name}은 ${group.count}과목 선택인데 같은 색의 과목이 ${group.courses.length}개뿐입니다. 편제표 색을 확인하세요.`);
@@ -3832,39 +3758,6 @@
           status.textContent = error instanceof Error ? error.message : "색상 과목군을 만들지 못했습니다.";
         }
         return;
-      }
-      const course = event.target.closest("[data-curriculum-group-course]");
-      if (!course) return;
-      const subject = course.dataset.curriculumGroupCourse;
-      if (curriculumSelectionGroupDraft.courses.has(subject)) curriculumSelectionGroupDraft.courses.delete(subject);
-      else curriculumSelectionGroupDraft.courses.add(subject);
-      $("#completeCurriculumGroup").disabled = !curriculumSelectionGroupDraft.name.trim() ||
-        curriculumSelectionGroupDraft.courses.size === 0;
-      renderCurriculumGroupCreator();
-      renderCurriculumStep();
-    });
-    $("#completeCurriculumGroup").addEventListener("click", () => {
-      try {
-        if (typeof createApplicationGroupFromCurriculum !== "function") {
-          throw new Error("선택과목군 기능을 불러오지 못했습니다. 페이지를 새로고침하세요.");
-        }
-        const grade = curriculumSelectionGroupDraft.grade;
-        const year = String(state.curriculumCohortYear);
-        const created = createApplicationGroupFromCurriculum({
-          year,
-          grade,
-          semester: curriculumSelectionGroupDraft.semester,
-          name: curriculumSelectionGroupDraft.name,
-          courses: [...curriculumSelectionGroupDraft.courses]
-        });
-        curriculumSelectionGroupDraft.name = "";
-        curriculumSelectionGroupDraft.courses.clear();
-        renderCurriculumGroupCreator();
-        renderCurriculumStep();
-        showAppToast(`선택과목군을 만들었습니다${created.movedCount ? ` · 기존 그룹에서 ${created.movedCount}과목 이동` : ""}. 다음 단계에서 그룹별 선택 과목 수를 지정하세요.`);
-      } catch (error) {
-        status.style.color = "#a44939";
-        status.textContent = error instanceof Error ? error.message : "선택과목군을 만들지 못했습니다.";
       }
     });
     $("#addCurriculumPlanRow").addEventListener("click", appendBlankImportedPlanRow);

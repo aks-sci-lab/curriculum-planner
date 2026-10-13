@@ -299,7 +299,7 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261012-color-groups"/);
+  assert.match(html,/href="styles\.css\?v=20261012-semester-group-columns"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -1162,6 +1162,15 @@ test("curriculum group creation stores clicked subjects under the matching cohor
     {grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["국어"]},
     {grade:"3",semester:"2",name:"택3",count:2,courses:["영어","사회"]}
   ]);
+  const appSource=fs.readFileSync(path.join(__dirname,"..","app.js"),"utf8");
+  const appContext=vm.createContext({getApplicationGroupSettings:()=>groups});
+  vm.runInContext(appSource.slice(
+    appSource.indexOf("function applicationGroupForCourse("),
+    appSource.indexOf("function classifyApplicationRecords(")
+  ),appContext);
+  assert.deepEqual(JSON.parse(JSON.stringify(appContext.applicationGroupForCourse({
+    name:"영어",subject:"영어",semesterKey:"2"
+  },"2"))),{name:"택3",semester:"2"});
   assert.throws(()=>context.createApplicationGroupFromCurriculum({
     year:"2025",grade:"3",semester:"2",name:"택5",count:5,courses:["영어","사회"]
   }),/0~2/);
