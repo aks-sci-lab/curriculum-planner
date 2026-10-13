@@ -31,11 +31,18 @@ var switchApplicationMenuGrade;
   const key = "curriculum-color-semester-groups-v3";
   const container = document.getElementById("courseGroupEditor");
   const message = document.getElementById("courseGroupMessage");
+  const groupNameDialog = document.getElementById("courseGroupNameDialog");
+  const groupNameForm = document.getElementById("courseGroupNameForm");
+  const groupNameInput = document.getElementById("courseGroupNameInput");
+  const groupNameTitle = document.getElementById("courseGroupNameTitle");
+  const groupNameDescription = document.getElementById("courseGroupNameDescription");
+  const groupNameCancel = document.getElementById("courseGroupNameCancel");
   let groups = [];
   let available = new Map();
   const selected = new Set();
   let query = "";
   let activeScope = "";
+  let pendingGroupName = null;
   let targetGrades = ["2"];
   setApplicationTargetGrades = (grades) => {
     targetGrades = [...new Set(grades.map(String))];
@@ -112,6 +119,58 @@ var switchApplicationMenuGrade;
       message.textContent = `그룹 저장 실패: ${error.message}`;
     }
   }
+  function openGroupNameDialog({ grade, semester, groupId = "" }) {
+    pendingGroupName = { grade, semester, groupId };
+    const group = groupId ? groups.find((item) => item.id === groupId) : null;
+    groupNameTitle.textContent = group ? "과목군 이름 변경" : "새 과목군 이름 입력";
+    groupNameDescription.textContent = group
+      ? "선택 그룹 버튼에 표시할 이름을 입력하세요."
+      : "학생에게 표시할 선택 과목군 이름을 입력하세요.";
+    groupNameInput.value = group?.name || "";
+    groupNameInput.placeholder = "예: 사회·과학 선택";
+    groupNameDialog.showModal();
+    groupNameInput.focus();
+  }
+  groupNameForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = groupNameInput.value.replace(/\s+/g, " ").trim();
+    if (!name) {
+      message.textContent = "과목군 이름을 입력하세요.";
+      groupNameInput.focus();
+      return;
+    }
+    if (!pendingGroupName) {
+      message.textContent = "이름을 설정할 과목군을 찾지 못했습니다. 다시 시도하세요.";
+      return;
+    }
+    const group = pendingGroupName.groupId
+      ? groups.find((item) => item.id === pendingGroupName.groupId)
+      : null;
+    if (pendingGroupName.groupId && !group) {
+      pendingGroupName = null;
+      groupNameDialog.close();
+      message.textContent = "과목군이 이미 삭제되어 이름을 변경하지 못했습니다.";
+      return;
+    }
+    if (group) group.name = name;
+    else groups.push({
+      id: crypto.randomUUID(),
+      grade: pendingGroupName.grade,
+      semester: pendingGroupName.semester,
+      name,
+      count: null,
+      courses: [],
+    });
+    pendingGroupName = null;
+    groupNameDialog.close();
+    message.textContent = group ? "과목군 이름을 변경했습니다." : "과목군을 만들었습니다.";
+    renderCourseGroups();
+  });
+  groupNameCancel.addEventListener("click", () => {
+    pendingGroupName = null;
+    groupNameDialog.close();
+  });
+  groupNameDialog.addEventListener("cancel", () => { pendingGroupName = null; });
   getApplicationGroupSettings = () => {
     sync();
     return JSON.parse(JSON.stringify(groups));
@@ -191,14 +250,7 @@ var switchApplicationMenuGrade;
       const heading = document.createElement("h4");
       heading.textContent = `${grade}학년 ${semester==="0"?"학기 미정":semester+"학기"} · 현재 ${Number(grade)-1}학년 신청`;
       container.appendChild(heading);
-      const name = document.createElement("input"); name.placeholder = "새 그룹명 (예: 사회·과학 선택)";
-      name.setAttribute("aria-label", `${grade}학년 새 그룹명`); name.maxLength = 100;
-      container.appendChild(name);
-      container.appendChild(button("그룹 만들기", () => {
-        if (!name.value.trim()) { message.textContent = "새 그룹명을 입력하세요."; name.focus(); return; }
-        groups.push({ id: crypto.randomUUID(), grade, semester, name: name.value.trim(), count: null, courses: [] });
-        persist(); renderCourseGroups();
-      }));
+      container.appendChild(button("그룹 만들기", () => openGroupNameDialog({ grade, semester })));
       const target = document.createElement("select");
       target.setAttribute("aria-label", `${grade}학년 선택 과목 이동 대상`);
       const unassigned = document.createElement("option"); unassigned.value = ""; unassigned.textContent = "미분류";
@@ -218,11 +270,11 @@ var switchApplicationMenuGrade;
         const legend = document.createElement("legend");
         legend.textContent = `${group.name} (${group.courses.length}과목)`; panel.appendChild(legend);
         if (group.id) {
-          const nameLabel = document.createElement("label"); nameLabel.textContent = "그룹명 ";
-          nameLabel.className = "course-group-name";
-          const input = document.createElement("input"); input.value = group.name; input.maxLength = 100;
-          input.onchange = () => { group.name = input.value.trim(); persist(); };
-          nameLabel.appendChild(input); panel.appendChild(nameLabel);
+          const nameButton = button(`택${group.count ?? "N"} · ${group.courses.length}과목`, () =>
+            openGroupNameDialog({ grade, semester, groupId: group.id }));
+          nameButton.className = "button course-group-name-trigger";
+          nameButton.setAttribute("aria-label", `${group.name} 과목군 이름 입력`);
+          panel.appendChild(nameButton);
           const countLabel = document.createElement("label"); countLabel.textContent = "선택할 과목 수 (정확히)";
           countLabel.className = "course-group-count";
           const count = document.createElement("input"); count.type = "number"; count.min = "0"; count.max = String(group.courses.length);

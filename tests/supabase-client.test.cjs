@@ -177,6 +177,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     else { context.state.applicationMenuGrade=grade; context.updateApplicationGradeControls(); }
   };
   fixtureData.groupSettings=()=>context.getApplicationGroupSettings();
+  fixtureData.renderGroups=()=>context.renderCourseGroups();
   return fixtureData;
 }
 
@@ -194,7 +195,7 @@ test("grade menus scope groups and rebuild colors without removing the other gra
   const grid=f.elements.courseGroupEditor.children.find((child)=>child.className==="course-group-grid");
   assert.equal(grid.children[0].className,"course-group-empty");
   assert.equal(grid.children[0].children.find((child)=>child.textContent==="표시 과목 전체 선택").disabled,true);
-  assert.equal(grid.children[1].children[1].className,"course-group-name");
+  assert.equal(grid.children[1].children[1].className,"button course-group-name-trigger");
   assert.equal(grid.children[1].children[2].className,"course-group-count");
   const tabs=f.elements.courseGroupEditor.children.find((child)=>child.className==="group-scope-tabs");
   assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
@@ -714,8 +715,11 @@ test("teacher log controls send the exact server cutoff and optional student id"
     const editor=f.elements.courseGroupEditor;
     const grid=()=>editor.children.find((e)=>e.className==="course-group-grid");
     assert.equal(grid().children.filter((e)=>e.tag==="fieldset").length,1);
-    editor.children.find((e)=>e.placeholder?.startsWith("새 그룹명")).value="사회·과학";
     editor.children.find((e)=>e.textContent==="그룹 만들기").onclick();
+    assert.equal(f.elements.courseGroupNameDialog.open,true);
+    f.elements.courseGroupNameInput.value="사회·과학";
+    f.elements.courseGroupNameForm.listeners.submit({preventDefault(){}});
+    assert.equal(f.elements.courseGroupNameDialog.open,false);
     let panels=grid().children.filter((e)=>e.tag==="fieldset");
     panels[0].children.find((e)=>e.textContent==="표시 과목 전체 선택").onclick();
     const destination=editor.children.find((e)=>e.tag==="select");
@@ -905,6 +909,39 @@ test("manual aggregate refresh disables repeat clicks and reports no linked appl
   assert.equal(f.aggregateRenders,1);
   assert.match(f.elements.aggregateRefreshStatus.textContent,/연동 신청 없음/);
   assert.equal(f.requests.some((request)=>request.body?.p_action==="export"),false);
+});
+
+test("color-group label opens a dialog to rename the group and cancel leaves it unchanged", () => {
+  const storage=new Map([["curriculum-color-semester-groups-v3",JSON.stringify([
+    {id:"color-group",grade:"2",semester:"1",name:"색상 그룹 1",count:null,courses:["과학"],fill:"#E2EFD9"},
+  ])]]);
+  const f=fixture({storage,menus:true,subjects:{
+    "2":[{subject:"과학",semester:"1",semesterColors:{"1":"#E2EFD9"}}],
+    "3":[],
+  }});
+  f.setGrade("1");
+  f.renderGroups();
+  const editor=f.elements.courseGroupEditor;
+  const grid=editor.children.find((element)=>element.className==="course-group-grid");
+  const panel=grid.children.find((element)=>element.tag==="fieldset" &&
+    element.children.some((child)=>child.className==="button course-group-name-trigger"));
+  const nameButton=panel.children.find((child)=>child.className==="button course-group-name-trigger");
+  assert.equal(nameButton.textContent,"택N · 1과목");
+  nameButton.onclick();
+  assert.equal(f.elements.courseGroupNameDialog.open,true);
+  assert.equal(f.elements.courseGroupNameInput.value,"색상 그룹 1");
+  f.elements.courseGroupNameInput.value="과학 선택";
+  f.elements.courseGroupNameForm.listeners.submit({preventDefault(){}});
+  assert.equal(f.elements.courseGroupNameDialog.open,false);
+  assert.equal(f.groupSettings()[0].name,"과학 선택");
+  assert.equal(JSON.parse(storage.get("curriculum-color-semester-groups-v3"))[0].name,"과학 선택");
+  const updatedGrid=editor.children.find((element)=>element.className==="course-group-grid");
+  const updatedPanel=updatedGrid.children.find((element)=>element.tag==="fieldset" &&
+    element.children.some((child)=>child.className==="button course-group-name-trigger"));
+  updatedPanel.children.find((child)=>child.className==="button course-group-name-trigger").onclick();
+  f.elements.courseGroupNameInput.value="취소된 이름";
+  f.elements.courseGroupNameCancel.listeners.click();
+  assert.equal(f.groupSettings()[0].name,"과학 선택");
 });
 
 test("color groups are semester scoped, editable and retain unassigned courses after reload", () => {

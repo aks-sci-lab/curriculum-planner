@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261007-reactive-realtime">
+  <link rel="stylesheet" href="styles.css?v=20261008-group-dialog-font-scale">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -321,6 +321,18 @@
     <button class="button" id="cloudCodePrint" type="button">선택한 반 전체 인쇄</button>
     <button class="button" id="cloudCodeClose" type="button">닫기</button>
     <div id="cloudCodePreview"></div>
+  </dialog>
+  <dialog id="courseGroupNameDialog" aria-labelledby="courseGroupNameTitle">
+    <form id="courseGroupNameForm">
+      <h2 id="courseGroupNameTitle">과목군 이름 입력</h2>
+      <p id="courseGroupNameDescription">학생에게 표시할 선택 과목군 이름을 입력하세요.</p>
+      <label for="courseGroupNameInput">그룹명</label>
+      <input id="courseGroupNameInput" type="text" maxlength="100" required autocomplete="off">
+      <div class="course-group-dialog-actions">
+        <button class="button button-secondary" id="courseGroupNameCancel" type="button">취소</button>
+        <button class="button button-primary" type="submit">저장</button>
+      </div>
+    </form>
   </dialog>
 
   <script defer src="app.js?v=20261008-class-allocation"></script>
