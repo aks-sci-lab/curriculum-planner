@@ -330,12 +330,34 @@ test("2027 and 2028 applications use their incoming cohort's promoted-grade cour
     assert.equal(ctx.collectApplicationSubjects()["3"][0].subject, `${year-1} 입학생 3학년 과목`);
   }
 });
-test("curriculum group creation uses two semester columns instead of a semester picker", () => {
-  assert.match(html, /id="curriculumGroupGrade"/);
-  assert.doesNotMatch(html, /curriculumGroupSemester|curriculumGroupName|completeCurriculumGroup/);
-  assert.match(frontend, /curriculumColorGroupOptions\(layout, curriculumGroupTargetGrade, semester\)/);
-  assert.match(frontend, /class="curriculum-group-action-heading">\$\{semester\}학기 그룹 만들기/);
-  assert.match(frontend, /data-curriculum-color-semester="\$\{semester\}"/);
+test("curriculum group course choices fall back to the uploaded layout and keep subject names unchanged", () => {
+  const ctx = vm.createContext({
+    curriculumSelectionGroupDraft: { grade: "2", semester: "1" },
+    state: {
+      curriculumPlan: [],
+      curriculumImportedLayout: { rows: [] },
+    },
+    normalizeCurriculumDivision: (value) => String(value).includes("학생") ? "학생 선택 교육과정" : "학교 지정 교육과정",
+    isSelectableDetail: (value) => ["일반선택", "진로선택", "융합선택"].includes(value),
+    importedPlanColumnMap: () => ({ semesters: [-1, -1, 2, 3, -1, -1] }),
+    importedPlanCourseContexts: () => [
+      { subject: "생명과학", division: "학생 선택 교육과정", selectionType: "일반선택",
+        area: "과학", row: ["", "", "3", "3"] },
+      { subject: "학교 지정 과목", division: "학교 지정 교육과정", selectionType: "일반선택",
+        area: "과학", row: ["", "", "3", ""] },
+      { subject: "공통 과목", division: "학생 선택 교육과정", selectionType: "공통",
+        area: "과학", row: ["", "", "3", ""] },
+    ],
+  });
+  vm.runInContext(functionSource("function curriculumGroupCourseOptions(", "function renderCurriculumGroupCreator("), ctx);
+  assert.deepEqual(plain(ctx.curriculumGroupCourseOptions()), [["생명과학", "생명과학 · 과학"]]);
+
+  ctx.state.curriculumPlan = [{
+    grade: "2", division: "학생 선택 교육과정", detail: "일반선택", subject: "생명과학",
+    area: "과학", sem21: "3", sem22: "3",
+  }];
+  ctx.curriculumSelectionGroupDraft.semester = "2";
+  assert.deepEqual(plain(ctx.curriculumGroupCourseOptions()), [["생명과학", "생명과학 · 과학"]]);
 });
 
 test("merged subject header uses actual course names and splits course lists by promoted semester", () => {
@@ -376,7 +398,7 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학 실험").semesterColors["2"],"#D6DCE4");
   ctx.normalizeCurriculumDivision=(value)=>String(value).includes("학생")?"학생 선택 교육과정":"학교 지정 교육과정";
   ctx.isSelectableDetail=(value)=>["일반선택","진로선택","융합선택"].includes(value);
-  vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function aggregateRecords("),ctx);
+  vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function renderCurriculumGroupCreator("),ctx);
   layout.rows[3][8]="택3";
   layout.cellFills["3:8"]="#E2EFD9";
   layout.cellFills["4:8"]="#E2EFD9";
