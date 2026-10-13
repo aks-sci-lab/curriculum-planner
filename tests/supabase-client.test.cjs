@@ -30,6 +30,8 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   getAttribute(name) { return this[name]; }
+  setCustomValidity(message) { this.validationMessage = message; }
+  reportValidity() { return !this.validationMessage; }
   showModal() { this.open = true; }
   close() { this.open = false; }
   click() { this.clicked = true; }
@@ -53,8 +55,9 @@ class Element {
   }
 }
 
-function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects, WebSocketClass } = {}) {
+function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects, WebSocketClass, onLine = true } = {}) {
   const elements = {};
+  const network = { onLine };
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) elements[match[2]] = new Element(match[1]);
   for (const [name,panel] of [["Groups","applicationGroupsPanel"],["Online","supabaseTeacherPanel"],
@@ -76,7 +79,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
       createElement: (tag) => new Element(tag),
       createTextNode: (text) => Object.assign(new Element("#text"), { textContent: text }),
     },
-    URL, URLSearchParams, crypto: webcrypto, TextEncoder,
+    URL, URLSearchParams, crypto: webcrypto, TextEncoder, navigator: network,
     Date: class extends Date {
       static now() { return fixtureData.now ?? Date.now(); }
     },
@@ -116,9 +119,6 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     selectedApplicationSubjects: () => fixtureData.subjects,
     renderApplicationSubjects: () => { fixtureData.renderedGrade = context.state.applicationMenuGrade; },
     renderRoundStatus: () => {},
-    renderAggregate: () => { fixtureData.aggregateRenders = (fixtureData.aggregateRenders || 0) + 1; },
-    renderClosurePanel: () => {},
-    renderRetakePanel: () => {},
     getCourseApplicationGroups: () => [{id:"g1",grade:"2",name:"수학",count:1,courses:["수학"]}],
     setApplicationTargetGrades: (grades) => { fixtureData.targetGrades = grades; },
     getGroupedApplicationSubjects: () => fixtureData.subjects,
@@ -148,7 +148,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     context.WebSocket.OPEN = WebSocketClass.OPEN;
   }
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets, poll:null,
+    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets,
     subjects: subjects || { "2": [{subject:"수학",credit:3,semester:"1"}], "3": [] },
     roster: [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     respond: respond || (async () => ({ data: [] })),
@@ -161,7 +161,15 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     },
     openRealtime() { sockets[sockets.length-1]?.open(); },
     notifyRealtime(id) { sockets[sockets.length-1]?.notify(id); },
+    setOnline(value) {
+      network.onLine = value;
+      fixtureData.activity[value ? "online" : "offline"]?.();
+    },
+    requireLogin() { return context.requireTeacherLogin(); },
   };
+  const frontend = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  vm.runInContext(frontend.slice(frontend.indexOf("function validateApplicationRosterGrade("),
+    frontend.indexOf("function downloadTextFile(")), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor", "qrcode.js"), "utf8"), context);
   const generateQR=context.qrcode;
   context.qrcode=(...args)=>{
@@ -177,11 +185,81 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     else { context.state.applicationMenuGrade=grade; context.updateApplicationGradeControls(); }
   };
   fixtureData.groupSettings=()=>context.getApplicationGroupSettings();
-  fixtureData.renderGroups=()=>context.renderCourseGroups();
   return fixtureData;
 }
 
-test("grade menus scope groups and rebuild colors without removing the other grade", async () => {
+test("teacher selection editor loads roster without codes and validates group counts before authenticated save", async () => {
+  const event = { id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", school_name: "테스트", school_year: "2026",
+    round: "1", is_open: false, subjects: { "2": [{ subject: "A", credit: 3 }, { subject: "B", credit: 4 }], "3": [] } };
+  const storage = new Map([["curriculum-teacher-session-v1", JSON.stringify({
+    lastActivity: Date.now(), session: { access_token: "token", refresh_token: "refresh",
+      expires_at: Date.now() / 1000 + 3600, user: { id: "owner", email: "teacher@example.com" } }
+  })]]);
+  const f = fixture({ storage, respond: async (request) => {
+    if (request.url.includes("/course_events?")) return { data: [event] };
+    if (request.url.endsWith("/get_teacher_course_applications")) return { data: {
+      entries: [{ id: "student", grade: "1", classroom: "1", number: "1", name: "학생", selections: ["A"], submittedAt: null }],
+      subjects: event.subjects, groups: [{ grade: "2", name: "선택", count: 1, courses: ["A", "B"] }]
+    } };
+    if (request.url.endsWith("/save_teacher_course_application")) return { data: { message: "저장" } };
+    return { data: [] };
+  } });
+  await f.settle();
+  const edit = f.elements.cloudEventList.children[0].children.find((child) => child.textContent === "학생 선택 과목 변경");
+  edit.listeners.click();
+  await f.settle();
+  assert.equal(f.elements.cloudTeacherEditDialog.open, true);
+  assert.match(f.elements.cloudTeacherEditStudent.children[0].textContent, /미제출/);
+  f.elements.cloudTeacherEditSearch.value = "없는 학생";
+  await f.fire("cloudTeacherEditSearch", "input");
+  assert.match(f.elements.cloudTeacherEditMessage.textContent, /검색 결과가 없습니다/);
+  f.elements.cloudTeacherEditSearch.value = "학생";
+  await f.fire("cloudTeacherEditSearch", "input");
+  assert.equal(f.elements.cloudTeacherEditMessage.textContent, "");
+  assert.match(f.elements.cloudTeacherEditSummary.textContent, /현재 1과목 선택/);
+  assert.match(f.elements.cloudTeacherEditChoices.children[0].children[0].textContent, /1\/1 선택/);
+  const boxes = f.elements.cloudTeacherEditChoices.querySelectorAll("input");
+  assert.equal(boxes[0].checked, true);
+  boxes[1].checked = true;
+  await f.fire("cloudTeacherEditChoices", "change");
+  assert.match(f.elements.cloudTeacherEditChoices.children[0].children[0].textContent, /2\/1 선택/);
+  await f.fire("cloudTeacherEditForm", "submit");
+  assert.match(f.elements.cloudTeacherEditMessage.textContent, /선택 수/);
+  assert.equal(f.requests.filter((request) => request.url.endsWith("/save_teacher_course_application")).length, 0);
+  boxes[0].checked = false;
+  await f.fire("cloudTeacherEditForm", "submit");
+  const save = f.requests.find((request) => request.url.endsWith("/save_teacher_course_application"));
+  assert.deepEqual(save.body, { p_event: event.id, p_student: "student", p_selections: ["B"],
+    p_previous_selections: ["A"], p_previous_submitted_at: null });
+  assert.equal(save.options.headers.Authorization, "Bearer token");
+  assert.equal(f.elements.cloudTeacherEditDialog.open, false);
+  assert.equal(f.elements.cloudTeacherEditSave.disabled, false);
+});
+
+test("offline workspaces bypass teacher login and keep cloud application controls unavailable", async () => {
+  const fileWorkspace = fixture({ href: "file:///C:/curriculum-planner/index.html" });
+  await fileWorkspace.settle();
+  assert.equal(fileWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false);
+  assert.equal(fileWorkspace.elements.teacherLoginGate.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.curriculumLoginStatus.textContent, "오프라인 · 로컬 기능 사용 가능");
+  assert.equal(fileWorkspace.elements.curriculumGoogleLogin.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.cloudTeacherOfflineNotice.classList.contains("hidden"), false);
+  assert.equal(fileWorkspace.requireLogin(), false);
+  assert.match(fileWorkspace.elements.cloudTeacherMessage.textContent, /온라인 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다/);
+  assert.deepEqual(fileWorkspace.redirects, []);
+
+  const reconnectingWorkspace = fixture({ onLine: false });
+  await reconnectingWorkspace.settle();
+  assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false);
+  reconnectingWorkspace.setOnline(true);
+  assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), true);
+  assert.equal(reconnectingWorkspace.elements.teacherLoginGate.classList.contains("hidden"), false);
+  assert.equal(reconnectingWorkspace.elements.cloudTeacherOfflineNotice.classList.contains("hidden"), true);
+  assert.equal(reconnectingWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), false);
+});
+
+test("grade menus scope curriculum groups and offer table-based assignment for unassigned courses", async () => {
   const key = "curriculum-color-semester-groups-v3";
   const storage = new Map([[key, JSON.stringify([
     {id:"g2",grade:"2",semester:"1",name:"2학년 보관",count:1,courses:["수학"]},
@@ -193,13 +271,14 @@ test("grade menus scope groups and rebuild colors without removing the other gra
   assert.equal(f.renderedGrade,"1");
   assert.equal(f.elements.applicationGrade1Tab["aria-selected"],"true");
   const grid=f.elements.courseGroupEditor.children.find((child)=>child.className==="course-group-grid");
-  assert.equal(grid.children[0].className,"course-group-empty");
-  assert.equal(grid.children[0].children.find((child)=>child.textContent==="표시 과목 전체 선택").disabled,true);
-  assert.equal(grid.children[1].children[1].className,"button course-group-name-trigger");
-  assert.equal(grid.children[1].children[2].className,"course-group-count");
+  assert.equal(grid.children.length,1);
+  assert.equal(grid.children[0].className,"course-group-card");
+  assert.equal(grid.children[0].children[1].className,"course-group-name");
+  assert.equal(grid.children[0].children[2].className,"course-group-count");
   const tabs=f.elements.courseGroupEditor.children.find((child)=>child.className==="group-scope-tabs");
   assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
-  f.elements.courseGroupEditor.children.find((child)=>child.textContent==="편제표 색상으로 다시 구성").onclick();
+  assert.equal(f.elements.courseGroupEditor.children.some((child)=>child.tag==="select"),false);
+  assert.equal(f.elements.courseGroupEditor.children.some((child)=>child.textContent==="편제표에서 과목군 편성"),false);
   assert.ok(f.groupSettings().some((group)=>group.grade==="3" && group.name==="3학년 보관"));
   await f.fire("applicationGrade2Tab","click");
   assert.equal(f.renderedGrade,"2");
@@ -220,6 +299,16 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
+  assert.match(html,/href="styles\.css\?v=20261012-semester-group-columns"/);
+});
+
+test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
+  const root = path.join(__dirname, "..");
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert.match(html, /id="curriculumPlanInput"/);
+  assert.doesNotMatch(html, /curriculumInput|curriculumPickList|저장된 교육과정 불러오기/);
+  assert.doesNotMatch(app, /handleCurriculumWorkbook|renderCurriculumCatalog|curriculumPickList/);
 });
 
 test("teacher student preview uses real selection flow without submitting to server and restores on close", async () => {
@@ -240,7 +329,7 @@ test("teacher student preview uses real selection flow without submitting to ser
   assert.equal(f.elements.cloudStudentChoices.children.length,0);
 });
 
-test("grade menus filter online events, roster uploads and preserve each grade's draft", async () => {
+test("grade menus reject mixed and wrong-grade rosters and preserve each valid grade draft", async () => {
   const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
     access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,user:{email:"teacher@example.invalid"}
   }})]]);
@@ -256,12 +345,20 @@ test("grade menus filter online events, roster uploads and preserve each grade's
   f.roster.push({grade:"2",classroom:"1",number:"1",name:"2학년 학생"});
   const upload=()=>{f.elements.cloudRosterInput.files=[{name:"명렬.xlsx",arrayBuffer:async()=>new ArrayBuffer(0)}];return f.fire("cloudRosterInput","change");};
   await upload();
-  assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명.*다른 학년 1명 제외/);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/2학년 수강신청에는 현재 1학년 명렬만/);
+  assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  f.roster = [{grade:"1",classroom:"1",number:"1",name:"1학년 학생"}];
+  await upload();
+  assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명/);
   const first=f.elements.cloudRosterSummary.textContent;
   f.setGrade("2");
   assert.equal(f.elements.cloudCreateEvent.disabled,true);
   assert.equal(f.elements.cloudEventList.children.length,1);
   assert.match(f.elements.cloudEventList.children[0].children[0].textContent,/현재 2학년/);
+  await upload();
+  assert.match(f.elements.cloudTeacherMessage.textContent,/3학년 수강신청에는 현재 2학년 명렬만/);
+  assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  f.roster = [{grade:"2",classroom:"1",number:"1",name:"2학년 학생"}];
   await upload();
   assert.match(f.elements.cloudRosterSummary.textContent,/현재 2학년 1명/);
   f.setGrade("1");
@@ -269,12 +366,43 @@ test("grade menus filter online events, roster uploads and preserve each grade's
   assert.equal(f.elements.cloudCreateEvent.disabled,false);
   f.roster=[{grade:"2",classroom:"1",number:"1",name:"다른 학년"}];
   await upload();
-  assert.match(f.elements.cloudTeacherMessage.textContent,/현재 1학년 학생이 없는 명렬/);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/2학년 수강신청에는 현재 1학년 명렬만/);
   assert.equal(f.elements.cloudCreateEvent.disabled,true);
+});
+
+test("academic-year changes isolate roster drafts and restore them only in the original year", async () => {
+  const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({lastActivity:Date.now(),session:{
+    access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,user:{email:"teacher@example.invalid"}
+  }})]]);
+  const f=fixture({storage});
+  await f.settle();
+  f.elements.schoolYear.value="2026";
+  f.setGrade("1");
+  f.elements.cloudRosterInput.files=[{name:"2026.xlsx",arrayBuffer:async()=>new ArrayBuffer(0)}];
+  await f.fire("cloudRosterInput","change");
+  assert.equal(f.elements.cloudCreateEvent.disabled,false);
+  const summary=f.elements.cloudRosterSummary.textContent;
+  for (const year of ["2027","2028"]) {
+    f.elements.schoolYear.value=year;
+    f.setGrade("1");
+    assert.equal(f.elements.cloudCreateEvent.disabled,true);
+  }
+  f.elements.schoolYear.value="2026";
+  f.setGrade("1");
+  assert.equal(f.elements.cloudCreateEvent.disabled,false);
+  assert.equal(f.elements.cloudRosterSummary.textContent,summary);
 });
 
 test("student flow uses public RPC only, displays own data and submits selections", async () => {
   const f = fixture();
+  const progress = f.elements.cloudStudentProgress;
+  progress.children = [1, 2, 3].map((step) => {
+    const item = new Element("li");
+    item.dataset.progressStep = String(step);
+    item.appendChild(new Element("span"));
+    item.appendChild(Object.assign(new Element("small"), { textContent: step === 2 ? "과목 선택" : "" }));
+    return item;
+  });
   const data = {
     student: { grade: "1", classroom: "2", number: "3", name: "가상학생" },
     schoolName: "가상학교", schoolYear: "2026", round: "2", open: true,
@@ -286,6 +414,9 @@ test("student flow uses public RPC only, displays own data and submits selection
   f.respond = async (request) => ({ data: request.url.endsWith("get_course_application") ? data : { message: "저장 완료" } });
   f.elements.cloudStudentCode.value = "a".repeat(32);
   await f.fire("cloudStudentLogin", "submit");
+  assert.equal(progress.children[0].classList.contains("is-complete"), true);
+  assert.equal(progress.children[1].getAttribute("aria-current"), "step");
+  assert.match(progress.children[1].children[1].textContent, /과목 선택/);
   assert.match(f.elements.cloudStudentTitle.textContent, /가상학교 2차 · 2학년 수강신청/);
   assert.match(f.elements.cloudStudentIdentity.textContent, /가상학생/);
   const box = f.elements.cloudStudentChoices.children[0].children[1].children[0];
@@ -304,6 +435,8 @@ test("student flow uses public RPC only, displays own data and submits selection
   await f.fire("cloudStudentChoices", "change");
   await f.fire("cloudStudentApplication", "submit");
   assert.equal(f.elements.cloudStudentMessage.textContent, "저장 완료");
+  assert.equal(progress.children[1].classList.contains("is-complete"), true);
+  assert.equal(progress.children[2].getAttribute("aria-current"), "step");
   assert.deepEqual(f.requests[1].body.p_selections, ["수학"]);
   assert.ok(f.requests.every((r) => !r.options.headers.Authorization));
   assert.ok(f.requests.every((r) => r.options.credentials === "omit"));
@@ -354,7 +487,10 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   start.respond = async () => ({ data: { external: { google: true } } });
   await start.fire("cloudTeacherGoogleLogin", "click");
   await start.settle();
-  assert.equal(start.redirects.length, 1);
+  for (let attempt = 0; attempt < 20 && !start.redirects.length; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(start.redirects.length, 1, start.elements.cloudTeacherMessage.textContent);
   const authorize = new URL(start.redirects[0]);
   assert.equal(authorize.searchParams.get("provider"), "google");
   assert.equal(authorize.searchParams.get("redirect_to"), "https://school.example/app/");
@@ -368,7 +504,12 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
       access_token: "test-token", refresh_token: "test-refresh", expires_in: 3600, user: { email: "teacher@example.invalid" },
     } };
     if (r.url.endsWith("create_course_event")) return { data: {
-      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", students: [{ grade: "1", classroom: "1", number: "1", name: "가상학생", code: "b".repeat(32) }],
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", students: Array.from({length:350},(_,index)=>{
+        const classroom=Math.floor(index/35)+1,number=index%35+1;
+        return {grade:"1",classroom:String(classroom),number:String(number),
+          name:`테스트학생${String(classroom).padStart(2,"0")}-${String(number).padStart(2,"0")}`,
+          code:(index+1).toString(16).padStart(32,"0")};
+      }),
     } };
     if (r.url.includes("/course_events?")) return {data:[{
       id:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",round:"2",school_name:"가상학교",school_year:"2026",created_at:"2026-01-01",
@@ -389,6 +530,11 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.equal(f.step, 2);
   f.elements.schoolName.value = "가상학교";
   f.elements.schoolYear.value = "2026";
+  f.roster = Array.from({length:350},(_,index)=>{
+    const classroom=Math.floor(index/35)+1,number=index%35+1;
+    return {grade:"1",classroom:String(classroom),number:String(number),
+      name:`테스트학생${String(classroom).padStart(2,"0")}-${String(number).padStart(2,"0")}`};
+  });
   f.elements.cloudRosterInput.files = [{ name: "roster.xlsx", arrayBuffer: async () => new ArrayBuffer(0) }];
   await f.fire("cloudRosterInput", "change");
   assert.equal(f.downloads.length, 0);
@@ -396,14 +542,17 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.equal(f.elements.cloudCreateEvent.disabled, false);
   await f.fire("cloudCreateEvent", "click");
   assert.equal(f.downloads.length, 1);
-  assert.equal(f.downloads[0].rows[1][5], "b".repeat(32));
+  assert.equal(f.downloads[0].rows.length, 351);
+  assert.equal(f.downloads[0].rows[1][5], "00000000000000000000000000000001");
+  assert.equal(f.downloads[0].rows[350][2], "10");
+  assert.equal(f.downloads[0].rows[350][3], "35");
   assert.equal(f.downloads[0].name,"학생별_신청코드.xlsx");
   assert.equal(f.elements.cloudDownloadCodes.disabled, false);
   assert.match(f.elements.cloudTeacherMessage.textContent, /신청을 생성/);
   const created=f.requests.find((request)=>request.url.endsWith("create_course_event"));
+  assert.equal(created.body.p_setup.roster.length, 350);
+  assert.equal(new Set(created.body.p_setup.roster.map((student)=>`${student.classroom}:${student.number}`)).size,350);
   assert.deepEqual(created.body.p_setup.subjects["3"],[]);
-  assert.equal(f.synced,undefined);
-  await f.fire("refreshAggregate","click");
   assert.equal(f.synced.round,"2");
   assert.equal(f.synced.entries.length,0);
   await f.fire("cloudTeacherLogout", "click");
@@ -696,7 +845,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
     assert.equal(f.requests.length,2);
   });
 
-  test("group editor starts unassigned and requires manual groups and counts", () => {
+  test("group editor reflects curriculum assignments and validates configured counts", () => {
     const f=fixture();
     const storage=new Map();
     const subjects={"2":[{subject:"A",semester:"1",area:"사회"},{subject:"B",semester:"1",area:"사회"},
@@ -708,26 +857,23 @@ test("teacher log controls send the exact server cutoff and optional student id"
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
       crypto:webcrypto,selectedApplicationSubjects:()=>subjects,
       state:{},renderApplicationSubjects:()=>{},renderRoundStatus:()=>{},
+      getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
     ctx.setApplicationTargetGrades(["2"]);
     assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
+    ctx.createApplicationGroupFromCurriculum({
+      year:"2026",grade:"2",semester:"1",name:"사회·과학",courses:["A","B","C"]
+    });
     const editor=f.elements.courseGroupEditor;
     const grid=()=>editor.children.find((e)=>e.className==="course-group-grid");
-    assert.equal(grid().children.filter((e)=>e.tag==="fieldset").length,1);
-    editor.children.find((e)=>e.textContent==="그룹 만들기").onclick();
-    assert.equal(f.elements.courseGroupNameDialog.open,true);
-    f.elements.courseGroupNameInput.value="사회·과학";
-    f.elements.courseGroupNameForm.listeners.submit({preventDefault(){}});
-    assert.equal(f.elements.courseGroupNameDialog.open,false);
-    let panels=grid().children.filter((e)=>e.tag==="fieldset");
-    panels[0].children.find((e)=>e.textContent==="표시 과목 전체 선택").onclick();
-    const destination=editor.children.find((e)=>e.tag==="select");
-    destination.value=destination.children[1].value;
-    editor.children.find((e)=>e.textContent==="선택 과목 일괄 이동").onclick();
-    assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
-    panels=grid().children.filter((e)=>e.tag==="fieldset");
-    const count=panels[1].children[2].children[0];
+    assert.equal(grid().children.length,1);
+    const panel=grid().children[0];
+    assert.equal(panel.className,"course-group-card");
+    assert.equal(panel.children[1].children[0].value,"사회·과학");
+    assert.equal(editor.children.some((e)=>e.tag==="select"),false);
+    assert.equal(panel.children.some((e)=>e.tag==="input" && e.type==="checkbox"),false);
+    const count=panel.children[2].children[0];
     count.value="2";count.onchange();
     const groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
     assert.equal(groups[0].count,2);
@@ -735,7 +881,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
     assert.equal(editor.children.find((e)=>e.className==="group-scope-tabs").children.length,1);
     assert.throws(()=>ctx.getCourseApplicationGroups(["2","3"]),/미분류/);
     count.value="4";count.onchange();
-    assert.throws(()=>ctx.getCourseApplicationGroups(),/選択|선택 수/);
+    assert.equal(ctx.getCourseApplicationGroups()[0].count,2);
     assert.ok(storage.size);
   });
 
@@ -780,7 +926,7 @@ test("student group limit disables unchecked choices and re-enables them after d
   assert.equal(b.disabled,false);
 });
 
-test("linked results never start Realtime or polling and refresh only on the aggregate button", async () => {
+test("Realtime updates linked results on student submissions and falls back to polling only while disconnected", async () => {
   const ownerId="cccccccc-cccc-cccc-cccc-cccccccccccc";
   const eventId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
   const otherEventId="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
@@ -822,19 +968,32 @@ test("linked results never start Realtime or polling and refresh only on the agg
     return {data:[]};
   }});
   await f.settle();
-  assert.equal(f.sockets.length,0);
-  assert.equal(f.poll,null);
-  assert.equal(exportCount,0);
-  await f.fire("cloudRefreshEvents","click");
-  assert.equal(exportCount,0);
-  await f.fire("refreshAggregate","click");
-  assert.equal(exportCount,1);
-  assert.equal(f.aggregateRenders,1);
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/최근 갱신/);
-  assert.equal(f.sockets.length,0);
+  assert.equal(f.sockets.length,1);
+  f.openRealtime();
+  await f.settle();
+  assert.equal(f.sockets[0].sent[0][3],"phx_join");
+  assert.equal(f.sockets[0].sent[0][4].config.postgres_changes[0].filter,`owner_id=eq.${ownerId}`);
+  assert.equal(f.elements.cloudSyncStatus.textContent.includes("실시간"),true);
+  assert.ok(exportCount>0);
+  const previous=exportCount;
+  f.poll();
+  await f.settle();
+  assert.equal(exportCount,previous);
+  f.notifyRealtime(otherEventId);
+  await f.settle();
+  assert.equal(exportCount,previous);
+  f.notifyRealtime(eventId);
+  await f.settle();
+  assert.ok(exportCount>previous);
+  assert.equal(typeof f.heartbeat,"function");
+  const beforeDisconnect=exportCount;
+  f.sockets[0].close();
+  f.poll();
+  await f.settle();
+  assert.ok(exportCount>beforeDisconnect);
+  assert.ok(f.reconnect);
   await f.fire("cloudTeacherLogout","click");
-  await f.fire("refreshAggregate","click");
-  assert.equal(exportCount,1);
+  assert.equal(f.sockets[0].readyState,3);
   assert.equal(f.poll,null);
 });
 
@@ -863,85 +1022,27 @@ test("linked online results sync without files, include both grades and stop on 
     return {data:{message:"완료"}};
   }});
   await f.settle();
-  assert.equal(f.synced,undefined);
-  await f.fire("refreshAggregate","click");
   assert.equal(f.synced.round,"1");
   assert.equal(f.synced.entries.length,2);
   assert.equal(f.synced.subjects["3"][0].subject,"B");
   assert.equal(f.downloads.length,0);
   const before=f.syncCalls.length;
-  await f.fire("refreshAggregate","click");
+  f.poll(); await f.settle();
   assert.equal(f.syncCalls.length,before); // Unchanged snapshots don't repaint the page.
   entries[0]=[];
-  await f.fire("refreshAggregate","click");
+  f.poll(); await f.settle();
   assert.equal(f.synced.entries.length,1);
   fail=true;
-  await f.fire("refreshAggregate","click");
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/갱신 실패.*연결 실패/);
+  f.poll(); await f.settle();
+  assert.match(f.elements.cloudSyncStatus.textContent,/자동 연동 실패.*연결 실패/);
   assert.equal(f.synced.entries.length,1);
   fail=false;
   entries[0]=[{...entries[1][0],name:"중복"}];
-  await f.fire("refreshAggregate","click");
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/동일 학생/);
+  f.poll(); await f.settle();
+  assert.match(f.elements.cloudSyncStatus.textContent,/동일 학생/);
   assert.equal(f.synced.entries.length,1);
   await f.fire("cloudTeacherLogout","click");
   assert.equal(f.poll,null);
-});
-
-test("manual aggregate refresh disables repeat clicks and reports no linked applications without exporting", async () => {
-  const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({
-    lastActivity:Date.now(),session:{access_token:"token",refresh_token:"refresh",expires_at:Date.now()/1000+3600,
-      user:{email:"teacher@example.invalid"}}
-  })]]);
-  const f=fixture({storage});
-  await f.settle();
-  let finish;
-  f.respond=async()=>new Promise((resolve)=>{finish=resolve;});
-  const before=f.requests.length;
-  await f.fire("refreshAggregate","click");
-  assert.equal(f.elements.refreshAggregate.disabled,true);
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/가져오는 중/);
-  await f.fire("refreshAggregate","click");
-  assert.equal(f.requests.length,before+1);
-  finish({data:[]});
-  await f.settle();
-  assert.equal(f.elements.refreshAggregate.disabled,false);
-  assert.equal(f.aggregateRenders,1);
-  assert.match(f.elements.aggregateRefreshStatus.textContent,/연동 신청 없음/);
-  assert.equal(f.requests.some((request)=>request.body?.p_action==="export"),false);
-});
-
-test("color-group label opens a dialog to rename the group and cancel leaves it unchanged", () => {
-  const storage=new Map([["curriculum-color-semester-groups-v3",JSON.stringify([
-    {id:"color-group",grade:"2",semester:"1",name:"색상 그룹 1",count:null,courses:["과학"],fill:"#E2EFD9"},
-  ])]]);
-  const f=fixture({storage,menus:true,subjects:{
-    "2":[{subject:"과학",semester:"1",semesterColors:{"1":"#E2EFD9"}}],
-    "3":[],
-  }});
-  f.setGrade("1");
-  f.renderGroups();
-  const editor=f.elements.courseGroupEditor;
-  const grid=editor.children.find((element)=>element.className==="course-group-grid");
-  const panel=grid.children.find((element)=>element.tag==="fieldset" &&
-    element.children.some((child)=>child.className==="button course-group-name-trigger"));
-  const nameButton=panel.children.find((child)=>child.className==="button course-group-name-trigger");
-  assert.equal(nameButton.textContent,"택N · 1과목");
-  nameButton.onclick();
-  assert.equal(f.elements.courseGroupNameDialog.open,true);
-  assert.equal(f.elements.courseGroupNameInput.value,"색상 그룹 1");
-  f.elements.courseGroupNameInput.value="과학 선택";
-  f.elements.courseGroupNameForm.listeners.submit({preventDefault(){}});
-  assert.equal(f.elements.courseGroupNameDialog.open,false);
-  assert.equal(f.groupSettings()[0].name,"과학 선택");
-  assert.equal(JSON.parse(storage.get("curriculum-color-semester-groups-v3"))[0].name,"과학 선택");
-  const updatedGrid=editor.children.find((element)=>element.className==="course-group-grid");
-  const updatedPanel=updatedGrid.children.find((element)=>element.tag==="fieldset" &&
-    element.children.some((child)=>child.className==="button course-group-name-trigger"));
-  updatedPanel.children.find((child)=>child.className==="button course-group-name-trigger").onclick();
-  f.elements.courseGroupNameInput.value="취소된 이름";
-  f.elements.courseGroupNameCancel.listeners.click();
-  assert.equal(f.groupSettings()[0].name,"과학 선택");
 });
 
 test("color groups are semester scoped, editable and retain unassigned courses after reload", () => {
@@ -951,13 +1052,12 @@ test("color groups are semester scoped, editable and retain unassigned courses a
     {subject:"B",semester:"1",semesterColors:{"1":"#E2EFD9"}},
     {subject:"C",semester:"2",semesterColors:{}}
   ],"3":[{subject:"D",semester:"1",semesterColors:{"1":"#E2EFD9"}}]};
-  let currentSubjects=subjects;
   function load() {
     const ctx=vm.createContext({
       document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
         createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
       window:{confirm:()=>true},crypto:webcrypto,
-      selectedApplicationSubjects:()=>currentSubjects,
+      selectedApplicationSubjects:()=>subjects,
       state:{},renderApplicationSubjects:()=>{},renderRoundStatus:()=>{},
       localStorage:{getItem:(k)=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}});
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
@@ -971,34 +1071,28 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.deepEqual(groups[0].courses,["A (1학기)","B"]);
   assert.deepEqual(groups[1].courses,["A (2학기)"]);
   assert.ok(groups.every((g)=>g.count===null));
-  const savedGroups=JSON.parse(JSON.stringify(groups));
-  currentSubjects=null;
-  ctx=load();
-  assert.deepEqual(JSON.parse(JSON.stringify(ctx.getApplicationGroupSettings())),savedGroups);
-  assert.deepEqual(JSON.parse(storage.get("curriculum-color-semester-groups-v3")),savedGroups);
-  currentSubjects=subjects;
-  ctx.renderCourseGroups();
-  assert.deepEqual(JSON.parse(JSON.stringify(ctx.getApplicationGroupSettings())),savedGroups);
   assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
   const editor=f.elements.courseGroupEditor;
-  const targets=editor.children.find((e)=>e.tag==="select");
-  assert.equal(targets.children.length,2); // Only unassigned and the current semester's group.
   const grid=editor.children.find((e)=>e.className==="course-group-grid");
-  grid.children[1].children.find((e)=>e.textContent==="표시 과목 전체 선택").onclick();
-  const invalidTarget=editor.children.find((e)=>e.tag==="select");
-  invalidTarget.value=groups[1].id;
-  editor.children.find((e)=>e.textContent==="선택 과목 일괄 이동").onclick();
-  assert.match(f.elements.courseGroupMessage.textContent,/같은 학년·학기/);
-  const currentGrid=editor.children.find((e)=>e.className==="course-group-grid");
-  currentGrid.children[1].children.find((e)=>e.textContent==="그룹 삭제 · 과목은 미분류로").onclick();
-  ctx=load();
-  groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3"));
-  assert.equal(groups.length,2);
-  assert.equal(groups[0].semester,"2");
+  assert.equal(grid.children.length,1);
+  const firstCount=grid.children[0].children[2].children[0];
+  firstCount.value="1";firstCount.onchange();
+  assert.equal(ctx.getApplicationGroupSettings().find((group)=>group.semester==="1").count,1);
+  assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
   const tabs=editor.children.find((e)=>e.className==="group-scope-tabs");
   tabs.children[1].onclick();
   assert.match(editor.children.find((e)=>e.tag==="h4").textContent,/2학기/);
-  assert.equal(editor.children.find((e)=>e.tag==="select").children.length,2);
+  assert.equal(editor.children.some((e)=>e.className==="course-group-unassigned"),true);
+  const secondGrid=editor.children.find((e)=>e.className==="course-group-grid");
+  assert.equal(secondGrid.children.length,1);
+  const secondCount=secondGrid.children[0].children[2].children[0];
+  secondCount.value="1";secondCount.onchange();
+  assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
+  secondGrid.children[0].children.find((e)=>e.textContent==="그룹 삭제").onclick();
+  ctx=load();
+  groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3"));
+  assert.equal(groups.length,2);
+  assert.ok(groups.every((g)=>g.semester==="1"));
   f.elements.applicationResultsTab.listeners.click();
   assert.equal(f.elements.applicationGroupsPanel.classList.contains("hidden"),true);
   assert.equal(f.elements.applicationResultsPanel.classList.contains("hidden"),false);
@@ -1013,10 +1107,76 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.match(scopedTabs.children[0].textContent,/3학년/);
   assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
   const scopedGrid=editor.children.find((e)=>e.className==="course-group-grid");
-  const count=scopedGrid.children[1].children[2].children[0];
+  const count=scopedGrid.children[0].children[2].children[0];
   count.value="1";count.onchange();
   assert.equal(ctx.getCourseApplicationGroups().length,1);
   assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");
+});
+
+test("legacy course groups are split by incoming cohort and restored when switching application grades", () => {
+  const f=fixture();
+  const storage=new Map([["curriculum-color-semester-groups-v3",JSON.stringify([
+    {id:"g2",grade:"2",semester:"1",name:"2026 선택",count:1,courses:["수학"]},
+    {id:"g3",grade:"3",semester:"1",name:"2025 선택",count:1,courses:["영어"]}
+  ])]]);
+  const context=vm.createContext({
+    document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
+      createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
+    window:{confirm:()=>true},crypto:webcrypto,
+    selectedApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1"}],"3":[{subject:"영어",semester:"1"}]}),
+    state:{},renderApplicationSubjects(){},renderRoundStatus(){},
+    getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
+    setApplicationTargetGrades(){},
+    localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),context);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getApplicationGroupSettings())).map((group)=>group.name),["2026 선택"]);
+  context.switchApplicationMenuGrade("2");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getApplicationGroupSettings())).map((group)=>group.name),["2025 선택"]);
+  assert.deepEqual(JSON.parse(storage.get("curriculum-color-semester-groups-v3:2026")).map((group)=>group.name),["2026 선택"]);
+});
+
+test("curriculum group creation stores clicked subjects under the matching cohort, grade and semester", () => {
+  const f=fixture();
+  const storage=new Map([["curriculum-color-semester-groups-v3:2025",JSON.stringify([
+    {id:"existing",grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["영어","국어"]}
+  ])]]);
+  const context=vm.createContext({
+    document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
+      createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
+    window:{confirm:()=>true},crypto:webcrypto,
+    selectedApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1"}],"3":[{subject:"영어",semester:"2"}]}),
+    state:{},renderApplicationSubjects(){},renderRoundStatus(){},
+    getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
+    setApplicationTargetGrades(){},
+    localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),context);
+  const created=context.createApplicationGroupFromCurriculum({
+    year:"2025",grade:"3",semester:"2",name:"택3",count:2,courses:["영어","영어","사회"]
+  });
+  assert.equal(created.year,"2025");
+  assert.equal(created.movedCount,1);
+  const groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3:2025"));
+  assert.deepEqual(groups.map((group)=>({grade:group.grade,semester:group.semester,name:group.name,count:group.count,courses:group.courses})),[
+    {grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["국어"]},
+    {grade:"3",semester:"2",name:"택3",count:2,courses:["영어","사회"]}
+  ]);
+  const appSource=fs.readFileSync(path.join(__dirname,"..","app.js"),"utf8");
+  const appContext=vm.createContext({getApplicationGroupSettings:()=>groups});
+  vm.runInContext(appSource.slice(
+    appSource.indexOf("function applicationGroupForCourse("),
+    appSource.indexOf("function classifyApplicationRecords(")
+  ),appContext);
+  assert.deepEqual(JSON.parse(JSON.stringify(appContext.applicationGroupForCourse({
+    name:"영어",subject:"영어",semesterKey:"2"
+  },"2"))),{name:"택3",semester:"2"});
+  assert.throws(()=>context.createApplicationGroupFromCurriculum({
+    year:"2025",grade:"3",semester:"2",name:"택5",count:5,courses:["영어","사회"]
+  }),/0~2/);
+  assert.throws(()=>context.createApplicationGroupFromCurriculum({
+    year:"2025",grade:"3",semester:"2",name:"택3",courses:["영어"]
+  }),/이미 있습니다/);
 });
 
 test("student chooses first semester before second and saves both selections together", async () => {
@@ -1061,7 +1221,6 @@ test("deleting a round unlinks only its online events and prevents an in-flight 
     return {data:[]};
   }});
   await f.settle();
-  await f.fire("refreshAggregate","click");
   // The exposed round unlink helper is the one used by the local reset button.
   f.unlinkRound("1");
   finish({data:{entries:[]}});
