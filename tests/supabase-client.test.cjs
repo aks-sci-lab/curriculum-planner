@@ -123,8 +123,8 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     setApplicationTargetGrades: (grades) => { fixtureData.targetGrades = grades; },
     getGroupedApplicationSubjects: () => fixtureData.subjects,
     applicationCourseLabel: (course) => `${course.subject}${course.type ? `(${course.type.replace(/선택$/,"")})` : ""}`,
-    applyCloudApplicationResults: (round,entries,subjects) => {
-      fixtureData.synced = {round,entries,subjects};
+    applyCloudApplicationResults: (round,entries,subjects,groups) => {
+      fixtureData.synced = {round,entries,subjects,groups};
       fixtureData.syncCalls.push(fixtureData.synced);
     },
     parseWorkbook: async () => fixtureData.workbook || [],
@@ -299,7 +299,7 @@ test("cohort group deployment loads versioned application scripts to bypass stal
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261014-aggregate-classification"/);
+  assert.match(html,/href="styles\.css\?v=20261014-online-result-groups"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -1006,6 +1006,10 @@ test("linked online results sync without files, include both grades and stop on 
   ]);
   const subjects=[{"2":[{subject:"A",semester:"1",credit:3}],"3":[]},
     {"2":[],"3":[{subject:"B",semester:"2",credit:4}]}];
+  const groups=[
+    [{grade:"2",semester:"1",name:"국영수과",courses:["A"]}],
+    [{grade:"3",semester:"2",name:"외국어 정보",courses:["B"]}],
+  ];
   let entries=[
     [{grade:"1",classroom:"1",number:"1",name:"가상1",selections:["A"]}],
     [{grade:"2",classroom:"1",number:"1",name:"가상2",selections:["B"]}],
@@ -1016,7 +1020,7 @@ test("linked online results sync without files, include both grades and stop on 
       access_token:"token",refresh_token:"refresh",expires_in:3600,user:{email:"teacher@example.invalid"}
     }};
     if(r.url.includes("/course_events?")) return {data:ids.map((id,index)=>({
-      id,round:"1",school_name:"학교",school_year:"2026",created_at:"2026-01-01",subjects:subjects[index]
+      id,round:"1",school_name:"학교",school_year:"2026",created_at:"2026-01-01",subjects:subjects[index],groups:groups[index]
     }))};
     if(r.body?.p_action==="export") return fail?{ok:false,data:{message:"연결 실패"}}:
       {data:{entries:entries[ids.indexOf(r.body.p_event)]}};
@@ -1026,10 +1030,15 @@ test("linked online results sync without files, include both grades and stop on 
   assert.equal(f.synced.round,"1");
   assert.equal(f.synced.entries.length,2);
   assert.equal(f.synced.subjects["3"][0].subject,"B");
+  assert.deepEqual(JSON.parse(JSON.stringify(f.synced.groups)),groups.flat());
   assert.equal(f.downloads.length,0);
   const before=f.syncCalls.length;
   f.poll(); await f.settle();
   assert.equal(f.syncCalls.length,before); // Unchanged snapshots don't repaint the page.
+  groups[1][0].name="수정된 그룹";
+  f.elements.cloudRefreshEvents.listeners.click(); await f.settle();
+  assert.equal(f.synced.groups[1].name,"수정된 그룹");
+  assert.equal(f.syncCalls.length,before+1);
   entries[0]=[];
   f.poll(); await f.settle();
   assert.equal(f.synced.entries.length,1);

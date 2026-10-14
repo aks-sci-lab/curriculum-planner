@@ -632,11 +632,13 @@ test("cloud aggregation updates its own round, clears rollback results and prese
     if(!elements.has(id)) elements.set(id,{textContent:"",disabled:false});
     return elements.get(id);
   },syncActiveRound(){},persistState(){saves++;},renderRoundStatus(){},
+    parseSemesterFromCourseName:()=>"",
     applyClassFilterOptions(){},renderRoster(){renders++;},renderPreview(){},
     renderSemesterClassifier(){},renderAggregate(){},
   });
 
   vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
+  vm.runInContext(functionSource("function applicationGroupForCourse(", "function courseIndexByColumn("),ctx);
   vm.runInContext(functionSource("function applyCloudApplicationResults(", "function applyMergedApplications("),ctx);
   const subjects={"2":[{subject:"A",semester:"1",credit:3}],"3":[]};
   const entries=[{grade:"1",classroom:"1",number:"1",name:"가상",selections:["A"]}];
@@ -669,6 +671,50 @@ test("Excel data export uses text cells for codes and formula-like input", () =>
   assert.equal(download,"codes.xlsx");
   assert.match(files["xl/worksheets/sheet1.xml"],/t="inlineStr".*001234/s);
   assert.ok(!files["xl/worksheets/sheet1.xml"].includes("<f>"));
+});
+
+test("online result groups and types remain authoritative across grades, local settings and reloads", () => {
+  const state={currentRound:"1",rounds:{},roundClosures:{},students:[],courses:[]};
+  const ctx=vm.createContext({
+    state,$:()=>({value:"",textContent:""}),
+    syncActiveRound(){},persistState(){},renderRoundStatus(){},applyClassFilterOptions(){},
+    renderRoster(){},renderPreview(){},renderSemesterClassifier(){},renderAggregate(){},
+    collectApplicationSubjects:()=>{throw new Error("Online results must not read the active local curriculum");},
+    getApplicationGroupSettings:()=>[{grade:"2",semester:"1",name:"잘못된 로컬 그룹",courses:["수학"]}],
+    curriculumSelectionType:(value)=>String(value||""),
+  });
+  vm.runInContext(functionSource("function parseCourseGroup(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
+  vm.runInContext(functionSource("function applyCloudApplicationResults(", "function applyMergedApplications("),ctx);
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("),ctx);
+  const subjects={"2":[{subject:"수학",type:"진로선택",semester:"1",credit:3}],
+    "3":[{subject:"수학",type:"융합선택",semester:"2",credit:4}]};
+  const groups=[
+    {grade:"2",semester:"1",name:"국영수과",courses:["수학"]},
+    {grade:"3",semester:"2",name:"외국어 정보",courses:["수학"]},
+  ];
+  const entries=["1","2"].map((grade)=>({grade,classroom:"1",number:"1",name:`가상${grade}`,selections:["수학"]}));
+  ctx.applyCloudApplicationResults("1",entries,subjects,groups);
+  const persisted=plain(state.rounds["1"]);
+  const aggregate=ctx.aggregateRecords(persisted.students,persisted.courses,90,110,{},{"app0":"2"},{"app0":"과거 그룹"});
+  for (const [index,report] of aggregate.reports.entries()) {
+    assert.equal(report.semesters.length,1);
+    const semester=report.semesters[0];
+    assert.equal(semester.name,`${index+2}학년 ${index+1}학기`);
+    assert.equal(semester.groups[0].category,groups[index].name);
+    assert.equal(semester.groups[0].courses.length,1);
+    const course=semester.groups[0].courses[0];
+    assert.equal(course.displayName,index===0?"수학(진로)":"수학(융합)");
+    assert.equal(course.enrollment,1);
+    assert.equal(course.name,`수학(${index+2}학년)`);
+    assert.match(ctx.createWorksheetXml(report,90,110),new RegExp(course.displayName.replace(/[()]/g,"\\$&")));
+    assert.equal(ctx.courseGroupLabel(persisted.students[index].selections[0],String(index+1)),`${index+1}학기 ${groups[index].name}`);
+    assert.equal(ctx.resolveCourseCategory(persisted.courses[index]),`${index+2}학년 ${index+1}학기 ${groups[index].name}`);
+    assert.equal(ctx.resolveCourseCategoryForOutput(persisted.courses[index]),groups[index].name);
+    assert.equal(ctx.resolveSemesterKey(persisted.courses[index]),String(index+1));
+  }
 });
 
 test("uploaded courses resolve application groups by promoted grade and explicit semester without guessing", () => {

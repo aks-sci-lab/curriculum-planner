@@ -469,10 +469,22 @@ var updateApplicationGradeControls;
         throw new Error(`${round}차에 다른 학교·학년도의 신청이 연동되어 있습니다. 연동을 해제하세요.`);
       }
       const subjects = { "1": [], "2": [], "3": [] };
+      const groups = [];
       const entries = [];
       const identities = new Set();
       for (const event of events) {
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: "export" }, true);
+        for (const group of event.groups || []) {
+          const overlapping = groups.filter((existing) => existing.grade === group.grade &&
+              existing.semester === group.semester &&
+              existing.courses.some((name) => group.courses.includes(name)));
+          if (overlapping.some((existing) => existing.name !== group.name ||
+              existing.count !== group.count ||
+              JSON.stringify([...existing.courses].sort()) !== JSON.stringify([...group.courses].sort()))) {
+            throw new Error(`${round}차 ${group.name}: 연동 신청의 과목 그룹 설정이 다릅니다.`);
+          }
+          if (!overlapping.length) groups.push(group);
+        }
         for (const grade of ["2", "3"]) {
           for (const course of event.subjects[grade] || []) {
             const existing = subjects[grade].find((item) => item.subject === course.subject);
@@ -488,9 +500,9 @@ var updateApplicationGradeControls;
         }
       }
       if (!session || (session.user.id || session.user.email) !== owner || revision !== syncRevision) return;
-      const snapshot = JSON.stringify({ entries, subjects });
+      const snapshot = JSON.stringify({ entries, subjects, groups });
       if (syncSnapshots.get(round) !== snapshot) {
-        applyCloudApplicationResults(round, entries, subjects);
+        applyCloudApplicationResults(round, entries, subjects, groups);
         syncSnapshots.set(round, snapshot);
       }
     }

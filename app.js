@@ -650,6 +650,9 @@
     }
 
     function resolveSemesterKey(course) {
+      if (course.applicationGroupSource === "online") {
+        return course.applicationGroups?.[course.applicationCurrentGrade]?.semester || course.semesterKey || "";
+      }
       const key = String(course.column);
       const assigned = state.semesterAssignments[key];
       if (assigned === "1" || assigned === "2") return assigned;
@@ -676,10 +679,17 @@
       };
       for (const custom of state.customGroupNames) pushUnique(custom);
       for (const assigned of Object.values(state.groupAssignments)) pushUnique(assigned);
+      for (const course of courses) {
+        if (course.applicationGroupSource === "online") pushUnique(resolveCourseCategory(course));
+      }
       return names;
     }
 
     function resolveCourseCategory(course) {
+      if (course.applicationGroupSource === "online") {
+        const group = course.applicationGroups?.[course.applicationCurrentGrade];
+        return group ? `${Number(course.applicationCurrentGrade) + 1}학년 ${group.semester === "0" ? "" : group.semester + "학기 "}${group.name}` : UNASSIGNED_GROUP;
+      }
       const key = String(course.column);
       const assigned = normalizeGroupName(state.groupAssignments[key]);
       if (assigned) return assigned;
@@ -687,6 +697,9 @@
     }
 
     function resolveCourseCategoryForOutput(course) {
+      if (course.applicationGroupSource === "online") {
+        return course.applicationGroups?.[course.applicationCurrentGrade]?.name || UNASSIGNED_GROUP;
+      }
       const key = String(course.column);
       const assigned = parseAssignedGroupLabel(state.groupAssignments[key]);
       if (assigned.category) return assigned.category;
@@ -702,6 +715,9 @@
     function applicationGroupForCourse(course, currentGrade, groups = null, semesterOverride = "") {
       const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
       if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
+      if (course.applicationGroupSource === "online") {
+        return course.applicationGroups?.[String(currentGrade)] || null;
+      }
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
       const normalize = (name) => String(name ?? "").trim()
         .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
@@ -1618,7 +1634,10 @@
       const grades = [...new Set(students.map((student) => student.grade))];
       const reports = grades.map((grade) => {
         const gradeStudents = students.filter((student) => student.grade === grade);
-        const applicationSubjects = typeof collectApplicationSubjects === "function"
+        const gradeCourses = courses.filter((course) => !course.applicationCurrentGrade ||
+          course.applicationCurrentGrade === String(grade));
+        const applicationSubjects = gradeCourses.some((course) => !course.applicationSubject) &&
+          typeof collectApplicationSubjects === "function"
           ? collectApplicationSubjects({ includeExcluded: true, currentGrade: String(grade) })
           : null;
         const classes = new Set(gradeStudents.map((student) => student.classroom)).size;
@@ -1631,20 +1650,23 @@
           divisionLimit: classes ? (gradeStudents.length / classes) * divisionPercent / 100 : 0
         };
         const semesters = [];
-        for (const course of courses) {
-          const applicationSubject = aggregateApplicationSubject(course, grade, applicationSubjects);
+        for (const course of gradeCourses) {
+          const applicationSubject = course.applicationSubject || aggregateApplicationSubject(course, grade, applicationSubjects);
           const applicationSemester = applicationSubject?.semester || "";
           const applicationGroup = applicationGroupForCourse(course, grade, null, applicationSemester);
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
-          const semesterKey = forcedSemester === "1" || forcedSemester === "2"
+          const semesterKey = course.applicationGroupSource === "online"
+            ? (applicationGroup?.semester || course.semesterKey || "")
+            : forcedSemester === "1" || forcedSemester === "2"
             ? forcedSemester
             : (applicationGroup?.semester || parsedAssignedGroup.semesterKey || course.semesterKey || "");
           const displayGrade = Number(grade) + 1;
           const semesterName = semesterKey
             ? `${displayGrade}학년 ${semesterKey}학기`
             : `${displayGrade}학년 미분류`;
-          const category = applicationGroup?.name || parsedAssignedGroup.category || UNASSIGNED_GROUP;
+          const category = applicationGroup?.name ||
+            (course.applicationGroupSource === "online" ? "" : parsedAssignedGroup.category) || UNASSIGNED_GROUP;
           let semester = semesters.find((item) => item.name === semesterName);
           if (!semester) {
             semester = { name: semesterName, groups: [], order: semesterKey === "1" ? 1 : semesterKey === "2" ? 2 : 9 };
@@ -1762,7 +1784,7 @@
       const body = groups.length
         ? groups.map((group) => group.courses.map((course, index) => `
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
-              <td class="course-cell">${escapeHtml(course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
+              <td class="course-cell">${escapeHtml(course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
       const coreCredits = student.selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
@@ -1830,7 +1852,7 @@
         ? list.map((course) => {
           const selectedClass = selectedSet.has(String(course.column)) ? " selected" : "";
           return `<div class="group-course-card${selectedClass}" draggable="true" data-drag-course-column="${course.column}">
-            <span title="${escapeHtml(course.name)}">${escapeHtml(course.name)}</span>
+            <span title="${escapeHtml(course.name)}">${escapeHtml(course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name)}</span>
             <span class="group-course-meta">${escapeHtml(course.credits || 0)}학점</span>
           </div>`;
         }).join("")
@@ -2473,6 +2495,7 @@
             name: displayName,
             credits: item.credit || 0,
             semesterKey: String(item.semester || "").match(/[12]/)?.[0] || "",
+            applicationSubject: { ...item },
             category: item.area || "선택과목"
           };
           courses.push(course);
@@ -2482,7 +2505,8 @@
             const subject = `${item.subject} (${semester}학기)`;
             if (!entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(subject))) continue;
             const semesterCourse = { ...course, column:`app${courses.length}`,
-              name: nameCount.get(item.subject)>1 ? `${subject}(${grade}학년)` : subject, semesterKey:semester };
+              name: nameCount.get(item.subject)>1 ? `${subject}(${grade}학년)` : subject, semesterKey:semester,
+              applicationSubject: { ...item, subject, semester } };
             courses.push(semesterCourse);
             courseByGradeName.set(`${grade}:${subject}`,semesterCourse);
           }
@@ -2709,11 +2733,17 @@
     }
 
     // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
-    function applyCloudApplicationResults(round, entries, subjects) {
+    function applyCloudApplicationResults(round, entries, subjects, groups = []) {
       round = String(round);
       if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
       const merged = mergeApplications(entries, subjects);
       if (merged.errors.length) throw new Error(`집계표 연동 실패: ${merged.errors[0]}`);
+      for (const course of merged.courses) {
+        const grade = course.applicationCurrentGrade;
+        const group = applicationGroupForCourse(course, grade, groups);
+        course.applicationGroups = group ? { [grade]: group } : {};
+        course.applicationGroupSource = "online";
+      }
       state.rounds ||= {"1":null};
       state.rounds[round] ||= null;
       state.roundClosures ||= {};
