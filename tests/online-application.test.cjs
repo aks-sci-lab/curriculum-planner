@@ -268,14 +268,15 @@ test("switching incoming cohort plans preserves each of the three uploads indepe
   }
 });
 
-test("application subjects include every student-choice course in promoted grades, ignoring old exclusions", () => {
-  const course = (subject, division, hours, grade = "") => ({
-    subject, division, row: [3, ...hours], grade, area: "교과", selectionType: "일반선택",
+test("application subjects include student-choice courses in promoted grades and color-tagged courses without hours", () => {
+  const course = (subject, division, hours, grade = "", rowIndex = -1) => ({
+    subject, division, row: [3, ...hours], grade, area: "교과", selectionType: "일반선택", rowIndex,
   });
   const contexts = [
     course("학교지정", "학교 지정 교육과정", ["", "", 3, "", "", ""]),
     course("수학", "학생 선택 교육과정", ["", "", 3, 3, "", ""]),
     course("과학", "학생선택교육과정", ["", "", "", "", 3, ""]),
+    course("색상과목", "학생 선택 교육과정", ["", "", "", "", "", ""], "", 7),
     course("현재학년", "학생 선택 교육과정", [3, "", "", "", "", ""]),
     course("미편제", "학생 선택 교육과정", ["", "", 0, "-", "", ""], "2"),
     course("구분없음", "", ["", "", 3, "", "", ""]),
@@ -284,13 +285,17 @@ test("application subjects include every student-choice course in promoted grade
     state: { curriculumCohortYear: "2026", curriculumImportedLayout: {}, applicationExcluded: { "2:수학": true } },
     importedPlanColumnMap: () => ({ subject: 0, opCredit: 0, baseCredit: -1, semesters: [1, 2, 3, 4, 5, 6] }),
     importedPlanCourseContexts: () => contexts,
-    curriculumCellFill: () => "",
+    curriculumCellFill: (_layout, rowIndex, column) => rowIndex === 7 && column === 3 ? "#FFFF00" : "",
+    curriculumColorGroupOptions: (_layout, grade, semester) =>
+      grade === "2" && semester === "1" ? [{ fill: "#FFFF00", courses: ["색상과목"] }] : [],
   });
   vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("), ctx);
   const result = plain(ctx.selectedApplicationSubjects());
   assert.deepEqual(result["1"], []);
-  assert.deepEqual(result["2"].map((c) => c.subject), ["수학"]);
+  assert.deepEqual(result["2"].map((c) => c.subject), ["수학", "색상과목"]);
   assert.equal(result["2"][0].semester, "1·2");
+  assert.equal(result["2"][1].semester, "1");
+  assert.equal(result["2"][1].semesterColors["1"], "#FFFF00");
   assert.deepEqual(result["3"].map((c) => c.subject), ["과학"]);
 });
 

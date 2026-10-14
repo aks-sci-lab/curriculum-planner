@@ -2210,6 +2210,18 @@
       const contexts = importedPlanCourseContexts(layout, columns);
       const result = { "1": [], "2": [], "3": [] };
       const seen = new Map();
+      const colorGroupCoursesBySemester = new Map();
+      if (typeof curriculumColorGroupOptions === "function") {
+        for (const grade of ["2", "3"]) {
+          for (const semester of ["1", "2"]) {
+            for (const group of curriculumColorGroupOptions(layout, grade, semester)) {
+              const key = `${grade}:${semester}:${group.fill.toUpperCase()}`;
+              if (!colorGroupCoursesBySemester.has(key)) colorGroupCoursesBySemester.set(key, new Set());
+              for (const course of group.courses) colorGroupCoursesBySemester.get(key).add(course);
+            }
+          }
+        }
+      }
       for (const context of contexts) {
         if (!String(context.division || "").replace(/\s+/g, "").includes("학생선택교육과정")) continue;
         const rowText = [context.division, context.detail, context.subject, ...context.row]
@@ -2223,14 +2235,25 @@
         // 교육과정 구분 표기(학생 선택 교육과정 등)가 과목명 칸에 들어온 경우도 제외한다.
         if (subject.includes("교육과정")) continue;
         const type = context.selectionType || "";
-        // 학년은 학기 열(1-1~3-2) 중 시수가 적힌 위치로 판별하고, 없으면 학년 열 문맥을 사용한다.
+        const names = subject.split(/[,，]/).map((part) =>
+          part.replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim()).filter(Boolean);
+        // 학기별 시수뿐 아니라 택n 태그와 색이 일치하는 표시 과목도 해당 학기에 포함한다.
         const byGrade = new Map();
         columns.semesters.forEach((column, index) => {
           if (column < 0) return;
           const value = String(context.row[column] ?? "").trim();
-          if (!value || /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
           const grade = Math.floor(index / 2) + 1;
           const sem = String((index % 2) + 1);
+          if (!value) {
+            if (grade !== 2 && grade !== 3) return;
+            const fill = curriculumCellFill(layout, context.rowIndex, column).toUpperCase();
+            if (!fill || !names.some((name) =>
+              colorGroupCoursesBySemester.get(`${grade}:${sem}:${fill}`)?.has(name))) return;
+            if (!byGrade.has(grade)) byGrade.set(grade, { semesters: [], hours: [] });
+            byGrade.get(grade).semesters.push(sem);
+            return;
+          }
+          if (/^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)) return;
           if (/학년/.test(value)) {
             const notedGrade = value.match(/([123])\s*학년/)?.[1];
             const notedSemesters = value.match(/([12](?:\s*[,·]\s*[12])*)\s*학기/)?.[1];
@@ -2254,8 +2277,7 @@
           : 0;
         for (const [grade, info] of byGrade) {
           if (grade !== 2 && grade !== 3) continue;
-          for (const name of subject.split(/[,，]/).map((part) =>
-            part.replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim()).filter(Boolean)) {
+          for (const name of names) {
             const key = `${grade}:${name}`;
             const existing = seen.get(key);
             if (existing) {
