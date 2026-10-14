@@ -299,7 +299,7 @@ test("cohort group deployment loads versioned application scripts to bypass stal
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261014-cohort-semester-groups"/);
+  assert.match(html,/href="styles\.css\?v=20261014-no-tagn-group-actions"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -848,8 +848,9 @@ test("teacher log controls send the exact server cutoff and optional student id"
   test("group editor reflects curriculum assignments and validates configured counts", () => {
     const f=fixture();
     const storage=new Map();
-    const subjects={"2":[{subject:"A",semester:"1",area:"사회"},{subject:"B",semester:"1",area:"사회"},
-      {subject:"C",semester:"1",area:"과학"}],"3":[{subject:"3학년 과목",semester:"1"}]};
+    const subjects={"2":[{subject:"A",semester:"1",area:"사회",semesterColors:{"1":"#E2EFD9"}},
+      {subject:"B",semester:"1",area:"사회",semesterColors:{"1":"#E2EFD9"}},
+      {subject:"C",semester:"1",area:"과학",semesterColors:{"1":"#E2EFD9"}}],"3":[{subject:"3학년 과목",semester:"1"}]};
     const ctx=vm.createContext({
       document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
         createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
@@ -861,16 +862,16 @@ test("teacher log controls send the exact server cutoff and optional student id"
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),ctx);
     ctx.setApplicationTargetGrades(["2"]);
-    assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
-    ctx.createApplicationGroupFromCurriculum({
-      year:"2026",grade:"2",semester:"1",name:"사회·과학",courses:["A","B","C"]
-    });
+    const generated=JSON.parse(JSON.stringify(ctx.getApplicationGroupSettings()));
+    assert.deepEqual(generated.map((group)=>({name:group.name,courses:group.courses})),[
+      {name:"색상 그룹 1",courses:["A","B","C"]},
+    ]);
     const editor=f.elements.courseGroupEditor;
     const grid=()=>editor.children.find((e)=>e.className==="course-group-grid");
     assert.equal(grid().children.length,1);
     const panel=grid().children[0];
     assert.equal(panel.className,"course-group-card");
-    assert.equal(panel.children[1].children[0].value,"사회·과학");
+    assert.equal(panel.children[1].children[0].value,"색상 그룹 1");
     assert.equal(editor.children.some((e)=>e.tag==="select"),false);
     assert.equal(panel.children.some((e)=>e.tag==="input" && e.type==="checkbox"),false);
     const count=panel.children[2].children[0];
@@ -879,7 +880,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
     assert.equal(groups[0].count,2);
     assert.deepEqual(groups[0].courses,["A","B","C"]);
     assert.equal(editor.children.find((e)=>e.className==="group-scope-tabs").children.length,1);
-    assert.throws(()=>ctx.getCourseApplicationGroups(["2","3"]),/미분류/);
+    assert.throws(()=>ctx.getCourseApplicationGroups(["2","3"]),/3학년 1학기 3학년 과목: 미분류/);
     count.value="4";count.onchange();
     assert.equal(ctx.getCourseApplicationGroups()[0].count,2);
     assert.ok(storage.size);
@@ -1134,40 +1135,6 @@ test("legacy course groups are split by incoming cohort and restored when switch
   context.switchApplicationMenuGrade("2");
   assert.deepEqual(JSON.parse(JSON.stringify(context.getApplicationGroupSettings())).map((group)=>group.name),["2025 선택"]);
   assert.deepEqual(JSON.parse(storage.get("curriculum-color-semester-groups-v3:2026")).map((group)=>group.name),["2026 선택"]);
-});
-
-test("curriculum group creation stores clicked subjects under the matching cohort, grade and semester", () => {
-  const f=fixture();
-  const storage=new Map([["curriculum-color-semester-groups-v3:2025",JSON.stringify([
-    {id:"existing",grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["영어","국어"]}
-  ])]]);
-  const context=vm.createContext({
-    document:{getElementById:(id)=>f.elements[id],createElement:(tag)=>new Element(tag),
-      createTextNode:(text)=>Object.assign(new Element("#text"),{textContent:text})},
-    window:{confirm:()=>true},crypto:webcrypto,
-    selectedApplicationSubjects:()=>({"2":[{subject:"수학",semester:"1"}],"3":[{subject:"영어",semester:"2"}]}),
-    state:{},renderApplicationSubjects(){},renderRoundStatus(){},
-    getApplicationCohortYear:(grade)=>String(2027-Number(grade)),
-    setApplicationTargetGrades(){},
-    localStorage:{getItem:(key)=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)}
-  });
-  vm.runInContext(fs.readFileSync(path.join(__dirname,"..","course-groups.js"),"utf8"),context);
-  const created=context.createApplicationGroupFromCurriculum({
-    year:"2025",grade:"3",semester:"2",name:"택3",count:2,courses:["영어","영어","사회"]
-  });
-  assert.equal(created.year,"2025");
-  assert.equal(created.movedCount,1);
-  const groups=JSON.parse(storage.get("curriculum-color-semester-groups-v3:2025"));
-  assert.deepEqual(groups.map((group)=>({grade:group.grade,semester:group.semester,name:group.name,count:group.count,courses:group.courses})),[
-    {grade:"3",semester:"2",name:"기존 그룹",count:1,courses:["국어"]},
-    {grade:"3",semester:"2",name:"택3",count:2,courses:["영어","사회"]}
-  ]);
-  assert.throws(()=>context.createApplicationGroupFromCurriculum({
-    year:"2025",grade:"3",semester:"2",name:"택5",count:5,courses:["영어","사회"]
-  }),/0~2/);
-  assert.throws(()=>context.createApplicationGroupFromCurriculum({
-    year:"2025",grade:"3",semester:"2",name:"택3",courses:["영어"]
-  }),/이미 있습니다/);
 });
 
 test("student chooses first semester before second and saves both selections together", async () => {

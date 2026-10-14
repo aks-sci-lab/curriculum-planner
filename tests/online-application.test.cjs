@@ -125,13 +125,11 @@ function setup() {
   };
 }
 
-test("cohort cards replace year and group controls with semester color actions at the table's left", () => {
+test("cohort cards remain while curriculum table has no 택n group creation controls", () => {
   assert.match(html, /id="curriculumCohortUploads"/);
   assert.doesNotMatch(html, /id="curriculumCohortYear"|id="curriculumGroupCreator"/);
-  assert.match(frontend, /const cells = \[groupActionCell\]/);
-  assert.match(frontend, /curriculumColorGroupsForAllSemesters\(layout\)/);
-  assert.match(frontend, /data-curriculum-color-group=/);
-  assert.match(frontend, /window\.prompt\("선택과목군 이름을 입력하세요\."/);
+  assert.match(frontend, /const cells = \[\]/);
+  assert.doesNotMatch(frontend, /curriculumColorGroupsForAllSemesters|data-curriculum-color-group|createApplicationGroupFromCurriculum|선택과목군 이름을 입력하세요/);
   assert.doesNotMatch(frontend, /curriculumGroupCreator|curriculumSelectionGroupDraft|curriculumGroupCourseOptions/);
 });
 
@@ -345,7 +343,7 @@ test("2027 and 2028 applications use their incoming cohort's promoted-grade cour
     assert.equal(ctx.collectApplicationSubjects()["3"][0].subject, `${year-1} 입학생 3학년 과목`);
   }
 });
-test("color-tag group extraction stays scoped to each of the four selectable grade semesters", () => {
+test("color-tag semester detection remains scoped to each of the four selectable grade semesters", () => {
   const rows = [
     ["", "", "택2", "", "", ""], ["", "", "", "", "", ""],
     ["", "", "", "택2", "", ""], ["", "", "", "", "", ""],
@@ -368,8 +366,14 @@ test("color-tag group extraction stays scoped to each of the four selectable gra
     isSelectableDetail: () => true,
   });
   vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function aggregateRecords("), ctx);
-  const groups = plain(ctx.curriculumColorGroupsForAllSemesters({ rows, fills }));
-  assert.deepEqual(groups.map(({ grade, semester, courses }) => ({ grade, semester, courses })), [
+  const layout = { rows, fills };
+  const groups = [
+    ["2", "1"], ["2", "2"], ["3", "1"], ["3", "2"],
+  ].map(([grade, semester]) => ({
+    grade, semester,
+    courses: plain(ctx.curriculumColorGroupOptions(layout, grade, semester)).flatMap(({ courses }) => courses),
+  }));
+  assert.deepEqual(groups, [
     { grade: "2", semester: "1", courses: ["2-1과목"] },
     { grade: "2", semester: "2", courses: ["2-2과목"] },
     { grade: "3", semester: "1", courses: ["3-1과목"] },
