@@ -291,7 +291,7 @@ test("grade menus scope curriculum groups and offer table-based assignment for u
   assert.equal(f.elements.applicationGradeWorkspace["aria-labelledby"],"applicationGrade2Tab");
 });
 
-test("grade menu deployment loads versioned application scripts to bypass stale caches", () => {
+test("cohort group deployment loads versioned application scripts to bypass stale caches", () => {
   const html=fs.readFileSync(path.join(__dirname,"..","index.html"),"utf8");
   const versions=["app","xlsx-parser","course-groups","curriculum-workbook","supabase-client"].map((name)=>{
     const match=html.match(new RegExp(`src="${name}\\.js\\?v=([^"]+)"`));
@@ -299,7 +299,7 @@ test("grade menu deployment loads versioned application scripts to bypass stale 
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261014-curriculum-groups"/);
+  assert.match(html,/href="styles\.css\?v=20261014-cohort-semester-groups"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -1196,6 +1196,65 @@ test("student chooses first semester before second and saves both selections tog
   await f.fire("cloudStudentNext","click");
   await f.fire("cloudStudentApplication","submit");
   assert.deepEqual(f.requests[1].body.p_selections,["B","A"]);
+});
+
+test("virtual first- and second-grade rosters complete semester applications without a server", async () => {
+  const parser = vm.createContext({});
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const parserStart = appSource.indexOf("function parseApplicationRoster(");
+  const parserEnd = appSource.indexOf("function downloadTextFile(", parserStart);
+  assert.ok(parserStart >= 0 && parserEnd > parserStart);
+  vm.runInContext(appSource.slice(parserStart, parserEnd), parser);
+  const roster = parser.parseApplicationRoster([{
+    name: "가상 명렬",
+    rows: [
+      ["학년", "반", "번호", "성명"],
+      ["1", "1", "1", "가상1학년학생1"],
+      ["1", "1", "2", "가상1학년학생2"],
+      ["2", "2", "1", "가상2학년학생1"],
+      ["2", "2", "2", "가상2학년학생2"],
+    ],
+  }]);
+  assert.equal(roster.length, 4);
+  for (const student of roster) {
+    const targetGrade = String(Number(student.grade) + 1);
+    const firstSubject = `${targetGrade}학년 1학기 가상과목`;
+    const secondSubject = `${targetGrade}학년 2학기 가상과목`;
+    const application = {
+      student, schoolName: "가상학교", schoolYear: "2026", round: "1", open: true, selections: [],
+      courses: [
+        { subject: firstSubject, semester: "1", credit: 3 },
+        { subject: secondSubject, semester: "2", credit: 3 },
+      ],
+      groups: [
+        { id: `${targetGrade}-s1`, grade: targetGrade, semester: "1", name: "가상 1학기", count: 1, courses: [firstSubject] },
+        { id: `${targetGrade}-s2`, grade: targetGrade, semester: "2", name: "가상 2학기", count: 1, courses: [secondSubject] },
+      ],
+    };
+    const f = fixture({ href: "https://school.example/app/#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" });
+    f.respond = async (request) => request.url.includes("get_scoped_course_application")
+      ? { data: application }
+      : { data: { message: "가상 신청 저장 완료" } };
+    f.elements.cloudStudentCode.value = "123456";
+    await f.fire("cloudStudentLogin", "submit");
+    assert.match(f.elements.cloudStudentTitle.textContent, new RegExp(`${targetGrade}학년 수강신청`),
+      `${student.grade}학년 가상학생 login failed: ${f.elements.cloudStudentMessage.textContent}`);
+    const chooseVisibleSemester = async () => {
+      const visible = f.elements.cloudStudentChoices.children.find((section) => !section.classList.contains("hidden"));
+      assert.ok(visible, "a semester should be visible before choosing");
+      const checkbox = visible.querySelectorAll("input")[0];
+      assert.ok(checkbox, "the visible semester should offer its virtual course");
+      checkbox.checked = true;
+    };
+    await chooseVisibleSemester();
+    await f.fire("cloudStudentNext", "click");
+    await chooseVisibleSemester();
+    await f.fire("cloudStudentApplication", "submit");
+    const save = f.requests.find((request) => Array.isArray(request.body?.p_selections));
+    assert.ok(save, `virtual application for ${student.name} should submit`);
+    assert.deepEqual(save.body.p_selections, [firstSubject, secondSubject]);
+    assert.match(f.elements.cloudStudentMessage.textContent, /가상 신청 저장 완료/);
+  }
 });
 
 test("deleting a round unlinks only its online events and prevents an in-flight result from restoring it", async () => {

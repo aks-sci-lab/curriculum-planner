@@ -125,13 +125,14 @@ function setup() {
   };
 }
 
-test("curriculum group controls are embedded with the imported curriculum", () => {
-  const creator = html.indexOf('id="curriculumGroupCreator"');
-  const plan = html.indexOf('id="curriculumPlanDropZone"');
-  const table = html.indexOf('<div class="curriculum-plan-drop">', plan);
-  assert.ok(plan >= 0 && creator > plan && creator < table);
-  assert.equal((html.match(/id="curriculumGroupCreator"/g) || []).length, 1);
-  assert.doesNotMatch(html, /선택과목군 빠르게 만들기/);
+test("cohort cards replace year and group controls with semester color actions at the table's left", () => {
+  assert.match(html, /id="curriculumCohortUploads"/);
+  assert.doesNotMatch(html, /id="curriculumCohortYear"|id="curriculumGroupCreator"/);
+  assert.match(frontend, /const cells = \[groupActionCell\]/);
+  assert.match(frontend, /curriculumColorGroupsForAllSemesters\(layout\)/);
+  assert.match(frontend, /data-curriculum-color-group=/);
+  assert.match(frontend, /window\.prompt\("선택과목군 이름을 입력하세요\."/);
+  assert.doesNotMatch(frontend, /curriculumGroupCreator|curriculumSelectionGroupDraft|curriculumGroupCourseOptions/);
 });
 
 test("all embedded scripts parse", () => {
@@ -246,7 +247,7 @@ test("switching incoming cohort plans preserves each of the three uploads indepe
     curriculumTemplateRows: [], curriculumMutationRevision: 0, curriculumCohorts: {},
   };
   const ctx = vm.createContext({
-    state, status: { style: {} }, $: () => ({}),
+    state, status: { style: {} }, $: (selector) => selector === "#schoolYear" ? { value: "2026" } : {},
     renderCurriculumStep() {}, renderApplicationSubjects() {}, persistState() {},
   });
   vm.runInContext(functionSource("function syncActiveCurriculumCohort(", "function collectApplicationSubjects("), ctx);
@@ -339,34 +340,36 @@ test("2027 and 2028 applications use their incoming cohort's promoted-grade cour
     assert.equal(ctx.collectApplicationSubjects()["3"][0].subject, `${year-1} 입학생 3학년 과목`);
   }
 });
-test("curriculum group course choices fall back to the uploaded layout and keep subject names unchanged", () => {
+test("color-tag group extraction stays scoped to each of the four selectable grade semesters", () => {
+  const rows = [
+    ["", "", "택2", "", "", ""], ["", "", "", "", "", ""],
+    ["", "", "", "택2", "", ""], ["", "", "", "", "", ""],
+    ["", "", "", "", "택2", ""], ["", "", "", "", "", ""],
+    ["", "", "", "", "", "택2"], ["", "", "", "", "", ""],
+  ];
+  const fills = { "0:2": "#111111", "1:2": "#111111", "2:3": "#222222", "3:3": "#222222",
+    "4:4": "#333333", "5:4": "#333333", "6:5": "#444444", "7:5": "#444444" };
+  const subjects = ["2-1과목", "2-2과목", "3-1과목", "3-2과목"];
+  const contextRows = subjects.map((subject, index) => ({
+    subject, division: "학생 선택 교육과정", selectionType: "일반선택",
+    rowIndex: index * 2 + 1, row: [],
+  }));
   const ctx = vm.createContext({
-    curriculumSelectionGroupDraft: { grade: "2", semester: "1" },
-    state: {
-      curriculumPlan: [],
-      curriculumImportedLayout: { rows: [] },
-    },
-    normalizeCurriculumDivision: (value) => String(value).includes("학생") ? "학생 선택 교육과정" : "학교 지정 교육과정",
-    isSelectableDetail: (value) => ["일반선택", "진로선택", "융합선택"].includes(value),
-    importedPlanColumnMap: () => ({ semesters: [-1, -1, 2, 3, -1, -1] }),
-    importedPlanCourseContexts: () => [
-      { subject: "생명과학", division: "학생 선택 교육과정", selectionType: "일반선택",
-        area: "과학", row: ["", "", "3", "3"] },
-      { subject: "학교 지정 과목", division: "학교 지정 교육과정", selectionType: "일반선택",
-        area: "과학", row: ["", "", "3", ""] },
-      { subject: "공통 과목", division: "학생 선택 교육과정", selectionType: "공통",
-        area: "과학", row: ["", "", "3", ""] },
-    ],
+    importedPlanColumnMap: () => ({ semesters: [-1, -1, 2, 3, 4, 5] }),
+    expandCurriculumLayoutRows: (layout) => layout.rows,
+    curriculumCellFill: (layout, rowIndex, columnIndex) => layout.fills[`${rowIndex}:${columnIndex}`] || "",
+    importedPlanCourseContexts: () => contextRows,
+    normalizeCurriculumDivision: (value) => value,
+    isSelectableDetail: () => true,
   });
-  vm.runInContext(functionSource("function curriculumGroupCourseOptions(", "function renderCurriculumGroupCreator("), ctx);
-  assert.deepEqual(plain(ctx.curriculumGroupCourseOptions()), [["생명과학", "생명과학 · 과학"]]);
-
-  ctx.state.curriculumPlan = [{
-    grade: "2", division: "학생 선택 교육과정", detail: "일반선택", subject: "생명과학",
-    area: "과학", sem21: "3", sem22: "3",
-  }];
-  ctx.curriculumSelectionGroupDraft.semester = "2";
-  assert.deepEqual(plain(ctx.curriculumGroupCourseOptions()), [["생명과학", "생명과학 · 과학"]]);
+  vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function aggregateRecords("), ctx);
+  const groups = plain(ctx.curriculumColorGroupsForAllSemesters({ rows, fills }));
+  assert.deepEqual(groups.map(({ grade, semester, courses }) => ({ grade, semester, courses })), [
+    { grade: "2", semester: "1", courses: ["2-1과목"] },
+    { grade: "2", semester: "2", courses: ["2-2과목"] },
+    { grade: "3", semester: "1", courses: ["3-1과목"] },
+    { grade: "3", semester: "2", courses: ["3-2과목"] },
+  ]);
 });
 
 test("merged subject header uses actual course names and splits course lists by promoted semester", () => {
@@ -407,7 +410,7 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.equal(subjects["2"].find((c)=>c.subject==="물리학 실험").semesterColors["2"],"#D6DCE4");
   ctx.normalizeCurriculumDivision=(value)=>String(value).includes("학생")?"학생 선택 교육과정":"학교 지정 교육과정";
   ctx.isSelectableDetail=(value)=>["일반선택","진로선택","융합선택"].includes(value);
-  vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function renderCurriculumGroupCreator("),ctx);
+  vm.runInContext(functionSource("function curriculumColorGroupOptions(", "function aggregateRecords("),ctx);
   layout.rows[3][8]="택3";
   layout.cellFills["3:8"]="#E2EFD9";
   layout.cellFills["4:8"]="#E2EFD9";
