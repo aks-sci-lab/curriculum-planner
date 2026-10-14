@@ -1587,6 +1587,7 @@
         ? `${state.curriculumCohortYear}학년도 신입생 · ${state.curriculumPlanFileName}`
         : `${state.curriculumCohortYear}학년도 신입생 편제표를 불러오지 않았습니다.`;
       const importedLayout = state.curriculumImportedLayout;
+      $("#curriculumGroupCreator").hidden = !importedLayout;
       if (importedLayout) {
         const planRows = state.curriculumPlan.map((item, index) => ({ item, index }));
         $("#curriculumPlanWrap").innerHTML =

@@ -125,6 +125,15 @@ function setup() {
   };
 }
 
+test("curriculum group controls are embedded with the imported curriculum", () => {
+  const creator = html.indexOf('id="curriculumGroupCreator"');
+  const plan = html.indexOf('id="curriculumPlanDropZone"');
+  const table = html.indexOf('<div class="curriculum-plan-drop">', plan);
+  assert.ok(plan >= 0 && creator > plan && creator < table);
+  assert.equal((html.match(/id="curriculumGroupCreator"/g) || []).length, 1);
+  assert.doesNotMatch(html, /선택과목군 빠르게 만들기/);
+});
+
 test("all embedded scripts parse", () => {
   scripts.forEach((source) => new vm.Script(source));
   new vm.Script(frontend);
