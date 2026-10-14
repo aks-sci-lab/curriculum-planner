@@ -299,7 +299,7 @@ test("cohort group deployment loads versioned application scripts to bypass stal
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261014-no-tagn-group-actions"/);
+  assert.match(html,/href="styles\.css\?v=20261014-aggregate-classification"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {

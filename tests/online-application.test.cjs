@@ -471,6 +471,24 @@ test("student course classification labels leave selection identities unchanged"
   assert.equal(ctx.applicationCourseLabel({subject:"수학"}),"수학");
 });
 
+test("aggregate course labels and groups follow the application menu classification and semester", () => {
+  const ctx=vm.createContext({
+    curriculumSelectionType:(value)=>String(value||""),
+    parseSemesterFromCourseName:(name)=>String(name).match(/([12])학기/)?.[1]||"",
+  });
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
+  vm.runInContext(functionSource("function aggregateApplicationSubject(", "function currentStudent("),ctx);
+  const menuSubjects={"2":[
+    {subject:"물리학 실험",type:"융합선택",semester:"1"},
+    {subject:"물리학 실험",type:"진로선택",semester:"2"},
+  ]};
+  const match=ctx.aggregateApplicationSubject({name:"물리학 실험",semesterKey:"1"}, "1", menuSubjects);
+  assert.equal(match.type,"융합선택");
+  assert.equal(ctx.applicationCourseLabel(match),"물리학 실험(융합)");
+  assert.equal(ctx.aggregateApplicationSubject({name:"물리학 실험 (2학기)"}, "1", menuSubjects).type,"진로선택");
+  assert.equal(ctx.aggregateApplicationSubject({name:"없는 과목"}, "1", menuSubjects),null);
+});
+
 test("Google Form classified labels map back to original course names and accept older results", () => {
   const ctx=vm.createContext({});
   vm.runInContext(functionSource("function curriculumSelectionType(", "function importedPlanCourseContexts("),ctx);
@@ -671,6 +689,7 @@ test("uploaded courses resolve application groups by promoted grade and explicit
   assert.equal(ctx.applicationGroupForCourse({name:"없는 과목"},"1"),null);
   assert.equal(ctx.applicationGroupForCourse({name:"물리학(3학년)"},"1"),null);
   assert.equal(ctx.courseGroupLabel({name:"실험 (2학기)",column:5},"1"),"2학기 2학기 선택");
+  assert.equal(ctx.applicationGroupForCourse({name:"실험"},"1",groups,"2").name,"2학기 선택");
   const course={name:"물리학",column:4};
   const data={courses:[course],students:[{grade:"1",selections:[{...course}]}]};
   assert.deepEqual([...ctx.classifyApplicationRecords(data)],[]);

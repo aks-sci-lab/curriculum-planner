@@ -699,14 +699,15 @@
       return "미분류";
     }
 
-    function applicationGroupForCourse(course, currentGrade, groups = null) {
+    function applicationGroupForCourse(course, currentGrade, groups = null, semesterOverride = "") {
       const namedGrade = String(course.name || "").match(/\(([23])학년\)$/)?.[1];
       if (namedGrade && namedGrade !== String(Number(currentGrade)+1)) return null;
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
       const normalize = (name) => String(name ?? "").trim()
         .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
         .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, " ").trim();
-      const hint = course.semesterKey || parseSemesterFromCourseName(course.name);
+      const hint = course.semesterKey || parseSemesterFromCourseName(course.name) ||
+        (String(semesterOverride).split("·").length === 1 ? String(semesterOverride) : "");
       const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
         (!hint || group.semester === hint) &&
         group.courses.some((name) => normalize(name) === normalize(course.name)));
@@ -1617,6 +1618,9 @@
       const grades = [...new Set(students.map((student) => student.grade))];
       const reports = grades.map((grade) => {
         const gradeStudents = students.filter((student) => student.grade === grade);
+        const applicationSubjects = typeof collectApplicationSubjects === "function"
+          ? collectApplicationSubjects({ includeExcluded: true, currentGrade: String(grade) })
+          : null;
         const classes = new Set(gradeStudents.map((student) => student.classroom)).size;
         const summary = {
           grade,
@@ -1628,7 +1632,9 @@
         };
         const semesters = [];
         for (const course of courses) {
-          const applicationGroup = applicationGroupForCourse(course, grade);
+          const applicationSubject = aggregateApplicationSubject(course, grade, applicationSubjects);
+          const applicationSemester = applicationSubject?.semester || "";
+          const applicationGroup = applicationGroupForCourse(course, grade, null, applicationSemester);
           const forcedSemester = semesterAssignments[String(course.column)];
           const parsedAssignedGroup = parseAssignedGroupLabel(groupAssignments[String(course.column)]);
           const semesterKey = forcedSemester === "1" || forcedSemester === "2"
@@ -1662,6 +1668,7 @@
             category,
             column: course.column,
             name: course.name,
+            displayName: applicationSubject ? applicationCourseLabel(applicationSubject) : course.name,
             enrollment,
             enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
             recommendedClasses,
@@ -1678,6 +1685,22 @@
         return { summary, semesters };
       });
       return { openingPercent, divisionPercent, reports };
+    }
+
+    function aggregateApplicationSubject(course, currentGrade, applicationSubjects) {
+      const normalize = (name) => String(name ?? "").trim()
+        .replace(/\s*\([23]학년\)$/, "")
+        .replace(/\s*\([12]학기\)/g, "")
+        .replace(/\s*\((?:공통|일반|진로|융합)(?:선택)?\)$/, "")
+        .replace(/\s+/g, " ").trim();
+      const normalizedName = normalize(course.name);
+      const matches = (applicationSubjects?.[String(Number(currentGrade) + 1)] || []).filter((subject) =>
+        normalize(subject.subject) === normalizedName);
+      const semester = String(course.semesterKey || parseSemesterFromCourseName(course.name) || "");
+      const semesterMatches = semester
+        ? matches.filter((subject) => subject.semester?.split("·").includes(semester))
+        : matches;
+      return semesterMatches.length === 1 ? semesterMatches[0] : matches.length === 1 ? matches[0] : null;
     }
 
     function currentStudent() {
@@ -1889,7 +1912,7 @@
               // 신청 인원이 개설기준(학급당 학생수의 N%)보다 적으면 폐강 예정으로 표시한다.
               const risk = course.enrollment < summary.openingLimit;
               if (risk) atRiskCount += 1;
-              return `<th class="aggregate-subject${risk ? " at-risk" : ""}">${escapeHtml(course.name)}${risk ? '<span class="at-risk-badge">폐강 예정</span>' : ""}</th>`;
+              return `<th class="aggregate-subject${risk ? " at-risk" : ""}">${escapeHtml(course.displayName || course.name)}${risk ? '<span class="at-risk-badge">폐강 예정</span>' : ""}</th>`;
             }).join("");
             const paddingCells = Array.from({ length: maxCourses - group.courses.length }, () => "<th></th>").join("");
             const totalCell = `<th class="aggregate-total" rowspan="5">총 학급수<br><strong>${group.totalClasses}</strong></th>`;
@@ -1902,7 +1925,7 @@
                 return `<span class="aggregate-enrollment"><span class="aggregate-enrollment-value">${course.enrollment}명${met ? "" : " · 기준 미달"}</span><span class="aggregate-progress-track ${met ? "met" : "below"}" role="img" aria-label="개설 기준의 ${percent}%"><span style="width:${width}%"></span></span></span>`;
               }],
               ["인원수/분반기준", (course) => course.enrollmentPerDivision.toFixed(2)],
-              ["개설 학급수", (course) => `<input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(course.name)} 개설 학급수" data-grade="${escapeHtml(summary.grade)}" data-course-column="${course.column}">`],
+              ["개설 학급수", (course) => `<input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(course.displayName || course.name)} 개설 학급수" data-grade="${escapeHtml(summary.grade)}" data-course-column="${course.column}">`],
               ["학급당 학생수", (course) => course.averageClassSize.toFixed(2)]
             ].map(([label, value]) => {
               const values = group.courses.map((course) => `<td>${value(course)}</td>`).join("");
@@ -1990,12 +2013,12 @@
               : '<span class="closure-verdict-open">기준 충족</span>';
             const confirmed = Object.hasOwn(closures, key) ? closures[key] : risk ? "" : "open";
             return `<tr>
-              <td class="closure-subject">${escapeHtml(course.name)}</td>
+              <td class="closure-subject">${escapeHtml(course.displayName || course.name)}</td>
               <td>${escapeHtml(semester)}</td>
               <td>${course.enrollment}</td>
               <td>${summary.openingLimit.toFixed(2)}</td>
               <td>${verdict}</td>
-              <td><select class="closure-select" data-closure-round="${round}" data-closure-key="${escapeHtml(key)}" aria-label="${escapeHtml(course.name)} 교사 최종 결정">
+              <td><select class="closure-select" data-closure-round="${round}" data-closure-key="${escapeHtml(key)}" aria-label="${escapeHtml(course.displayName || course.name)} 교사 최종 결정">
                 <option value=""${confirmed === "" ? " selected" : ""}>미정</option>
                 <option value="open"${confirmed === "open" ? " selected" : ""}>개설</option>
                 <option value="closed"${confirmed === "closed" ? " selected" : ""}>폐강</option>
@@ -2176,9 +2199,9 @@
         : `${normalized}학년도 신입생 편제표가 없습니다. 이 학년도의 3개년 편제표를 업로드하세요.`;
     }
 
-    function collectApplicationSubjects({ includeExcluded = false } = {}) {
+    function collectApplicationSubjects({ includeExcluded = false, currentGrade: requestedCurrentGrade } = {}) {
       if (typeof syncActiveCurriculumCohort === "function") syncActiveCurriculumCohort();
-      const currentGrade = String(state.applicationMenuGrade || "1");
+      const currentGrade = String(requestedCurrentGrade ?? state.applicationMenuGrade ?? "1");
       const schoolYear = Number(typeof $ === "function" ? $("#schoolYear")?.value || "2026" : "2026");
       const cohortYear = String(schoolYear - Number(currentGrade) + 1);
       const cohortLayout = state.curriculumCohorts?.[cohortYear]?.importedLayout;
@@ -3086,7 +3109,7 @@
             const headerRow = addRow(21);
             const metricRows = [addRow(23), addRow(23), addRow(23), addRow(23)];
             setCell(headerRow, 0, "과목", 6);
-            block.forEach((course, index) => setCell(headerRow, index + 1, course.name, 6));
+            block.forEach((course, index) => setCell(headerRow, index + 1, course.displayName || course.name, 6));
             for (let col = block.length + 1; col <= BLOCK_SIZE; col++) setCell(headerRow, col, "", 6);
             if (blockIndex === 0) {
               setCell(headerRow, 7, "총 학급수", 9);
