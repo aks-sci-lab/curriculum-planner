@@ -148,7 +148,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     context.WebSocket.OPEN = WebSocketClass.OPEN;
   }
   const fixtureData = {
-    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets,
+    elements, requests, downloads, storage, redirects, history, syncCalls: [], activity:{}, qrLinks:[], sockets, context,
     subjects: subjects || { "2": [{subject:"수학",credit:3,semester:"1"}], "3": [] },
     roster: [{ grade: "1", classroom: "1", number: "1", name: "가상학생" }],
     respond: respond || (async () => ({ data: [] })),
@@ -299,7 +299,7 @@ test("cohort group deployment loads versioned application scripts to bypass stal
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261014-online-result-groups"/);
+  assert.match(html,/href="styles\.css\?v=20261015-reselection"/);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -540,6 +540,7 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.equal(f.downloads.length, 0);
   assert.deepEqual([...f.targetGrades], ["2"]);
   assert.equal(f.elements.cloudCreateEvent.disabled, false);
+  f.context.state.currentRound="1";
   await f.fire("cloudCreateEvent", "click");
   assert.equal(f.downloads.length, 1);
   assert.equal(f.downloads[0].rows.length, 351);
@@ -925,6 +926,96 @@ test("student group limit disables unchecked choices and re-enables them after d
   a.checked=false;
   f.elements.cloudStudentChoices.listeners.change({target:a});
   assert.equal(b.disabled,false);
+});
+
+test("student cannot choose the same subject across semesters and can switch after deselecting", async () => {
+  const f=fixture({href:"https://school.example/app/#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"});
+  const data={student:{grade:"1",classroom:"1",number:"1",name:"학생"},open:true,schoolName:"학교",
+    selections:[],courses:[
+      {subject:"물리학 (1학기)",credit:3,semester:"1"},
+      {subject:"화학",credit:3,semester:"1"},
+      {subject:"물리학 (2학기)",credit:3,semester:"2"},
+      {subject:"생명과학",credit:3,semester:"2"},
+    ],groups:[
+      {id:"s1",grade:"2",semester:"1",name:"선택1",count:1,courses:["물리학 (1학기)","화학"]},
+      {id:"s2",grade:"2",semester:"2",name:"선택2",count:1,courses:["물리학 (2학기)","생명과학"]},
+    ]};
+  f.respond=async()=>({data});
+  f.elements.cloudStudentCode.value="123456";
+  await f.fire("cloudStudentLogin","submit");
+  const [physics1,chemistry,physics2]=f.elements.cloudStudentChoices.querySelectorAll("input");
+  physics1.checked=true;
+  f.elements.cloudStudentChoices.listeners.change({target:physics1});
+  assert.equal(physics2.disabled,true);
+  physics2.checked=true;
+  f.elements.cloudStudentChoices.listeners.change({target:physics2});
+  assert.equal(physics2.checked,false);
+  assert.match(f.elements.cloudStudentMessage.textContent,/중복 신청/);
+  physics1.checked=false;
+  f.elements.cloudStudentChoices.listeners.change({target:physics1});
+  assert.equal(physics2.disabled,false);
+  chemistry.checked=true;
+  f.elements.cloudStudentChoices.listeners.change({target:chemistry});
+  await f.fire("cloudStudentNext","click");
+  physics2.checked=true;
+  f.elements.cloudStudentChoices.listeners.change({target:physics2});
+  assert.equal(physics2.checked,true);
+});
+
+test("affected student keeps locked open courses and only replaces closed choices", async () => {
+  const f=fixture({href:"https://school.example/app/#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"});
+  const data={student:{grade:"1",classroom:"1",number:"1",name:"학생"},open:true,schoolName:"학교",
+    lockedSelections:["유지"],reselectionAllowed:true,selections:["유지"],
+    courses:[{subject:"유지",credit:3,semester:"1"},{subject:"대체",credit:3,semester:"1"},{subject:"다른",credit:3,semester:"1"}],
+    groups:[{id:"s1",grade:"2",semester:"1",name:"선택",count:2,courses:["유지","대체","다른"]}]};
+  f.respond=async(r)=>r.url.includes("get_scoped")?{data}:{data:{message:"저장"}};
+  f.elements.cloudStudentCode.value="123456";
+  await f.fire("cloudStudentLogin","submit");
+  const [locked,replacement]=f.elements.cloudStudentChoices.querySelectorAll("input");
+  assert.equal(locked.checked,true);
+  assert.equal(locked.disabled,true);
+  assert.match(f.elements.cloudStudentMessage.textContent,/기존 개설 과목/);
+  locked.checked=false;
+  f.elements.cloudStudentChoices.listeners.change({target:locked});
+  assert.equal(locked.checked,true);
+  replacement.checked=true;
+  f.elements.cloudStudentChoices.listeners.change({target:replacement});
+  await f.fire("cloudStudentApplication","submit");
+  assert.deepEqual(f.requests[1].body.p_selections,["유지","대체"]);
+});
+
+test("teacher creates next round from exact semester closures and chosen reselection mode", async () => {
+  const id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const created="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const storage=new Map([
+    ["curriculum-google-pkce",JSON.stringify({verifier:"a".repeat(43),createdAt:Date.now()})],
+  ]);
+  const source={id,round:"1",school_name:"학교",school_year:"2026",is_open:false,
+    subjects:{"2":[{subject:"물리학 (1학기)",credit:3,semester:"1"},{subject:"물리학 (2학기)",credit:3,semester:"2"}],"3":[]},groups:[]};
+  const f=fixture({href:"https://school.example/app/?code=test",storage,respond:async(r)=>{
+    if(r.url.endsWith("grant_type=pkce")) return {data:{access_token:"token",refresh_token:"refresh",
+      expires_in:3600,user:{email:"teacher@example.invalid"}}};
+    if(r.url.includes("/course_events?")) return {data:[source]};
+    if(r.url.endsWith("create_next_course_event")) return {data:{id:created,affectedCount:1,
+      students:[{grade:"1",classroom:"1",number:"1",name:"학생",code:"123456"}]}};
+    return {data:[]};
+  }});
+  await f.settle();
+  f.elements.schoolYear.value="2026";
+  f.context.updateApplicationGradeControls();
+  f.context.state.rounds={"1":{courses:[
+    {column:"app0",name:"물리학 (1학기)",applicationSubject:{subject:"물리학 (1학기)"}},
+    {column:"app1",name:"물리학 (2학기)",applicationSubject:{subject:"물리학 (2학기)"}},
+  ]}};
+  f.context.state.roundClosures={"1":{"1:app0":"closed","1:app1":"open"}};
+  f.elements.cloudRetakeSource.value=id;
+  f.elements.cloudRetakeMode.value="affected";
+  await f.fire("cloudCreateRetake","click");
+  const request=f.requests.find((r)=>r.url.endsWith("create_next_course_event"));
+  assert.deepEqual(request.body,{p_source:id,p_closed:[{grade:"2",subject:"물리학 (1학기)"}],p_mode:"affected"});
+  assert.equal(f.downloads.length,1);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/1명만 대체 선택/);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/중복 생성하지 말고/);
 });
 
 test("Realtime updates linked results on student submissions and falls back to polling only while disconnected", async () => {

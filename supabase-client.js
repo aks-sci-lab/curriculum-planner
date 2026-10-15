@@ -571,6 +571,17 @@ var updateApplicationGradeControls;
   function renderGradeEvents() {
     const grade = String(Number(state.applicationMenuGrade || "1") + 1);
     const events = knownEvents.filter((event) => event.subjects?.[grade]?.length);
+    const source = byId("cloudRetakeSource");
+    const previous = source.value;
+    source.replaceChildren();
+    for (const event of events.filter((event) => event.school_year === byId("schoolYear").value)) {
+      const option = document.createElement("option");
+      option.value = event.id;
+      option.textContent = `${event.round}차 · ${event.school_name} · ${event.is_open ? "접수 중 (마감 필요)" : "마감"} · ${event.id.slice(0,8)}`;
+      source.appendChild(option);
+    }
+    source.value = [...source.children].some((option) => option.value === previous) ? previous : source.children[0]?.value || "";
+    byId("cloudCreateRetake").disabled = !session || !source.children.length;
     const list = byId("cloudEventList");
     list.replaceChildren();
     if (!events.length) list.textContent = `현재 ${Number(grade) - 1}학년의 수강신청이 없습니다.`;
@@ -693,6 +704,7 @@ var updateApplicationGradeControls;
         box.type = "checkbox";
         box.value = subject;
         box.checked = student.selections.includes(subject);
+        box.disabled = student.reselectionAllowed === false || student.lockedSelections?.includes(subject);
         label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`));
         fieldset.appendChild(label);
       }
@@ -733,6 +745,11 @@ var updateApplicationGradeControls;
       }
     }
     const student = teacherEdit.entries.find((entry) => entry.id === byId("cloudTeacherEditStudent").value);
+    const picked = [...byId("cloudTeacherEditChoices").querySelectorAll("input:checked")].map((box) => box.value);
+    for (const box of byId("cloudTeacherEditChoices").querySelectorAll("input")) {
+      box.disabled = student?.reselectionAllowed === false || !!student?.lockedSelections?.includes(box.value) ||
+        (!box.checked && picked.some((name) => baseApplicationSubject(name) === baseApplicationSubject(box.value)));
+    }
     const studentLabel = student ? `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}` : "학생 선택";
     byId("cloudTeacherEditSummary").textContent = `${studentLabel} · 현재 ${selected}과목 선택`;
   }
@@ -741,7 +758,17 @@ var updateApplicationGradeControls;
     try { renderTeacherEditor(); }
     catch (error) { byId("cloudTeacherEditMessage").textContent = error.message; }
   });
-  byId("cloudTeacherEditChoices").addEventListener("change", updateTeacherEditSummary);
+  byId("cloudTeacherEditChoices").addEventListener("change", (event) => {
+    const student = teacherEdit?.entries.find((entry) => entry.id === byId("cloudTeacherEditStudent").value);
+    if (event.target && student?.lockedSelections?.includes(event.target.value)) event.target.checked = true;
+    try {
+      validateUniqueApplicationCourses([...byId("cloudTeacherEditChoices").querySelectorAll("input:checked")].map((box) => box.value));
+    } catch (error) {
+      if (event.target?.checked) event.target.checked = false;
+      byId("cloudTeacherEditMessage").textContent = error.message;
+    }
+    updateTeacherEditSummary();
+  });
   byId("cloudTeacherEditClose").addEventListener("click", () => byId("cloudTeacherEditDialog").close());
   byId("cloudTeacherEditSearch").addEventListener("input", filterTeacherEditStudents);
   byId("cloudTeacherEditDialog").addEventListener("close", () => {
@@ -763,6 +790,9 @@ var updateApplicationGradeControls;
       const student = editor.entries.find((entry) => entry.id === select.value);
       if (!student) throw new Error("학생을 선택하세요.");
       const selected = [...byId("cloudTeacherEditChoices").querySelectorAll("input:checked")].map((box) => box.value);
+      validateUniqueApplicationCourses(selected);
+      if (student.reselectionAllowed === false) throw new Error("폐강 과목 신청 학생만 재선택할 수 있습니다.");
+      if (student.lockedSelections?.some((name) => !selected.includes(name))) throw new Error("기존 개설 과목은 변경할 수 없습니다.");
       if (!selected.length) throw new Error("과목을 1개 이상 선택하세요.");
       for (const fieldset of byId("cloudTeacherEditChoices").children) {
         if (fieldset.dataset.count !== undefined &&
@@ -791,6 +821,7 @@ var updateApplicationGradeControls;
     } finally {
       teacherEditBusy = false;
       controls.forEach((control) => { control.disabled = false; });
+      if (teacherEdit === editor) updateTeacherEditSummary();
     }
   });
 
@@ -917,6 +948,7 @@ var updateApplicationGradeControls;
   byId("cloudCreateEvent").addEventListener("click", () => {
     teacherAction(async () => {
       if (!session) throw new Error("교사 로그인이 필요합니다.");
+      if (Number(state.currentRound) > 1) throw new Error("2차 이후는 아래 ‘다음 차수 수강신청 생성’에서 재선택 방식을 지정하세요.");
       if (!pendingRoster) throw new Error("학생 명렬을 먼저 업로드하세요.");
       validateApplicationRosterGrade(pendingRoster, state.applicationMenuGrade || "1");
       if (latestCodes && !window.confirm("이전에 생성한 학생 코드를 저장했나요? 새 신청을 생성하면 이전 코드 다운로드 버튼은 대체됩니다.")) {
@@ -956,6 +988,39 @@ var updateApplicationGradeControls;
       }
     });
   });
+  byId("cloudCreateRetake").addEventListener("click", () => teacherAction(async () => {
+    const source = knownEvents.find((event) => event.id === byId("cloudRetakeSource").value);
+    if (!source) throw new Error("이전 차수 신청을 선택하세요.");
+    if (source.is_open) throw new Error("이전 차수 신청을 먼저 마감하세요.");
+    if (latestCodes && !window.confirm("기존 학생 코드를 저장했나요? 다음 차수의 새 코드를 발급합니다.")) return;
+    if (typeof syncActiveRound === "function") syncActiveRound();
+    const data = state.rounds?.[String(source.round)];
+    if (!data) throw new Error("이전 차수를 집계표에 연동한 뒤 폐강을 확정하세요.");
+    const closed = [];
+    for (const [key, verdict] of Object.entries(state.roundClosures?.[String(source.round)] || {})) {
+      if (verdict !== "closed") continue;
+      const separator = key.indexOf(":");
+      const grade = String(Number(key.slice(0,separator)) + 1);
+      const course = data.courses.find((item) => String(item.column) === key.slice(separator+1));
+      if (!course) continue;
+      const subject = course.applicationSubject?.subject || course.name.replace(/\([23]학년\)$/, "").trim();
+      if (source.subjects?.[grade]?.some((item) => item.subject === subject)) closed.push({grade,subject});
+    }
+    if (!closed.length) throw new Error("선택한 이전 차수의 과목을 집계표에서 폐강으로 확정하세요.");
+    const mode = byId("cloudRetakeMode").value;
+    latestCodes = await rpc("create_next_course_event", {p_source:source.id,p_closed:closed,p_mode:mode}, true);
+    downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
+    byId("cloudTeacherMessage").textContent = `${Number(source.round)+1}차 신청 생성 완료 · ${mode === "all" ? "전체 학생 재선택" : `폐강 신청 학생 ${latestCodes.affectedCount}명만 대체 선택 · 나머지 학생 결과 유지`}. 새 신청 코드를 저장하세요.`;
+    try {
+      await refreshEvents();
+      const created = knownEvents.find((event) => event.id === latestCodes.id);
+      if (!created) throw new Error("생성한 신청을 목록에서 찾지 못했습니다.");
+      await linkEvent(created);
+      await refreshEvents();
+    } catch (error) {
+      byId("cloudTeacherMessage").textContent += ` 신청은 생성되었습니다. 목록·연동 갱신 실패: ${error.message}. 중복 생성하지 말고 목록을 새로고침하세요.`;
+    }
+  }));
   byId("cloudDownloadCodes").addEventListener("click", () => {
     if (latestCodes) downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
   });
@@ -989,6 +1054,18 @@ var updateApplicationGradeControls;
     return /^(국어|화법과작문|독서와작문|문학|언어와매체|영어|영어회화|영어독해와작문|수학|대수|미적분|확률과통계|기하|경제수학|인공지능수학)/.test(subject);
   }
 
+  function baseApplicationSubject(name) {
+    return String(name).replace(/\s*\([12]학기\)/g, "").replace(/\s+/g, " ").trim();
+  }
+  function validateUniqueApplicationCourses(names) {
+    const seen = new Set();
+    for (const name of names) {
+      const base = baseApplicationSubject(name);
+      if (seen.has(base)) throw new Error(`${base}: 1학기와 2학기에 같은 과목을 중복 신청할 수 없습니다.`);
+      seen.add(base);
+    }
+  }
+
   function renderStudentApplication(data) {
     studentSemesterIndex = 0;
     studentSaved = false;
@@ -1019,7 +1096,7 @@ var updateApplicationGradeControls;
           const label = document.createElement("label"); label.className = "application-subject";
           const box = document.createElement("input"); box.type = "checkbox"; box.value = subject;
           box.dataset.credit = course.credit; box.dataset.core = String(isCoreApplicationCourse(course));
-          box.checked = data.selections.includes(subject); box.disabled = !data.open;
+          box.checked = data.selections.includes(subject); box.disabled = !data.open || data.lockedSelections?.includes(subject);
           label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`)); fieldset.appendChild(label);
         }
         choices.appendChild(fieldset);
@@ -1045,7 +1122,7 @@ var updateApplicationGradeControls;
       box.dataset.credit = course.credit;
       box.dataset.core = String(isCoreApplicationCourse(course));
       box.checked = data.selections.includes(course.subject);
-      box.disabled = !data.open;
+      box.disabled = !data.open || data.lockedSelections?.includes(course.subject);
       label.append(box, document.createTextNode(`${applicationCourseLabel(course)} · ${course.credit}학점`));
       semesters.get(semester).appendChild(label);
     }
@@ -1055,7 +1132,9 @@ var updateApplicationGradeControls;
     updateStudentSemester();
     updateSummary();
     updateStudentProgress();
-    byId("cloudStudentMessage").textContent = !data.open ? "접수가 마감되었습니다. 기존 신청만 확인할 수 있습니다."
+    byId("cloudStudentMessage").textContent = data.reselectionAllowed === false ? "재선택 대상이 아닙니다. 기존 신청은 그대로 유지됩니다."
+      : data.lockedSelections?.length ? "기존 개설 과목은 유지됩니다. 폐강 과목을 대체할 과목만 선택하세요."
+      : !data.open ? "접수가 마감되었습니다. 기존 신청만 확인할 수 있습니다."
       : data.submittedAt ? "기존 신청을 불러왔습니다. 수정 후 저장할 수 있습니다." : "과목을 선택하고 신청 저장을 누르세요.";
   }
   function updateStudentSemester() {
@@ -1089,6 +1168,7 @@ var updateApplicationGradeControls;
   }
   function validateStudentSemester() {
     if (!application.open) return;
+    validateUniqueApplicationCourses([...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((box) => box.value));
     for (const fieldset of byId("cloudStudentChoices").children) {
       if (fieldset.dataset.semester !== studentSemesters[studentSemesterIndex]) continue;
       const count = fieldset.querySelectorAll("input:checked").length;
@@ -1120,18 +1200,35 @@ var updateApplicationGradeControls;
     byId("cloudStudentCore").textContent = `국·영·수 ${coreCredits}학점 · ${corePercent}%`;
     byId("cloudStudentCoreFill").style.width = `${corePercent}%`;
     byId("cloudStudentCoreTrack").setAttribute("aria-valuenow", String(corePercent));
+    for (const box of byId("cloudStudentChoices").querySelectorAll("input")) {
+      box.disabled = !application.open || !!application.lockedSelections?.includes(box.value);
+    }
     for (const fieldset of byId("cloudStudentChoices").querySelectorAll("fieldset[data-group]")) {
       const count = fieldset.querySelectorAll("input:checked").length;
       const group = application.groups.find((g) => g.id === fieldset.dataset.group);
       fieldset.querySelector("legend").textContent = `${fieldset.dataset.semester === "0" ? "" : fieldset.dataset.semester+"학기 · "}${group.name} · ${count}/${group.count}과목 선택`;
       for (const box of fieldset.querySelectorAll("input")) {
-        box.disabled = !application.open || (!box.checked && count >= Number(group.count));
+        box.disabled = !application.open || application.lockedSelections?.includes(box.value) ||
+          (!box.checked && (count >= Number(group.count) ||
+            selected.some((chosen) => baseApplicationSubject(chosen.value) === baseApplicationSubject(box.value))));
       }
+    }
+    for (const box of byId("cloudStudentChoices").querySelectorAll("input")) {
+      if (!box.checked && selected.some((chosen) => baseApplicationSubject(chosen.value) === baseApplicationSubject(box.value))) box.disabled = true;
     }
   }
   byId("cloudStudentChoices").addEventListener("change", (event) => {
     studentSaved = false;
     const box = event.target;
+    if (box?.checked) {
+      try {
+        validateUniqueApplicationCourses([...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((input) => input.value));
+      } catch (error) {
+        box.checked = false;
+        byId("cloudStudentMessage").textContent = error.message;
+      }
+    }
+    if (box && application.lockedSelections?.includes(box.value)) box.checked = true;
     const fieldset = box?.closest?.("fieldset[data-group]");
     if (fieldset && box.checked && fieldset.querySelectorAll("input:checked").length > Number(fieldset.dataset.count)) {
       box.checked = false;
@@ -1175,6 +1272,8 @@ var updateApplicationGradeControls;
       if (studentSemesterIndex < studentSemesters.length - 1) throw new Error("1학기 선택을 완료하고 다음 학기로 이동한 뒤 모든 학기 신청을 저장하세요.");
       const code = activeCode;
       const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((box) => box.value);
+      validateUniqueApplicationCourses(selected);
+      if (application.lockedSelections?.some((name) => !selected.includes(name))) throw new Error("기존 개설 과목은 변경할 수 없습니다.");
       if (!selected.length) throw new Error("과목을 1개 이상 선택하세요.");
       for (const group of application.groups || []) {
         const count = selected.filter((name) => group.courses.includes(name)).length;

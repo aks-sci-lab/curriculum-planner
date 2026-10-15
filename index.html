@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 편성 프로그램</title>
-  <link rel="stylesheet" href="styles.css?v=20261014-online-result-groups">
+  <link rel="stylesheet" href="styles.css?v=20261015-reselection">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -201,6 +201,18 @@
               <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
               <p id="cloudRosterSummary" class="cloud-roster-summary" role="status">학생 명렬을 선택하면 업로드한 파일의 학년을 확인합니다.</p>
               <button class="button button-primary" id="cloudCreateEvent" type="button" disabled>수강신청 생성</button>
+              <hr>
+              <h4>2차 이후 수강신청</h4>
+              <p class="note">이전 차수를 마감하고 집계표에서 폐강을 확정한 뒤 생성하세요. 이전 신청의 과목·그룹·명렬을 사용하며 폐강 과목은 제외합니다.</p>
+              <label for="cloudRetakeSource">이전 차수 신청</label>
+              <select id="cloudRetakeSource" aria-label="재신청 기준 신청"></select>
+              <label for="cloudRetakeMode">재선택 방식</label>
+              <select id="cloudRetakeMode">
+                <option value="all">전체 학생 · 폐강 제외 전체 과목 재선택</option>
+                <option value="affected">폐강 신청 학생만 · 기존 개설 과목 유지, 폐강 과목 대체</option>
+              </select>
+              <button class="button" id="cloudCreateRetake" type="button">다음 차수 수강신청 생성</button>
+              <p class="note">대상학생 방식에서는 대상이 아닌 학생의 기존 결과도 다음 차수에 유지됩니다. 새 신청 코드가 발급되므로 대상 학생에게 새 코드를 전달하세요.</p>
             </section>
             <section class="cloud-code-tools" aria-label="학생 안내 및 코드 관리">
               <div class="cloud-section-heading">
@@ -581,12 +593,12 @@ function courseClient_() {
   });
 }
   </script>
-  <script defer src="app.js?v=20261014-online-result-groups"></script>
-  <script src="xlsx-parser.js?v=20261014-online-result-groups" defer></script>
-  <script src="course-groups.js?v=20261014-online-result-groups" defer></script>
-  <script src="curriculum-workbook.js?v=20261014-online-result-groups" defer></script>
+  <script defer src="app.js?v=20261015-reselection"></script>
+  <script src="xlsx-parser.js?v=20261015-reselection" defer></script>
+  <script src="course-groups.js?v=20261015-reselection" defer></script>
+  <script src="curriculum-workbook.js?v=20261015-reselection" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261014-online-result-groups" defer></script>
+  <script src="supabase-client.js?v=20261015-reselection" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>
