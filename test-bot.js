@@ -1,4 +1,11 @@
 "use strict";
+// xlsx-parser.js가 셀 주소("AB12")를 열 번호로 바꿀 때 쓰는 함수. 앱에서는 app.js가 같은 이름으로 정의한다.
+function columnIndex(reference) {
+  const letters = String(reference).match(/^[A-Z]+/i)?.[0]?.toUpperCase() || "";
+  let result = 0;
+  for (const letter of letters) result = result * 26 + letter.charCodeAt(0) - 64;
+  return result - 1;
+}
 // 수강신청 테스트봇 화면. 규칙·계산은 test-bot-core.js, 앱 창과의 연결은 test-bot-bridge.js가 맡는다.
 // 학생 코드는 이 창의 메모리에만 둔다(localStorage·IndexedDB·주소에 저장하지 않음). 실행 설정만 저장한다.
 (() => {

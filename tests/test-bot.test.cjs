@@ -315,6 +315,7 @@ test("test bot: 배포본과 앱 화면에 연결되어 있고 학생 코드를 
   assert.match(html, /id="cloudAutoTest"/);
   assert.ok(html.indexOf('src="supabase-config.js') < html.indexOf('src="supabase-client.js'));
   const bot = fs.readFileSync(path.join(root, "test-bot.js"), "utf8");
+  assert.match(bot, /^function columnIndex\(/m, "xlsx-parser.js가 쓰는 columnIndex를 봇 화면에서도 정의");
   const setItems = [...bot.matchAll(/localStorage\.setItem\(([^,]+),/g)].map((match) => match[1].trim());
   assert.deepEqual(setItems, ["OPTIONS_KEY"], "봇은 실행 설정만 저장한다");
   assert.doesNotMatch(bot, /indexedDB|sessionStorage/);
