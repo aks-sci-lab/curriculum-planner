@@ -3108,8 +3108,7 @@
         item.setAttribute("aria-pressed", String(selected));
         item.querySelector(".student-avatar").textContent = student.number;
         item.querySelector(".student-name").textContent = student.name;
-        item.querySelector(".student-meta").textContent =
-          `${student.grade}학년 ${student.classroom}반 ${student.number}번`;
+        item.querySelector(".student-meta").textContent = studentGradeLabel(student);
         item.querySelector(".student-courses").textContent = `${student.selections.length}과목`;
         fragment.appendChild(item);
       }
@@ -3119,6 +3118,11 @@
     // 그룹 설정을 읽는 데 약 50ms가 걸리므로 일괄 인쇄에서는 한 번만 읽어 학생마다 넘긴다.
     function certificateGroupSettings() {
       return typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+    }
+
+    // 현 N학년 학생은 N+1학년 과목을 신청하므로 학생 표기에는 항상 '현'을 붙여 신청 학년과 헷갈리지 않게 한다.
+    function studentGradeLabel(student) {
+      return `현 ${student.grade}학년 ${student.classroom}반 ${student.number}번`;
     }
 
     function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
@@ -3146,8 +3150,8 @@
       return `<article class="${printMode ? "print-page" : "preview-paper"}${density}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
-          <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span><span>${escapeHtml(Number(student.grade) + 1)}학년 선택과목 신청</span></div>
-          <p class="paper-student">${escapeHtml(student.grade)} 학년&nbsp;&nbsp; ${escapeHtml(student.classroom)} 반&nbsp;&nbsp; ${escapeHtml(student.number)} 번&nbsp;&nbsp; ${escapeHtml(student.name)}</p>
+          <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span></div>
+          <p class="paper-student"><span class="paper-student-grade">${escapeHtml(studentGradeLabel(student))} · ${escapeHtml(Number(student.grade) + 1)}학년 선택과목 신청</span>&nbsp;&nbsp; <span class="paper-student-name">${escapeHtml(student.name)}</span></p>
           <table class="certificate-table">
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
             <tbody>${body}</tbody>
@@ -3180,7 +3184,7 @@
       }
       preview.className = "preview-paper";
       preview.innerHTML = certificateMarkup(student);
-      $("#previewSubheading").textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 · ${student.selections.length}과목 · ${student.totalCredits}학점`;
+      $("#previewSubheading").textContent = `${studentGradeLabel(student)} · ${Number(student.grade) + 1}학년 과목 ${student.selections.length}개 · ${student.totalCredits}학점`;
       $("#printSelected").disabled = false;
       syncPrintAllButton();
     }

@@ -164,6 +164,8 @@
     .paper-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; font-size: 14px; }
     .paper-meta .academic { font-weight: 750; }
     .paper-student { margin: 0 0 0; padding: 0 2px 7px; font-size: 14px; text-align: right; }
+    .paper-student-grade { font-weight: 650; }
+    .paper-student-name { font-weight: 750; }
     .certificate-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
     .certificate-table th, .certificate-table td { height: 29px; padding: 4px 8px; border: 1px solid #252525; }
     .certificate-table thead th { height: 31px; background: #fafafa; font-weight: 750; text-align: center; }
