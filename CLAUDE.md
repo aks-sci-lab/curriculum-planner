@@ -22,6 +22,7 @@ npm run build:deploy               # 배포용 파일만 dist/ 에 모음
 | 기능 | 주요 파일 |
 |---|---|
 | 1단계 편제표(업로드·표·선택과목군·행·과목 이동·이력) | `curriculum-data.js`(업로드→과목·선택과목군 데이터 변환, 예전 자료 변환), `curriculum-data-view.js`(데이터로 그린 표·편집), `curriculum-data-export.js`(원본 양식+데이터+수식 내보내기), `curriculum-choice-blocks.js`(택n), `curriculum-subject-actions.js`, `curriculum-subject-list.js`(2022 개정 과목 목록), `curriculum-versions.js`(변경 이력), `curriculum-workbook.js`(수식·내보내기), `curriculum-annual.js`(전학년 생성), `xlsx-parser.js` |
+| 1단계 편제 점검표·편성 영역·교과(군) 통계(카드마다 `편제 점검` 팝업, 울산 편제 점검 프로그램 점검표 자동 20+자체 4개, 인정오류·자체 점검은 `state.curriculumCompliance.plans["cohort:연도"/"annual:연도"]`, 기준값은 `.settings`(설정 팝업), 편성 영역은 과목 데이터 `subject.planSection`(`school`/`choice`/`cross`/`extra`)·`planSectionManual` + `curriculumPlanSection(subject, plan)`, 행 메뉴 `편성 영역 바꾸기`, 표의 영역 표시·학점 범위 경고·과목명 `바꾸기`, 점검표·통계 엑셀/인쇄, 2015 개정(2024 이전 입학생)은 점검 대상 아님, 전학년은 학점 범위·과목명·체육·3-2 수능만) | `curriculum-compliance.js`(위쪽 순수 계산 `planComplianceReport`·`planComplianceStats` → `// ---- 앱 연결` 아래 팝업·표 장식, `app.js`보다 먼저 로드, 과목 학점 범위는 `curriculum-subject-list.js`의 `CURRICULUM_OFFICIAL_CREDIT_ROWS`, 위계는 `course-checks.js` 규칙 재사용), 테스트 `tests/curriculum-compliance.test.cjs` |
 | 2단계 선택 그룹·결과 업로드/검증 | `course-groups.js`(그룹), `result-import.js`(검증 미리보기) |
 | 3단계 확인서 | `app.js`의 `certificateMarkup`, `renderRoster`, `visibleStudents`, `printStudents` |
 | 4단계 집계·개설/폐강·재신청·차수 확정 | `app.js`(`aggregateRecords`, 폐강·재신청 패널), `round-status.js`(확정·스냅샷·차수 비교) |

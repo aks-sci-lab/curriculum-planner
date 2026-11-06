@@ -49,6 +49,7 @@
       roundStatuses: {},
       hoursStats: {},
       courseChecks: {},
+      curriculumCompliance: {},
       curriculumVersions: {},
       applicationImportRevision: 0,
       applicationMenuGrade: "1",
@@ -345,6 +346,7 @@
           roundStatuses: state.roundStatuses,
           hoursStats: state.hoursStats,
           courseChecks: state.courseChecks,
+          curriculumCompliance: state.curriculumCompliance,
           curriculumVersions: state.curriculumVersions,
           students: state.students,
           courses: state.courses,
@@ -944,6 +946,7 @@
       state.roundStatuses = {};
       state.hoursStats = {};
       state.courseChecks = {};
+      state.curriculumCompliance = {};
       state.curriculumVersions = {};
       state.semesterAssignments = {};
       state.customGroupNames = [];
@@ -1063,6 +1066,9 @@
         // 위계·이수학점 점검 설정(규칙·필수 학점·이전 학년 결과). 예전 저장분에는 없고, 예전 '저장 막기' 값은 버린다.
         state.courseChecks = typeof courseCheckNormalizeSettings === "function"
           ? courseCheckNormalizeSettings(saved.courseChecks) : plainObject(saved.courseChecks) ? saved.courseChecks : {};
+        // 1단계 편제 점검표(기준값·편제표별 인정 오류·자체 점검). 예전 저장분에는 없다.
+        state.curriculumCompliance = typeof planComplianceNormalizeState === "function"
+          ? planComplianceNormalizeState(saved.curriculumCompliance) : plainObject(saved.curriculumCompliance) ? saved.curriculumCompliance : {};
         state.curriculumVersions = plainObject(saved.curriculumVersions)
           ? Object.fromEntries(Object.entries(saved.curriculumVersions)
             .filter(([year, versions]) => /^(?:\d{4}|annual:\d{4})$/.test(year) && Array.isArray(versions))
@@ -2898,6 +2904,7 @@
           `${curriculumBundleSummaryHtml(planRows.map(({ item }) => item), importedLayout)}` +
           `${curriculumImportedGradeSummaries(planRows, importedLayout)}` +
           `${curriculumImportedSheetHtml(importedLayout, state.curriculumPlanFilters, curriculumCellSelectionMode, state.curriculumTopCollapsed)}`;
+        if (typeof decoratePlanComplianceSheet === "function") decoratePlanComplianceSheet();
       } else {
         $("#curriculumChangeSummary").textContent = "";
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
@@ -3866,7 +3873,7 @@
               : "올해 전학년 편제표의 3학년 열을 만드는 데 사용 · 수강신청에는 쓰지 않음";
         return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
           <h4>${year}학년도 입학생 · ${grade === "0" ? "내년도 신입생" : `현 ${grade}학년`}</h4>
-          <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>
+          <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
           <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>
           <div><button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
@@ -3884,7 +3891,7 @@
       const sourceLine = sources.map((source) => `${source.grade}학년 ${source.year} ${source.rows ? "✓" : "미업로드"}`).join(" · ");
       const annualCard = `<article class="curriculum-cohort-card curriculum-annual-card${annualActive ? " is-active" : ""}">
         <h4>${annualYear}학년도 전학년 편제표</h4>
-        <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>
+        <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("annual", annualYear, built) : ""}
         <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => `${source.grade}학년(${source.year})`).join("·")} 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
         <div><button class="button${built && !stale ? "" : " button-primary"}" type="button" data-annual-build="${annualYear}"${missing.length ? " disabled" : ""} aria-label="${annualYear}학년도 전학년 편제표 ${built ? "다시 만들기" : "만들기"}">${built ? "다시 만들기" : "만들기"}</button>
         <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
