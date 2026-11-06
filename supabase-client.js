@@ -5,8 +5,8 @@ var updateApplicationGradeControls;
 var updateRetakeReadiness;
 
 (() => {
-  const PROJECT_URL = "https://hapfkdkbhnqpfjdepozv.supabase.co";
-  const PUBLIC_KEY = "sb_publishable_HCUWUrxTxaDVtwv4KvPj4A_4RKnLD-p";
+  // 서버 주소·공개 키는 supabase-config.js 한 곳에서 정한다(수강신청 테스트봇도 같은 값을 쓴다).
+  const { projectUrl: PROJECT_URL, publicKey: PUBLIC_KEY } = CURRICULUM_SUPABASE_CONFIG;
   const byId = (id) => document.getElementById(id);
   let session = null;
   let sessionRevision = 0;
@@ -137,6 +137,7 @@ var updateRetakeReadiness;
   window.addEventListener("offline", updateAccountControls);
   const PKCE_STORAGE_KEY = "curriculum-google-pkce";
   let latestCodes = null;
+  let latestCodesMeta = null;
   let activeCode = "";
   let application = null;
   let previewMode = false;
@@ -551,6 +552,7 @@ var updateRetakeReadiness;
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
       byId("cloudRosterInput").disabled = false;
       byId("cloudDownloadCodes").disabled = !latestCodes;
+      byId("cloudSendTestBot").disabled = !latestCodes;
       byId("cloudPrintCodes").disabled = false;
       byId("cloudCreateEvent").disabled = !pendingRoster || !session;
       updateRetakeReadiness();
@@ -644,6 +646,7 @@ var updateRetakeReadiness;
           return;
         }
         latestCodes = await rpc("manage_course_event", { p_event: event.id, p_action: "codes" }, true);
+        latestCodesMeta = { schoolName: event.school_name, schoolYear: String(event.school_year), round: String(event.round) };
         downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
         byId("cloudTeacherMessage").textContent = "전체 코드를 재발급했습니다. 새 코드를 저장하고 각 학생에게 다시 전달하세요. 기존 코드는 사용할 수 없습니다.";
       }), "button button-quiet"));
@@ -779,8 +782,10 @@ var updateRetakeReadiness;
       if (!window.confirm(`${chosen.classroom}반 ${chosen.number}번 ${chosen.name} 학생의 기존 코드를 무효로 하고 새 코드를 발급할까요? 신청 결과는 유지되고 접속 잠금도 풀립니다. 학생은 새 코드로 처음 접속할 때 코드를 다시 바꿔야 합니다.`)) return;
       const result = await rpc("reissue_course_code", { p_event: event.id, p_student: chosen.id }, true);
       const issued = result.students[0];
+      const forwarded = forwardReissuedCode(event, issued);
       await showStudentAccessPanel(event, parent);
-      byId("cloudTeacherMessage").textContent = `${issued.classroom}반 ${issued.number}번 ${issued.name} 새 코드: ${issued.code} · 잠금 해제됨 (이 학생에게만 전달하세요. 이 화면을 닫으면 다시 볼 수 없습니다.)`;
+      byId("cloudTeacherMessage").textContent = `${issued.classroom}반 ${issued.number}번 ${issued.name} 새 코드: ${issued.code} · 잠금 해제됨 (이 학생에게만 전달하세요. 이 화면을 닫으면 다시 볼 수 없습니다.)` +
+        (forwarded ? " 열려 있는 테스트봇 창에도 이 학생의 새 코드를 보냈습니다." : "");
     }), "button button-quiet"));
     panel.appendChild(reissue);
     parent.appendChild(panel);
@@ -971,6 +976,7 @@ var updateRetakeReadiness;
     }
     byId("cloudCreateEvent").disabled = !pendingRoster || !session;
     byId("cloudDownloadCodes").disabled = !latestCodes;
+    byId("cloudSendTestBot").disabled = !latestCodes;
     renderGradeEvents();
   };
 
@@ -1076,6 +1082,28 @@ var updateRetakeReadiness;
       byId("courseGroupMessage").textContent = `명렬 기준 ${grades.map((g) => `${g}학년`).join(", ")} 그룹만 설정하세요. 설정 후 온라인 신청 관리 탭에서 신청을 생성합니다.`;
     });
   });
+  // 지금 편제표·선택 그룹으로 수강신청 생성 자료를 만든다(일반 생성과 수강신청 자동 테스트가 함께 쓴다).
+  function applicationSetup(roster, schoolName) {
+    const allSubjects = getGroupedApplicationSubjects();
+    if (!allSubjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
+    const grades = [...new Set(roster.map((student) => String(Number(student.grade) + 1)))];
+    const subjects = { "1": [], "2": [], "3": [] };
+    for (const grade of grades) subjects[grade] = allSubjects[grade] || [];
+    const setup = {
+      type: "course-application-setup",
+      schoolName, schoolYear: byId("schoolYear").value.trim(),
+      round: state.currentRound, subjects,
+      groups: getCourseApplicationGroups(grades),
+      roster,
+    };
+    for (const student of setup.roster) {
+      const targetGrade = String(Number(student.grade) + 1);
+      if (!subjects[targetGrade]?.length) {
+        throw new Error(`현재 ${student.grade}학년이 신청할 ${targetGrade}학년 학생선택교육과정 과목을 찾지 못했습니다. 1단계 편제표의 교육과정 구분과 ${targetGrade}학년 학기 시수를 확인하세요.`);
+      }
+    }
+    return setup;
+  }
   byId("cloudCreateEvent").addEventListener("click", () => {
     teacherAction(async () => {
       if (!session) throw new Error("교사 로그인이 필요합니다.");
@@ -1086,25 +1114,9 @@ var updateRetakeReadiness;
         byId("cloudTeacherMessage").textContent = "생성을 취소했습니다. 이전 코드를 먼저 저장하세요.";
         return;
       }
-      const allSubjects = getGroupedApplicationSubjects();
-      if (!allSubjects) throw new Error("1단계에서 편제표를 먼저 불러오세요.");
-      const grades = [...new Set(pendingRoster.map((student) => String(Number(student.grade) + 1)))];
-      const subjects = { "1": [], "2": [], "3": [] };
-      for (const grade of grades) subjects[grade] = allSubjects[grade] || [];
-      const setup = {
-        type: "course-application-setup",
-        schoolName: byId("schoolName").value.trim(), schoolYear: byId("schoolYear").value.trim(),
-        round: state.currentRound, subjects,
-        groups: getCourseApplicationGroups(grades),
-        roster: pendingRoster,
-      };
-      for (const student of setup.roster) {
-        const targetGrade = String(Number(student.grade) + 1);
-        if (!subjects[targetGrade]?.length) {
-          throw new Error(`현재 ${student.grade}학년이 신청할 ${targetGrade}학년 학생선택교육과정 과목을 찾지 못했습니다. 1단계 편제표의 교육과정 구분과 ${targetGrade}학년 학기 시수를 확인하세요.`);
-        }
-      }
+      const setup = applicationSetup(pendingRoster, byId("schoolName").value.trim());
       latestCodes = await rpc("create_course_event", { p_setup: setup }, true);
+      latestCodesMeta = { schoolName: setup.schoolName, schoolYear: setup.schoolYear, round: String(setup.round) };
       downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
       byId("cloudTeacherMessage").textContent = `${setup.round}차 신청을 생성했습니다 (${latestCodes.students.length}명). 학생 코드를 반드시 저장하고 개별 전달하세요.`;
       // Keep the successful creation and its codes visible even if refreshing the list fails.
@@ -1131,6 +1143,7 @@ var updateRetakeReadiness;
     if (!closed.length) throw new Error("선택한 이전 차수의 과목을 집계표에서 폐강으로 확정하세요.");
     const mode = byId("cloudRetakeMode").value;
     latestCodes = await rpc("create_next_course_event", {p_source:source.id,p_closed:closed,p_mode:mode}, true);
+    latestCodesMeta = { schoolName: source.school_name, schoolYear: String(source.school_year), round: String(Number(source.round) + 1) };
     downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
     byId("cloudTeacherMessage").textContent = `${Number(source.round)+1}차 신청 생성 완료 · ${mode === "all" ? "전체 학생 재선택" : `폐강 신청 학생 ${latestCodes.affectedCount}명만 대체 선택 · 나머지 학생 결과 유지`}. 새 신청 코드를 저장하세요.`;
     try {
@@ -1636,6 +1649,166 @@ var updateRetakeReadiness;
         window.print();
       } catch (error) { byId("cloudTeacherMessage").textContent = error.message; }
     });
+  // ---------- 수강신청 테스트봇 연결 ----------
+  // 학생 코드는 저장소·주소에 남기지 않고, 내가 연 봇 창에 postMessage로만 보낸다(test-bot-bridge.js 참고).
+  // 봇은 같은 연결로 교사 화면 대조(신청 현황·잠금 현황)와 자동 테스트 신청의 정리(닫기·삭제)를 요청할 수 있다.
+  const bridge = typeof TestBotBridge !== "undefined" ? TestBotBridge : null;
+  let testBot = null;
+  const testEvents = new Set();
+  function testBotOpen() {
+    return !!testBot?.window && !testBot.window.closed;
+  }
+  function postToTestBot(message) {
+    if (!testBotOpen() || !bridge) return false;
+    testBot.window.postMessage({ ...message, nonce: testBot.nonce }, bridge.targetOrigin(window.location));
+    return true;
+  }
+  function sendTestBotPayload() {
+    if (!testBot?.ready) return;
+    if (testBot.payload) postToTestBot({ type: bridge.CODES, payload: testBot.payload });
+    else if (testBot.status) postToTestBot({ type: bridge.STATUS, ...testBot.status });
+  }
+  // 앱 쪽 진행 안내. 봇 창이 아직 준비 전이면 준비 신호를 받을 때 보낸다.
+  function testBotStatus(message, failed = false) {
+    if (!testBot) return;
+    testBot.status = { message, failed };
+    sendTestBotPayload();
+  }
+  // 봇 창을 연다(이미 열려 있으면 그 창을 쓴다). 팝업 차단을 피하려고 단추를 누른 그 순간에 부른다.
+  function openTestBotWindow() {
+    if (!bridge) throw new Error("테스트봇 연결 파일(test-bot-bridge.js)을 불러오지 못했습니다. 페이지를 새로고침하세요.");
+    if (testBotOpen()) {
+      testBot.window.focus?.();
+      return testBot;
+    }
+    const nonce = bridge.createNonce(crypto);
+    const url = new URL("test-bot.html", window.location.href);
+    url.search = "";
+    url.hash = new URLSearchParams({ bridge: nonce }).toString();
+    const opened = window.open(url.href, "_blank");
+    if (!opened) throw new Error("테스트봇 창이 팝업 차단으로 열리지 않았습니다. 이 사이트의 팝업을 허용한 뒤 다시 누르세요.");
+    testBot = { window: opened, nonce, ready: false, payload: null };
+    return testBot;
+  }
+  function deliverToTestBot(payload) {
+    testBot.payload = payload;
+    sendTestBotPayload();
+  }
+  // 학생별 코드 재발급: 봇 창이 같은 신청을 받고 있으면 그 학생 코드만 갱신해 보낸다.
+  function forwardReissuedCode(event, issued) {
+    const sameStudent = (student) => (student.id && student.id === issued.id) ||
+      (String(student.grade) === String(issued.grade) && String(student.classroom) === String(issued.classroom) &&
+        String(student.number) === String(issued.number));
+    if (latestCodes?.id === event.id) {
+      latestCodes = { ...latestCodes, students: latestCodes.students.map((student) => sameStudent(student) ? { ...student, ...issued } : student) };
+    }
+    if (!bridge || !testBotOpen() || testBot.payload?.eventId !== event.id) return false;
+    const update = bridge.buildPayload({ id: event.id, students: [issued] }, testBot.payload, testBot.payload.link, true);
+    testBot.payload = bridge.mergePayload(testBot.payload, bridge.validatePayload(update));
+    if (testBot.ready) postToTestBot({ type: bridge.CODES, payload: update });
+    return true;
+  }
+  byId("cloudSendTestBot").addEventListener("click", () => {
+    try {
+      if (!latestCodes?.id) throw new Error("보낼 학생 코드가 없습니다. 수강신청을 만들거나 코드를 재발급하세요.");
+      if (!window.confirm("테스트용 수강신청에만 쓰세요. 학생 코드가 테스트봇 창으로 전달됩니다. 보낼까요?")) return;
+      openTestBotWindow();
+      deliverToTestBot({ ...bridge.buildPayload(latestCodes, latestCodesMeta || {}, eventLink(latestCodes.id)),
+        testEvent: testEvents.has(latestCodes.id) });
+      byId("cloudTeacherMessage").textContent = `테스트봇 창으로 학생 ${latestCodes.students.length}명의 코드를 보냈습니다. 봇 화면에서 실행 설정을 확인하세요.`;
+    } catch (error) { byId("cloudTeacherMessage").textContent = error.message; }
+  });
+
+  // 수강신청 자동 테스트: [테스트] 신청 생성 → 봇 창에 코드 전달 → 봇이 바로 가상 학생 신청·교사 화면 대조·정리까지 진행.
+  function virtualRoster(grade, classes, perClass) {
+    const surnames = ["김", "이", "박", "최", "정", "강", "조", "윤", "장", "임", "한", "오", "서", "신", "권"];
+    const roster = [];
+    for (let classroom = 1; classroom <= classes; classroom++) {
+      for (let number = 1; number <= perClass; number++) {
+        roster.push({ grade, classroom: String(classroom), number: String(number),
+          name: `${surnames[(classroom * 7 + number) % surnames.length]}가상${String(number).padStart(2, "0")}` });
+      }
+    }
+    return roster;
+  }
+  byId("cloudAutoTest").addEventListener("click", () => {
+    if (!session) {
+      byId("cloudTeacherMessage").textContent = "수강신청 자동 테스트는 교사 로그인 후 이용하세요.";
+      return;
+    }
+    const grade = String(state.applicationMenuGrade || "1");
+    byId("testBotAutoMessage").textContent = "";
+    byId("testBotAutoSummary").textContent = `${byId("schoolYear").value}학년도 ${state.currentRound}차 · 현 ${grade}학년 → ${Number(grade) + 1}학년 과목 · 학교명 '[테스트] ${byId("schoolName").value.trim().replace(/^\[테스트\]\s*/, "") || "학교"}'`;
+    byId("testBotAutoDialog").showModal();
+  });
+  byId("testBotAutoCancel").addEventListener("click", () => byId("testBotAutoDialog").close());
+  byId("testBotAutoStart").addEventListener("click", () => {
+    const classes = Number(byId("testBotAutoClasses").value);
+    const perClass = Number(byId("testBotAutoPerClass").value);
+    if (!Number.isInteger(classes) || classes < 1 || classes > 20 || !Number.isInteger(perClass) || perClass < 1 || perClass > 40) {
+      byId("testBotAutoMessage").textContent = "반 수는 1~20, 반별 인원은 1~40 사이 정수로 입력하세요.";
+      return;
+    }
+    let bot;
+    try { bot = openTestBotWindow(); } catch (error) { byId("testBotAutoMessage").textContent = error.message; return; }
+    byId("testBotAutoDialog").close();
+    testBot.payload = null;
+    testBotStatus("앱에서 테스트 수강신청을 만드는 중입니다…");
+    teacherAction(async () => {
+      try {
+        if (!session) throw new Error("교사 로그인이 필요합니다.");
+        const grade = String(state.applicationMenuGrade || "1");
+        const school = byId("schoolName").value.trim().replace(/^\[테스트\]\s*/, "") || "학교";
+        const setup = applicationSetup(virtualRoster(grade, classes, perClass), `[테스트] ${school}`);
+        const created = await rpc("create_course_event", { p_setup: setup }, true);
+        testEvents.add(created.id);
+        if (bot !== testBot) throw new Error("테스트봇 창이 바뀌었습니다. 다시 시도하세요.");
+        const payload = bridge.buildPayload(created, { schoolName: setup.schoolName, schoolYear: setup.schoolYear, round: String(setup.round) }, eventLink(created.id));
+        deliverToTestBot({ ...payload, autoRun: true, testEvent: true });
+        byId("cloudTeacherMessage").textContent = `테스트 수강신청(${setup.schoolName} ${setup.round}차, 가상 학생 ${created.students.length}명)을 만들고 테스트봇으로 보냈습니다. 집계표에는 연동하지 않았습니다.`;
+        try { await refreshEvents(); } catch { /* 목록 갱신 실패는 테스트 진행과 무관하다. */ }
+      } catch (error) {
+        testBotStatus(`앱에서 테스트 수강신청을 만들지 못했습니다: ${error.message}`, true);
+        throw error;
+      }
+    });
+  });
+  async function answerTestBot(request) {
+    const id = request.eventId;
+    if (request.action === "applications") return rpc("get_teacher_course_applications", { p_event: id }, true);
+    if (request.action === "locks") return rpc("get_course_code_locks", { p_event: id }, true);
+    if (!testEvents.has(id)) throw new Error("이 창에서 자동 테스트로 만든 [테스트] 수강신청만 닫기·삭제·반영할 수 있습니다.");
+    if (request.action === "close" || request.action === "delete") {
+      const result = await rpc("manage_course_event", { p_event: id, p_action: request.action }, true);
+      if (request.action === "delete") testEvents.delete(id);
+      try { await refreshEvents(); } catch { /* 목록 갱신 실패는 결과와 무관하다. */ }
+      return result;
+    }
+    // import: 테스트 결과를 이 작업 자료의 해당 차수에 연동한다(기본 꺼짐, 봇과 앱 양쪽에서 경고).
+    await refreshEvents();
+    const known = knownEvents.find((item) => item.id === id);
+    if (!known) throw new Error("테스트 수강신청을 목록에서 찾지 못했습니다.");
+    if (!window.confirm(`테스트 수강신청 결과를 이 작업 자료의 ${known.round}차에 반영합니다. 같은 차수의 기존 결과가 테스트 결과로 바뀔 수 있습니다. 계속할까요?`)) {
+      throw new Error("앱에서 반영을 취소했습니다.");
+    }
+    await linkEvent(known);
+    return { round: String(known.round), students: (state.rounds?.[String(known.round)]?.students || []).length };
+  }
+  window.addEventListener("message", (event) => {
+    if (!bridge || !testBot) return;
+    const options = { expectedSource: testBot.window, nonce: testBot.nonce, location: window.location };
+    if (bridge.acceptReady(event, options)) {
+      testBot.ready = true;
+      sendTestBotPayload();
+      return;
+    }
+    const request = bridge.acceptTeacherRequest(event, { ...options, eventId: testBot.payload?.eventId });
+    if (!request) return;
+    answerTestBot(request).then(
+      (data) => postToTestBot({ type: bridge.TEACHER_RESPONSE, id: request.id, ok: true, data }),
+      (error) => postToTestBot({ type: bridge.TEACHER_RESPONSE, id: request.id, ok: false, error: error?.message || "요청 실패" }));
+  });
+
   async function initializeTeacherSession() {
     if (eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=")) return;
     const url = new URL(window.location.href);
