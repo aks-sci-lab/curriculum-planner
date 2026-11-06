@@ -526,3 +526,18 @@ test("plan and result names match across Roman numerals and spacing", () => {
   vm.runInContext(resultImport, bare);
   assert.equal(bare.normalizeResultCourseName("미적분 2"), "미적분2", "works without the app helper too");
 });
+
+test("the statistics badge waits for the three cohort plans even after the round is confirmed", () => {
+  const cohorts = { "2027": { plan: [{}] }, "2026": { plan: [{}] } };
+  const ctx = vm.createContext({
+    state: { curriculumImportedLayout: {}, curriculumPlan: [{}], students: [{ id: "s" }], currentRound: "1" },
+    getApplicationPreparationStatus: () => ({ subjects: 1, unassigned: 0, invalidGroups: 0, hasSelections: true }),
+    roundStatus: () => "confirmed",
+    annualSourceCohorts: () => cohorts,
+    $: () => ({ value: "2026" })
+  });
+  vm.runInContext(functionSource(app, "function workflowStepStates(", "function renderWorkflowStepStates("), ctx);
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "2025 입학생 편제표가 없다");
+  cohorts["2025"] = { plan: [{}] };
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["done", "가능"]);
+});
