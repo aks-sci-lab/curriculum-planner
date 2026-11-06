@@ -22,6 +22,7 @@ npm run build:deploy               # 배포용 파일만 dist/ 에 모음
 | 기능 | 주요 파일 |
 |---|---|
 | 1단계 편제표(업로드·표·선택과목군·행·과목 이동·이력) | `curriculum-data.js`(업로드→과목·선택과목군 데이터 변환, 예전 자료 변환), `curriculum-data-view.js`(데이터로 그린 표·편집), `curriculum-data-export.js`(원본 양식+데이터+수식 내보내기), `curriculum-choice-blocks.js`(택n), `curriculum-subject-actions.js`, `curriculum-subject-list.js`(2022 개정 과목 목록), `curriculum-versions.js`(변경 이력), `curriculum-workbook.js`(수식·내보내기), `curriculum-annual.js`(전학년 생성), `xlsx-parser.js` |
+| 교육청 제출 양식(울산 편제 점검 프로그램) 내보내기·불러오기 | `curriculum-office-format.js`(위쪽 순수 계산: 우리 편제표 데이터 → 울산 「N학년_편제표」·「편제표통합」 시트 모델(`curriculumOfficeEntries`→`curriculumOfficeOrderRows`→`buildCurriculumOfficeSheet`, 소계 = 학교지정 + 교차집중 첫 줄 + 택n×학점, 그 외(소인수·공동) 제외)·xlsx 파일 목록, 구분 추정 `curriculumOfficeSection`/`curriculumOfficeDivision`(`curriculumPlanSection`·`planSection` 우선), 울산 「N학년_편성과목」 입력 영역 → 편제표 데이터, 작은 xlsb 리더 → `// ---- 앱 연결 ----` 아래 단추·확인 창(`#curriculumOfficeImportDialog`)), `app.js`의 `handleCurriculumPlanWorkbook`이 울산 파일·xlsb를 넘김, 테스트 `tests/curriculum-office-format.test.cjs` |
 | 2단계 선택 그룹·결과 업로드/검증 | `course-groups.js`(그룹), `result-import.js`(검증 미리보기) |
 | 3단계 확인서 | `app.js`의 `certificateMarkup`, `renderRoster`, `visibleStudents`, `printStudents` |
 | 4단계 집계·개설/폐강·재신청·차수 확정 | `app.js`(`aggregateRecords`, 폐강·재신청 패널), `round-status.js`(확정·스냅샷·차수 비교) |
