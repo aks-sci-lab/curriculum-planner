@@ -19,6 +19,7 @@
     .bot-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:10px 16px; }
     .bot-grid label, .bot-field { display:flex; flex-direction:column; gap:4px; font-size:14px; }
     .bot-grid input[type="number"], .bot-grid input[type="text"], .bot-grid select, .bot-card input[type="text"] { padding:6px 8px; border:1px solid #c5cdd9; border-radius:6px; font:inherit; }
+    .bot-grid label.bot-check { flex-direction:row; align-items:center; gap:6px; }
     .bot-inline { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
     .bot-note { color:#596780; font-size:13px; margin:6px 0 0; }
     .bot-warning { color:#8a3b12; background:#fff3e6; border:1px solid #f0c9a6; border-radius:6px; padding:6px 10px; font-size:13px; }
@@ -107,8 +108,8 @@
               <option value="keep">그대로 두기</option>
             </select>
           </label>
-          <span class="bot-field"><label><input id="botTeacherCheck" type="checkbox" checked> 교사 화면 신청 현황·잠금 대조(앱 창이 열려 있을 때)</label></span>
-          <span class="bot-field"><label><input id="botImport" type="checkbox"> 앱 2단계에 결과 반영 확인</label>
+          <span class="bot-field"><label class="bot-check"><input id="botTeacherCheck" type="checkbox" checked> 교사 화면 신청 현황·잠금 대조(앱 창이 열려 있을 때)</label></span>
+          <span class="bot-field"><label class="bot-check"><input id="botImport" type="checkbox"> 앱 2단계에 결과 반영 확인</label>
             <span class="bot-note bot-error">켜면 테스트 결과가 교사의 실제 작업 자료(해당 차수)에 들어갑니다. 백업 후에만 쓰세요.</span></span>
         </div>
         <p class="bot-note">설정은 이 브라우저에 저장되어 ‘수강신청 자동 테스트’에도 쓰입니다. 학생 코드는 저장하지 않습니다.</p>
@@ -170,15 +171,15 @@
           <label>아무것도 고르지 않은 학생 수 <input id="localEmpty" type="number" min="0" value="0"></label>
           <label>택 수 위반 학생 수 <input id="localViolation" type="number" min="0" value="0"></label>
           <label>편제표에 없는 과목을 넣을 학생 수 <input id="localUnknown" type="number" min="0" value="0"></label>
-          <span class="bot-field"><label><input id="localRoman" type="checkbox"> 로마숫자를 숫자로 적기(미적분Ⅱ → 미적분2)</label></span>
+          <span class="bot-field"><label class="bot-check"><input id="localRoman" type="checkbox"> 로마숫자를 숫자로 적기(미적분Ⅱ → 미적분2)</label></span>
         </div>
       </div>
       <div class="bot-card">
         <h2>3. 파일 형식과 만들기</h2>
         <div class="bot-grid">
           <span class="bot-field">형식
-            <label><input type="radio" name="localFormat" value="wide" checked> 학생별 과목 표시(과목 열에 1)</label>
-            <label><input type="radio" name="localFormat" value="form"> 차수·선택과목 목록</label>
+            <label class="bot-check"><input type="radio" name="localFormat" value="wide" checked> 학생별 과목 표시(과목 열에 1)</label>
+            <label class="bot-check"><input type="radio" name="localFormat" value="form"> 차수·선택과목 목록</label>
           </span>
           <label>차수(목록 형식) <input id="localRound" type="number" min="1" value="1"></label>
         </div>

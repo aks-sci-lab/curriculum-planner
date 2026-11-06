@@ -254,7 +254,7 @@
   }
   function renderRecord(record) {
     const row = document.createElement("tr");
-    if (!record.ok) row.className = "is-failed";
+    if (!record.ok && record.status !== "잠김 확인") row.className = "is-failed";
     for (const value of [`${record.grade}-${record.classroom}-${record.number} ${record.name}`, record.status, record.newCode,
       record.selections.join(", "), record.notes.join(" / "), record.failure]) {
       row.insertCell().textContent = value || "";
