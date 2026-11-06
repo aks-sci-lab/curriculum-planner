@@ -59,6 +59,8 @@ function curriculumPlanEntries(layout) {
   const contexts = importedPlanCourseContexts(layout, columns);
   const choiceSheetMerges = typeof curriculumSheetMerges === "function"
     ? curriculumSheetMerges(layout).filter((merge) => merge.kind !== "plain") : [];
+  // 원본 양식의 '택n' 묶음 안에는 자기 학점 칸이 비어 있는 과목 행이 있다. 묶음 학점으로 그 학기에 편성된 것으로 본다.
+  const choiceBlocks = typeof curriculumChoiceBlocks === "function" ? curriculumChoiceBlocks(layout, columns) : [];
   const contextRows = new Set(contexts.map((context) => context.rowIndex));
   const firstSemesterColumn = Math.min(...columns.semesters.filter((column) => column >= 0));
   // 과목명 칸이 비어 있고 앞쪽 열에 자기 값이 없는 바로 아래 행(택n·교차집중 아래 숫자 행)은 같은 과목으로 본다.
@@ -112,10 +114,12 @@ function curriculumPlanEntries(layout) {
       const sheetMerge = choiceSheetMerges.find((merge) =>
         column >= merge.startColumn && column <= merge.endColumn &&
         context.rowIndex >= merge.startRow && context.rowIndex <= merge.endRow);
-      if (!sheetMerge && (!values.length || values.every((value) => /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)))) return;
+      const block = sheetMerge ? null : choiceBlocks.find((item) => item.column === column &&
+        context.rowIndex >= item.startRow && context.rowIndex <= item.endRow && Number(item.credit) > 0);
+      if (!sheetMerge && !block && (!values.length || values.every((value) => /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)))) return;
       const numeric = values.map(curriculumCellNumber).find((value) => value > 0);
       const readable = values.every((value) => curriculumCellNumber(value) > 0 || /택\s*\d+|교차|[-–—]/.test(value));
-      if (!sheetMerge && !numeric && !readable) {
+      if (!sheetMerge && !block && !numeric && !readable) {
         result.issues.push(`${names.join(", ")} ${Math.floor(index / 2) + 1}학년 ${(index % 2) + 1}학기 칸 '${values[0]}'을(를) 숫자로 읽지 못해 운영학점 ${credit}을(를) 사용했습니다.`);
       }
       names.forEach((subject, nameIndex) => result.entries.push({
@@ -125,9 +129,9 @@ function curriculumPlanEntries(layout) {
         semester: String((index % 2) + 1),
         subject,
         nameIndex,
-        credit: sheetMerge?.credit || numeric || credit,
-        creditSource: numeric ? "semester" : "credit",
-        kind: sheetMerge || division === "학생선택" || choiceTag ? "선택" : "지정"
+        credit: sheetMerge?.credit || numeric || (!values.length && block ? block.credit : credit),
+        creditSource: numeric ? "semester" : !values.length && block ? "block" : "credit",
+        kind: sheetMerge || block || division === "학생선택" || choiceTag ? "선택" : "지정"
       }));
     });
   }

@@ -274,6 +274,12 @@
       classSelect.innerHTML = '<option value="">전체 반</option>' +
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
       if (classes.includes(previousClass)) classSelect.value = previousClass;
+      const note = document.getElementById("gradeFilterNote");
+      if (note) {
+        const missing = students.length ? ["1", "2"].filter((value) => !grades.includes(value)) : [];
+        note.textContent = missing.length ? `현 ${missing.join("·")}학년 결과가 아직 없습니다. 2단계에서 올리면 이 목록에 나타납니다.` : "";
+        note.classList.toggle("hidden", !missing.length);
+      }
     }
 
     function syncActiveRound() {
@@ -3106,6 +3112,7 @@
       return { openingPercent, divisionPercent };
     }
 
+    let aggregateGradeScope = "";
     function renderAggregate() {
       if (!state.students.length || !state.courses.length) {
         $("#aggregateDescription").textContent = "학생별 신청 명단에서 과목별 인원을 계산했습니다.";
@@ -3130,18 +3137,37 @@
         state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases
       );
       let atRiskCount = 0;
-      const allCourses = aggregate.reports.flatMap((report) => report.semesters.flatMap((semester) =>
-        semester.groups.flatMap((group) => group.courses)));
-      const totalStudents = aggregate.reports.reduce((sum, report) => sum + report.summary.students, 0);
-      const totalClasses = aggregate.reports.reduce((sum, report) => sum + report.semesters
-        .reduce((semesterSum, semester) => semesterSum + semester.groups
-          .reduce((groupSum, group) => groupSum + group.totalClasses, 0), 0), 0);
-      $("#aggregateContent").innerHTML = `<div class="aggregate-overview" aria-label="집계 요약">
-        <div class="aggregate-overview-card"><span>신청 학생</span><strong>${totalStudents}명</strong></div>
-        <div class="aggregate-overview-card"><span>집계 과목</span><strong>${allCourses.length}과목</strong></div>
+      // 학년별 요약(전체 보기에서는 학년마다 따로 보여 주고, 학년을 고르면 그 학년만 집계한다).
+      const gradeStats = aggregate.reports.map((report) => {
+        const courses = report.semesters.flatMap((semester) => semester.groups.flatMap((group) => group.courses));
+        return {
+          grade: String(report.summary.grade), students: report.summary.students, courses: courses.length,
+          classes: report.semesters.reduce((sum, semester) => sum + semester.groups.reduce((groupSum, group) => groupSum + group.totalClasses, 0), 0),
+          risk: courses.filter((course) => course.enrollment < report.summary.openingLimit).length
+        };
+      });
+      const scope = gradeStats.some((stat) => stat.grade === aggregateGradeScope) ? aggregateGradeScope : "";
+      const shownReports = aggregate.reports.filter((report) => !scope || String(report.summary.grade) === scope);
+      const shownStats = gradeStats.filter((stat) => !scope || stat.grade === scope);
+      const courseTotal = shownStats.reduce((sum, stat) => sum + stat.courses, 0);
+      const totalStudents = shownStats.reduce((sum, stat) => sum + stat.students, 0);
+      const totalClasses = shownStats.reduce((sum, stat) => sum + stat.classes, 0);
+      const gradeLabel = (grade) => `현 ${grade}학년 → ${Number(grade) + 1}학년 신청`;
+      const gradeTabs = `<div class="aggregate-grade-tabs" role="group" aria-label="학년 선택">` +
+        [["", "전체 학년"], ...gradeStats.map((stat) => [stat.grade, gradeLabel(stat.grade)])].map(([value, label]) =>
+          `<button type="button" class="aggregate-grade-tab" data-aggregate-grade="${value}" aria-pressed="${value === scope}">${label}</button>`).join("") + `</div>`;
+      const missingGrades = ["1", "2"].filter((grade) => !gradeStats.some((stat) => stat.grade === grade));
+      const missingNote = missingGrades.length
+        ? `<p class="aggregate-missing-note" role="status">${missingGrades.map((grade) => `현 ${grade}학년`).join("·")} 결과가 아직 없어 표시되지 않습니다. 2단계에서 학년 탭을 고르고 결과 엑셀을 올리면 함께 집계됩니다.</p>` : "";
+      const gradeBreakdown = !scope && gradeStats.length > 1
+        ? `<p class="aggregate-grade-breakdown">${gradeStats.map((stat) =>
+          `<span><strong>${gradeLabel(stat.grade)}</strong> ${stat.students}명 · ${stat.courses}과목 · 개설 ${stat.classes}학급 · 기준 미달 ${stat.risk}과목</span>`).join("")}</p>` : "";
+      $("#aggregateContent").innerHTML = gradeTabs + `<div class="aggregate-overview" aria-label="집계 요약">
+        <div class="aggregate-overview-card"><span>신청 학생${scope ? ` (${gradeLabel(scope)})` : ""}</span><strong>${totalStudents}명</strong></div>
+        <div class="aggregate-overview-card"><span>집계 과목</span><strong>${courseTotal}과목</strong></div>
         <div class="aggregate-overview-card"><span>개설 학급 합계</span><strong>${totalClasses}학급</strong></div>
         <div class="aggregate-overview-card risk"><span>개설 기준 미달</span><strong data-aggregate-risk-count>집계 중</strong></div>
-      </div>` + aggregate.reports.map(({ summary, semesters }) => {
+      </div>${gradeBreakdown}${missingNote}` + shownReports.map(({ summary, semesters }) => {
         const semesterTables = semesters.map((semester) => {
           const maxCourses = Math.max(...semester.groups.map((group) => group.courses.length));
           const rows = semester.groups.map((group) => {
@@ -3174,7 +3200,7 @@
         }).join("");
         const displayGrade = Number(summary.grade) + 1;
         return `<section class="aggregate-grade">
-          <h3 class="aggregate-grade-heading">${displayGrade}학년(현${summary.grade}학년) 수강신청결과(${escapeHtml($("#round").value || "1차")})<span class="aggregate-grade-date">${escapeHtml($("#confirmDate").value)}</span></h3>
+          <h3 class="aggregate-grade-heading"><span class="aggregate-grade-badge">현 ${summary.grade}학년 → ${displayGrade}학년 신청</span>${displayGrade}학년(현${summary.grade}학년) 수강신청결과(${escapeHtml($("#round").value || "1차")})<span class="aggregate-grade-date">${escapeHtml($("#confirmDate").value)}</span></h3>
           <div class="aggregate-kpis">
             <div class="aggregate-kpi"><span class="aggregate-kpi-label">총학생수</span><span class="aggregate-kpi-value">${summary.students}</span></div>
             <div class="aggregate-kpi"><span class="aggregate-kpi-label">학급 수 (${summary.classSource === "planned" ? "내년도 편성 입력값" : "명단의 반 수"})</span><span class="aggregate-kpi-value">${summary.classes}</span></div>
@@ -3187,7 +3213,7 @@
         </section>`;
       }).join("");
       $("#aggregateDescription").textContent =
-        `${state.currentRound}차${locked ? " · 확정됨(수정 잠금)" : ""} · ${aggregate.reports.length}개 학년 · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 기준 미달 ${atRiskCount}과목 (폐강 확정 아님)`;
+        `${state.currentRound}차${locked ? " · 확정됨(수정 잠금)" : ""} · ${scope ? gradeLabel(scope) : `${aggregate.reports.length}개 학년`} · 기준 비율 ${openingPercent}% / ${divisionPercent}% · 기준 미달 ${atRiskCount}과목 (폐강 확정 아님)`;
       $("#aggregateContent").querySelector("[data-aggregate-risk-count]").textContent = `${atRiskCount}과목`;
       $("#downloadAggregate").disabled = false;
     }
@@ -3354,6 +3380,7 @@
     function downloadRetakeList() {
       const { sourceRound, rows } = retakeTargets();
       if (!rows.length) return;
+      const nextRound = String(Number(sourceRound) + 1);
       const sheetRows = [
         ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목"],
         ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", ")])
@@ -5938,6 +5965,12 @@
         persistState();
       });
     }
+    $("#aggregateContent").addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-aggregate-grade]");
+      if (!tab) return;
+      aggregateGradeScope = tab.dataset.aggregateGrade;
+      renderAggregate();
+    });
     $("#aggregateContent").addEventListener("change", (event) => {
       const input = event.target.closest(".aggregate-class-input");
       if (!input) return;

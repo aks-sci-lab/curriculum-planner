@@ -205,8 +205,15 @@ function computeHoursStats(year = hoursTargetYear()) {
       } else {
         const candidates = resultIndex.get(normalizeResultCourseName(entry.subject)) || [];
         const exact = candidates.filter((row) => row.semester === entry.semester);
-        const matched = exact.length ? exact : candidates.length === 1 && !candidates[0].semester ? candidates : [];
-        if (matched.length) {
+        const semesterless = !exact.length && candidates.length === 1 && !candidates[0].semester;
+        // 학기 표시가 없는 결과 한 칸이 편제표의 두 학기와 모두 맞으면 이중 계산하지 않고 앞 학기에만 반영한다.
+        const alreadyUsed = semesterless && usedResults.has(candidates[0]);
+        const matched = exact.length ? exact : semesterless && !alreadyUsed ? candidates : [];
+        if (alreadyUsed) {
+          item.autoClasses = 0;
+          item.basis = "학기 표시 없는 결과 · 앞 학기에만 반영";
+          issues.push({ level: "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 신청 결과에 학기 표시가 없어 앞 학기에만 반영했습니다. 이 학기에도 개설하면 상세 표에서 개설반을 입력하세요.` });
+        } else if (matched.length) {
           matched.forEach((row) => usedResults.add(row));
           item.autoClasses = matched.reduce((sum, row) => sum + (Number(row.classCount) || 0), 0);
           item.enrollment = matched.reduce((sum, row) => sum + (Number(row.enrollment) || 0), 0);

@@ -574,3 +574,19 @@ test("the student list can be limited by grade so classes of different grades ar
   values["#gradeFilter"] = "2";
   assert.deepEqual(plain(ctx.visibleStudents().map((s) => s.id)), ["b"]);
 });
+
+test("the retake list download names the next round without throwing", () => {
+  let files = null, clicked = 0;
+  const ctx = vm.createContext({
+    retakeTargets: () => ({ sourceRound: "1", rows: [{ student: { grade: "2", classroom: "1", number: "3", name: "가" }, courses: ["수학과 문화"] }] }),
+    columnName: (index) => "ABCDEF"[index], xmlEscape: String, createStylesXml: () => "<styleSheet/>",
+    createXlsxBlob: (parts) => { files = parts; return {}; },
+    document: { createElement: () => ({ click() { clicked++; } }) },
+    URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} }, setTimeout: () => 0
+  });
+  vm.runInContext(functionSource(app, "function downloadRetakeList(", "function applicationCohortYear("), ctx);
+  ctx.downloadRetakeList();
+  assert.equal(clicked, 1);
+  assert.match(files["xl/workbook.xml"], /2차 대상자/);
+  assert.match(files["xl/worksheets/sheet1.xml"], /신청 학년/);
+});
