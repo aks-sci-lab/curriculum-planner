@@ -183,6 +183,7 @@ const NS_PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relations
         if (!sheet) throw new Error(`'${sheetNode.getAttribute("name")}' 시트를 찾지 못했습니다.`);
         const rows = [];
         const rowHeights = {};
+        const hiddenRows = [];
         const cellFills = {};
         const formulas = {};
         const sharedFormulas = new Map();
@@ -196,6 +197,8 @@ const NS_PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relations
           const rowNumber = Number(rowNode.getAttribute("r")) - 1;
           const height = Number(rowNode.getAttribute("ht"));
           if (Number.isFinite(height) && height > 0) rowHeights[rowNumber] = height;
+          const hiddenAttribute = rowNode.getAttribute("hidden");
+          if (hiddenAttribute === "1" || hiddenAttribute === "true" || (Number.isFinite(height) && height > 0 && height <= 3)) hiddenRows.push(rowNumber);
           const row = rows[rowNumber] || [];
           for (const cell of rowNode.getElementsByTagNameNS(NS_MAIN, "c")) {
             const index = columnIndex(cell.getAttribute("r"));
@@ -260,7 +263,7 @@ const NS_PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relations
         sheets.push({
           name: sheetNode.getAttribute("name"),
           rows,
-          ...(includeLayout ? { layout: { mergedRanges, columnWidths, rowHeights, cellFills, formulas, sheetPath } } : {})
+          ...(includeLayout ? { layout: { mergedRanges, columnWidths, rowHeights, hiddenRows, cellFills, formulas, sheetPath } } : {})
         });
       }
       return sheets;

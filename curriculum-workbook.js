@@ -95,6 +95,7 @@ function recalculatePlanFormulas(layout) {
 }
 
 function insertPlanFormulaRow(previous, next, row) {
+  if (previous.hiddenRows) next.hiddenRows = previous.hiddenRows.map((index) => index >= row ? index + 1 : index);
   if (previous.sheetMerges) next.sheetMerges = previous.sheetMerges.map((merge) =>
     ({ ...merge, reference: shiftPlanFormula(merge.reference, 1, 0, row) }));
   if (previous.sheetCellEdits) next.sheetCellEdits = Object.fromEntries(Object.entries(previous.sheetCellEdits).map(([key, value]) => {
@@ -150,6 +151,34 @@ async function storeCurriculumLayout(layout) {
 async function loadCurriculumLayout(id) {
   if (!id) return null;
   return await curriculumArchiveStore("get",`layout:${id}`) || null;
+}
+
+// 엑셀에서 숨김·초소형으로 지정한 행은 화면에도 보이지 않아야 한다. 예전에 올린 편제표는 보관된 원본에서 한 번 읽어 채운다.
+async function detectCurriculumHiddenRows(layout) {
+  if (!layout?.archiveId || !layout.sheetPath) return null;
+  const buffer = await curriculumArchiveStore("get", layout.archiveId);
+  if (!buffer) return null;
+  const original = (await parseWorkbook(buffer, { includeLayout: true })).find((sheet) => sheet.layout.sheetPath === layout.sheetPath);
+  if (!original) return null;
+  const hidden = new Set(original.layout.hiddenRows || []);
+  const rowSources = Array.from({ length: layout.originalRowCount }, (_, index) => index + (layout.sourceRowOffset || 0));
+  for (const row of layout.rowInsertions || []) rowSources.splice(row, 0, null);
+  return rowSources.flatMap((source, row) => source !== null && hidden.has(source) ? [row] : []);
+}
+
+const checkedHiddenRowArchives = new Set();
+function ensureCurriculumHiddenRows() {
+  const layout = state.curriculumImportedLayout;
+  if (!layout || layout.hiddenRows !== undefined || !layout.archiveId || checkedHiddenRowArchives.has(layout.archiveId)) return;
+  const archiveId = layout.archiveId;
+  checkedHiddenRowArchives.add(archiveId);
+  detectCurriculumHiddenRows(layout).then((rows) => {
+    const current = state.curriculumImportedLayout;
+    if (!rows || !current || current.archiveId !== archiveId || current.hiddenRows !== undefined) return;
+    current.hiddenRows = rows;
+    persistState();
+    if (rows.length) renderCurriculumStep();
+  }).catch(() => {});
 }
 
 async function buildOriginalCurriculumWorkbook(layout) {

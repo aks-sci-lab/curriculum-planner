@@ -1998,7 +1998,8 @@
       const sheetMergeByReference = new Map((typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout) : [])
         .map((item) => [item.reference, item]));
       const emptySubjectRows = new Set(typeof curriculumEmptySubjectRows === "function" ? curriculumEmptySubjectRows(layout) : []);
-      const isHiddenRow = (rowIndex) => (!layout.showEmptySubjectRows && emptySubjectRows.has(rowIndex)) ||
+      const sheetHiddenRows = new Set(layout.hiddenRows || []);
+      const isHiddenRow = (rowIndex) => sheetHiddenRows.has(rowIndex) || (!layout.showEmptySubjectRows && emptySubjectRows.has(rowIndex)) ||
         (hasActiveFilter && courseRows.has(rowIndex) && !matchingRows.has(rowIndex));
       const headerIndex = compactView ? Math.max(0, rows.findIndex((row) =>
         row.some((value) => /세부과목|과목명/.test(String(value))) &&
@@ -2632,6 +2633,7 @@
       $("#curriculumAddSubject").disabled = !state.curriculumImportedLayout;
       renderCurriculumCohortUploads();
       if (typeof renderCurriculumVersions === "function") renderCurriculumVersions();
+      if (typeof ensureCurriculumHiddenRows === "function") ensureCurriculumHiddenRows();
       $("#undoCurriculumEdit").disabled = !state.curriculumUndoStack.length;
       $("#clearCurriculumPlan").disabled = !state.curriculumImportedLayout && !state.curriculumPlan.length;
       $("#exportCurriculumPlan").disabled = !state.curriculumImportedLayout && !state.curriculumPlan.length;
@@ -4917,7 +4919,8 @@
         rowHeights: Object.fromEntries(Object.entries(layout.rowHeights || {}).map(([row, height]) => [
           Number(row) >= insertionRow ? Number(row) + 1 : Number(row),
           height
-        ]))
+        ])),
+        ...(layout.hiddenRows ? { hiddenRows: layout.hiddenRows.map((row) => row >= insertionRow ? row + 1 : row) } : {})
       };
       nextLayout.rows.splice(insertionRow, 0, newRow);
       nextLayout.cellFills=Object.fromEntries(Object.entries(layout.cellFills || {}).map(([key,color])=>{
@@ -5038,7 +5041,8 @@
         columnWidths: (sheet.layout?.columnWidths || []).slice(minColumn, maxColumn + 1),
         rowHeights: Object.fromEntries(Object.entries(sheet.layout?.rowHeights || {})
           .filter(([row]) => Number(row) >= minRow && Number(row) <= maxRow)
-          .map(([row, height]) => [Number(row) - minRow, height]))
+          .map(([row, height]) => [Number(row) - minRow, height])),
+        hiddenRows: (sheet.layout?.hiddenRows || []).filter((row) => row >= minRow && row <= maxRow).map((row) => row - minRow)
       };
     }
 
