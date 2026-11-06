@@ -20,25 +20,38 @@ test("closure defaults open eligible courses and leave at-risk courses undecided
   // 개설/폐강 결정은 집계표의 과목 행 안에 있다(별도 개설/폐강 검토 표 없음).
   const ctx = vm.createContext({ $: () => ({ value: "" }), state: {}, escapeHtml: String });
   vm.runInContext(functionSource("function aggregateThresholds(", "function renderAggregate("), ctx);
-  const course = (column, name, enrollment, atRisk) => ({ column, name, enrollment, atRisk, closed: false, classCount: 1,
-    enrollmentPerDivision: 1, averageClassSize: enrollment });
+  const course = (column, name, enrollment, atRisk, classCount = 1) => ({ column, name, enrollment, atRisk, closed: false, classCount,
+    enrollmentPerDivision: 1, averageClassSize: classCount ? enrollment / classCount : 0 });
   const report = { summary: { grade: "1", students: 350, classes: 10, classSource: "roster", averageClassSize: 35, openingLimit: 31.5, divisionLimit: 38.5 },
     semesters: [{ name: "2학년 1학기", groups: [{ category: "2-1 택1", choiceCount: 1, totalClasses: 5, courses: [
       course(1, "개설기준 일치", 31.5, false),
       course(2, "미달", 5, true),
-      course(3, "수동 미정", 100, false),
-      course(4, "수동 폐강", 100, false),
+      course(3, "수동 미정", 100, false, 3),
+      course(4, "수동 폐강", 100, false, 3),
       course(5, "수동 개설", 5, true)
     ] }] }] };
   const closures = { "1:3": "", "1:4": "closed", "1:5": "open" };
-  const options = { closures, round: "1", locked: false, maxClassSize: 34, riskOnly: false, canUndo: false };
+  const options = { closures, round: "1", locked: false, maxClassSize: 34, attentionOnly: false, canUndo: false };
   const decisions = (markup) => [...markup.matchAll(/data-closure-key="([^"]+)"[\s\S]*?<option value="([^"]*)" selected/g)]
     .map((match) => [match[1], match[2]]);
   const markup = ctx.aggregateGradeSectionMarkup(report, options);
   assert.deepEqual(decisions(markup), [["1:1", "open"], ["1:2", ""], ["1:3", ""], ["1:4", "closed"], ["1:5", "open"]]);
   assert.match(markup, /data-closure-round="1"/);
-  // 기준 미달·미정만 보기: 기준 미달이거나 결정이 미정인 과목만 남는다.
-  assert.deepEqual(decisions(ctx.aggregateGradeSectionMarkup(report, { ...options, riskOnly: true })).map(([key]) => key), ["1:2", "1:3", "1:5"]);
+  // 처리할 것만 보기: 결정이 미정인 기준 미달 과목만 남고, 이미 개설/폐강을 정한 과목과 기준을 충족한 과목은 빠진다.
+  // 목표(택1 × 10학급 = 10)와 맞지 않는 그룹의 소제목은 남는다.
+  const attention = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
+  assert.deepEqual(decisions(attention).map(([key]) => key), ["1:2"]);
+  assert.match(attention, /data-group-status="mismatch"[\s\S]*2-1 택1[\s\S]*총 5학급 \/ 목표 10 \(-5\)/);
+  assert.equal(ctx.aggregateAttention(report, closures, 34).count, 2, "one undecided at-risk course and one group off target");
+  // 학급수를 직접 줄여 학급당 인원이 최대 인원·분반 기준을 넘으면 그 과목도 처리할 것에 들어가고 행에 경고 배지가 붙는다.
+  report.semesters[0].groups[0].courses[2] = course(3, "수동 미정", 100, false, 2);
+  const crowded = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
+  assert.deepEqual(decisions(crowded).map(([key]) => key), ["1:2", "1:3"]);
+  assert.match(crowded, /data-course-key="1:3"[\s\S]*?34명 초과[\s\S]*?분반기준 초과/);
+  // 목표와 맞고 처리할 과목이 없는 그룹은 통째로 사라지고 빈 안내가 나온다.
+  const settled = { summary: report.summary, semesters: [{ name: "2학년 1학기", groups: [{ category: "2-1 택1", choiceCount: 1, totalClasses: 10, courses: [
+    course(1, "충족", 40, false, 10)] }] }] };
+  assert.match(ctx.aggregateGradeSectionMarkup(settled, { ...options, attentionOnly: true }), /처리할 과목이 없습니다/);
   // 확정된 차수는 결정 칸이 잠긴다.
   assert.equal(ctx.aggregateGradeSectionMarkup(report, { ...options, locked: true }).match(/<select class="closure-select"[^>]* disabled/g).length, 5);
   assert.match(frontend, /state\.roundClosures\[round\]\[key\] = select\.value/);
@@ -1242,4 +1255,34 @@ test("result bundle import checks round and reports empty results without changi
   assert.match(ctx.status.textContent, /비어/);
   await ctx.handleApplicationFiles([file({ type: "course-application-results", round: "2", entries: setup().roster })]);
   assert.equal(ctx.merged.length, 2);
+});
+
+test("the aggregate workbook keeps the school columns but labels each choice group and checks its student count", () => {
+  const ctx = vm.createContext({ $: (selector) => ({ value: { "#confirmDate": "2026. 11. 6.", "#round": "1차" }[selector] || "" }) });
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("), ctx);
+  const course = (column, name, enrollment, classCount) => ({ column, name, enrollment, classCount, closed: false,
+    enrollmentPerDivision: enrollment / 33.8, averageClassSize: classCount ? enrollment / classCount : 0 });
+  const report = { summary: { grade: "1", students: 30, classes: 1, averageClassSize: 30, openingLimit: 27, divisionLimit: 33 },
+    semesters: [{ name: "2학년 1학기", groups: [
+      { category: "2-1 택3", choiceCount: 3, totalClasses: 3, courses: Array.from({ length: 7 }, (_, index) => course(index + 1, `과목${index + 1}`, index < 3 ? 29 : 0, index < 3 ? 1 : 0)) },
+      { category: "2-1 택1", choiceCount: 1, totalClasses: 2, courses: [course(8, "일본어", 20, 1), course(9, "중국어", 9, 1)] }
+    ] }] };
+  const xml = ctx.createWorksheetXml(report, 90, 110);
+  const cell = (reference) => {
+    const match = xml.match(new RegExp(`<c r="${reference}"[^>]*>(?:<v>([^<]*)</v>|<is><t[^>]*>([^<]*)</t></is>)</c>`));
+    return match ? (match[1] ?? match[2]) : undefined;
+  };
+  assert.equal((xml.match(/<col /g) || []).length, 9, "the nine school columns stay");
+  // 1행 제목, 2행 공백, 3·4행 기준, 5행 공백, 6행 학기, 7행부터 그룹 묶음(과목 6개씩 5행).
+  assert.equal(cell("A6"), "2학년 1학기");
+  assert.equal(cell("A7"), "2-1 택3");
+  assert.equal(cell("A12"), "2-1 택3", "the second block of the same group keeps the group name");
+  assert.equal(cell("H7"), "총 학급수");
+  assert.equal(cell("H8"), "3", "the class total is per group, as on the screen");
+  assert.match(xml, /<mergeCell ref="H8:H16"\/>/);
+  assert.equal(cell("I8"), "29", "memo = enrollments ÷ 3, so a missing choice shows up against 30 students");
+  assert.equal(cell("A18"), "2-1 택1", "a blank row separates the next group");
+  assert.equal(cell("H19"), "2");
+  assert.equal(cell("I19"), "29");
+  assert.doesNotMatch(xml, />30\.0</, "the old string memo is gone");
 });

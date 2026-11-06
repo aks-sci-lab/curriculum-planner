@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-grade-tabs">
+  <link rel="stylesheet" href="styles.css?v=20261106-followups">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -106,14 +106,9 @@
         <div class="workspace-context-heading"><strong id="workspaceContextSummary">현재 작업 대상</strong>
           <label class="workspace-round-control" for="workspaceRound">결과 차수 <select id="workspaceRound" aria-describedby="workspaceRoundHelp"></select></label>
         </div>
-        <details class="workspace-settings">
-          <summary>학교·학년도 설정</summary>
-          <p id="workspaceRoundHelp" class="note">결과 차수는 확인서·집계·개설 확정에 사용할 수강신청 결과를 정합니다.</p>
-          <div class="settings-grid">
-            <div class="field"><label for="schoolYear">학교 학년도</label><input id="schoolYear" type="number" value="2026" min="2000" max="2100" required></div>
-            <div class="field"><label for="schoolName">학교명</label><input id="schoolName" type="text" value="" placeholder="예: ○○고등학교" autocomplete="organization"></div>
-          </div>
-        </details>
+        <div class="workspace-settings">
+          <button class="workspace-settings-button" id="openWorkspaceSettings" type="button" aria-haspopup="dialog" data-open-dialog="workspaceSettingsDialog">학교·학년도 설정</button>
+        </div>
         <div class="workspace-storage">
           <span id="workspaceSaveStatus" role="status" aria-live="polite">자동 저장 준비 중</span>
           <span id="workspaceBackupStatus" class="workspace-backup-status" aria-live="polite"></span>
@@ -262,16 +257,20 @@
           <summary class="application-subject-title">신청 받을 과목 확인 (학생선택교육과정 · 공동교육과정·소인수 제외)</summary>
           <div id="applicationSubjectList" class="application-subject-list"></div>
           </details>
-          <h3>수강신청 선택 그룹 설정</h3>
-          <p class="note">과목은 해당 입학연도 편제표를 기준으로 합니다. 같은 학기 안에서 과목을 그룹 카드로 끌어 놓아 배치하고, 미분류 영역에 놓아 해제하세요. 그룹명·선택 수는 여기서, 과목·학점·학기는 편제표에서 수정합니다. 기존 온라인 신청에는 자동 반영되지 않습니다.</p>
+          <div class="panel-title-row">
+            <h3>수강신청 선택 그룹 설정</h3>
+            <span class="note-inline">과목을 그룹 카드로 끌어 놓아 배치 · 미분류에 놓으면 해제</span>
+            <button class="button button-quiet panel-help-button" type="button" aria-haspopup="dialog" data-open-dialog="groupHelpDialog">그룹 설정 방법</button>
+          </div>
           <div id="courseGroupEditor"></div>
           <p id="courseGroupMessage" role="status"></p>
         </section>
         <section class="hidden" id="applicationResultsPanel" role="tabpanel" aria-labelledby="applicationResultsTab">
-        <p class="note">외부 수강신청 프로그램에서 받은 결과 엑셀을 차수별로 올립니다. 선택한 학년만 교체하고 다른 학년은 유지하며, 반영 전에 검증 결과와 기존 결과 대비 변화를 보여 줍니다.</p>
-        <p class="note">확인서·집계표는 차수별 두 학년 결과를 함께 사용합니다. 차수 데이터 삭제는 두 학년 모두에 적용되며, 확정된 차수는 확정을 해제해야 수정할 수 있습니다.</p>
-        <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택"></div>
-        <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
+        <div class="round-toolbar">
+          <div class="round-selector" id="roundSelector" role="tablist" aria-label="수강신청 차수 선택"></div>
+          <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
+          <button class="button button-quiet panel-help-button" type="button" aria-haspopup="dialog" data-open-dialog="resultUploadHelpDialog">결과 업로드 안내</button>
+        </div>
         <div class="dropzone" id="dropzone">
           <div class="upload-icon" aria-hidden="true">↑</div>
           <strong id="resultDropHint">선택한 학년·차수의 수강신청 결과 엑셀을 여기에 놓으세요</strong>
@@ -286,7 +285,6 @@
         <div style="margin-top:10px">
           <button class="button button-danger" id="resetData" type="button">선택한 차수 데이터 삭제 (두 학년 전체)</button>
         </div>
-        <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
         <div class="round-status-list" id="roundStatusList"></div>
         </section>
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
@@ -444,7 +442,6 @@
         <div class="hours-heading">
           <div>
             <h3>5단계 · 교과별 시수 통계 <span class="count-pill" id="hoursTargetYear"></span></h3>
-            <p class="note">내년도 학년별 편제표(입학연도별)와 확정된 수강신청 결과로 교과별 개설 시수를 계산합니다. 학교 지정 과목은 학급 수만큼, 학생 선택 과목은 집계 결과의 개설 학급 수만큼 반영합니다.</p>
           </div>
           <div class="hours-toolbar">
             <button class="button" id="hoursLoadPrevious" type="button">전년도 설정 불러오기</button>
@@ -729,6 +726,60 @@ function courseClient_() {
   });
 }
   </script>
+  <dialog class="curriculum-subject-dialog workspace-settings-dialog" id="workspaceSettingsDialog" aria-labelledby="workspaceSettingsTitle">
+    <form method="dialog">
+      <h2 id="workspaceSettingsTitle">학교·학년도 설정</h2>
+      <p id="workspaceRoundHelp" class="note">학교 학년도는 편제표 카드(내년도·현 1·2·3학년 입학생)와 시수 통계 학년도를 정합니다. 결과 차수는 상단에서 고르며, 확인서·집계·개설 확정에 사용할 수강신청 결과를 정합니다.</p>
+      <div class="settings-grid">
+        <div class="field"><label for="schoolYear">학교 학년도</label><input id="schoolYear" type="number" value="2026" min="2000" max="2100" required></div>
+        <div class="field"><label for="schoolName">학교명</label><input id="schoolName" type="text" value="" placeholder="예: ○○고등학교" autocomplete="organization"></div>
+      </div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog" id="resultUploadHelpDialog" aria-labelledby="resultUploadHelpTitle">
+    <form method="dialog">
+      <h2 id="resultUploadHelpTitle">결과 업로드 안내</h2>
+      <p class="note">외부 수강신청 프로그램에서 받은 결과 엑셀을 차수별로 올립니다. 선택한 학년만 교체하고 다른 학년은 유지하며, 반영 전에 검증 결과와 기존 결과 대비 변화를 보여 줍니다.</p>
+      <p class="note">확인서·집계표는 차수별 두 학년 결과를 함께 사용합니다. 차수 데이터 삭제는 두 학년 모두에 적용되며, 확정된 차수는 확정을 해제해야 수정할 수 있습니다.</p>
+      <p class="privacy-note"><b aria-hidden="true">●</b><span>파일은 이 브라우저 안에서만 처리되며 서버로 전송되지 않습니다.</span></p>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" type="submit">닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog" id="groupHelpDialog" aria-labelledby="groupHelpTitle">
+    <form method="dialog">
+      <h2 id="groupHelpTitle">선택 그룹 설정 방법</h2>
+      <p class="note">과목은 해당 입학연도 편제표를 기준으로 합니다. 같은 학기 안에서 과목을 그룹 카드로 끌어 놓아 배치하고, 미분류 영역에 놓아 해제하세요.</p>
+      <p class="note">그룹명·선택 수는 여기서, 과목·학점·학기는 편제표에서 수정합니다. 기존 온라인 신청에는 자동 반영되지 않습니다.</p>
+      <p class="note">'편제표 택n 연동' 그룹은 1단계 편제표의 택n 묶음과 연결된 그룹입니다. 과목·선택 수는 1단계 편제표 묶음 칸에서 수정하세요.</p>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" type="submit">닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog hours-settings-dialog" id="hoursSettingsDialog" aria-labelledby="hoursSettingsTitle">
+    <form method="dialog">
+      <h2 id="hoursSettingsTitle">시수 계산 설정</h2>
+      <p class="note">내년도 학년별 편제표(입학연도별)와 확정된 수강신청 결과로 교과별 개설 시수를 계산합니다. 학교 지정 과목은 학급 수만큼, 학생 선택 과목은 집계 결과의 개설 학급 수만큼 반영합니다. 입력하면 바로 저장되고 표에 반영됩니다.</p>
+      <div id="hoursSettingsBody"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog hours-issues-dialog" id="hoursIssuesDialog" aria-labelledby="hoursIssuesTitle">
+    <form method="dialog">
+      <h2 id="hoursIssuesTitle">시수 통계 확인 항목</h2>
+      <div id="hoursIssuesBody"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" type="submit">닫기</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog aggregate-settings-dialog" id="aggregateSettingsDialog" aria-labelledby="aggregateSettingsTitle">
     <form method="dialog" id="aggregateSettingsForm">
       <h2 id="aggregateSettingsTitle">집계 기준 설정</h2>
@@ -819,22 +870,22 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261106-grade-tabs" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261106-grade-tabs" defer></script>
-  <script src="app-version.js?v=20261106-grade-tabs" defer></script>
-  <script src="curriculum-annual.js?v=20261106-grade-tabs" defer></script>
-  <script defer src="app.js?v=20261106-grade-tabs"></script>
-  <script src="xlsx-parser.js?v=20261106-grade-tabs" defer></script>
-  <script src="course-groups.js?v=20261106-grade-tabs" defer></script>
-  <script src="curriculum-workbook.js?v=20261106-grade-tabs" defer></script>
-  <script src="result-import.js?v=20261106-grade-tabs" defer></script>
-  <script src="round-status.js?v=20261106-grade-tabs" defer></script>
-  <script src="curriculum-versions.js?v=20261106-grade-tabs" defer></script>
-  <script src="hours-stats.js?v=20261106-grade-tabs" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261106-grade-tabs" defer></script>
-  <script src="workspace-file.js?v=20261106-grade-tabs" defer></script>
+  <script src="curriculum-subject-list.js?v=20261106-followups" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261106-followups" defer></script>
+  <script src="app-version.js?v=20261106-followups" defer></script>
+  <script src="curriculum-annual.js?v=20261106-followups" defer></script>
+  <script defer src="app.js?v=20261106-followups"></script>
+  <script src="xlsx-parser.js?v=20261106-followups" defer></script>
+  <script src="course-groups.js?v=20261106-followups" defer></script>
+  <script src="curriculum-workbook.js?v=20261106-followups" defer></script>
+  <script src="result-import.js?v=20261106-followups" defer></script>
+  <script src="round-status.js?v=20261106-followups" defer></script>
+  <script src="curriculum-versions.js?v=20261106-followups" defer></script>
+  <script src="hours-stats.js?v=20261106-followups" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261106-followups" defer></script>
+  <script src="workspace-file.js?v=20261106-followups" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-client.js?v=20261106-grade-tabs" defer></script>
+  <script src="supabase-client.js?v=20261106-followups" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>
