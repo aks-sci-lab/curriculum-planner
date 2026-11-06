@@ -1664,7 +1664,15 @@ var updateRetakeReadiness;
     return true;
   }
   function sendTestBotPayload() {
-    if (testBot?.ready && testBot.payload) postToTestBot({ type: bridge.CODES, payload: testBot.payload });
+    if (!testBot?.ready) return;
+    if (testBot.payload) postToTestBot({ type: bridge.CODES, payload: testBot.payload });
+    else if (testBot.status) postToTestBot({ type: bridge.STATUS, ...testBot.status });
+  }
+  // 앱 쪽 진행 안내. 봇 창이 아직 준비 전이면 준비 신호를 받을 때 보낸다.
+  function testBotStatus(message, failed = false) {
+    if (!testBot) return;
+    testBot.status = { message, failed };
+    sendTestBotPayload();
   }
   // 봇 창을 연다(이미 열려 있으면 그 창을 쓴다). 팝업 차단을 피하려고 단추를 누른 그 순간에 부른다.
   function openTestBotWindow() {
@@ -1705,7 +1713,8 @@ var updateRetakeReadiness;
       if (!latestCodes?.id) throw new Error("보낼 학생 코드가 없습니다. 수강신청을 만들거나 코드를 재발급하세요.");
       if (!window.confirm("테스트용 수강신청에만 쓰세요. 학생 코드가 테스트봇 창으로 전달됩니다. 보낼까요?")) return;
       openTestBotWindow();
-      deliverToTestBot(bridge.buildPayload(latestCodes, latestCodesMeta || {}, eventLink(latestCodes.id)));
+      deliverToTestBot({ ...bridge.buildPayload(latestCodes, latestCodesMeta || {}, eventLink(latestCodes.id)),
+        testEvent: testEvents.has(latestCodes.id) });
       byId("cloudTeacherMessage").textContent = `테스트봇 창으로 학생 ${latestCodes.students.length}명의 코드를 보냈습니다. 봇 화면에서 실행 설정을 확인하세요.`;
     } catch (error) { byId("cloudTeacherMessage").textContent = error.message; }
   });
@@ -1743,7 +1752,8 @@ var updateRetakeReadiness;
     let bot;
     try { bot = openTestBotWindow(); } catch (error) { byId("testBotAutoMessage").textContent = error.message; return; }
     byId("testBotAutoDialog").close();
-    postToTestBot({ type: bridge.STATUS, message: "앱에서 테스트 수강신청을 만드는 중입니다…" });
+    testBot.payload = null;
+    testBotStatus("앱에서 테스트 수강신청을 만드는 중입니다…");
     teacherAction(async () => {
       try {
         if (!session) throw new Error("교사 로그인이 필요합니다.");
@@ -1758,7 +1768,7 @@ var updateRetakeReadiness;
         byId("cloudTeacherMessage").textContent = `테스트 수강신청(${setup.schoolName} ${setup.round}차, 가상 학생 ${created.students.length}명)을 만들고 테스트봇으로 보냈습니다. 집계표에는 연동하지 않았습니다.`;
         try { await refreshEvents(); } catch { /* 목록 갱신 실패는 테스트 진행과 무관하다. */ }
       } catch (error) {
-        postToTestBot({ type: bridge.STATUS, message: `앱에서 테스트 수강신청을 만들지 못했습니다: ${error.message}`, failed: true });
+        testBotStatus(`앱에서 테스트 수강신청을 만들지 못했습니다: ${error.message}`, true);
         throw error;
       }
     });

@@ -73,7 +73,7 @@ var TestBotCore = (() => {
       const hot = mode === "skewed" ? Math.max(1, Math.round(courses.length * 0.2)) : 0;
       const cold = mode === "skewed" ? Math.floor(courses.length * 0.3) : 0;
       courses.forEach((name, index) => {
-        const weight = index < hot ? 8 : index >= courses.length - cold ? 0.12 : 1;
+        const weight = index < hot ? 4 : index >= courses.length - cold ? 0.15 : 1;
         weights.set(name, weight);
       });
     }
@@ -715,22 +715,24 @@ var TestBotCore = (() => {
     const done = records.filter(Boolean);
     const times = done.flatMap((record) => record.times);
     const reasons = new Map();
+    // 틀린 코드로 일부러 잠근 학생(잠김 확인)은 기대한 결과라 실패로 세지 않는다.
+    const expected = (record) => record.status === "잠김 확인";
     for (const record of done) {
-      if (record.ok) continue;
+      if (record.ok || expected(record)) continue;
       const key = `${record.status}: ${String(record.failure || "").replace(/\d+분/g, "N분").slice(0, 80)}`;
       reasons.set(key, (reasons.get(key) || 0) + 1);
     }
     return {
       total: done.length,
       ok: done.filter((record) => record.ok).length,
-      failed: done.filter((record) => !record.ok).length,
+      failed: done.filter((record) => !record.ok && !expected(record)).length,
       codeChanged: done.filter((record) => record.newCode).length,
       requests: times.length,
       averageMs: times.length ? Math.round(times.reduce((sum, ms) => sum + ms, 0) / times.length) : 0,
       maxMs: times.length ? Math.max(...times) : 0,
       violationsRefused: done.filter((record) => record.violation?.refused).length,
       violationsAccepted: done.filter((record) => record.violation && !record.violation.refused).length,
-      locked: done.filter((record) => record.wrongCode?.lockedAfter).length,
+      locked: done.filter(expected).length,
       reasons: [...reasons].sort((a, b) => b[1] - a[1]),
     };
   }

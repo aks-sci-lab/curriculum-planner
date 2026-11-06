@@ -224,9 +224,9 @@
 
   function renderStats(records) {
     const summary = Core.summarize(records);
-    const cells = [["대상", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["코드 변경", summary.codeChanged],
+    const cells = [["대상", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["잠김 확인", summary.locked], ["코드 변경", summary.codeChanged],
       ["요청 수", summary.requests], ["평균 응답", `${summary.averageMs}ms`], ["최대 응답", `${summary.maxMs}ms`],
-      ["위반 거절", summary.violationsRefused], ["잠김 확인", summary.locked]];
+      ["위반 거절", summary.violationsRefused]];
     byId("botStats").replaceChildren(...cells.map(([label, value]) => {
       const box = document.createElement("div");
       const strong = document.createElement("strong");
@@ -333,6 +333,8 @@
     byId("botStop").disabled = false;
     byId("botPause").disabled = false;
     byId("botPause").textContent = "일시정지";
+    byId("botProgressText").textContent = auto ? "앱에서 받은 코드로 자동 실행을 시작합니다…" : "서버와 수강신청을 확인하는 중…";
+    byId("botProgress").value = 0;
     renderSteps(steps);
     const rng = Core.createRng(Date.now());
     const rpc = Core.createRpcClient({ projectUrl: config.projectUrl, publicKey: config.publicKey, fetchImpl: (...args) => fetch(...args) });
@@ -390,11 +392,10 @@
         const summary = renderStats(records);
         const violationOk = summary.violationsAccepted === 0;
         step.expected = `${targets.length}명 모두 저장·다시 불러오기 일치${opts.violationPercent ? ", 규칙 위반은 서버가 거절" : ""}`;
-        step.actual = `성공 ${summary.ok}명, 실패 ${summary.failed}명, 코드 변경 ${summary.codeChanged}명, 평균 응답 ${summary.averageMs}ms` +
+        step.actual = `성공 ${summary.ok}명, 실패 ${summary.failed}명${summary.locked ? `, 잠김 확인 ${summary.locked}명` : ""}, 코드 변경 ${summary.codeChanged}명, 평균 응답 ${summary.averageMs}ms` +
           (summary.violationsRefused + summary.violationsAccepted ? `, 위반 거절 ${summary.violationsRefused}/${summary.violationsRefused + summary.violationsAccepted}` : "") +
           (controller.signal.aborted ? " · 중지됨" : "");
-        const expectedFailures = records.filter((record) => record.status === "잠김 확인").length;
-        if (controller.signal.aborted || summary.ok + expectedFailures !== targets.length || !violationOk) step.status = "fail";
+        if (controller.signal.aborted || summary.ok + summary.locked !== targets.length || summary.failed || !violationOk) step.status = "fail";
       });
       if (controller.signal.aborted) throw Object.assign(new Error("중지했습니다."), { cancelled: true });
       const connected = appConnected() && source.from === "app";
