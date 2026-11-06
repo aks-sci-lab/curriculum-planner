@@ -92,6 +92,17 @@ async function buildCurriculumDataWorkbook(layout) {
   const originalValue = (row, column) => String(original?.rows?.[row]?.[column] ?? "");
   const originalFormula = (row, column) => original?.layout?.formulas?.[`${row}:${column}`];
   const hidden = new Set(layout.hiddenRows || []);
+  // 병합 칸의 가려진 부분은 값을 비운다(서식은 남긴다).
+  const covered = new Set();
+  for (const reference of layout.mergedRanges || []) {
+    const range = planDataRange(reference);
+    if (!range) continue;
+    for (let row = range.startRow; row <= range.endRow; row++) {
+      for (let column = range.startColumn; column <= range.endColumn; column++) {
+        if (row !== range.startRow || column !== range.startColumn) covered.add(`${row}:${column}`);
+      }
+    }
+  }
   const usedSources = new Set();
 
   // 1) 크롭 위쪽 행은 그대로, 2) 크롭 영역은 새 표로, 3) 크롭 아래 행은 늘어난 만큼 내린다.
@@ -127,8 +138,9 @@ async function buildCurriculumDataWorkbook(layout) {
     }
     for (let local = 0; local < width; local++) {
       const column = local + offsetColumn;
-      const value = String(values[local] ?? "");
-      const formula = layout.formulas?.[`${index}:${local}`];
+      const hiddenByMerge = covered.has(`${index}:${local}`);
+      const value = hiddenByMerge ? "" : String(values[local] ?? "");
+      const formula = hiddenByMerge ? undefined : layout.formulas?.[`${index}:${local}`];
       let cell = cells.get(column);
       // 머리글·소계 행에서 값이 그대로인 칸은 원본 XML(서식 있는 글자 포함)을 그대로 둔다.
       const keepOriginal = info.type !== "subject" && cell && source !== null && formula === undefined &&

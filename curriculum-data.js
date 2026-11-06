@@ -671,6 +671,19 @@ function curriculumSheetFromData(data, template) {
     const [row, column] = key.split(":").map(Number);
     formulas[`${row + footerStart}:${column}`] = planDataRemapFormula(formula, mapRow);
   }
+  // 병합으로 가려진 칸에는 값을 두지 않는다(원본에서 복사된 펼침 값이 남아 소계와 어긋나지 않게).
+  for (const reference of new Set(merges)) {
+    const range = planDataRange(reference);
+    if (!range) continue;
+    for (let row = range.startRow; row <= range.endRow; row++) {
+      for (let column = range.startColumn; column <= range.endColumn; column++) {
+        if ((row !== range.startRow || column !== range.startColumn) && rows[row]) {
+          rows[row][column] = "";
+          delete formulas[`${row}:${column}`];
+        }
+      }
+    }
+  }
   return { rows, mergedRanges: [...new Set(merges)], formulas, cellFills: fills, rowHeights: heights,
     hiddenRows: [...new Set(hidden)].sort((a, b) => a - b), rowMeta: meta, bodyStart, bodyEnd };
 }
