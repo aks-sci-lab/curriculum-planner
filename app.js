@@ -2873,7 +2873,8 @@
       classOverrides = {},
       semesterAssignments = {},
       groupAssignments = {},
-      classBases = {}
+      classBases = {},
+      closures = {}
     ) {
       const grades = [...new Set(students.map((student) => student.grade))];
       const reports = grades.map((grade) => {
@@ -2929,13 +2930,21 @@
           }
           const enrollment = gradeStudents.filter((student) =>
             student.selections.some((selection) => selection.column === course.column)).length;
-          const recommendedClasses = summary.divisionLimit > 0 && enrollment > 0
-            ? Math.ceil(enrollment / summary.divisionLimit)
+          // 부동소수 오차(예: 3.0000000000000004)로 올림·비교가 어긋나지 않도록 정수로 계산한다.
+          //   신청 인원 ÷ (학생/학급 × 분반%/100) = 신청 인원 × 학급 × 100 ÷ (학생 × 분반%)
+          const divisionDenominator = gradeStudents.length * divisionPercent;
+          const scaledEnrollment = enrollment * summary.classes * 100;
+          const recommendedClasses = summary.classes && divisionDenominator > 0 && enrollment > 0
+            ? Math.floor((scaledEnrollment + divisionDenominator - 1) / divisionDenominator)
             : 0;
+          const atRisk = summary.classes > 0 && scaledEnrollment < gradeStudents.length * openingPercent;
           const overrideKey = `${grade}:${course.column}`;
-          const classCount = Object.prototype.hasOwnProperty.call(classOverrides, overrideKey)
+          // 교사가 폐강으로 정한 과목은 개설 학급수 0으로 취급한다(확정 스냅샷·시수 통계와 같은 기준).
+          const closed = closures?.[overrideKey] === "closed";
+          const rawClassCount = Object.prototype.hasOwnProperty.call(classOverrides, overrideKey)
             ? classOverrides[overrideKey]
             : recommendedClasses;
+          const classCount = closed ? 0 : rawClassCount;
           group.courses.push({
             category,
             column: course.column,
@@ -2946,6 +2955,9 @@
             enrollment,
             enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
             recommendedClasses,
+            atRisk,
+            closed,
+            rawClassCount,
             classCount,
             averageClassSize: classCount ? enrollment / classCount : 0
           });
@@ -3197,7 +3209,8 @@
       const locked = typeof isRoundLocked === "function" && isRoundLocked(state.currentRound);
       const aggregate = aggregateRecords(
         state.students, state.courses, openingPercent, divisionPercent,
-        state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases
+        state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases,
+        state.roundClosures?.[state.currentRound] || {}
       );
       let atRiskCount = 0;
       // 학년별 요약(전체 보기에서는 학년마다 따로 보여 주고, 학년을 고르면 그 학년만 집계한다).
@@ -3206,7 +3219,7 @@
         return {
           grade: String(report.summary.grade), students: report.summary.students, courses: courses.length,
           classes: report.semesters.reduce((sum, semester) => sum + semester.groups.reduce((groupSum, group) => groupSum + group.totalClasses, 0), 0),
-          risk: courses.filter((course) => course.enrollment < report.summary.openingLimit).length
+          risk: courses.filter((course) => course.atRisk).length
         };
       });
       const scope = gradeStats.some((stat) => stat.grade === aggregateGradeScope) ? aggregateGradeScope : "";
@@ -3235,9 +3248,9 @@
           const maxCourses = Math.max(...semester.groups.map((group) => group.courses.length));
           const rows = semester.groups.map((group) => {
             const headerCells = group.courses.map((course) => {
-              const risk = course.enrollment < summary.openingLimit;
+              const risk = course.atRisk;
               if (risk) atRiskCount += 1;
-              return `<th class="aggregate-subject${risk ? " at-risk" : ""}">${escapeHtml(course.displayName || course.name)}${risk ? '<span class="at-risk-badge">기준 미달</span>' : ""}</th>`;
+              return `<th class="aggregate-subject${risk ? " at-risk" : ""}${course.closed ? " is-closed" : ""}">${escapeHtml(course.displayName || course.name)}${course.closed ? '<span class="at-risk-badge closed-badge">폐강</span>' : risk ? '<span class="at-risk-badge">기준 미달</span>' : ""}</th>`;
             }).join("");
             const paddingCells = Array.from({ length: maxCourses - group.courses.length }, () => "<th></th>").join("");
             const totalCell = `<th class="aggregate-total" rowspan="5">총 학급수<br><strong>${group.totalClasses}</strong></th>`;
@@ -3246,11 +3259,11 @@
                 const percent = summary.openingLimit > 0
                   ? Math.round(course.enrollment / summary.openingLimit * 100) : 0;
                 const width = Math.max(0, Math.min(100, percent));
-                const met = course.enrollment >= summary.openingLimit;
+                const met = !course.atRisk;
                 return `<span class="aggregate-enrollment"><span class="aggregate-enrollment-value">${course.enrollment}명${met ? "" : " · 기준 미달"}</span><span class="aggregate-progress-track ${met ? "met" : "below"}" role="img" aria-label="개설 기준의 ${percent}%"><span style="width:${width}%"></span></span></span>`;
               }],
               ["인원수/분반기준", (course) => course.enrollmentPerDivision.toFixed(2)],
-              ["개설 학급수", (course) => `<input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(course.displayName || course.name)} 개설 학급수" data-grade="${escapeHtml(summary.grade)}" data-course-column="${course.column}"${locked ? ' disabled title="확정된 차수입니다. 확정 해제 후 수정하세요."' : ""}>`],
+              ["개설 학급수", (course) => `<input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(course.displayName || course.name)} 개설 학급수${course.closed ? " (폐강)" : ""}" data-grade="${escapeHtml(summary.grade)}" data-course-column="${course.column}"${locked ? ' disabled title="확정된 차수입니다. 확정 해제 후 수정하세요."' : course.closed ? ' disabled title="폐강으로 정한 과목은 0학급입니다. 개설/폐강 검토에서 결정을 바꾸면 수정할 수 있습니다."' : ""}>`],
               ["학급당 학생수", (course) => course.averageClassSize.toFixed(2)]
             ].map(([label, value]) => {
               const values = group.courses.map((course) => `<td>${value(course)}</td>`).join("");
@@ -3341,7 +3354,7 @@
             group.courses.map((course) => ({ semester: semester.name, course }))))
           .map(({ semester, course }) => {
             const key = `${summary.grade}:${course.column}`;
-            const risk = course.enrollment < summary.openingLimit;
+            const risk = course.atRisk;
             const verdict = risk
               ? '<span class="closure-verdict-risk">기준 미달</span>'
               : '<span class="closure-verdict-open">기준 충족</span>';
@@ -4843,7 +4856,7 @@
             const headerRow = addRow(21);
             const metricRows = [addRow(23), addRow(23), addRow(23), addRow(23)];
             setCell(headerRow, 0, "과목", 6);
-            block.forEach((course, index) => setCell(headerRow, index + 1, course.displayName || course.name, 6));
+            block.forEach((course, index) => setCell(headerRow, index + 1, `${course.displayName || course.name}${course.closed ? " (폐강)" : ""}`, 6));
             for (let col = block.length + 1; col <= BLOCK_SIZE; col++) setCell(headerRow, col, "", 6);
             if (blockIndex === 0) {
               setCell(headerRow, 7, "총 학급수", 9);
@@ -4987,7 +5000,8 @@
       const aggregate = aggregateRecords(
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
-        typeof nextYearClassBases === "function" ? nextYearClassBases() : {}
+        typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
+        state.roundClosures?.[state.currentRound] || {}
       );
       const sheets = aggregate.reports.map((report) => ({
         name: `${Number(report.summary.grade) + 1}학년(현${report.summary.grade}학년)`,
@@ -6048,7 +6062,9 @@
     $("#downloadAggregate").addEventListener("click", downloadAggregate);
     for (const selector of ["#openingPercent", "#divisionPercent"]) {
       $(selector).addEventListener("input", () => {
+        if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) return;
         renderAggregate();
+        if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
         if (Number(state.workflowStep) === 4) renderClosurePanel(state.currentRound);
         persistState();
       });

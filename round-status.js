@@ -41,7 +41,8 @@ function buildRoundSnapshot(round) {
   const classBases = typeof nextYearClassBases === "function" ? nextYearClassBases() : {};
   const aggregate = aggregateRecords(
     data.students, data.courses, openingPercent, divisionPercent,
-    data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases
+    data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases,
+    state.roundClosures?.[round] || {}
   );
   const closures = state.roundClosures?.[round] || {};
   const rows = [];
@@ -50,7 +51,7 @@ function buildRoundSnapshot(round) {
       for (const group of semester.groups) {
         for (const course of group.courses) {
           const key = `${summary.grade}:${course.column}`;
-          const atRisk = course.enrollment < summary.openingLimit;
+          const atRisk = course.atRisk;
           const decision = Object.hasOwn(closures, key) ? closures[key] : atRisk ? "" : "open";
           rows.push({
             grade: String(summary.grade),
@@ -60,7 +61,7 @@ function buildRoundSnapshot(round) {
             name: course.subjectName || course.name,
             displayName: course.displayName || course.name,
             enrollment: course.enrollment,
-            classCount: decision === "closed" ? 0 : Number(course.classCount) || 0,
+            classCount: Number(course.classCount) || 0,
             decision,
             atRisk
           });
@@ -118,6 +119,13 @@ function renderRoundStatusControls() {
   confirm.classList.toggle("hidden", status === "confirmed");
   confirm.disabled = !hasData;
   unlock.classList.toggle("hidden", status !== "confirmed");
+  // 확정된 차수는 화면 집계가 확정 시점과 달라지지 않도록 기준 비율 입력도 잠근다.
+  for (const id of ["openingPercent", "divisionPercent"]) {
+    const input = document.getElementById(id);
+    if (!input) continue;
+    input.disabled = status === "confirmed";
+    input.title = status === "confirmed" ? "확정된 차수입니다. 확정 해제 후 수정하세요." : "";
+  }
   if (status === "confirmed") {
     const updatedAt = state.roundStatuses[round]?.updatedAt;
     const date = updatedAt ? new Date(updatedAt).toLocaleString("ko-KR") : "";

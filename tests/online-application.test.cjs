@@ -25,11 +25,11 @@ test("closure defaults open eligible courses and leave at-risk courses undecided
     escapeHtml: String,
     aggregateRecords: () => ({ reports: [{ summary: { grade: "1", students: 350, openingLimit: 31.5 },
       semesters: [{ name: "1", groups: [{ courses: [
-        { column: 1, name: "개설기준 일치", enrollment: 31.5 },
-        { column: 2, name: "미달", enrollment: 5 },
-        { column: 3, name: "수동 미정", enrollment: 100 },
-        { column: 4, name: "수동 폐강", enrollment: 100 },
-        { column: 5, name: "수동 개설", enrollment: 5 }
+        { column: 1, name: "개설기준 일치", enrollment: 31.5, atRisk: false },
+        { column: 2, name: "미달", enrollment: 5, atRisk: true },
+        { column: 3, name: "수동 미정", enrollment: 100, atRisk: false },
+        { column: 4, name: "수동 폐강", enrollment: 100, atRisk: false },
+        { column: 5, name: "수동 개설", enrollment: 5, atRisk: true }
       ] }] }] }] })
   });
   vm.runInContext(functionSource("function aggregateThresholds(", "function renderAggregate("), ctx);
