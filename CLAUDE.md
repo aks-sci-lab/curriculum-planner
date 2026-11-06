@@ -21,7 +21,7 @@ npm run build:deploy               # 배포용 파일만 dist/ 에 모음
 ## 기능별 파일 지도 (작업할 기능의 파일만 읽으세요)
 | 기능 | 주요 파일 |
 |---|---|
-| 1단계 편제표(업로드·표·병합·행·과목 이동·이력) | `curriculum-choice-blocks.js`(택n·병합), `curriculum-subject-actions.js`, `curriculum-subject-list.js`(2022 개정 과목 목록), `curriculum-versions.js`(변경 이력), `curriculum-workbook.js`(수식·내보내기), `curriculum-annual.js`(전학년 생성), `xlsx-parser.js` |
+| 1단계 편제표(업로드·표·선택과목군·행·과목 이동·이력) | `curriculum-data.js`(업로드→과목·선택과목군 데이터 변환, 예전 자료 변환), `curriculum-data-view.js`(데이터로 그린 표·편집), `curriculum-data-export.js`(원본 양식+데이터+수식 내보내기), `curriculum-choice-blocks.js`(택n), `curriculum-subject-actions.js`, `curriculum-subject-list.js`(2022 개정 과목 목록), `curriculum-versions.js`(변경 이력), `curriculum-workbook.js`(수식·내보내기), `curriculum-annual.js`(전학년 생성), `xlsx-parser.js` |
 | 2단계 선택 그룹·결과 업로드/검증 | `course-groups.js`(그룹), `result-import.js`(검증 미리보기) |
 | 3단계 확인서 | `app.js`의 `certificateMarkup`, `renderRoster`, `visibleStudents`, `printStudents` |
 | 4단계 집계·개설/폐강·재신청·차수 확정 | `app.js`(`aggregateRecords`, 폐강·재신청 패널), `round-status.js`(확정·스냅샷·차수 비교) |
@@ -29,6 +29,8 @@ npm run build:deploy               # 배포용 파일만 dist/ 에 모음
 | 웹 수강신청·서버 | `supabase-client.js`, `supabase/*.sql` |
 | 저장·백업·배포 | `app.js`(저장·백업·전체 초기화), `workspace-file.js`(PC 파일 자동 저장), `app-version.js`, `scripts/build-deploy.js` |
 `app.js`(약 6,300줄)는 상태·저장·단계 전환·확인서·집계가 모두 들어 있는 중심 파일이므로 `grep -n "function 이름"`으로 필요한 함수만 읽으세요. 스타일은 `src/legacy.css` → `styles.css`(생성물).
+
+- 편제표는 **데이터 기반**입니다. 원본 엑셀은 내보내기 양식으로만 쓰고, 화면·계산은 과목·선택과목군 데이터로 합니다. 선택과목군을 가짜 병합으로 표시하지 마세요.
 
 ## 상태와 저장
 - 작업 자료: `localStorage["course-certificate-studio-v1"]`, 선택 그룹은 `curriculum-color-semester-groups-v3*` 키, 원본 편제표 엑셀은 IndexedDB `curriculum-original-workbooks`. `workspace-file.js`가 PC 파일에도 저장합니다.
