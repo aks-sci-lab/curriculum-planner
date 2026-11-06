@@ -1914,3 +1914,86 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
 .teacher-edit-prereq li { margin: 2px 0; }
 .teacher-edit-prereq .is-violation { color: #8d3025; }
 .teacher-edit-prereq .is-unknown { color: #7b8494; }
+
+/* 1단계 편제 점검표·편성 영역·교과(군) 통계 (curriculum-compliance.js) */
+.plan-compliance-open { display: inline-flex; align-items: center; gap: 4px; }
+/* 카드 설명 줄 오른쪽의 작은 '편제 점검' 단추 */
+.curriculum-cohort-card > .plan-compliance-open { align-self: flex-start; min-height: 22px !important; padding: 0 6px !important; font-size: 11px !important; white-space: nowrap; }
+@media screen and (min-width: 981px) {
+  .curriculum-cohort-card:has(> .plan-compliance-open) > p:not(.curriculum-cohort-file) { grid-column: 1; }
+  .curriculum-cohort-card > .plan-compliance-open { grid-column: 2; justify-self: end; align-self: center; }
+}
+.plan-compliance-badge { display: inline-block; padding: 0 5px; border-radius: 8px; font-size: 11px; font-weight: 700; line-height: 16px; }
+.plan-compliance-badge.is-ok { color: #1f6b47; background: #e2f4ea; }
+.plan-compliance-badge.is-check { color: #9a3412; background: #ffedd5; }
+.plan-compliance-badge.is-na { color: #5b6474; background: #eceff4; }
+.plan-compliance-dialog { width: min(1180px, calc(100vw - 24px)); }
+.plan-compliance-stats-dialog { width: min(1180px, calc(100vw - 24px)); }
+.plan-compliance-settings-dialog { width: min(720px, calc(100vw - 24px)); }
+.plan-compliance-settings-dialog h3 { margin: 12px 0 6px; font-size: 14px; }
+.plan-compliance-file { margin: 0 0 6px; }
+.plan-compliance-notice { margin: 6px 0; padding: 8px 10px; border: 1px solid #f0d59b; border-radius: 8px; background: #fffaeb; color: #6b4a07; font-size: 13px; line-height: 1.5; }
+.plan-compliance-notice.is-strong { border-color: #e7b6ad; background: #fff4f2; color: #8d3025; font-weight: 600; }
+.plan-compliance-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.plan-compliance-chip { padding: 2px 8px; border-radius: 10px; background: #eef2f8; color: #344462; font-size: 12px; font-weight: 600; }
+.plan-compliance-chip.is-ok { background: #e2f4ea; color: #1f6b47; }
+.plan-compliance-chip.is-check { background: #ffedd5; color: #9a3412; }
+.plan-compliance-chip.is-self { background: #e8eefc; color: #2c4f9e; }
+.plan-compliance-chip.is-na { background: #eceff4; color: #5b6474; }
+.plan-compliance-table-wrap { max-height: 62vh; overflow: auto; border: 1px solid #d7dfed; border-radius: 8px; margin: 6px 0; }
+.plan-compliance-table, .plan-compliance-stats, .plan-compliance-sources { width: 100%; border-collapse: collapse; font-size: 12px; }
+.plan-compliance-table th, .plan-compliance-table td, .plan-compliance-stats th, .plan-compliance-stats td { padding: 5px 6px; border-bottom: 1px solid #e4e9f2; vertical-align: top; text-align: left; line-height: 1.45; }
+.plan-compliance-table thead th, .plan-compliance-stats thead th { position: sticky; top: 0; z-index: 1; background: #eef2f9; color: #263e68; white-space: nowrap; }
+.plan-compliance-table small, .plan-compliance-stats small { display: block; color: #6a7891; font-size: 11px; }
+.plan-compliance-section th { background: #f5f7fb; color: #263e68; font-weight: 700; }
+.plan-compliance-no { width: 34px; text-align: center !important; }
+.plan-compliance-area { width: 64px; white-space: nowrap; }
+.plan-compliance-result { width: 84px; white-space: nowrap; }
+.plan-compliance-note { min-width: 220px; max-width: 360px; color: #3f4d66; overflow-wrap: anywhere; }
+.plan-compliance-ack { width: 58px; white-space: nowrap; }
+.plan-compliance-reason { width: 170px; }
+.plan-compliance-table input[type="text"] { width: 100%; min-width: 120px; padding: 3px 6px; border: 1px solid #cad5e5; border-radius: 6px; font: inherit; }
+.plan-compliance-table tr.is-ok .plan-compliance-result b { color: #1f6b47; }
+.plan-compliance-table tr.is-check { background: #fff8f1; }
+.plan-compliance-table tr.is-check .plan-compliance-result b { color: #b4400f; }
+.plan-compliance-table tr.is-self .plan-compliance-result b { color: #2c4f9e; }
+.plan-compliance-table tr.is-na { color: #7b8494; }
+.plan-compliance-sources { margin: 6px 0; }
+.plan-compliance-sources caption { text-align: left; font-weight: 700; color: #263e68; padding: 2px 0 4px; }
+.plan-compliance-sources { width: auto; min-width: 60%; }
+.plan-compliance-sources th, .plan-compliance-sources td { height: auto; padding: 3px 10px 3px 0; border-bottom: 1px solid #e4e9f2; text-align: left; vertical-align: middle; }
+.plan-compliance-sources .button { min-height: 24px; padding: 0 8px; font-size: 12px; }
+.plan-compliance-stats { table-layout: fixed; min-width: 980px; }
+.plan-compliance-stats th:first-child { width: 190px; }
+.plan-compliance-stats caption { padding: 6px 8px; text-align: left; color: #344462; font-weight: 600; font-size: 12px; }
+.plan-compliance-stats td { text-align: center; white-space: nowrap; }
+.plan-compliance-stats td.is-empty { color: #b6bfcd; }
+.plan-compliance-stats .is-choice { color: #2c4f9e; }
+.plan-compliance-stats .is-extra { color: #7b5a12; }
+.plan-compliance-stats tr.is-check { background: #fff4ec; }
+.plan-compliance-stats tr.plan-compliance-kem th, .plan-compliance-stats tr.plan-compliance-total th { background: #f5f7fb; }
+.plan-compliance-stats td.plan-compliance-kem-note { white-space: normal; text-align: left; color: #5d6b84; font-size: 11px; }
+.plan-compliance-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 12px; }
+.plan-compliance-setting { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #344462; }
+.plan-compliance-setting input[type="number"], .plan-compliance-setting textarea { padding: 4px 6px; border: 1px solid #cad5e5; border-radius: 6px; font: inherit; }
+.plan-compliance-check { flex-direction: row; align-items: center; }
+.plan-compliance-wide { margin-top: 10px; }
+.plan-section-options { display: grid; gap: 6px; margin: 8px 0; }
+.plan-section-tag { display: inline-block; margin-left: 3px; padding: 0 4px; border-radius: 4px; font-size: 10px; font-weight: 700; line-height: 15px; vertical-align: 1px; white-space: nowrap; }
+.plan-section-tag.is-school { color: #475467; background: #eef1f5; }
+.plan-section-tag.is-choice { color: #1d4ed8; background: #e5edff; }
+.plan-section-tag.is-cross { color: #7c3aed; background: #f1eafe; }
+.plan-section-tag.is-extra { color: #92400e; background: #fdf0d5; }
+.plan-section-tag.is-manual { outline: 1px dashed currentColor; }
+.curriculum-data-sheet td.is-plan-warn { box-shadow: inset 0 0 0 2px #f59e0b; background-color: #fff7e6 !important; }
+.curriculum-data-sheet td.is-plan-warn-row { box-shadow: inset 3px 0 0 #f59e0b; }
+.curriculum-subject-name.is-plan-name-warn { color: #a8321f; text-decoration: underline wavy #e07a2f; text-underline-offset: 3px; }
+.plan-rename-button { margin-left: 4px; padding: 0 5px; border: 1px solid #f0b37a; border-radius: 5px; background: #fff5eb; color: #9a3412; font-size: 11px; line-height: 17px; cursor: pointer; }
+.plan-rename-button:hover { background: #ffe6cc; }
+@media print {
+  .plan-compliance-print { width: auto; padding: 0; }
+  .plan-compliance-print h1 { margin: 0 0 4mm; font-size: 16px; text-align: center; }
+  .plan-compliance-print table { width: 100%; border-collapse: collapse; font-size: 9.5px; }
+  .plan-compliance-print th, .plan-compliance-print td { padding: 1.2mm 1.5mm; border: 1px solid #777; vertical-align: top; text-align: left; }
+  .plan-compliance-print tr { break-inside: avoid; page-break-inside: avoid; }
+}
