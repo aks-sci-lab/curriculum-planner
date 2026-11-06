@@ -55,6 +55,20 @@ class Element {
   }
 }
 
+function findDescendant(root, className) {
+  for (const child of root.children) {
+    if (child.className === className) return child;
+    const descendant = findDescendant(child, className);
+    if (descendant) return descendant;
+  }
+  return null;
+}
+
+function findSemesterPanel(root, grade, semester) {
+  return findDescendant(root, "course-group-semester-columns")?.children
+    .find((panel) => panel.dataset.grade === grade && panel.dataset.semester === semester) ?? null;
+}
+
 function fixture({ href = "https://school.example/app/", storage = new Map(), respond, menus = false, subjects, WebSocketClass, onLine = true } = {}) {
   const elements = {};
   const network = { onLine };
@@ -236,25 +250,25 @@ test("teacher selection editor loads roster without codes and validates group co
   assert.equal(f.elements.cloudTeacherEditSave.disabled, false);
 });
 
-test("offline workspaces bypass teacher login and keep cloud application controls unavailable", async () => {
+test("offline workspaces work without teacher login and keep cloud application controls unavailable", async () => {
   const fileWorkspace = fixture({ href: "file:///C:/curriculum-planner/index.html" });
   await fileWorkspace.settle();
   assert.equal(fileWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false);
-  assert.equal(fileWorkspace.elements.teacherLoginGate.classList.contains("hidden"), true);
+  assert.equal(fileWorkspace.elements.teacherLoginGate, undefined, "local work has no login gate");
   assert.equal(fileWorkspace.elements.curriculumLoginStatus.textContent, "오프라인 · 로컬 기능 사용 가능");
   assert.equal(fileWorkspace.elements.curriculumGoogleLogin.classList.contains("hidden"), true);
   assert.equal(fileWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), true);
   assert.equal(fileWorkspace.elements.cloudTeacherOfflineNotice.classList.contains("hidden"), false);
   assert.equal(fileWorkspace.requireLogin(), false);
-  assert.match(fileWorkspace.elements.cloudTeacherMessage.textContent, /온라인 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다/);
+  assert.match(fileWorkspace.elements.cloudTeacherMessage.textContent, /웹 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다/);
   assert.deepEqual(fileWorkspace.redirects, []);
 
   const reconnectingWorkspace = fixture({ onLine: false });
   await reconnectingWorkspace.settle();
   assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false);
   reconnectingWorkspace.setOnline(true);
-  assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), true);
-  assert.equal(reconnectingWorkspace.elements.teacherLoginGate.classList.contains("hidden"), false);
+  assert.equal(reconnectingWorkspace.elements.teacherWorkspace.classList.contains("hidden"), false, "going online never hides local work");
+  assert.equal(reconnectingWorkspace.elements.curriculumGoogleLogin.classList.contains("hidden"), false);
   assert.equal(reconnectingWorkspace.elements.cloudTeacherOfflineNotice.classList.contains("hidden"), true);
   assert.equal(reconnectingWorkspace.elements.cloudTeacherGoogleLogin.classList.contains("hidden"), false);
 });
@@ -270,13 +284,14 @@ test("grade menus scope curriculum groups and offer table-based assignment for u
   }});
   assert.equal(f.renderedGrade,"1");
   assert.equal(f.elements.applicationGrade1Tab["aria-selected"],"true");
-  const grid=f.elements.courseGroupEditor.children.find((child)=>child.className==="course-group-grid");
+  const grid=findDescendant(f.elements.courseGroupEditor,"course-group-grid");
   assert.equal(grid.children.length,1);
   assert.equal(grid.children[0].className,"course-group-card");
   assert.equal(grid.children[0].children[1].className,"course-group-name");
   assert.equal(grid.children[0].children[2].className,"course-group-count");
-  const tabs=f.elements.courseGroupEditor.children.find((child)=>child.className==="group-scope-tabs");
-  assert.ok(tabs.children.every((tab)=>tab.textContent.startsWith("2학년")));
+  const semesterPanels=findDescendant(f.elements.courseGroupEditor,"course-group-semester-columns").children;
+  assert.equal(semesterPanels.length,1);
+  assert.equal(semesterPanels[0].dataset.grade,"2");
   assert.equal(f.elements.courseGroupEditor.children.some((child)=>child.tag==="select"),false);
   assert.equal(f.elements.courseGroupEditor.children.some((child)=>child.textContent==="편제표에서 과목군 편성"),false);
   assert.ok(f.groupSettings().some((group)=>group.grade==="3" && group.name==="3학년 보관"));
@@ -299,7 +314,9 @@ test("cohort group deployment loads versioned application scripts to bypass stal
     return match[1];
   });
   assert.equal(new Set(versions).size,1);
-  assert.match(html,/href="styles\.css\?v=20261015-reselection"/);
+  const stylesheet = html.match(/href="styles\.css\?v=([^"]+)"/);
+  assert.ok(stylesheet, "stylesheet must have a deployment version");
+  assert.equal(stylesheet[1], versions[0]);
 });
 
 test("curriculum upload screen only exposes cohort plan import, not the saved catalog flow", () => {
@@ -561,7 +578,7 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.match(f.elements.cloudTeacherMessage.textContent, /로그아웃/);
 });
 
-test("teacher session survives reload, gates uploads and expires after five idle minutes", async () => {
+test("teacher session survives reload and expires after five idle minutes", async () => {
   const key="curriculum-teacher-session-v1";
   const initial=Date.now();
   const session={access_token:"token",refresh_token:"refresh",expires_at:initial/1000+3600,
@@ -570,7 +587,7 @@ test("teacher session survives reload, gates uploads and expires after five idle
   const f=fixture({storage});
   await f.settle();
   assert.equal(f.elements.curriculumGoogleLogin.disabled,true);
-  assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),false);
+  assert.equal(f.elements.headerTeacherLogout.classList.contains("hidden"),false);
   f.now=initial+10000;
   f.activity.pointerdown({isTrusted:true});
   assert.equal(JSON.parse(storage.get(key)).lastActivity,f.now);
@@ -579,7 +596,8 @@ test("teacher session survives reload, gates uploads and expires after five idle
   await f.settle();
   assert.equal(storage.has(key),false);
   assert.match(f.elements.cloudTeacherMessage.textContent,/5분간 활동/);
-  assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),true);
+  assert.equal(f.elements.headerTeacherLogout.classList.contains("hidden"),true);
+  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),false,"local work stays available after logout");
   assert.equal(f.poll,null);
   const expired=fixture({storage:new Map([[key,JSON.stringify({session,lastActivity:initial-300001})]])});
   await expired.settle();
@@ -604,38 +622,37 @@ test("list refresh failure preserves the restored login across reloads and allow
   await reloaded.settle();
   assert.equal(storage.has(key), true);
   assert.equal(reloaded.elements.curriculumGoogleLogin.disabled, true);
-  assert.equal(reloaded.elements.teacherLoginGate.classList.contains("hidden"), true);
+  assert.equal(reloaded.elements.teacherWorkspace.classList.contains("hidden"), false);
   reloaded.respond = async () => ({data:[]});
   await reloaded.fire("cloudRefreshEvents", "click");
   assert.match(reloaded.elements.cloudTeacherMessage.textContent, /목록을 새로 불러왔습니다/);
   assert.equal(storage.has(key), true);
 });
 
-test("normal teacher does not get developer Excel upload controls", async () => {
+test("logged-in teacher sees the logout control without any separate developer upload", async () => {
   const storage=new Map([["curriculum-teacher-session-v1",JSON.stringify({
     lastActivity:Date.now(),session:{access_token:"token",refresh_token:"refresh",expires_in:3600,user:{email:"teacher@example.invalid"}}
   })]]);
   const f=fixture({storage});
   await f.settle();
-  assert.equal(f.elements.developerResultUpload.classList.contains("hidden"),true);
+  assert.equal(f.elements.developerResultUpload,undefined);
   assert.equal(f.elements.curriculumGoogleLogin.disabled,true);
   assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),false);
-  assert.equal(f.elements.teacherLoginGate.classList.contains("hidden"),true);
   assert.equal(f.elements.curriculumGoogleLogin.classList.contains("hidden"),true);
   assert.equal(f.elements.headerTeacherLogout.classList.contains("hidden"),false);
 });
 
-test("logged-out teacher content is hidden and student routes do not display the teacher login gate", async () => {
+test("logged-out teachers keep local work while student routes hide the teacher screens", async () => {
   const f=fixture();
   await f.settle();
-  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),true);
-  assert.equal(f.elements.teacherLoginGate.classList.contains("hidden"),false);
+  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),false);
   assert.equal(f.elements.teacherHeader.classList.contains("hidden"),false);
+  assert.equal(f.elements.curriculumGoogleLogin.classList.contains("hidden"),false);
+  assert.equal(f.elements.headerTeacherLogout.classList.contains("hidden"),true);
   for (const hash of ["#student","#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","#apply=https%3A%2F%2Fscript.google.com"]) {
     const student=fixture({href:"https://school.example/app/"+hash});
     await student.settle();
     assert.equal(student.elements.teacherHeader.classList.contains("hidden"),true);
-    assert.equal(student.elements.teacherLoginGate.classList.contains("hidden"),true);
     assert.equal(student.elements.teacherWorkspace.classList.contains("hidden"),true);
   }
 });
@@ -658,8 +675,8 @@ test("an in-flight token refresh cannot restore a session after idle logout", as
   assert.equal(storage.has(key),false);
   assert.equal(f.elements.curriculumGoogleLogin.disabled,false);
   assert.equal(f.elements.cloudTeacherControls.classList.contains("hidden"),true);
-  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),true);
-  assert.equal(f.elements.teacherLoginGate.classList.contains("hidden"),false);
+  assert.equal(f.elements.teacherWorkspace.classList.contains("hidden"),false);
+  assert.equal(f.elements.headerTeacherLogout.classList.contains("hidden"),true);
   assert.equal(f.requests.filter((r)=>r.url.includes("course_events")).length,0);
 });
 
@@ -868,7 +885,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
       {name:"색상 그룹 1",courses:["A","B","C"]},
     ]);
     const editor=f.elements.courseGroupEditor;
-    const grid=()=>editor.children.find((e)=>e.className==="course-group-grid");
+    const grid=()=>findDescendant(editor,"course-group-grid");
     assert.equal(grid().children.length,1);
     const panel=grid().children[0];
     assert.equal(panel.className,"course-group-card");
@@ -880,7 +897,9 @@ test("teacher log controls send the exact server cutoff and optional student id"
     const groups=JSON.parse(JSON.stringify(ctx.getCourseApplicationGroups()));
     assert.equal(groups[0].count,2);
     assert.deepEqual(groups[0].courses,["A","B","C"]);
-    assert.equal(editor.children.find((e)=>e.className==="group-scope-tabs").children.length,1);
+    const semesterPanels=findDescendant(editor,"course-group-semester-columns").children;
+    assert.equal(semesterPanels.length,1);
+    assert.equal(semesterPanels[0].dataset.grade,"2");
     assert.throws(()=>ctx.getCourseApplicationGroups(["2","3"]),/3학년 1학기 3학년 과목: 미분류/);
     count.value="4";count.onchange();
     assert.equal(ctx.getCourseApplicationGroups()[0].count,2);
@@ -1003,7 +1022,7 @@ test("teacher creates next round from exact semester closures and chosen reselec
   await f.settle();
   f.elements.schoolYear.value="2026";
   f.context.updateApplicationGradeControls();
-  f.context.state.rounds={"1":{courses:[
+  f.context.state.rounds={"1":{students:[],courses:[
     {column:"app0",name:"물리학 (1학기)",applicationSubject:{subject:"물리학 (1학기)"}},
     {column:"app1",name:"물리학 (2학기)",applicationSubject:{subject:"물리학 (2학기)"}},
   ]}};
@@ -1174,17 +1193,17 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.ok(groups.every((g)=>g.count===null));
   assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
   const editor=f.elements.courseGroupEditor;
-  const grid=editor.children.find((e)=>e.className==="course-group-grid");
+  const firstSemester=findSemesterPanel(editor,"2","1");
+  const grid=findDescendant(firstSemester,"course-group-grid");
   assert.equal(grid.children.length,1);
   const firstCount=grid.children[0].children[2].children[0];
   firstCount.value="1";firstCount.onchange();
   assert.equal(ctx.getApplicationGroupSettings().find((group)=>group.semester==="1").count,1);
   assert.throws(()=>ctx.getCourseApplicationGroups(),/미분류/);
-  const tabs=editor.children.find((e)=>e.className==="group-scope-tabs");
-  tabs.children[1].onclick();
-  assert.match(editor.children.find((e)=>e.tag==="h4").textContent,/2학기/);
-  assert.equal(editor.children.some((e)=>e.className==="course-group-unassigned"),true);
-  const secondGrid=editor.children.find((e)=>e.className==="course-group-grid");
+  const secondSemester=findSemesterPanel(editor,"2","2");
+  assert.match(secondSemester.children.find((e)=>e.tag==="h4").textContent,/2학기/);
+  assert.ok(findDescendant(secondSemester,"course-group-unassigned"));
+  const secondGrid=findDescendant(secondSemester,"course-group-grid");
   assert.equal(secondGrid.children.length,1);
   const secondCount=secondGrid.children[0].children[2].children[0];
   secondCount.value="1";secondCount.onchange();
@@ -1203,15 +1222,182 @@ test("color groups are semester scoped, editable and retain unassigned courses a
   assert.equal(groups.length,1);
   assert.equal(groups[0].grade,"3");
   ctx.setApplicationTargetGrades(["3"]);
-  const scopedTabs=editor.children.find((e)=>e.className==="group-scope-tabs");
-  assert.equal(scopedTabs.children.length,1);
-  assert.match(scopedTabs.children[0].textContent,/3학년/);
+  const scopedSemester=findSemesterPanel(editor,"3","1");
+  assert.ok(scopedSemester);
   assert.throws(()=>ctx.getCourseApplicationGroups(),/직접 지정/);
-  const scopedGrid=editor.children.find((e)=>e.className==="course-group-grid");
+  const scopedGrid=findDescendant(scopedSemester,"course-group-grid");
   const count=scopedGrid.children[0].children[2].children[0];
   count.value="1";count.onchange();
   assert.equal(ctx.getCourseApplicationGroups().length,1);
   assert.equal(ctx.getCourseApplicationGroups()[0].grade,"3");
+});
+
+test("course groups omit assignment dropdowns and move unclassified subjects by drag and drop", () => {
+  const f = fixture({ menus: true, subjects: { "2": [
+    { subject: "A", semester: "1", semesterColors: { "1": "#E2EFD9" } },
+    { subject: "B", semester: "1", semesterColors: {} },
+  ], "3": [] } });
+  const editor = f.elements.courseGroupEditor;
+  assert.equal(findDescendant(editor,"course-assignment-editor"), null);
+  const assertNoSelect = (element) => {
+    assert.notEqual(element.tag, "select");
+    element.children.forEach(assertNoSelect);
+  };
+  assertNoSelect(editor);
+  const source = findDescendant(findDescendant(editor,"course-group-unassigned"),"course-group-course-chip");
+  assert.equal(source.textContent, "B");
+  assert.equal(source.draggable, true);
+  source.listeners.dragstart({ dataTransfer: { setData() {} } });
+  findDescendant(editor,"course-group-grid").children[0].listeners.drop({ preventDefault() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(f.context.getApplicationGroupSettings()[0].courses)), ["A", "B"]);
+  const grid = findDescendant(editor,"course-group-grid");
+  const count = grid.children[0].children[2].children[0];
+  count.value = "1";
+  count.onchange();
+  assert.equal(f.context.getCourseApplicationGroups()[0].count, 1);
+  const saved = JSON.parse(f.storage.get("curriculum-color-semester-groups-v3"));
+  assert.deepEqual(saved[0].courses, ["A", "B"]);
+  findSemesterPanel(editor,"2","1").children.find((child) => child.textContent === "새 선택 그룹 추가").onclick();
+  assert.equal(f.context.getApplicationGroupSettings().length, 2);
+});
+
+test("course group cards accept same-scope drag and drop and retain counts only when valid", () => {
+  const f = fixture({ menus: true, subjects: { "2": [
+    { subject: "A", semester: "1", semesterColors: { "1": "#E2EFD9" } },
+    { subject: "B", semester: "1", semesterColors: {} },
+  ], "3": [] } });
+  const editor = f.elements.courseGroupEditor;
+  let grid = findDescendant(editor,"course-group-grid");
+  let card = grid.children[0];
+  const count = card.children[2].children[0];
+  count.value = "1";
+  count.onchange();
+  grid = findDescendant(editor,"course-group-grid");
+  card = grid.children[0];
+  const source = findDescendant(findDescendant(editor,"course-group-unassigned"),"course-group-course-chip");
+  let prevented = false;
+  source.listeners.dragstart({ dataTransfer: { setData() {} } });
+  card.listeners.dragover({ preventDefault() { prevented = true; }, dataTransfer: {} });
+  assert.equal(prevented, true);
+  card.listeners.drop({ preventDefault() {} });
+  const group = f.context.getApplicationGroupSettings()[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(group.courses)), ["A", "B"]);
+  assert.equal(group.count, 1);
+  assert.deepEqual(JSON.parse(f.storage.get("curriculum-color-semester-groups-v3"))[0].courses, ["A", "B"]);
+
+  grid = findDescendant(editor,"course-group-grid");
+  card = grid.children[0];
+  card.children[2].children[0].value = "2";
+  card.children[2].children[0].onchange();
+  grid = findDescendant(editor,"course-group-grid");
+  card = grid.children[0];
+  const groupedCourse = card.children[3].children.find((child) =>
+    child.className === "course-group-course-chip" && child.textContent === "B");
+  const unassigned = findDescendant(editor,"course-group-unassigned");
+  groupedCourse.listeners.dragstart({ dataTransfer: { setData() {} } });
+  unassigned.listeners.drop({ preventDefault() {} });
+  const updatedGroup = f.context.getApplicationGroupSettings()[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(updatedGroup.courses)), ["A"]);
+  assert.equal(updatedGroup.count, null);
+});
+
+test("compact group cards show preparation counts and reject cross-semester and cross-grade drops", () => {
+  const f = fixture({ menus: true, subjects: {
+    "2": [
+      { subject: "A", semester: "1", semesterColors: { "1": "#E2EFD9" } },
+      { subject: "B", semester: "2", semesterColors: { "2": "#E2EFD9" } },
+    ],
+    "3": [{ subject: "C", semester: "1", semesterColors: { "1": "#E2EFD9" } }],
+  } });
+  const editor = f.elements.courseGroupEditor;
+  f.context.setApplicationTargetGrades(["2", "3"]);
+  let semester = findSemesterPanel(editor, "2", "1");
+  assert.match(semester.children[0].textContent, /1과목 · 1그룹 · 미분류 0/);
+  semester.children.find((child) => child.textContent === "새 선택 그룹 추가").onclick();
+  semester = findSemesterPanel(editor, "2", "1");
+  let cards = findDescendant(semester, "course-group-grid").children;
+  assert.equal(cards[1].children[3].textContent, "과목을 여기에 끌어 놓으세요.");
+  assert.equal(cards[1].children[2].children[0]["aria-invalid"], "true");
+  const course = findDescendant(cards[0], "course-group-course-chip");
+  course.listeners.dragstart({ dataTransfer: { setData() {} } });
+  cards[1].listeners.drop({ preventDefault() {} });
+  semester = findSemesterPanel(editor, "2", "1");
+  cards = findDescendant(semester, "course-group-grid").children;
+  assert.equal(findDescendant(cards[0], "course-group-course-chip"), null);
+  assert.equal(findDescendant(cards[1], "course-group-course-chip").textContent, "A");
+  for (const [grade, term] of [["2", "2"], ["3", "1"]]) {
+    const before = JSON.stringify(f.context.getApplicationGroupSettings());
+    const other = findDescendant(findSemesterPanel(editor, grade, term), "course-group-course-chip");
+    other.listeners.dragstart({ dataTransfer: { setData() {} } });
+    const reject = () => assert.fail("A different grade or semester must not accept a drop");
+    cards[1].listeners.dragover({ preventDefault: reject });
+    cards[1].listeners.drop({ preventDefault: reject });
+    findDescendant(semester, "course-group-unassigned").listeners.drop({ preventDefault: reject });
+    assert.equal(JSON.stringify(f.context.getApplicationGroupSettings()), before);
+    other.listeners.dragend();
+  }
+});
+
+test("corrupt group data stays protected through rendering and cannot create an application", () => {
+  const key = "curriculum-color-semester-groups-v3";
+  const storage = new Map([[key, "{broken"]]);
+  const f = fixture({ menus: true, storage });
+  let issue = "";
+  f.context.showWorkspaceGroupStorageIssue = (message) => { issue = message; };
+  f.context.renderCourseGroups();
+  assert.equal(storage.get(key), "{broken");
+  assert.match(f.elements.courseGroupMessage.textContent, /원본 보호/);
+  assert.throws(() => f.context.getCourseApplicationGroups(), /원본 보호/);
+  assert.match(issue, /원본 보호/);
+  storage.set(key, "[]");
+  f.elements.courseGroupEditor.children[0].onclick();
+  assert.equal(issue, "");
+});
+
+test("a protected curriculum workspace cannot erase valid saved course groups", () => {
+  const f = fixture({ menus: true, subjects: {
+    "2": [{ subject: "A", semester: "1", semesterColors: { "1": "#E2EFD9" } }], "3": [],
+  } });
+  const key = "curriculum-color-semester-groups-v3";
+  const original = f.storage.get(key);
+  f.context.isWorkspaceStorageProtected = () => true;
+  f.subjects = null;
+  f.context.renderCourseGroups();
+  assert.equal(f.storage.get(key), original);
+  assert.match(f.elements.courseGroupEditor.textContent, /선택 그룹 원본도 보호/);
+  assert.throws(() => f.context.getCourseApplicationGroups(), /먼저 복원/);
+});
+
+test("rendering unchanged groups does not write storage again", () => {
+  const f = fixture({ menus: true });
+  let writes = 0;
+  const set = f.context.localStorage.setItem;
+  f.context.localStorage.setItem = (...args) => { writes++; set(...args); };
+  f.context.renderCourseGroups();
+  f.context.renderCourseGroups();
+  assert.equal(writes, 0);
+});
+
+test("failed group saves preserve stored values and retain pending settings for backup", () => {
+  const f = fixture({ menus: true, subjects: {
+    "2": [{ subject: "A", semester: "1", semesterColors: { "1": "#E2EFD9" } }], "3": [],
+  } });
+  const key = "curriculum-color-semester-groups-v3";
+  const original = f.storage.get(key);
+  const set = f.context.localStorage.setItem;
+  f.context.localStorage.setItem = (name, value) => {
+    if (name === key) throw new Error("quota exceeded");
+    set(name, value);
+  };
+  const grid = findDescendant(f.elements.courseGroupEditor,"course-group-grid");
+  const name = grid.children[0].children[1].children[0];
+  name.value = "미저장 그룹";
+  name.onchange();
+  assert.equal(f.storage.get(key), original);
+  assert.match(f.context.getApplicationGroupStorageIssue(), /저장 실패/);
+  assert.equal(f.context.getApplicationGroupBackup().groups[0].name, "미저장 그룹");
+  assert.equal(f.context.getApplicationGroupBackup().canRestore, true);
+  assert.equal(JSON.parse(original)[0].name.startsWith("색상 그룹"), true);
 });
 
 test("legacy course groups are split by incoming cohort and restored when switching application grades", () => {
