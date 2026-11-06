@@ -278,6 +278,18 @@ function analyzeResultCandidate(candidate, options) {
     }
   }
 
+  // 위계(선이수)·이수학점 점검(course-checks.js): 편제표 데이터 기준 학생별 경고와 목록.
+  let courseChecks = null;
+  if (typeof courseCheckResultIssues === "function") {
+    try {
+      courseChecks = courseCheckResultIssues(students, { grade });
+      issues.warnings.push(...courseChecks.warnings);
+      issues.info.push(...courseChecks.info);
+    } catch (error) {
+      issues.info.push(`위계·이수학점 점검을 건너뛰었습니다(${error?.message || "확인 필요"}).`);
+    }
+  }
+
   if (candidate.otherGrades?.length) issues.info.push(...candidate.otherGrades);
   else if (candidate.otherGradeCount) issues.info.push(`다른 학년 ${candidate.otherGradeCount}명은 제외했습니다. 해당 학년 탭에서 따로 올려 주세요.`);
   const classes = new Set(students.map((student) => String(student.classroom))).size;
@@ -295,7 +307,7 @@ function analyzeResultCandidate(candidate, options) {
     after: after.get(key)?.count || 0
   }));
   return {
-    ...candidate, issues, comparison, unclassified,
+    ...candidate, issues, comparison, unclassified, courseCheckHtml: courseChecks?.html || "",
     summary: { students: students.length, previousStudents: previousStudents.length, classes, courses: courses.length }
   };
 }
@@ -368,6 +380,7 @@ function renderResultImportPreview() {
     ${list(candidate.issues.blocking, "is-blocking", "반영할 수 없는 오류")}
     ${list(candidate.issues.warnings, "is-warning", "확인이 필요한 경고")}
     ${list(candidate.issues.info, "is-info", "참고")}
+    ${candidate.courseCheckHtml || ""}
     ${comparison}
     ${candidate.issues.actions?.length ? `<div class="result-import-fixes"><span>설정을 고친 뒤 파일을 다시 올리지 않고 아래 버튼으로 다시 검증할 수 있습니다.</span>${candidate.issues.actions.map((action) =>
       `<button class="button" type="button" data-result-import-fix="${esc(action.target)}">${esc(action.label)}</button>`).join("")}<button class="button" id="revalidateResultImport" type="button">다시 검증</button></div>` : ""}

@@ -22,10 +22,12 @@
 3. **바로 이어서 앱(`supabase-client.js`, `index.html`, `styles.css`)을 배포**합니다. 새 앱은 새 RPC를 부르므로 SQL보다 먼저 배포하면 학생 접속 화면에 "신청 서버 설정이 필요합니다"가 뜨고, 예전 앱은 SQL 적용 뒤 "반·번호와 개인 코드를 함께 입력해야 합니다. 새로고침…" 안내를 받습니다(둘 다 안전하게 실패).
 4. `02-next-round-student-id.sql` — 다음 차수 생성 시 학번이 이어지게 합니다(`upgrade-stable-student-ids.sql` 필요).
 5. `03-retention-purge.sql` — (선택) 학년도 종료 +180일 뒤 자동 삭제. `pg_cron` 예약은 주석 안내.
+6. `04-prerequisite-check.sql` — (선택) 위계(선이수) '저장 막기' 서버 검증. 01 적용 여부와 무관하며 표·열을 바꾸지 않습니다. 아래 '위계 점검' 참고.
 
 ## 되돌리기
 - 01: `01-rollback.sql` 실행 + 이전 앱으로 되돌린 뒤 각 신청에서 **"전체 학생 코드 재발급"** 을 눌러 새 코드를 나눠 주세요(원본 코드는 저장하지 않아 복원 불가). 컬럼(`code_hmac` 등)은 남겨도 무해합니다.
 - 02: 파일 안의 `old_text`/`new_text` 를 서로 바꿔 다시 실행.
+- 04: `04-rollback.sql` 실행. 이벤트 자료는 그대로이고 학생 화면은 경고만 표시로 돌아갑니다.
 - 03: `drop trigger course_events_purge_after on public.course_events; drop function public.purge_expired_course_events(); alter table public.course_events drop column purge_after;` 와 `cron.unschedule`.
 
 ## 잠금 방식 비교
@@ -43,3 +45,13 @@
 - **학생 존재 여부**: 문구는 같지만, 잠금 안내는 실제 학생에게만 나오므로 같은 반·번호로 5번 틀려 보면 그 반·번호가 있는지는 알 수 있습니다(이름·코드는 드러나지 않음).
 - 반·번호는 명렬의 값과 그대로 비교합니다(앞의 0은 무시). 명렬의 반이 "1" 이 아닌 다른 표기면 학생이 찾지 못합니다.
 - 구형 32자리 긴 코드는 반·번호 없이 계속 쓸 수 있습니다(128비트라 대입 불가).
+
+## 위계(선이수) 점검과 저장 막기 (04)
+- **서버 스키마 변경 없음.** 앱(`course-checks.js`)이 수강신청을 만들 때 기존 jsonb에 점검 정보를 싣습니다.
+  - `course_events.subjects[학년][i].requires`: 그 과목의 선이수 조건 `[{ name, designatedSemester?, options: [이 신청의 과목명], prior?: "elective" }]`(편제표 이전 학년 지정 과목으로 이미 충족되는 조건은 싣지 않음)
+  - `course_events.selection_groups[i].checks`: 학기별 지정·기준 학점, 교과(군) 필수 학점 기준, 3년 누계, `blockPrerequisites`
+  - `create_course_event`는 과목의 `subject`·`credit`·`semester`, 그룹의 `id`·`grade`·`name`·`count`·`courses`·`semester`만 검사하므로 다른 키는 그대로 저장되고, 학생 조회(`courses`·`groups`)와 다음 차수 생성(`create_next_course_event`, 과목·그룹 객체를 복사)에서도 유지됩니다. 규칙이 없는 예전 신청은 그대로 동작합니다(학생 화면에 점검표가 나오지 않음).
+- 기본은 **경고만**(학생 화면 점검표·과목 옆 표시). 교사가 2단계 '위계·학점 점검'에서 "위계 미충족이면 저장 막기"를 켜고 만든 신청은 `blockPrerequisites=true`가 됩니다.
+- `04-prerequisite-check.sql`은 가장 안쪽 저장 함수(`save_scoped_course_application_base`)를 감싸 막기를 켠 신청에서 위반을 거절하고, 학생 조회 응답에 `prerequisiteBlock: true`를 붙입니다. 학생 화면은 이 표시가 있을 때만 저장을 막고, **없으면(04 미적용) 막기를 켜도 경고만** 합니다.
+- 서버 판정은 학생 화면과 같습니다: 같은 신청의 앞 학기 선택·같은 학년 앞 학기 지정 과목만 충족, 같은 학기·뒤 학기·미선택은 위반, 학기를 모르거나 이전 학년 선택 과목(prior)이면 판단하지 않음. 교사 화면의 학생 선택 수정은 막지 않습니다.
+- 검증: `tests/course-checks-sql.test.cjs`(PGlite, 기존 체인 + 01 + 04, 무작위 선택 60개에서 학생 화면 계산과 서버 판정 일치, 테스트봇 위반 시도 거절, 되돌리기).
