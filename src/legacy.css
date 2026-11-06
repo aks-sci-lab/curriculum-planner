@@ -554,6 +554,53 @@
     .curriculum-selectable-cell:focus-visible { outline: 2px solid #315fce; outline-offset: -2px; }
     .curriculum-source-table td.curriculum-cell-selected { background: #dce8ff !important; box-shadow: inset 0 0 0 2px #315fce; }
     .curriculum-change-summary { color: #825314; font-size: 11px; }
+    /* 데이터 편제표: 선택과목군은 병합 대신 묶음 테두리와 띠로 보인다. 칸 사이 가는 선은 과목마다 남긴다. */
+    .curriculum-source-table td.curriculum-group-cell {
+      padding: 2px;
+      background-color: #f3f6ff;
+      border-left: 2px solid #5b7fd6;
+      border-right: 2px solid #5b7fd6;
+      border-top: 1px dashed #b7c5ea;
+      border-bottom: 1px dashed #b7c5ea;
+    }
+    .curriculum-source-table td.curriculum-group-cell.is-group-first { border-top: 2px solid #5b7fd6; vertical-align: top; }
+    .curriculum-source-table td.curriculum-group-cell.is-group-last { border-bottom: 2px solid #5b7fd6; }
+    .curriculum-group-band {
+      display: block;
+      width: 100%;
+      padding: 1px 3px;
+      border: 0;
+      border-radius: 3px;
+      background: #5b7fd6;
+      color: #fff;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.35;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .curriculum-group-band:hover, .curriculum-group-band:focus-visible { background: #2f56b8; outline: 2px solid #9fb6ee; outline-offset: 1px; }
+    .curriculum-group-band:disabled { cursor: default; }
+    .curriculum-source-table td.is-cross::before { content: "↔ "; color: #5b7fd6; font-weight: 700; }
+    .curriculum-source-table td.curriculum-note-cell { color: #4a5a76; font-size: 11px; }
+    .curriculum-source-table td.curriculum-row-tools { min-width: 0; width: 40px; padding: 0 2px; border-color: transparent; background: transparent; }
+    .curriculum-row-menu-button {
+      width: 28px; height: 24px; padding: 0; border: 1px solid #c8d1e0; border-radius: 4px;
+      background: #fff; color: #40567c; font: inherit; font-weight: 700; cursor: pointer;
+    }
+    .curriculum-data-row:hover .curriculum-row-menu-button, .curriculum-row-menu-button:focus-visible { border-color: #5b7fd6; color: #2f56b8; }
+    .curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: inset 3px 0 0 #e0a43a; }
+    .curriculum-row-menu {
+      position: fixed; z-index: 60; display: flex; flex-direction: column; min-width: 170px; padding: 4px;
+      border: 1px solid #b9c6e6; border-radius: 6px; background: #fff; box-shadow: 0 6px 20px rgba(20, 40, 80, .18);
+    }
+    .curriculum-row-menu.hidden { display: none; }
+    .curriculum-row-menu-label { padding: 3px 8px 5px; color: #596780; font-size: 11px; border-bottom: 1px solid #e3e8f1; margin-bottom: 3px; }
+    .curriculum-row-menu button { padding: 6px 10px; border: 0; border-radius: 4px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+    .curriculum-row-menu button:hover:not(:disabled), .curriculum-row-menu button:focus-visible { background: #eef3ff; }
+    .curriculum-row-menu button:disabled { color: #a0a8b8; cursor: default; }
+    .curriculum-row-menu button[data-row-action="delete"] { color: #a8321f; }
     .curriculum-subject-name[data-change-kind] { background-color: #fff0c2; border-radius: 3px; }
     .curriculum-bundles-details > summary { padding: 4px 8px; cursor: pointer; color: #40567c; font-size: 11px; }
     .curriculum-top-collapsed #curriculumCohortUploads,

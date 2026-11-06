@@ -776,7 +776,31 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <dialog class="curriculum-subject-dialog" id="curriculumSubjectDialog" aria-labelledby="curriculumSubjectTitle" aria-describedby="curriculumSubjectCurrent">
+  <dialog class="curriculum-subject-dialog curriculum-group-dialog" id="curriculumGroupDialog" aria-labelledby="curriculumGroupTitle" aria-describedby="curriculumGroupMembers">
+    <form id="curriculumGroupForm">
+      <h2 id="curriculumGroupTitle">선택과목군</h2>
+      <p class="note" id="curriculumGroupMembers"></p>
+      <div class="curriculum-versions-form">
+        <label for="curriculumGroupPick">선택 수 (택n)<input id="curriculumGroupPick" type="number" min="1" max="30" step="1" required></label>
+        <label for="curriculumGroupCredit">과목당 학점<input id="curriculumGroupCredit" type="number" min="0.5" max="30" step="any" required></label>
+      </div>
+      <p class="curriculum-subject-preview" id="curriculumGroupPreview" role="status" aria-live="polite"></p>
+      <p class="curriculum-subject-error" id="curriculumGroupError" role="alert"></p>
+      <div class="curriculum-subject-actions">
+        <button class="button" id="curriculumGroupCancel" type="button">취소</button>
+        <button class="button hidden" id="curriculumGroupRelease" type="button">묶음 풀기</button>
+        <button class="button button-primary" id="curriculumGroupApply" type="submit">적용</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="curriculum-row-menu hidden" id="curriculumRowMenu" role="menu" aria-label="과목 행 메뉴">
+    <span class="curriculum-row-menu-label" data-row-label></span>
+    <button type="button" role="menuitem" data-row-action="insert">위에 과목 추가</button>
+    <button type="button" role="menuitem" data-row-action="up">위로 이동</button>
+    <button type="button" role="menuitem" data-row-action="down">아래로 이동</button>
+    <button type="button" role="menuitem" data-row-action="delete">행 삭제</button>
+  </div>
+  <dialog class="curriculum-subject-dialog" id="curriculumSubjectDialog"aria-labelledby="curriculumSubjectTitle" aria-describedby="curriculumSubjectCurrent">
     <form id="curriculumSubjectForm">
       <h2 id="curriculumSubjectTitle">과목 편성 변경</h2>
       <p class="note" id="curriculumSubjectCurrent"></p>
@@ -821,6 +845,8 @@ function courseClient_() {
   </dialog>
   <script src="curriculum-subject-list.js?v=20261106-grade-tabs" defer></script>
   <script src="curriculum-choice-blocks.js?v=20261106-grade-tabs" defer></script>
+  <script src="curriculum-data.js?v=20261106-grade-tabs" defer></script>
+  <script src="curriculum-data-view.js?v=20261106-grade-tabs" defer></script>
   <script src="app-version.js?v=20261106-grade-tabs" defer></script>
   <script src="curriculum-annual.js?v=20261106-grade-tabs" defer></script>
   <script defer src="app.js?v=20261106-grade-tabs"></script>

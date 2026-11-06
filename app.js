@@ -2864,6 +2864,7 @@
           "openCurriculumVersionSave", "openCurriculumVersionDialog", "clearCurriculumPlan"]) $(`#${id}`).disabled = true;
         $("#curriculumMergeControls").classList.add("hidden");
       }
+      if (typeof syncCurriculumDataControls === "function") syncCurriculumDataControls(state.curriculumImportedLayout);
       renderCurriculumCohortUploads();
       if (typeof renderCurriculumVersions === "function") renderCurriculumVersions();
       if (typeof ensureCurriculumHiddenRows === "function") ensureCurriculumHiddenRows();
@@ -6009,10 +6010,12 @@
         recordCurriculumUndo(state.curriculumEditBefore);
         state.curriculumEditUndoRecorded = true;
       }
+      // 데이터 편제표는 칸을 벗어날 때(focusout) 데이터로 한 번에 반영한다.
+      if (state.curriculumImportedLayout.planData) return;
       const rowIndex = Number(cell.dataset.sourceRow);
       const columnIndexValue = Number(cell.dataset.sourceColumn);
       if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndexValue)) return;
-      state.curriculumImportedLayout.rows[rowIndex] = state.curriculumImportedLayout.rows[rowIndex] || [];
+      state.curriculumImportedLayout.rows[rowIndex] =state.curriculumImportedLayout.rows[rowIndex] || [];
       state.curriculumImportedLayout.rows[rowIndex][columnIndexValue] = cell.innerText.replace(/\r\n?/g, "\n");
       if (state.curriculumImportedLayout.formulas) delete state.curriculumImportedLayout.formulas[`${rowIndex}:${columnIndexValue}`];
       try {
@@ -6033,6 +6036,15 @@
       state.curriculumEditBefore = null;
       state.curriculumEditUndoRecorded = false;
       if (!edited) return;
+      if (state.curriculumImportedLayout.planData && typeof applyCurriculumDataCellEdit === "function") {
+        // 입력을 시작할 때 실행취소 기록은 이미 남겼다(input 처리). 다음 칸으로 옮겨 간 초점은 다시 그린 뒤 되살린다.
+        const mutation = state.curriculumMutationRevision;
+        setTimeout(() => {
+          if (mutation !== state.curriculumMutationRevision) return;
+          applyCurriculumDataCellEdit(cell, document.activeElement?.closest?.("[contenteditable='true'][data-source-row]"));
+        }, 0);
+        return;
+      }
       const mutationRevision = state.curriculumMutationRevision;
       setTimeout(() => {
         if (mutationRevision !== state.curriculumMutationRevision) return;
@@ -6104,6 +6116,9 @@
       const semesterColumns = selectionColumns.semesters;
       const academic = startRow >= curriculumFirstRowCache.row && semesterColumns.includes(startColumn) && semesterColumns.includes(endColumn);
       $("#curriculumMergeSelection").textContent = `${columnName(startColumn)}${startRow + 1}:${columnName(endColumn)}${endRow + 1} · ${academic ? horizontal ? "교차집중 선택과목군" : "선택과목군" : "일반 셀 병합"}`;
+      if (selectionLayout.planData && typeof curriculumDataSelectionLabel === "function") {
+        $("#curriculumMergeSelection").textContent = curriculumDataSelectionLabel(selectionLayout, curriculumCellSelection);
+      }
       $("#curriculumMergeApply").disabled = !horizontal && endRow <= startRow;
       $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic);
       $("#curriculumMergeCredit").closest?.("label")?.classList.toggle("hidden", !academic);
@@ -6115,7 +6130,7 @@
         $("#curriculumMergePick").value = String(block.pick);
         $("#curriculumMergeCredit").value = String(block.credit || 4);
       }
-      if ((state.curriculumImportedLayout.mergedRanges || []).some((reference) => {
+      if (!selectionLayout.planData && (state.curriculumImportedLayout.mergedRanges || []).some((reference) => {
         const range = curriculumChoiceRange(reference);
         return range && range.startColumn <= endColumn && range.endColumn >= startColumn &&
           range.startRow <= endRow && range.endRow >= startRow;
@@ -6218,6 +6233,12 @@
       try {
         if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) throw new Error("저장 원본을 먼저 복원하세요.");
         if (!curriculumCellSelection) throw new Error("병합할 셀을 먼저 선택하세요.");
+        // 데이터 편제표: 학기 칸 선택은 선택과목군 묶기(팝업)·풀기로 처리한다.
+        if (state.curriculumImportedLayout?.planData && typeof applyCurriculumDataSelection === "function") {
+          if (insertion) throw new Error("행은 과목 행 끝의 ⋯ 메뉴에서 추가·삭제·이동하세요.");
+          applyCurriculumDataSelection(curriculumCellSelection, release);
+          return;
+        }
         let layout = JSON.parse(JSON.stringify(state.curriculumImportedLayout));
         if (insertion === "row") {
           layout = insertImportedPlanLayoutRow(layout, curriculumCellSelection.startRow, []);
