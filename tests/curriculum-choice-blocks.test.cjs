@@ -699,3 +699,17 @@ test("merging header cells keeps them as a plain merge instead of a choice group
   const body = plain(ctx.mergeCurriculumSheetCells(fixture(), { startRow: 4, endRow: 5, column: 10, endColumn: 10 }, { pick: 1, credit: 4 }));
   assert.equal(body.sheetMerges.at(-1).kind, "choice", "merges in the subject area still become choice groups");
 });
+
+test("the split-merged-cells button sits left of the version save button and releases the selected merge", () => {
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const split = html.indexOf('id="curriculumSplitMerged"');
+  const save = html.indexOf('id="openCurriculumVersionSave"');
+  assert.ok(split > 0 && save > split, "split button comes right before the save button");
+  assert.match(app, /\$\("#curriculumSplitMerged"\)\.addEventListener\("click"[\s\S]*?applyCurriculumCellSelection\(true\)/);
+  const ctx = context();
+  const layout = fixture();
+  layout.mergedRanges.push("G2:H2");
+  const next = plain(ctx.unmergeCurriculumSheetCells(layout, { startRow: 1, endRow: 1, column: 6, endColumn: 7 }));
+  assert.ok(!next.mergedRanges.includes("G2:H2"));
+  assert.equal(next.rows[1][6], "1학년", "the original value stays after splitting");
+});

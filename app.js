@@ -2628,6 +2628,7 @@
       $("#curriculumMergePick").closest("label").classList.remove("hidden");
       $("#curriculumMergeCredit").closest("label").classList.remove("hidden");
       $("#curriculumMergeToggle").disabled = !state.curriculumImportedLayout;
+      $("#curriculumSplitMerged").disabled = !state.curriculumImportedLayout;
       $("#curriculumAddSubject").disabled = !state.curriculumImportedLayout;
       renderCurriculumCohortUploads();
       if (typeof renderCurriculumVersions === "function") renderCurriculumVersions();
@@ -5593,6 +5594,22 @@
         showAppToast(status.textContent, "error");
       }
     }
+    $("#curriculumSplitMerged").addEventListener("click", () => {
+      if (!state.curriculumImportedLayout) return;
+      if (!curriculumCellSelectionMode || !curriculumCellSelection) {
+        if (!curriculumCellSelectionMode) {
+          curriculumCellSelectionMode = true;
+          $("#curriculumMergeToggle").setAttribute("aria-pressed", "true");
+          $("#curriculumMergeControls").classList.remove("hidden");
+          renderCurriculumStep();
+        }
+        status.style.color = "#596780";
+        status.textContent = "분리할 병합 셀을 표에서 선택한 뒤 '병합 셀 분리'를 다시 누르세요.";
+        showAppToast(status.textContent);
+        return;
+      }
+      applyCurriculumCellSelection(true);
+    });
     $("#curriculumMergeApply").addEventListener("click", () => applyCurriculumCellSelection());
     $("#curriculumMergeRelease").addEventListener("click", () => applyCurriculumCellSelection(true));
     $("#curriculumInsertSelectionRow").addEventListener("click", () => applyCurriculumCellSelection(false, "row"));
