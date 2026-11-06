@@ -98,6 +98,10 @@
 
     const state = observeState(rawState);
     const STORAGE_KEY = "course-certificate-studio-v1";
+    // 사용자가 자료를 바꿔 이 브라우저에 저장한 시각. 연결된 PC 파일이 더 최신인지 판단할 때 쓴다.
+    const WORKSPACE_SAVED_AT_KEY = "course-certificate-studio-saved-at";
+    // 시작할 때 화면을 그리며 생긴 정리용 저장은 사용자 수정이 아니므로 저장 시각을 바꾸지 않는다.
+    let workspaceStartupFlush = false;
     let statePersistenceBlocked = false;
     let protectedStoredState = null;
     let workspaceSaveFailed = false;
@@ -397,8 +401,20 @@
             protectedStoredState = stored;
             throw new Error("다른 창의 저장 자료가 변경되어 덮어쓰기를 중지했습니다.");
           }
-          localStorage.setItem(STORAGE_KEY, serialized);
+          try {
+            localStorage.setItem(STORAGE_KEY, serialized);
+          } catch (storageError) {
+            // 브라우저 저장소가 가득 차도 연결된 PC 파일에는 지금 자료를 저장해 둔다.
+            const fileName = typeof scheduleWorkspaceFileSave === "function" ? scheduleWorkspaceFileSave() : "";
+            const reason = storageError?.name === "QuotaExceededError" || /quota/i.test(storageError?.message || "")
+              ? "브라우저 저장 공간이 부족합니다(용량 초과)"
+              : storageError?.message || "브라우저 저장소에 쓰지 못했습니다";
+            throw new Error(fileName ? `${reason} · PC 파일 '${fileName}'에는 저장을 시도합니다` : reason);
+          }
           lastSavedWorkspace = serialized;
+          if (!workspaceStartupFlush) {
+            try { localStorage.setItem(WORKSPACE_SAVED_AT_KEY, String(Date.now())); } catch { /* 시각 기록은 비교용이므로 실패해도 자료 저장은 유효하다. */ }
+          }
           if (typeof scheduleWorkspaceFileSave === "function") scheduleWorkspaceFileSave();
         }
         updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
@@ -415,6 +431,12 @@
     function lastWorkspaceBackup() {
       try {
         const value = Number(localStorage.getItem(BACKUP_TIME_KEY));
+        return Number.isFinite(value) && value > 0 ? value : 0;
+      } catch { return 0; }
+    }
+    function workspaceBrowserSavedAt() {
+      try {
+        const value = Number(localStorage.getItem(WORKSPACE_SAVED_AT_KEY));
         return Number.isFinite(value) && value > 0 ? value : 0;
       } catch { return 0; }
     }
@@ -468,7 +490,9 @@
           window.confirm("전체 초기화 전에 지금 작업 자료를 백업 파일로 내려받을까요?\n(권장: 초기화하면 되돌릴 수 없습니다)")) {
         downloadWorkspaceBackup();
       }
-      if (!window.confirm("모든 작업 자료를 이 브라우저에서 삭제합니다.\n\n· 편제표(입학생별·전학년)와 변경 이력, 보관된 원본 엑셀\n· 모든 차수의 신청 결과·개설/폐강 결정·확정 상태\n· 선택 그룹 설정과 학교·학년도 설정\n\n되돌릴 수 없습니다. 계속할까요?")) return;
+      const linkedFile = typeof workspaceFileHandle !== "undefined" && workspaceFileHandle ? `'${workspaceFileHandle.name}' ` : "";
+      if (!window.confirm("모든 작업 자료를 이 브라우저에서 삭제합니다.\n\n· 편제표(입학생별·전학년)와 변경 이력, 보관된 원본 엑셀\n· 모든 차수의 신청 결과·개설/폐강 결정·확정 상태\n· 선택 그룹 설정과 학교·학년도 설정\n" +
+        `· PC 파일 자동 저장 연결 ${linkedFile}— 연결된 PC 파일은 지우지 않고 연결만 끊습니다\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
       if (window.prompt("확인을 위해 '초기화'를 입력하세요.") !== "초기화") {
         showAppToast("입력이 달라 전체 초기화를 취소했습니다.", "error");
         return;
@@ -480,12 +504,16 @@
           window.clearTimeout(statePersistenceTimer);
           statePersistenceTimer = null;
         }
+        // 빈 자료가 연결된 PC 파일에 저장되지 않도록 먼저 연결을 끊는다(파일 자체는 지우지 않는다).
+        if (typeof disconnectWorkspaceFile === "function") await disconnectWorkspaceFile();
         clearWorkspaceStorage();
-        await new Promise((resolve) => {
-          if (typeof indexedDB === "undefined") { resolve(); return; }
-          const request = indexedDB.deleteDatabase("curriculum-original-workbooks");
-          request.onsuccess = request.onerror = request.onblocked = () => resolve();
-        });
+        for (const name of ["curriculum-workspace-file", "curriculum-original-workbooks"]) {
+          await new Promise((resolve) => {
+            if (typeof indexedDB === "undefined") { resolve(); return; }
+            const request = indexedDB.deleteDatabase(name);
+            request.onsuccess = request.onerror = request.onblocked = () => resolve();
+          });
+        }
         window.location.reload();
       } catch (error) {
         workspaceResetting = false;
@@ -526,7 +554,8 @@
     }
 
     // afterWrite: 자료를 실제로 교체한 직후(새로고침 직전)에 한 번 부른다. 파일 연결처럼 교체가 끝난 뒤에만 해야 하는 일에 쓴다.
-    async function restoreWorkspaceBackup(file, afterWrite = null) {
+    // confirmed: 호출한 쪽에서 이미 교체 확인을 받았을 때(PC 파일이 더 최신이라 불러올 때) 확인 창을 다시 띄우지 않는다.
+    async function restoreWorkspaceBackup(file, afterWrite = null, { confirmed = false } = {}) {
       if (!file) return false;
       const previous = new Map();
       const written = [];
@@ -562,7 +591,8 @@
           );
           entries.push([key, value]);
         }
-        if (!window.confirm("백업에 포함된 편제표·차수·선택 그룹으로 이 브라우저의 자료를 교체합니다. 현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다.")) return;
+        if (!confirmed && !window.confirm("백업에 포함된 편제표·차수·선택 그룹으로 이 브라우저의 자료를 교체합니다. 현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다.")) return false;
+        entries.push([WORKSPACE_SAVED_AT_KEY, String(Date.now())]);
         for (const [key] of entries) previous.set(key, localStorage.getItem(key));
         for (const [key, value] of entries) {
           localStorage.setItem(key, value);
@@ -573,6 +603,7 @@
         statePersistenceBlocked = true;
         if (statePersistenceTimer !== null) window.clearTimeout(statePersistenceTimer);
         window.location.reload();
+        return true;
       } catch (error) {
         const rollbackErrors = [];
         for (const key of written.reverse()) {
@@ -588,6 +619,7 @@
           updateWorkspaceSaveStatus(`백업 복원 및 원래 자료 되돌리기 실패: ${rollbackErrors.join(", ")}`, true);
         }
         showAppToast(`백업 복원 실패: ${error.message}`, "error");
+        return false;
       }
     }
 
@@ -6510,6 +6542,10 @@
         refreshCurriculumDerivedPlans();
         renderAggregate();
         renderWorkflowLayout();
+        if (statePersistenceTimer !== null) {
+          workspaceStartupFlush = true;
+          try { persistState(); } finally { workspaceStartupFlush = false; }
+        }
       }, { once: true });
     }
     statePersistenceReady = !studentApplicationRoute;
