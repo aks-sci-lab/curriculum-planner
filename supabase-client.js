@@ -1498,9 +1498,10 @@ var updateRetakeReadiness;
         const count = selected.filter((name) => group.courses.includes(name)).length;
         if (count !== group.count) throw new Error(`${group.name}: 정확히 ${group.count}과목을 선택하세요 (현재 ${count}개).`);
       }
-      if (typeof courseCheckStudentBeforeSave === "function") courseCheckStudentBeforeSave(selected);
+      // 위계(선이수)는 경고만 한다: 저장을 막지 않고 저장 안내에 경고를 덧붙인다.
+      const prerequisiteNote = typeof courseCheckStudentSaveNote === "function" ? courseCheckStudentSaveNote(selected) : "";
       if (previewMode) {
-        byId("cloudStudentMessage").textContent = "미리보기 제출 완료 · 실제 신청은 저장되지 않습니다.";
+        byId("cloudStudentMessage").textContent = `미리보기 제출 완료 · 실제 신청은 저장되지 않습니다.${prerequisiteNote}`;
         window.showAppToast?.("미리보기 제출을 확인했습니다. 실제 신청은 저장되지 않았습니다.");
         return;
       }
@@ -1510,7 +1511,7 @@ var updateRetakeReadiness;
           ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
           : await rpc("save_course_application", { p_code: code, p_selections: selected }));
       if (activeCode === code) {
-        byId("cloudStudentMessage").textContent = result.message;
+        byId("cloudStudentMessage").textContent = `${result.message}${prerequisiteNote}`;
         studentSaved = true;
         updateStudentProgress();
         window.showAppToast?.(result.message);

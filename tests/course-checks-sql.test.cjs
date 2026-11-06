@@ -1,4 +1,5 @@
-// 위계 '저장 막기' 서버 검증 초안(supabase/proposed/04-prerequisite-check.sql)을 PGlite에서 기존 SQL 전체 체인 위에 올려 확인한다.
+// 위계(선이수)는 경고만 한다(서버는 검사·저장 막기를 하지 않는다). 학생 화면 경고에 쓰는 점검 정보(과목.requires, 그룹.checks)가
+// 서버 스키마·SQL 변경 없이 기존 jsonb에 실려 보존되는지, 위계 위반 선택도 저장되는지를 PGlite에서 기존 SQL 전체 체인 위에 올려 확인한다.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -42,7 +43,8 @@ function plan() {
 }
 
 // 앱이 만드는 수강신청 생성 자료와 같은 모양(과목.requires, 그룹.checks)을 순수 함수로 만든다.
-function setup(block, { withChecks = true } = {}) {
+// legacyBlock: 예전 앱이 '저장 막기'를 켜고 만든 신청처럼 checks.blockPrerequisites=true를 남긴다.
+function setup({ withChecks = true, legacyBlock = false } = {}) {
   const model = checks.courseCheckPlanModel(plan());
   const rules = checks.courseCheckApplicableDefaults([model]);
   const semesterOf = { "미적분Ⅰ": "1", "확률과 통계": "1", "물리학": "1", "화학": "1", "생명과학": "1", "지구과학": "1" };
@@ -59,9 +61,9 @@ function setup(block, { withChecks = true } = {}) {
   ];
   if (withChecks) {
     for (const [grade, list] of [["2", courses], ["3", grade3]]) {
-      const payload = checks.courseCheckEventPayload(model, rules, { targetGrade: grade, courses: list, block });
+      const payload = checks.courseCheckEventPayload(model, rules, { targetGrade: grade, courses: list, block: true });
       for (const course of list) if (payload.requires.has(course.subject)) course.requires = payload.requires.get(course.subject);
-      for (const group of groups) if (group.grade === grade) group.checks = payload.checks;
+      for (const group of groups) if (group.grade === grade) group.checks = legacyBlock ? { ...payload.checks, blockPrerequisites: true } : payload.checks;
     }
   }
   const roster = [1, 2, 3, 4, 5, 6].map((n) => ({ grade: "1", classroom: "1", number: String(n), name: `학생${n}`, studentId: `10${n}` }))
@@ -97,74 +99,81 @@ async function server() {
   return { db, call, apply };
 }
 
+// 서버에 위계 검사 함수가 없다(04 초안은 쓰지 않기로 했다).
+async function prerequisiteFunctions(db) {
+  await db.exec("reset role");
+  return (await db.query("select proname from pg_proc where proname ilike '%prereq%'")).rows.map((row) => row.proname);
+}
+
 const ok = ["미적분Ⅰ", "미적분Ⅱ", "물리학", "화학", "생명과학", "역학과 에너지", "생물의 유전"];
 const noCalculus = ["확률과 통계", "미적분Ⅱ", "물리학", "화학", "생명과학", "역학과 에너지", "생물의 유전"];
 const noBiology = ["미적분Ⅰ", "기하", "물리학", "화학", "지구과학", "역학과 에너지", "생물의 유전"];
 
-test("prerequisite SQL: event check data rides on existing jsonb, and blocking events refuse violations on the server", async () => {
-  const { call, apply } = await server();
-  const blocking = await call("create_course_event", { p_setup: setup(true) }, "authenticated");
-  const warning = await call("create_course_event", { p_setup: setup(false) }, "authenticated");
-  const legacy = await call("create_course_event", { p_setup: setup(true, { withChecks: false }) }, "authenticated");
-  assert.ok(blocking.id && warning.id && legacy.id, JSON.stringify(blocking));
-  const student = (event, index = 0) => event.students.filter((item) => String(item.grade) === "1")[index];
-  // 서버 스키마 변경 없이(04 적용 전에도) 과목.requires·그룹.checks가 학생 응답에 그대로 온다.
-  const before = await call("get_scoped_course_application", { p_event: blocking.id, p_code: student(blocking).code });
-  const calculus = before.courses.find((course) => course.subject === "미적분Ⅱ");
+test("prerequisite checks: event check data rides on existing jsonb with no server change, and violations are saved (warning only)", async () => {
+  const { db, call } = await server();
+  const event = await call("create_course_event", { p_setup: setup() }, "authenticated");
+  const legacy = await call("create_course_event", { p_setup: setup({ legacyBlock: true }) }, "authenticated");
+  const plain = await call("create_course_event", { p_setup: setup({ withChecks: false }) }, "authenticated");
+  assert.ok(event.id && legacy.id && plain.id, JSON.stringify(event));
+  assert.deepEqual(await prerequisiteFunctions(db), [], "서버에는 위계 검사 함수가 없다");
+  const student = (target, index = 0) => target.students.filter((item) => String(item.grade) === "1")[index];
+  // 서버 스키마 변경 없이 과목.requires·그룹.checks가 학생 응답에 그대로 온다.
+  const data = await call("get_scoped_course_application", { p_event: event.id, p_code: student(event).code });
+  const calculus = data.courses.find((course) => course.subject === "미적분Ⅱ");
   assert.deepEqual(calculus.requires.map((rule) => rule.name), ["대수", "미적분Ⅰ"]);
   assert.equal(calculus.requires[0].designatedSemester, "1", "같은 학년 지정 과목은 학기만 싣는다(2-1 대수 → 2-2 미적분Ⅱ 충족)");
   assert.deepEqual(calculus.requires[1].options, ["미적분Ⅰ"]);
-  assert.ok(!before.courses.find((course) => course.subject === "미적분Ⅰ").requires, "1학년 지정 공통수학으로 이미 충족되는 조건은 싣지 않는다");
-  assert.equal(before.groups[0].checks.blockPrerequisites, true);
-  assert.equal(before.groups[0].checks.semesters["1"].target, 4 + 4 + 9);
-  assert.equal(before.prerequisiteBlock, undefined, "04 적용 전에는 막기 지원 표시가 없다(학생 화면은 경고만)");
-  // 04 적용 전: 위반도 저장된다.
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking).code, p_selections: noCalculus })).message, /저장/);
-
-  await apply("04-prerequisite-check.sql");
-  const after = await call("get_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 1).code });
-  assert.equal(after.prerequisiteBlock, true);
-  assert.equal(after.courses.length, 11);
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 1).code, p_selections: ok })).message, /저장/);
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 2).code, p_selections: noCalculus })).error,
-    /위계 미충족: 미적분Ⅱ은\(는\) 미적분Ⅰ을\(를\) 먼저 이수해야 합니다/);
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 2).code, p_selections: noBiology })).error,
-    /생물의 유전은\(는\) 생명과학/);
-  // 막기를 끈 신청과 점검 정보가 없는 예전 신청은 그대로 저장된다.
-  assert.match((await call("save_scoped_course_application", { p_event: warning.id, p_code: student(warning).code, p_selections: noCalculus })).message, /저장/);
-  assert.match((await call("save_scoped_course_application", { p_event: legacy.id, p_code: student(legacy).code, p_selections: noCalculus })).message, /저장/);
-  // 그룹 규칙 검증은 그대로 앞에서 동작한다.
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 3).code, p_selections: ["미적분Ⅰ"] })).error, /정확히/);
-  // 3학년 과목(현 2학년): 선이수가 이전 학년 선택 과목이면 서버는 판단하지 않는다(학생 화면의 '확인 불가').
-  const senior = blocking.students.find((item) => String(item.grade) === "2");
-  const seniorData = await call("get_scoped_course_application", { p_event: blocking.id, p_code: senior.code });
-  assert.equal(seniorData.courses.find((course) => course.subject === "전자기와 양자").requires[0].prior, "elective");
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: senior.code, p_selections: ["전자기와 양자"] })).message, /저장/);
-
-  // 학생 화면 계산과 서버 판정이 같다(무작위 선택 60개).
-  const rng = Core.createRng(11);
-  const groups = after.groups.map((group) => ({ ...group, count: Number(group.count) }));
-  let refusedCount = 0;
-  for (let i = 0; i < 60; i++) {
-    const picks = Core.chooseSelections(groups, { rng });
-    const client = checks.courseCheckApplicationState(after, picks).violations.length > 0;
-    const result = await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 4).code, p_selections: picks });
-    assert.equal(Boolean(result.error), client, `${picks.join(",")}: 서버 ${result.error || "저장"} / 화면 ${client}`);
-    if (client) refusedCount++;
+  assert.ok(!data.courses.find((course) => course.subject === "미적분Ⅰ").requires, "1학년 지정 공통수학으로 이미 충족되는 조건은 싣지 않는다");
+  assert.equal(data.groups[0].checks.v, 1);
+  assert.equal(data.groups[0].checks.semesters["1"].target, 4 + 4 + 9);
+  assert.equal("blockPrerequisites" in data.groups[0].checks, false, "막기 값은 더 싣지 않는다(예전 block 인자를 넘겨도)");
+  assert.equal(data.prerequisiteBlock, undefined);
+  // 학생 화면 계산은 위반을 찾지만(경고) 서버는 그대로 저장한다.
+  assert.ok(checks.courseCheckApplicationState(data, noCalculus).violations.length > 0);
+  for (const [target, index, picks] of [[event, 0, noCalculus], [event, 1, noBiology], [event, 2, ok], [legacy, 0, noCalculus], [plain, 0, noCalculus]]) {
+    const code = student(target, index).code;
+    assert.match((await call("save_scoped_course_application", { p_event: target.id, p_code: code, p_selections: picks })).message, /저장/, picks.join(","));
+    const again = await call("get_scoped_course_application", { p_event: target.id, p_code: code });
+    assert.deepEqual([...again.selections].sort(), [...picks].sort());
   }
-  assert.ok(refusedCount > 0 && refusedCount < 60, `위반·정상이 모두 나와야 한다(${refusedCount})`);
-
-  await apply("04-rollback.sql");
-  const rolled = await call("get_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 5).code });
-  assert.equal(rolled.prerequisiteBlock, undefined);
-  assert.match((await call("save_scoped_course_application", { p_event: blocking.id, p_code: student(blocking, 5).code, p_selections: noCalculus })).message, /저장/);
+  // 예전에 막기를 켜고 만든 신청: 값이 남아 있어도 학생 화면은 경고만 계산한다(막기 표시 없음).
+  const legacyData = await call("get_scoped_course_application", { p_event: legacy.id, p_code: student(legacy, 1).code });
+  assert.equal(legacyData.groups[0].checks.blockPrerequisites, true);
+  const legacyState = checks.courseCheckApplicationState(legacyData, noCalculus);
+  assert.ok(legacyState.violations.length > 0);
+  assert.equal("blockConfigured" in legacyState, false);
+  // 그룹 규칙 검증은 그대로 서버에서 동작한다.
+  assert.match((await call("save_scoped_course_application", { p_event: event.id, p_code: student(event, 3).code, p_selections: ["미적분Ⅰ"] })).error, /정확히/);
+  // 3학년 과목(현 2학년): 선이수가 이전 학년 선택 과목이면 '확인 불가'(prior)로 싣는다.
+  const senior = event.students.find((item) => String(item.grade) === "2");
+  const seniorData = await call("get_scoped_course_application", { p_event: event.id, p_code: senior.code });
+  assert.equal(seniorData.courses.find((course) => course.subject === "전자기와 양자").requires[0].prior, "elective");
+  assert.match((await call("save_scoped_course_application", { p_event: event.id, p_code: senior.code, p_selections: ["전자기와 양자"] })).message, /저장/);
+  // 무작위 선택 40개: 위반 여부와 관계없이 모두 저장된다.
+  const rng = Core.createRng(11);
+  const groups = data.groups.map((group) => ({ ...group, count: Number(group.count) }));
+  let warned = 0;
+  for (let i = 0; i < 40; i++) {
+    const picks = Core.chooseSelections(groups, { rng });
+    if (checks.courseCheckApplicationState(data, picks).violations.length) warned++;
+    const result = await call("save_scoped_course_application", { p_event: event.id, p_code: student(event, 4).code, p_selections: picks });
+    assert.match(result.message || "", /저장/, `${picks.join(",")}: ${result.error}`);
+  }
+  assert.ok(warned > 0 && warned < 40, `경고·정상이 모두 나와야 한다(${warned})`);
+  // 다음 차수 생성에서도 과목.requires·그룹.checks가 복사된다.
+  await call("manage_course_event", { p_event: event.id, p_action: "close" }, "authenticated");
+  const next = await call("create_next_course_event", { p_source: event.id, p_closed: [{ grade: "2", subject: "기하" }], p_mode: "all" }, "authenticated");
+  assert.ok(next.id, JSON.stringify(next));
+  const nextData = await call("get_scoped_course_application", { p_event: next.id, p_code: next.students.find((item) => String(item.grade) === "1").code });
+  assert.deepEqual(nextData.courses.find((course) => course.subject === "미적분Ⅱ").requires.map((rule) => rule.name), ["대수", "미적분Ⅰ"]);
+  assert.equal(nextData.groups[0].checks.semesters["1"].target, 4 + 4 + 9);
 });
 
-test("prerequisite SQL on top of code hardening: the test bot keeps prerequisites and its violation attempts are refused", async () => {
+test("prerequisite checks on top of code hardening: the test bot's violation attempts are saved with a warning", async () => {
   const { db, call, apply } = await server();
-  const event = await call("create_course_event", { p_setup: setup(true) }, "authenticated");
+  const event = await call("create_course_event", { p_setup: setup() }, "authenticated");
   await apply("01-code-hardening.sql");
-  await apply("04-prerequisite-check.sql");
+  assert.deepEqual(await prerequisiteFunctions(db), []);
   const codes = await call("manage_course_event", { p_event: event.id, p_action: "codes" }, "authenticated");
   const fetchImpl = async (url, options) => {
     const name = url.match(/\/rest\/v1\/rpc\/(\w+)$/)[1];
@@ -184,18 +193,18 @@ test("prerequisite SQL on top of code hardening: the test bot keeps prerequisite
   const tried = records.filter((record) => record.prerequisite);
   assert.ok(tried.length >= 1, "위반 시도 학생이 있어야 한다");
   for (const record of tried) {
-    assert.equal(record.prerequisite.refused, true, record.prerequisite.message);
-    assert.equal(record.prerequisite.expected, "거절");
-    assert.match(record.prerequisite.message, /위계 미충족/);
+    assert.equal(record.prerequisite.saved, true, record.prerequisite.message);
+    assert.ok(record.notes.some((note) => /위계 경고 과목 저장됨/.test(note)), record.notes.join(" / "));
   }
   const summary = Core.summarize(records);
-  assert.equal(summary.prerequisiteRefused, tried.length);
-  // 저장된 선택은 모두 위계를 지킨다.
-  await db.exec("reset role");
-  const data = await call("get_scoped_course_application_base", { p_event: event.id, p_code: "" });
-  assert.ok(data.error, "내부 함수는 학생이 직접 부를 수 없다");
+  assert.equal(summary.prerequisiteSaved, tried.length);
+  assert.equal(summary.prerequisiteRefused, 0);
+  const info = Core.resultSheets(records).find((sheet) => sheet.name === "요약").rows;
+  assert.deepEqual(info.find((row) => row[0] === "위계 경고 과목 저장됨"), ["위계 경고 과목 저장됨", tried.length]);
+  assert.ok(!info.some((row) => /위계 위반 거절/.test(String(row[0]))));
+  // 마지막에 저장한 정상 선택은 위계를 지킨다(위반 시도 뒤 정상 학생처럼 다시 저장).
   for (const record of records) {
-    const app = { courses: setup(true).subjects["2"], groups: setup(true).groups.filter((group) => group.grade === "2") };
+    const app = { courses: setup().subjects["2"], groups: setup().groups.filter((group) => group.grade === "2") };
     assert.equal(checks.courseCheckApplicationState(app, record.selections).violations.length, 0, record.selections.join(","));
   }
 });

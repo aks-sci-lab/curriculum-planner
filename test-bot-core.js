@@ -668,20 +668,20 @@ var TestBotCore = (() => {
       const chooseAny = (avoid = []) => groups.length
         ? chooseSelections(groups, { weights: ctx.weights || new Map(), rng, locked, avoid })
         : chooseFreeSelections(data.courses, { weights: ctx.weights || new Map(), rng });
-      // 위계 규칙이 있는 신청에서는 정상 학생처럼 선이수 순서를 지켜 고른다(저장 막기를 켠 신청에서도 실패하지 않게).
+      // 위계 규칙이 있는 신청에서는 정상 학생처럼 선이수 순서를 지켜 고른다(위계는 경고만이라 어겨도 저장된다).
       const prerequisites = hasPrerequisiteRules(data);
       const choose = (avoid = []) => prerequisites ? choosePrerequisiteSafe(data, () => chooseAny(avoid)) : chooseAny(avoid);
       let selections = choose();
-      // 4-1) 위계 위반 시도: 저장 막기가 서버에서 동작하면 거절되어야 하고, 아니면 경고만이므로 저장된다.
+      // 4-1) 위계 위반 시도: 위계는 경고만 하므로(서버는 막지 않음) 저장되는 것이 정상이다. 거절되면 실패로 본다.
+      //      예전 이벤트에 남은 막기 값(checks.blockPrerequisites)·서버 표시(prerequisiteBlock)는 보지 않는다.
       if (plan.violate && prerequisites && groups.length) {
         const broken = choosePrerequisiteViolation(data, () => chooseAny());
         if (broken) {
-          const blocking = data.prerequisiteBlock === true && groups.some((group) => group?.checks?.blockPrerequisites === true);
-          const refused = await save(code, broken.selections);
-          record.prerequisite = { description: broken.description, refused: !!refused.error, expected: blocking ? "거절" : "저장", message: refused.error || "" };
-          record.notes.push(refused.error ? `위계 위반 거절됨(${broken.description})`
-            : `위계 위반 저장됨(${broken.description}${blocking ? " · 저장 막기인데 저장됨!" : " · 경고만 하는 신청"})`);
-          if (blocking && !refused.error) record.prerequisite.unexpected = true;
+          const attempt = await save(code, broken.selections);
+          record.prerequisite = { description: broken.description, saved: !attempt.error, refused: !!attempt.error, message: attempt.error || "" };
+          record.notes.push(attempt.error ? `위계 경고 과목 저장 거절됨!(${broken.description}: ${attempt.error})`
+            : `위계 경고 과목 저장됨(${broken.description})`);
+          if (attempt.error) record.prerequisite.unexpected = true;
         }
       }
       // 4) 규칙 위반 선택을 먼저 보내 서버가 거절하는지 본다.
@@ -719,7 +719,7 @@ var TestBotCore = (() => {
       record.ok = true;
       record.status = "완료";
       if (record.violation && !record.violation.refused) { record.ok = false; record.status = "규칙 위반 저장됨"; record.failure = record.violation.description; }
-      if (record.prerequisite?.unexpected) { record.ok = false; record.status = "위계 위반 저장됨"; record.failure = record.prerequisite.description; }
+      if (record.prerequisite?.unexpected) { record.ok = false; record.status = "위계 경고 과목 거절됨"; record.failure = `${record.prerequisite.description}: ${record.prerequisite.message}`; }
       return record;
     } catch (error) {
       if (error?.stopped) return fail("중지됨", "사용자가 중지했습니다.");
@@ -778,8 +778,9 @@ var TestBotCore = (() => {
       maxMs: times.length ? Math.max(...times) : 0,
       violationsRefused: done.filter((record) => record.violation?.refused).length,
       violationsAccepted: done.filter((record) => record.violation && !record.violation.refused).length,
-      prerequisiteRefused: done.filter((record) => record.prerequisite?.refused).length,
+      // 위계 위반 시도: 경고만이라 저장되는 것이 정상(저장됨), 거절은 비정상.
       prerequisiteSaved: done.filter((record) => record.prerequisite && !record.prerequisite.refused).length,
+      prerequisiteRefused: done.filter((record) => record.prerequisite?.refused).length,
       locked: done.filter(expected).length,
       reasons: [...reasons].sort((a, b) => b[1] - a[1]),
     };
@@ -802,7 +803,7 @@ var TestBotCore = (() => {
       ["대상 학생", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["코드 변경", summary.codeChanged],
       ["요청 수", summary.requests], ["평균 응답(ms)", summary.averageMs], ["최대 응답(ms)", summary.maxMs],
       ["규칙 위반 거절", summary.violationsRefused], ["규칙 위반 저장됨", summary.violationsAccepted], ["잠김 확인", summary.locked],
-      ["위계 위반 거절", summary.prerequisiteRefused], ["위계 위반 저장됨(경고만 하는 신청)", summary.prerequisiteSaved],
+      ["위계 경고 과목 저장됨", summary.prerequisiteSaved], ["위계 경고 과목 거절(비정상)", summary.prerequisiteRefused],
       [],
       ["실패 사유", "학생 수"],
       ...summary.reasons.map(([reason, count]) => [reason, count]),
@@ -848,6 +849,7 @@ var TestBotCore = (() => {
   }
 
   // 서버에 무엇이 저장되어 있어야 하는지(학생별 마지막 확인 선택). 저장 여부가 불확실한 학생은 대조에서 뺀다.
+  // 위계 경고 과목 저장 시도가 저장된 뒤 마지막 저장을 확인하지 못한 학생도 서버에 무엇이 남았는지 확실하지 않아 뺀다.
   const UNCERTAIN = new Set(["확인 실패", "재신청 실패", "오류", "중지됨"]);
   function updateExpected(expected, uncertain, records) {
     for (const record of records.filter(Boolean)) {
@@ -855,7 +857,7 @@ var TestBotCore = (() => {
       if (record.verified) {
         expected.set(key, { selections: [...record.selections], label: seatLabel(record) });
         uncertain.delete(key);
-      } else if (UNCERTAIN.has(record.status)) uncertain.add(key);
+      } else if (UNCERTAIN.has(record.status) || record.prerequisite?.saved) uncertain.add(key);
     }
   }
 

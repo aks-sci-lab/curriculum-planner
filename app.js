@@ -1060,7 +1060,7 @@
         state.hoursStats = plainObject(saved.hoursStats)
           ? Object.fromEntries(Object.entries(saved.hoursStats).filter(([year, value]) => /^\d{4}$/.test(year) && plainObject(value)))
           : {};
-        // 위계·이수학점 점검 설정(규칙·저장 막기·필수 학점·이전 학년 결과). 예전 저장분에는 없다.
+        // 위계·이수학점 점검 설정(규칙·필수 학점·이전 학년 결과). 예전 저장분에는 없고, 예전 '저장 막기' 값은 버린다.
         state.courseChecks = typeof courseCheckNormalizeSettings === "function"
           ? courseCheckNormalizeSettings(saved.courseChecks) : plainObject(saved.courseChecks) ? saved.courseChecks : {};
         state.curriculumVersions = plainObject(saved.curriculumVersions)

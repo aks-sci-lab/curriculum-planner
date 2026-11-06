@@ -1831,6 +1831,8 @@
 .course-check-table th, .course-check-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .course-check-rule-table tr.is-off td { color: #8a94a6; text-decoration: line-through; }
 .course-check-rule-table tr.is-off td:nth-last-child(-n+2) { text-decoration: none; }
+.course-check-rule-table tr.course-check-rule-group th { padding-top: 10px; background: #f3f6fb; color: #2b3a55; font-weight: 700; text-align: left; }
+.course-check-rule-table tr.course-check-rule-group small { margin-left: 4px; color: #59667b; font-weight: 400; }
 .course-check-required-table input { width: 80px; }
 .course-check-add { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 10px; }
 .course-check-add label { display: grid; gap: 3px; font-size: 12px; font-weight: 700; }
@@ -1860,7 +1862,7 @@
 .course-check-issues li { margin: 3px 0; padding: 6px 8px; border-radius: 7px; background: #fff3f0; line-height: 1.5; }
 .course-check-issues li.is-unknown { background: #f1f4f9; }
 .course-check-ok { margin: 0 0 8px; color: #1f6447; font-weight: 700; }
-.course-check-block { margin: 0 0 8px; color: #8d3025; font-weight: 700; }
+.course-check-warn-note { margin: 0 0 8px; color: #6b4a12; font-size: 12px; }
 .course-check-total { margin: 0 0 6px; }
 .course-check-families table { border-collapse: collapse; margin-top: 6px; }
 .course-check-families th, .course-check-families td { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: left; }
