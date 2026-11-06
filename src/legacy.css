@@ -1957,7 +1957,9 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
 .plan-compliance-table tr.is-na { color: #7b8494; }
 .plan-compliance-sources { margin: 6px 0; }
 .plan-compliance-sources caption { text-align: left; font-weight: 700; color: #263e68; padding: 2px 0 4px; }
-.plan-compliance-sources th, .plan-compliance-sources td { padding: 4px 6px; border-bottom: 1px solid #e4e9f2; text-align: left; }
+.plan-compliance-sources { width: auto; min-width: 60%; }
+.plan-compliance-sources th, .plan-compliance-sources td { height: auto; padding: 3px 10px 3px 0; border-bottom: 1px solid #e4e9f2; text-align: left; vertical-align: middle; }
+.plan-compliance-sources .button { min-height: 24px; padding: 0 8px; font-size: 12px; }
 .plan-compliance-stats { table-layout: fixed; min-width: 980px; }
 .plan-compliance-stats th:first-child { width: 190px; }
 .plan-compliance-stats caption { padding: 6px 8px; text-align: left; color: #344462; font-weight: 600; font-size: 12px; }
