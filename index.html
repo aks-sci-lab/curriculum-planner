@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-agg-prereq">
+  <link rel="stylesheet" href="styles.css?v=20261106-decisions">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -495,7 +495,7 @@
   </dialog>
   <dialog id="testBotAutoDialog" aria-labelledby="testBotAutoTitle">
     <h2 id="testBotAutoTitle">수강신청 자동 테스트</h2>
-    <p>지금 편제표·선택 그룹으로 <strong>[테스트]</strong> 수강신청을 만들고 가상 학생 코드를 테스트봇 창으로 보냅니다. 테스트봇은 받는 즉시 저장된 옵션으로 가상 학생 접속·신청·저장 확인, 교사 화면 대조, 정리(기본: 신청 닫기)까지 진행합니다. 실제 학생 명렬은 쓰지 않으며 집계표에도 연동하지 않습니다.</p>
+    <p>지금 편제표·선택 그룹으로 <strong>[테스트]</strong> 수강신청을 만들고 가상 학생 코드를 테스트봇 창으로 보냅니다. 테스트봇은 받는 즉시 저장된 옵션으로 가상 학생 접속·신청·저장 확인, 교사 화면 대조, 정리(끝날 때 확인 창에서 고름, 기본 선택: 닫고 삭제)까지 진행합니다. 실제 학생 명렬은 쓰지 않으며 집계표에도 연동하지 않습니다.</p>
     <p id="testBotAutoSummary"></p>
     <label>반 수 <input id="testBotAutoClasses" type="number" min="1" max="20" value="2"></label>
     <label>반별 인원 <input id="testBotAutoPerClass" type="number" min="1" max="40" value="10"></label>
@@ -948,29 +948,29 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-data.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-data-view.js?v=20261106-agg-prereq" defer></script>
-  <script src="app-version.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-annual.js?v=20261106-agg-prereq" defer></script>
-  <script src="course-checks.js?v=20261106-agg-prereq" defer></script>
-  <script defer src="app.js?v=20261106-agg-prereq"></script>
-  <script src="xlsx-parser.js?v=20261106-agg-prereq" defer></script>
-  <script src="course-groups.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-workbook.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-data-export.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-office-format.js?v=20261106-agg-prereq" defer></script>
-  <script src="result-import.js?v=20261106-agg-prereq" defer></script>
-  <script src="round-status.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-versions.js?v=20261106-agg-prereq" defer></script>
-  <script src="hours-stats.js?v=20261106-agg-prereq" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261106-agg-prereq" defer></script>
-  <script src="workspace-file.js?v=20261106-agg-prereq" defer></script>
+  <script src="curriculum-subject-list.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-data.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-data-view.js?v=20261106-decisions" defer></script>
+  <script src="app-version.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-annual.js?v=20261106-decisions" defer></script>
+  <script src="course-checks.js?v=20261106-decisions" defer></script>
+  <script defer src="app.js?v=20261106-decisions"></script>
+  <script src="xlsx-parser.js?v=20261106-decisions" defer></script>
+  <script src="course-groups.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-workbook.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-data-export.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-office-format.js?v=20261106-decisions" defer></script>
+  <script src="result-import.js?v=20261106-decisions" defer></script>
+  <script src="round-status.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-versions.js?v=20261106-decisions" defer></script>
+  <script src="hours-stats.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261106-decisions" defer></script>
+  <script src="workspace-file.js?v=20261106-decisions" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261106-agg-prereq" defer></script>
-  <script src="test-bot-bridge.js?v=20261106-agg-prereq" defer></script>
-  <script src="supabase-client.js?v=20261106-agg-prereq" defer></script>
+  <script src="supabase-config.js?v=20261106-decisions" defer></script>
+  <script src="test-bot-bridge.js?v=20261106-decisions" defer></script>
+  <script src="supabase-client.js?v=20261106-decisions" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

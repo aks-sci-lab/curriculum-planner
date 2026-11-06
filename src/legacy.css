@@ -1889,8 +1889,6 @@
 .aggregate-check-note.is-muted { border-color: #e3e7ee; background: #f6f7f9; color: #7b8494; }
 button.prereq-badge { border: 1px solid #f1b7ae; background: #fdecea; color: #a3261c; cursor: pointer; font: inherit; font-size: 10px; font-weight: 700; }
 button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6d1; }
-.prereq-unknown-badge { display: inline-block; margin-left: 4px; padding: 1px 6px; border: 1px dashed #d4d9e2; border-radius: 999px; background: transparent; color: #8a93a3; font-size: 10px; cursor: pointer; }
-.prereq-unknown-badge:hover, .prereq-unknown-badge:focus-visible { color: #4b556a; border-color: #aab2c0; }
 .prereq-dialog-scope { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
 .prereq-dialog-heading { margin: 8px 0 6px; font-size: 15px; color: #8d3025; }
 .prereq-student-list { margin: 0 0 8px; padding-left: 18px; font-size: 13px; line-height: 1.6; max-height: 50vh; overflow: auto; }

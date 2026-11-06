@@ -3481,7 +3481,7 @@
         over ? `<span class="at-risk-badge over-badge" title="학급당 ${course.averageClassSize.toFixed(1)}명이 최대 인원 ${maxClassSize}명을 넘습니다.">${maxClassSize}명 초과</span>` : "",
         overDivision ? `<span class="at-risk-badge over-badge" title="학급당 ${course.averageClassSize.toFixed(1)}명이 분반 기준 ${summary.divisionLimit.toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.">분반기준 초과</span>` : ""
       ].join("") || '<span class="aggregate-ok">충족</span>';
-      // 위계(선이수) 경고 학생 수 배지(누르면 학생 목록 팝업). 확인 불가는 따로 흐리게 둔다.
+      // 위계(선이수) 경고 학생 수 배지(누르면 학생 목록 팝업). 확인 불가는 학년 머리줄·팝업에만 둔다.
       const prereqBadges = prereq && typeof courseCheckCourseBadges === "function" ? courseCheckCourseBadges(prereq, key, name) : "";
       const inputLock = locked ? ' disabled title="확정된 차수입니다. 확정 해제 후 수정하세요."'
         : course.closed ? ' disabled title="폐강으로 정한 과목은 0학급입니다. 교사 결정을 바꾸면 수정할 수 있습니다."' : "";

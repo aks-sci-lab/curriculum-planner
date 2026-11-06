@@ -327,20 +327,30 @@ function columnIndex(reference) {
   byId("botConfirmInput").addEventListener("input", () => {
     byId("botConfirmRun").disabled = byId("botConfirmInput").value.trim() !== "테스트";
   });
-  function askCleanup() {
+  // 끝 정리 확인 창. 앱이 자동 테스트로 만든 [테스트] 신청은 기본 선택이 '닫고 삭제', 그 밖의 신청은 '닫기만'.
+  // Esc(취소)는 언제나 지우지 않는 '닫기만'.
+  function askCleanup({ testEvent = true, round = "" } = {}) {
     return new Promise((resolve) => {
       const dialog = byId("botCleanupDialog");
+      const preferred = testEvent ? "delete" : "close";
+      const buttons = { delete: byId("botCleanupDelete"), close: byId("botCleanupClose"), keep: byId("botCleanupKeep") };
+      const labels = { delete: "닫고 삭제", close: "닫기만", keep: "그대로 두기" };
+      for (const [choice, button] of Object.entries(buttons)) {
+        button.textContent = labels[choice] + (choice === preferred ? "(기본)" : "");
+        button.classList.toggle("button-primary", choice === preferred);
+      }
+      byId("botCleanupText").textContent = `${round ? `${round}차 테스트가` : "테스트가"} 끝났습니다. ` + (testEvent
+        ? "앱이 만든 [테스트] 수강신청을 어떻게 할까요? 테스트 신청이라 실제 학생 자료와 무관하므로 기본은 닫고 삭제입니다."
+        : "이 수강신청을 어떻게 할까요? 기본은 닫기만입니다.");
       const finish = (value) => {
-        for (const id of ["botCleanupClose", "botCleanupDelete", "botCleanupKeep"]) byId(id).onclick = null;
+        for (const button of Object.values(buttons)) button.onclick = null;
         dialog.close();
         resolve(value);
       };
-      byId("botCleanupClose").onclick = () => finish("close");
-      byId("botCleanupDelete").onclick = () => finish("delete");
-      byId("botCleanupKeep").onclick = () => finish("keep");
+      for (const choice of Object.keys(buttons)) buttons[choice].onclick = () => finish(choice);
       dialog.addEventListener("cancel", () => finish("close"), { once: true });
       dialog.showModal();
-      byId("botCleanupClose").focus();
+      buttons[preferred].focus();
     });
   }
 
@@ -438,7 +448,7 @@ function columnIndex(reference) {
         now: () => new Date().toLocaleString("ko-KR"),
         teacher: (action, { eventId, timeoutMs } = {}) => teacherRequest(action, timeoutMs, eventId),
         waitForTeacher,
-        confirm: (info) => waitForConfirm(`${info.schoolYear}학년도 ${info.schoolName} ${info.round}차 · 대상 가상 학생 ${info.targets}명 · 동시 접속 ${opts.concurrency}` +
+        confirm: (info) => waitForConfirm(`${info.round ? `${info.round}차 테스트 · ` : ""}${info.schoolYear}학년도 ${info.schoolName} ${info.round}차 · 대상 가상 학생 ${info.targets}명 · 동시 접속 ${opts.concurrency}` +
           ` · 반복 ${info.repeat.count}회(${info.repeat.freshEvent ? "회차마다 새 수강신청을 만들고 회차가 끝나면 닫고 삭제" : "같은 수강신청에서 바뀐 코드로 재신청"})`),
         askCleanup,
         acceptCreated: (data) => Bridge.validatePayload(data),
