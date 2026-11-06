@@ -883,14 +883,14 @@ function courseCheckSortItems(items) {
     Number(a.student.number) - Number(b.student.number) || String(a.issue.course).localeCompare(String(b.issue.course), "ko"));
 }
 
-// 집계표 과목 행의 배지(위계 경고 수, 흐린 확인 불가 수). 누르면 그 과목의 학생 목록 팝업이 열린다.
+// 집계표 과목 행의 배지(위계 경고 수). 누르면 그 과목의 학생 목록 팝업이 열린다.
+// 확인 불가는 과목 행에 두지 않고 학년 머리줄 단추와 팝업 안(접힌 칸)에만 둔다.
 function courseCheckCourseBadges(flags, key, label = "") {
   const flag = flags?.courses?.get(key);
   if (!flag) return "";
   const esc = courseCheckEscape;
   const attrs = `data-open-dialog="prereqStudentsDialog" data-prereq-course="${esc(key)}" data-prereq-label="${esc(label)}"`;
-  return (flag.violators.size ? `<button type="button" class="at-risk-badge prereq-badge" ${attrs} title="${esc(`${label} 신청자 중 위계(선이수) 경고 ${flag.violators.size}명 — 눌러서 학생 보기`)}">위계 경고 ${flag.violators.size}</button>` : "") +
-    (flag.unknownStudents.size ? `<button type="button" class="prereq-unknown-badge" ${attrs} title="${esc(`이전 학년 이수 결과가 없어 판단하지 못한 학생 ${flag.unknownStudents.size}명(위반 아님)`)}">확인 불가 ${flag.unknownStudents.size}</button>` : "");
+  return flag.violators.size ? `<button type="button" class="at-risk-badge prereq-badge" ${attrs} title="${esc(`${label} 신청자 중 위계(선이수) 경고 ${flag.violators.size}명 — 눌러서 학생 보기`)}">위계 경고 ${flag.violators.size}</button>` : "";
 }
 
 // 팝업 본문: 위계 경고 학생 목록(+ 확인 불가는 접어서 따로).
@@ -927,7 +927,7 @@ function courseCheckOpenStudentsDialog(opener) {
       gradeFlags.unknowns.flatMap((entry) => entry.unknowns.map((item) => ({ student: entry.student, ...item }))),
       { title: `현 ${grade}학년 → ${Number(grade) + 1}학년 과목 · 학년 전체` });
   }
-  if (opener.dataset.prereqUnknown !== undefined || opener.classList.contains("prereq-unknown-badge")) {
+  if (opener.dataset.prereqUnknown !== undefined) {
     body.querySelector(".prereq-unknown-details")?.setAttribute("open", "");
   }
 }
@@ -967,11 +967,15 @@ function courseCheckAggregateSheetRows(students, grade = "") {
 }
 
 // 재신청 명단: 학생 한 명의 위계 경고 과목. exclude(폐강 과목)를 주면 그 과목을 뺀 뒤 다시 점검한다.
+// 학생이 고른 선이수 과목이 폐강돼 생긴 경고는 "선이수 과목(화학) 폐강", 원래 이수하지 않은 경우는 "화학 미이수"로 구분한다.
 function courseCheckPrereqText(student, { exclude = null } = {}) {
   const report = courseCheckStudentReport(student, courseCheckContext(), exclude ? { exclude } : {});
   if (!report) return "";
-  return report.prerequisites.violations.map((issue) => `${issue.course}: ${courseCheckIssueBrief(issue,
-    { grade: report.targetGrade, offered: courseCheckOfferedLabels(report.model, issue.requires, report.targetGrade) })}`).join(" / ");
+  const picked = new Set((student.selections || []).map((item) => courseCheckKey(item.name)));
+  const closed = new Set((exclude || []).map(courseCheckKey).filter((key) => picked.has(key)));
+  return report.prerequisites.violations.map((issue) => `${issue.course}: ${closed.has(courseCheckKey(issue.requires))
+    ? `선이수 과목(${issue.requires}) 폐강`
+    : courseCheckIssueBrief(issue, { grade: report.targetGrade, offered: courseCheckOfferedLabels(report.model, issue.requires, report.targetGrade) })}`).join(" / ");
 }
 
 // ---- 웹 수강신청 연결
