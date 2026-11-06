@@ -3203,6 +3203,21 @@
       return { sourceRound, data, rows, closedCount: closedKeys.size };
     }
 
+    // 폐강 확정 → 재신청 대상 확인 → 다음 차수 결과 반영까지 지금 어느 단계인지 보여 준다.
+    function renderRetakeProgress({ sourceRound, nextRound, data, rows, closedCount }) {
+      const list = $("#retakeProgress");
+      if (!list) return;
+      const nextHasResult = !!state.rounds?.[nextRound]?.students?.length;
+      const steps = [
+        { done: closedCount > 0, label: "폐강 확정", detail: data ? (closedCount ? `${closedCount}과목 폐강` : "아래 집계표에서 개설/폐강을 정하세요") : `${sourceRound}차 결과 필요` },
+        { done: closedCount > 0 && rows.length > 0, label: "재신청 대상 확인", detail: rows.length ? `대상 학생 ${rows.length}명 · 명단을 내려받거나 웹 수강신청에서 재신청 생성` : "폐강 과목을 신청한 학생이 없습니다" },
+        { done: nextHasResult, label: `${nextRound}차 결과 반영`, detail: nextHasResult ? `${nextRound}차 결과 반영됨` : `2단계에서 ${nextRound}차를 추가해 결과 업로드` }
+      ];
+      const currentIndex = steps.findIndex((step) => !step.done);
+      list.innerHTML = steps.map((step, index) =>
+        `<li data-state="${step.done ? "done" : index === currentIndex ? "current" : "wait"}"${index === currentIndex ? ' aria-current="step"' : ""}><strong>${index + 1}. ${escapeHtml(step.label)}</strong><span>${escapeHtml(step.detail)}</span></li>`).join("");
+    }
+
     function renderRetakePanel() {
       const { sourceRound, data, rows, closedCount } = retakeTargets();
       const nextRound = String(Number(sourceRound) + 1);
@@ -3211,6 +3226,7 @@
       $("#retakePanel h2").textContent = `${nextRound}차 수강신청 대상자`;
       $("#retakeNextRoundNote").textContent = `${nextRound}차 결과는 2단계에서 차수를 추가한 뒤 불러오세요.`;
       $("#downloadRetakeList").disabled = !rows.length;
+      renderRetakeProgress({ sourceRound, nextRound, data, rows, closedCount });
       if (!data) {
         description.textContent = "수강신청 데이터가 없습니다. 2단계에서 명단을 불러오세요.";
         content.innerHTML = "";
