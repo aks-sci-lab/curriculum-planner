@@ -55,6 +55,15 @@ test("an empty school name prints a blank, not the word 학교명", () => {
   assert.match(named, /2026\. 11\. 6\./);
 });
 
+test("the certificate shows the current grade and the applied grade on one line", () => {
+  const ctx = markupContext({ "#schoolYear": "2026", "#round": "1차", "#confirmDate": "", "#schoolName": "학교" });
+  const markup = ctx.certificateMarkup(student(3), true, []);
+  assert.match(markup, /<span class="paper-student-grade">현 2학년 3반 4번 · 3학년 선택과목 신청<\/span>&nbsp;&nbsp; <span class="paper-student-name">홍길동<\/span>/);
+  assert.doesNotMatch(markup, /2 학년&nbsp;/, "the old split label is gone");
+  assert.equal((markup.match(/3학년 선택과목 신청/g) || []).length, 1, "the applied grade is written once");
+  assert.equal(ctx.studentGradeLabel({ grade: "1", classroom: "10", number: "7" }), "현 1학년 10반 7번");
+});
+
 test("the closing lines stay together and long course lists print in a denser layout", () => {
   const ctx = markupContext({ "#schoolYear": "2026", "#round": "1차", "#confirmDate": "2026. 11. 6.", "#schoolName": "학교" });
   const closing = ctx.certificateMarkup(student(3), true, []);

@@ -379,12 +379,44 @@ function syncNextYearClassInputs() {
   }
 }
 
+const HOURS_ISSUE_LABELS = { error: "필수", warning: "확인", info: "참고" };
+
 function hoursIssueList(issues) {
   if (!issues.length) return '<p class="hours-ok">확인할 문제가 없습니다.</p>';
-  const labels = { error: "필수", warning: "확인", info: "참고" };
   const order = { error: 0, warning: 1, info: 2 };
   return `<ul class="hours-issues">${issues.slice().sort((a, b) => order[a.level] - order[b.level]).map((issue) =>
-    `<li class="hours-issue is-${issue.level}"><b>${labels[issue.level]}</b> ${escapeHtml(issue.text)}</li>`).join("")}</ul>`;
+    `<li class="hours-issue is-${issue.level}"><b>${HOURS_ISSUE_LABELS[issue.level]}</b> ${escapeHtml(issue.text)}</li>`).join("")}</ul>`;
+}
+
+// 화면에는 확인 항목 개수와 가장 급한 항목 하나만 한 줄로 보이고, 전체 목록은 팝업에서 본다.
+function hoursIssueSummary(issues) {
+  if (!issues.length) return '<p class="hours-summary-line hours-ok">확인할 문제가 없습니다.</p>';
+  const counts = ["error", "warning", "info"].map((level) => [level, issues.filter((issue) => issue.level === level).length])
+    .filter(([, count]) => count);
+  const first = issues.find((issue) => issue.level === "error") || issues.find((issue) => issue.level === "warning");
+  return `<p class="hours-summary-line hours-issue-summary">
+    <span class="hours-summary-label">확인 항목</span>
+    ${counts.map(([level, count]) => `<span class="hours-issue-count is-${level}">${HOURS_ISSUE_LABELS[level]} ${count}</span>`).join("")}
+    ${first ? `<span class="hours-summary-text">${escapeHtml(first.text)}</span>` : ""}
+    <button class="button button-quiet" type="button" data-open-dialog="hoursIssuesDialog" aria-haspopup="dialog">확인 항목 보기 (${issues.length})</button>
+  </p>`;
+}
+
+// 학급 수·선택과목 근거·창체 시수의 현재 값을 한 줄로 보여 준다. 고치는 곳은 '시수 설정' 팝업이다.
+function hoursSettingsSummary(stats) {
+  const grades = stats.grades.map((info) => {
+    const classes = info.classes > 0 ? `${info.classes}학급` : '<span class="is-missing">학급 수 미입력</span>';
+    const plan = info.hasLayout ? ""
+      : ` <button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">${info.cohortYear} 편제표 미업로드 · 1단계에서 업로드</button>`;
+    const source = info.grade === "1" ? ""
+      : info.source ? ` (현${Number(info.grade) - 1} ${info.source.round}차${info.source.confirmed ? " 확정" : " 임시"})` : ` (현${Number(info.grade) - 1} 결과 없음)`;
+    return `<span class="hours-summary-item"><b>${info.grade}학년</b> ${classes}${source}${plan}</span>`;
+  }).join("");
+  return `<p class="hours-summary-line hours-settings-summary">
+    <span class="hours-summary-label">내년도</span>${grades}
+    <span class="hours-summary-item">창체 ${hoursFormat(stats.creativeHours)}시간</span>
+    <button class="button" type="button" id="openHoursSettings" data-open-dialog="hoursSettingsDialog" aria-haspopup="dialog">시수 설정</button>
+  </p>`;
 }
 
 function renderHoursStats() {
@@ -476,12 +508,19 @@ function renderHoursStats() {
     <div class="aggregate-sheet-wrap"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">내년도<br>학년</th><th scope="col">입학<br>연도</th><th scope="col">신청<br>학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">시수</th><th scope="col">근거 차수</th><th scope="col">근거</th></tr></thead>
     <tbody>${detailRows}</tbody></table></div>
   </details>`;
-  content.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
+  // 설정 입력과 확인 항목 전체는 팝업에 두고, 화면에는 한 줄 요약과 버튼만 남겨 표가 위에서 바로 보이게 한다.
+  const settingsBody = document.getElementById("hoursSettingsBody");
+  if (settingsBody) {
+    settingsBody.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
     <div class="hours-settings-row">
       <label class="hours-classes">창체 시수 (학급당·학기) <input id="hoursCreative" data-hours-creative="1" data-focus-key="creative" type="number" min="0" max="10" step="0.5" value="${settings.creativeHours ?? ""}" placeholder="2"></label>
-      <span class="hours-note">교사 수는 소수(0.5 등)도 입력할 수 있습니다. 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</span>
-    </div>
-    ${hoursIssueList(stats.issues)}
+      <span class="hours-note">교사 수는 표에서 입력하며 소수(0.5 등)도 됩니다. 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</span>
+    </div>`;
+  }
+  const issuesBody = document.getElementById("hoursIssuesBody");
+  if (issuesBody) issuesBody.innerHTML = hoursIssueList(stats.issues);
+  content.innerHTML = `${hoursSettingsSummary(stats)}
+    ${hoursIssueSummary(stats.issues)}
     ${overview}
     ${gradeMap}
     ${summaryTable}
@@ -736,13 +775,19 @@ function initHoursStats() {
     if (Number(state.workflowStep) === 7) scheduleHoursRerender();
     else renderWorkspaceContext();
   };
-  content.addEventListener("change", handleChange);
-  content.addEventListener("click", (event) => {
+  const openCohort = (event) => {
     const cohort = event.target.closest("[data-hours-cohort]");
     if (!cohort) return;
+    cohort.closest("dialog")?.close?.();
     switchWorkflowStep("1");
     switchCurriculumCohort(cohort.dataset.hoursCohort);
-  });
+  };
+  content.addEventListener("change", handleChange);
+  content.addEventListener("click", openCohort);
+  // 학급 수·근거 차수·창체 시수는 '시수 설정' 팝업 안에 있다.
+  const settingsBody = document.getElementById("hoursSettingsBody");
+  settingsBody?.addEventListener("change", handleChange);
+  settingsBody?.addEventListener("click", openCohort);
   for (const input of document.querySelectorAll(".next-year-class-input")) input.addEventListener("change", handleChange);
   document.getElementById("downloadHoursStats").addEventListener("click", downloadHoursStats);
   document.getElementById("hoursLoadPrevious").addEventListener("click", loadPreviousHoursSettings);
