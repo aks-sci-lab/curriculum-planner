@@ -527,7 +527,6 @@ function loadPreviousHoursSettings() {
     : `${previousYear}학년도 교사 수·담당 교과를 불러왔습니다. 전년도 평균은 그 해 엑셀을 내려받은 기록이 없어 직접 입력하세요.`;
 }
 
-// 시수 통계 엑셀: 교과·학기 블록마다 학년별 세부과목/학점/개설반/시수를 놓고, 시수·합계·평균은 수식으로 넣는다.
 function buildHoursWorkbookSheets(stats) {
   const rows = [];
   const merges = [];

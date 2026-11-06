@@ -259,7 +259,6 @@
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
     }
 
-    // 현재 활성 차수 데이터를 rounds에 동기화한다.
     function syncActiveRound() {
       if (!state.rounds || typeof state.rounds !== "object") state.rounds = { "1": null };
       if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
@@ -386,7 +385,6 @@
       }
     }
 
-    // 자료는 이 브라우저에만 저장되므로 마지막 백업 시각을 보여 주고, 오래되면 백업을 권한다.
     const BACKUP_TIME_KEY = "curriculum-last-backup-at";
     const BACKUP_STALE_MS = 24 * 60 * 60 * 1000;
     let backupSuggestedAt = 0;
@@ -421,7 +419,6 @@
       label.classList.toggle("is-stale", stale);
       label.title = stale ? "작업 내용이 이 브라우저에만 저장되어 있습니다. '파일로 백업하기'를 눌러 보관하세요." : "";
     }
-    // 결과 반영·차수 확정처럼 되돌리기 번거로운 작업 직후에 호출한다(10분에 한 번만 알린다).
     function suggestWorkspaceBackup(reason) {
       const time = lastWorkspaceBackup();
       if (!workspaceHasWork() || (time && Date.now() - time <= BACKUP_STALE_MS)) return;
@@ -559,7 +556,6 @@
       persistState();
     }
 
-    // 업무 메뉴 각 단계에 완료·확인 필요·대기 상태를 표시해 어디서 막혔는지 한눈에 보이게 한다.
     function workflowStepStates() {
       const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
       const hasResult = state.students.length > 0;
@@ -627,7 +623,6 @@
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
     }
 
-    // 메뉴 순서는 업무 흐름(편제표 → 수강신청 → 확인서 → 집계 → 시수 통계)을 따른다.
     // 내부 단계 번호 5·6(이동수업·시간표)은 보류 중이고 시수 통계는 7번으로 저장한다.
     function workflowStepLabel(step) {
       return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
@@ -746,7 +741,6 @@
       switchRound(next);
     }
 
-    // 차수를 전환한다. 현재 활성 데이터를 rounds에 저장하고 대상 차수 데이터를 활성화한다.
     function switchRound(round, skipRender = false) {
       const next = String(round);
       if (!/^[1-9]\d{0,8}$/.test(next) || !Object.hasOwn(state.rounds || {}, next)) return;
@@ -1618,7 +1612,6 @@
       return records;
     }
 
-    // 화면 레이아웃에서 과목 데이터를 만들고 택n 묶음을 선택 그룹으로 연결한다.
     // previousPlan이 있으면 사용자가 직접 지정한 학기 선택 그룹(묶음 연동이 아닌 것)을 이어받는다.
     function curriculumPlanFromLayout(layout, context = "", previousPlan = null) {
       let plan = [];
@@ -1743,7 +1736,6 @@
       return covered;
     }
 
-    // 편제표의 각 과목 행에 대해 위쪽 셀·병합에서 이어받은 학년/교육과정/교과군/선택 유형 문맥을 계산한다.
     function importedPlanCourseContexts(layout, columns = importedPlanColumnMap(layout)) {
       const expandedRows = expandCurriculumLayoutRows(layout);
       const coveredCells = importedPlanCoveredCells(layout);
@@ -2922,7 +2914,6 @@
       syncPrintAllButton();
     }
 
-    // 반 필터를 고르면 그 반 학생만 한 번에 인쇄된다(학생마다 한 장). 인쇄 대상 인원을 버튼에 보여 준다.
     function syncPrintAllButton() {
       const count = visibleStudents().length;
       const button = $("#printAll");
@@ -3091,7 +3082,6 @@
       $("#downloadAggregate").disabled = false;
     }
 
-    // 차수 탭·배지·차수별 보관 현황을 동기화한다.
     function renderRoundStatus() {
       const statusLabel = (round) => typeof roundStatusLabel === "function" ? roundStatusLabel(round) : "";
       $("#roundSelector").innerHTML = applicationRoundNumbers().map((round) =>
@@ -3118,7 +3108,6 @@
       }).join("");
     }
 
-    // 현재 차수의 개설·폐강 검토를 집계표와 함께 표시한다.
     function renderClosurePanel(round) {
       const data = state.rounds?.[round];
       $("#closureTitle").textContent = `${round}차 개설/폐강 검토`;
@@ -3177,7 +3166,6 @@
       }).join("");
     }
 
-    // 등록된 차수별 폐강 결정을 종합해 마지막 신청 명단의 대상을 계산한다.
     function retakeTargets() {
       const rounds = applicationRoundNumbers();
       const sourceRound = [...rounds].reverse().find((round) => state.rounds?.[round]) || "1";
@@ -3213,7 +3201,6 @@
       return { sourceRound, data, rows, closedCount: closedKeys.size };
     }
 
-    // 폐강 확정 → 재신청 대상 확인 → 다음 차수 결과 반영까지 지금 어느 단계인지 보여 준다.
     function renderRetakeProgress({ sourceRound, nextRound, data, rows, closedCount }) {
       const list = $("#retakeProgress");
       if (!list) return;
@@ -3592,7 +3579,6 @@
       if (typeof renderCourseGroups === "function") renderCourseGroups();
     }
 
-    // 학생용 수강신청 웹페이지(독립 실행 HTML)를 만든다.
     function buildApplicationPageHtml(subjects) {
       const schoolName = String($("#schoolName").value || "").trim();
       const schoolYear = String($("#schoolYear").value || "").trim();
@@ -3694,7 +3680,6 @@
       ].join("\n");
     }
 
-    // 학생 신청 파일(JSON)들을 명단(학생·과목 구조)으로 합친다.
     function mergeApplications(entries, applicationSubjects = null) {
       const subjects = applicationSubjects || collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
       const nameCount = new Map();
@@ -4035,7 +4020,6 @@
       }
     }
 
-    // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
     function applyCloudApplicationResults(round, entries, subjects, groups = []) {
       round = String(round);
       if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
@@ -4126,7 +4110,6 @@
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
-    // 새 차수에 해당 학년 결과가 처음 들어올 때, 직전 차수의 학급 수·학기·그룹 설정을 이어받을 근거를 찾는다.
     // 개설/폐강 결정은 차수마다 새로 내려야 하므로 이어받지 않는다.
     function priorRoundSettings(grade) {
       const current = Number(state.currentRound);
@@ -4145,11 +4128,9 @@
       return null;
     }
 
-    // 외부 프로그램 결과를 현재 차수의 해당 학년 자료로 교체한다.
     // 같은 과목(과목명·학기)의 개설 학급 수·개설 결정·학기·그룹 지정은 새 열로 옮겨 유지한다.
     function storeGradeResults(data, sourceLabel, grade) {
       grade = String(grade);
-      // 확정된 차수의 결과는 호출 경로와 관계없이 이 함수에서 교체를 막는다.
       if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
         throw new Error(`${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 업로드하세요.`);
       }
@@ -4187,7 +4168,6 @@
         return new Map([...candidates].filter(([, target]) => targetCounts.get(target) === 1));
       };
       const columnMap = mapColumns(previousCourses);
-      // 이 차수에 해당 학년 결과가 처음이면 직전 차수 설정을 같은 방식(과목명·학기)으로 옮긴다.
       const inherited = previousCourses.length ? null : priorRoundSettings(grade);
       const inheritedMap = inherited ? mapColumns(inherited.courses) : new Map();
       const carry = { kept: 0, dropped: 0, inheritedFrom: null, inherited: 0 };
@@ -4303,7 +4283,6 @@
       }
     }
 
-    // 구글폼을 자동 생성하는 Google Apps Script 코드를 만든다.
     function buildAppsScriptCode(subjects) {
       const schoolName = String($("#schoolName").value || "").trim();
       const schoolYear = String($("#schoolYear").value || "").trim();
@@ -4393,7 +4372,6 @@
       return found;
     }
 
-    // 구글폼 응답 시트 행들을 신청 항목 배열로 변환한다.
     function parseGoogleFormsRows(rows, subjects) {
       const headerIndex = rows.findIndex((row) =>
         (row || []).some((value) => /이름|성명/.test(String(value ?? ""))) &&
@@ -4472,7 +4450,6 @@
       return name;
     }
 
-    // 학년 1개분의 집계표 시트 XML을 만든다. 학년별로 시트를 나누어보낸다.
     function createWorksheetXml(report, openingPercent, divisionPercent) {
       const { summary, semesters } = report;
       //보내기 서식: 과목 6개씩 한 묶음(열)으로 배치하고, 총 학급수는 학기 전체를 하나로 병합한다.
@@ -4679,7 +4656,6 @@
       });
     }
 
-    // 학년별 시트로 나눈 집계표 xlsx 파일 구성을 만든다.
     function buildAggregateXlsxFiles() {
       const { openingPercent, divisionPercent } = aggregateThresholds();
       const aggregate = aggregateRecords(
@@ -4733,7 +4709,6 @@
       persistState();
     }
 
-    // 미리보기 검증에 쓰는 현재 편제표 과목·기존 결과. 다시 검증할 때도 최신 설정으로 새로 만든다.
     function resultImportOptions(grade) {
       return {
         subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }),
@@ -4741,7 +4716,6 @@
       };
     }
 
-    // 결과 엑셀을 읽어 검증 미리보기를 띄운다. 실제 반영은 미리보기의 '반영' 버튼에서 한다.
     function handleWorkbook(file) {
       if (!file) return;
       status.textContent = "";
@@ -4945,7 +4919,6 @@
       return nextLayout;
     }
 
-    // 드롭한 과목이 들어갈 행 번호와 이어받을 문맥(학년·교육과정·교과군·선택 유형)을 찾는다.
     function appendBlankImportedPlanRow() {
       const layout = state.curriculumImportedLayout;
       if (!layout) {
@@ -5134,7 +5107,6 @@
             } catch (error) {
               parseError = error;
             }
-            // 헤더 규칙으로 못 읽으면 표 레이아웃에서 과목 행을 만든다.
             if (!sheetPlan.length) sheetPlan = planRowsFromImportedLayout(layout);
             if (sheetPlan.length || !importedLayout) {
               importedLayout = layout;

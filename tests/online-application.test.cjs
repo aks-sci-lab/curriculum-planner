@@ -611,7 +611,7 @@ test("generated Google Form routes each current grade to only its promoted-grade
 });
 
 test("generated offline student form shows total credits and the math, English, Korean credit share", () => {
-  const source = functionSource("function buildApplicationPageHtml(", "// 학생 신청 파일(JSON)들을 명단");
+  const source = functionSource("function buildApplicationPageHtml(", "function mergeApplications(");
   const context = vm.createContext({
     $: (selector) => ({ value: selector === "#schoolName" ? "가상학교" : "2026" }),
     xmlEscape: (value) => String(value),

@@ -1,5 +1,4 @@
 "use strict";
-// 확정 시점은 전체 편제표의 독립 복사본으로 보존한다. 수정 중인 초안과 분리한다.
 var curriculumVersionView = null;
 
 function curriculumCellNumber(value) {
@@ -324,7 +323,6 @@ function diffCurriculumPlans(before, after) {
   return { added, removed, changed, moved };
 }
 
-// 이미 신청한 학생이 있는 학년의 과목이 빠지거나 학기가 바뀌면 영향을 받는 학생 수를 센다.
 function curriculumChangeImpact(year, diff) {
   if (String(year).startsWith("annual:")) return null;
   const currentGrade = String(Number($("#schoolYear").value) - Number(year) + 1);

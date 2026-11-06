@@ -12,7 +12,6 @@ function shiftPlanFormula(formula, rowDelta, columnDelta = 0, insertionRow = nul
   })).join("");
 }
 
-// 병합 영역을 셀 좌표로 한 번만 색인해 셀·범위 조회를 O(1)에 가깝게 유지한다.
 function planMergeLookup(merges) {
   const cells = new Map();
   for (const merge of merges) {

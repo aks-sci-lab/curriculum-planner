@@ -1,5 +1,4 @@
 "use strict";
-// 외부 수강신청 프로그램의 결과 엑셀을 검증하고, 미리보기에서 확인한 뒤 현재 차수·학년에 반영한다.
 var resultImportPending = null;
 
 function normalizeResultCourseName(name) {
@@ -132,7 +131,6 @@ function countResultSelections(students, courses) {
   return counts;
 }
 
-// 반영 전에 확인해야 할 오류·경고·참고 사항과 기존 결과 대비 변화를 계산한다.
 function analyzeResultCandidate(candidate, options) {
   const issues = { blocking: [], warnings: [], info: [], actions: [] };
   const addAction = (target, label) => {
@@ -321,12 +319,10 @@ function renderResultImportPreview() {
   container.classList.remove("hidden");
 }
 
-// 미리보기를 만든 뒤 차수·학년·데이터가 바뀌지 않았는지 다시 확인하고 반영한다.
 function confirmResultImport() {
   const preview = resultImportPending;
   if (!preview) return;
   const candidate = preview.candidates[preview.selected];
-  // 미리보기가 더 이상 맞지 않는 경우(차수·학년·잠금 변경)에만 미리보기를 닫는다.
   try {
     if (!candidate || candidate.issues.blocking.length) throw new Error("오류가 있는 시트는 반영할 수 없습니다.");
     if (state.currentRound !== preview.round) throw new Error("미리보기 이후 차수가 바뀌었습니다. 해당 차수에서 다시 업로드하세요.");
@@ -359,7 +355,6 @@ function confirmResultImport() {
     (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개.` : "");
 }
 
-// 설정(편제표·그룹)을 고친 뒤 같은 파일을 최신 설정으로 다시 검증한다. 시트 선택은 가능한 한 유지한다.
 function revalidateResultImport() {
   const previous = resultImportPending;
   if (!previous?.sheets) return;

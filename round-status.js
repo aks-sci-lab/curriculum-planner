@@ -1,5 +1,4 @@
 "use strict";
-// 차수별 결과 진행 상태(작성 중 → 협의회 검토 → 확정)와 확정 시점 스냅샷, 차수 간 신청 인원 비교를 관리한다.
 var ROUND_STATUS_LABELS = { draft: "작성 중", review: "협의회 검토", confirmed: "확정" };
 
 function roundStatus(round) {
@@ -34,7 +33,6 @@ function setRoundStatus(round, status, snapshot = null) {
   else state.roundStatuses[round] = { status, updatedAt: new Date().toISOString(), ...(snapshot ? { snapshot } : {}) };
 }
 
-// 확정 시점의 과목별 신청 인원·개설 학급 수·개설 결정을 고정해 시수 통계의 근거로 쓴다.
 function buildRoundSnapshot(round) {
   round = String(round);
   const data = roundStatusData(round);
@@ -186,7 +184,6 @@ function initRoundStatusControls() {
   document.getElementById("downloadRoundCompare").addEventListener("click", downloadRoundCompare);
 }
 
-// 결과가 있는 모든 차수의 과목별 신청 인원을 학년별로 나란히 놓는다.
 function buildRoundCompare() {
   const rounds = applicationRoundNumbers().filter((round) => roundStatusData(round)?.students?.length);
   const grades = new Map();
