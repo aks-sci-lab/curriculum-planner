@@ -1256,3 +1256,33 @@ test("result bundle import checks round and reports empty results without changi
   await ctx.handleApplicationFiles([file({ type: "course-application-results", round: "2", entries: setup().roster })]);
   assert.equal(ctx.merged.length, 2);
 });
+
+test("the aggregate workbook keeps the school columns but labels each choice group and checks its student count", () => {
+  const ctx = vm.createContext({ $: (selector) => ({ value: { "#confirmDate": "2026. 11. 6.", "#round": "1차" }[selector] || "" }) });
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("), ctx);
+  const course = (column, name, enrollment, classCount) => ({ column, name, enrollment, classCount, closed: false,
+    enrollmentPerDivision: enrollment / 33.8, averageClassSize: classCount ? enrollment / classCount : 0 });
+  const report = { summary: { grade: "1", students: 30, classes: 1, averageClassSize: 30, openingLimit: 27, divisionLimit: 33 },
+    semesters: [{ name: "2학년 1학기", groups: [
+      { category: "2-1 택3", choiceCount: 3, totalClasses: 3, courses: Array.from({ length: 7 }, (_, index) => course(index + 1, `과목${index + 1}`, index < 3 ? 29 : 0, index < 3 ? 1 : 0)) },
+      { category: "2-1 택1", choiceCount: 1, totalClasses: 2, courses: [course(8, "일본어", 20, 1), course(9, "중국어", 9, 1)] }
+    ] }] };
+  const xml = ctx.createWorksheetXml(report, 90, 110);
+  const cell = (reference) => {
+    const match = xml.match(new RegExp(`<c r="${reference}"[^>]*>(?:<v>([^<]*)</v>|<is><t[^>]*>([^<]*)</t></is>)</c>`));
+    return match ? (match[1] ?? match[2]) : undefined;
+  };
+  assert.equal((xml.match(/<col /g) || []).length, 9, "the nine school columns stay");
+  // 1행 제목, 2행 공백, 3·4행 기준, 5행 공백, 6행 학기, 7행부터 그룹 묶음(과목 6개씩 5행).
+  assert.equal(cell("A6"), "2학년 1학기");
+  assert.equal(cell("A7"), "2-1 택3");
+  assert.equal(cell("A12"), "2-1 택3", "the second block of the same group keeps the group name");
+  assert.equal(cell("H7"), "총 학급수");
+  assert.equal(cell("H8"), "3", "the class total is per group, as on the screen");
+  assert.match(xml, /<mergeCell ref="H8:H16"\/>/);
+  assert.equal(cell("I8"), "29", "memo = enrollments ÷ 3, so a missing choice shows up against 30 students");
+  assert.equal(cell("A18"), "2-1 택1", "a blank row separates the next group");
+  assert.equal(cell("H19"), "2");
+  assert.equal(cell("I19"), "29");
+  assert.doesNotMatch(xml, />30\.0</, "the old string memo is gone");
+});

@@ -5147,28 +5147,34 @@
         setCell(row, 0, semester.name, 5);
         merge(0, row, 1, row);
 
-          const courses = semester.groups.flatMap((group) => group.courses);
-          const semesterTotal = courses.reduce((total, course) => total + course.classCount, 0);
+        // 학교 서식처럼 선택 그룹(화면 소제목과 같은 이름)마다 묶음을 나누고, 그룹마다 총 학급수와 학생 수 확인 메모를 둔다.
+        for (const [groupIndex, group] of semester.groups.entries()) {
+          if (groupIndex > 0) addRow(8);
+          const groupLabel = typeof aggregateGroupLabel === "function" ? aggregateGroupLabel(semester, group) : group.category;
+          const courses = group.courses;
+          const groupTotal = courses.reduce((total, course) => total + course.classCount, 0);
+          // 메모: 신청 인원 합 ÷ 택 수. 모든 학생이 그룹에서 n과목씩 신청했으면 총학생수와 같아 누락·중복을 확인할 수 있다.
+          const choiceCount = Number(group.choiceCount);
+          const enrollmentTotal = courses.reduce((total, course) => total + (Number(course.enrollment) || 0), 0);
+          const studentCheck = Number.isInteger(choiceCount) && choiceCount > 0 ? enrollmentTotal / choiceCount : enrollmentTotal;
           const blocks = [];
           for (let index = 0; index < courses.length; index += BLOCK_SIZE) {
             blocks.push(courses.slice(index, index + BLOCK_SIZE));
           }
-          const semesterFirstRow = rows.length + 1;
-          const semesterLastRow = semesterFirstRow + blocks.length * 5 - 1;
+          const groupFirstRow = rows.length + 1;
+          const groupLastRow = groupFirstRow + blocks.length * 5 - 1;
           blocks.forEach((block, blockIndex) => {
             const headerRow = addRow(21);
             const metricRows = [addRow(23), addRow(23), addRow(23), addRow(23)];
-            setCell(headerRow, 0, "과목", 6);
+            setCell(headerRow, 0, groupLabel, 6);
             block.forEach((course, index) => setCell(headerRow, index + 1, `${course.displayName || course.name}${course.closed ? " (폐강)" : ""}`, 6));
             for (let col = block.length + 1; col <= BLOCK_SIZE; col++) setCell(headerRow, col, "", 6);
             if (blockIndex === 0) {
               setCell(headerRow, 7, "총 학급수", 9);
-              setCell(metricRows[0], 7, semesterTotal, 9, true);
-              merge(7, metricRows[0], 7, semesterLastRow);
-              if (semesterIndex === 0) {
-                setCell(metricRows[0], 8, summary.students.toFixed(1), 10);
-                merge(8, metricRows[0], 8, metricRows[1]);
-              }
+              setCell(metricRows[0], 7, groupTotal, 9, true);
+              merge(7, metricRows[0], 7, groupLastRow);
+              setCell(metricRows[0], 8, studentCheck, 10, true);
+              merge(8, metricRows[0], 8, metricRows[1]);
             }
             const metrics = [
               ["인원 수", (course) => course.enrollment, 3],
@@ -5184,8 +5190,9 @@
               for (let col = block.length + 1; col <= BLOCK_SIZE; col++) setCell(metricRow, col, "", 7);
             }
           });
-          addRow(12);
         }
+        addRow(12);
+      }
 
       const rowsXml = rows.map((row, rowIndex) => {
         const cells = row.cells.map((cell, columnIndexValue) => {
