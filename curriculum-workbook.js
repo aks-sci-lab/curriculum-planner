@@ -182,6 +182,8 @@ function ensureCurriculumHiddenRows() {
 }
 
 async function buildOriginalCurriculumWorkbook(layout) {
+  // 데이터로 바꾼 편제표는 원래 양식 + 데이터 + 수식으로 새로 채운다(curriculum-data-export.js).
+  if (layout?.planData && typeof buildCurriculumDataWorkbook === "function") return buildCurriculumDataWorkbook(layout);
   if (!layout?.archiveId || !layout.sheetPath) throw new Error("원본 양식을 보존하려면 편제표를 다시 업로드하세요.");
   const buffer=await curriculumArchiveStore("get",layout.archiveId);
   if(!buffer) throw new Error("저장된 원본 편제표가 없습니다. 다시 업로드하세요.");

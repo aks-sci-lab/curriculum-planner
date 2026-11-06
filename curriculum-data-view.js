@@ -271,9 +271,9 @@ function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, co
     const first = meta.findIndex((item) => item.type === "footer");
     return first >= 0 ? `${row - first}:${column}` : "";
   };
-  const header = planViewStaticRows(layout, shownHeader, width, { className: "curriculum-source-header", tools: !readOnly });
+  const header = planViewStaticRows(layout, shownHeader, width, { className: "curriculum-data-header", tools: !readOnly });
   const footer = planViewStaticRows(layout, footerRows, width, { className: "curriculum-footer-row", tools: !readOnly, editable: footerEditable });
-  return `<div class="curriculum-imported-sheet curriculum-data-sheet" aria-label="${planViewEscape(layout.sheetName || "불러온 편제표")}"><table class="curriculum-source-table"><colgroup>${colGroup}</colgroup><tbody>${header}${bodyRows}${footer}</tbody></table></div>`;
+  return `<div class="curriculum-imported-sheet curriculum-data-sheet" aria-label="${planViewEscape(layout.sheetName || "불러온 편제표")}"><table class="curriculum-source-table"><colgroup>${colGroup}</colgroup><thead class="curriculum-data-head">${header}</thead><tbody>${bodyRows}${footer}</tbody></table></div>`;
 }
 
 // ---- 편집 동작: 모든 편집은 데이터를 바꾸고 표를 다시 그린다. 실행취소·자동 저장·변경 음영은 기존 흐름을 그대로 쓴다.
@@ -436,6 +436,7 @@ function applyCurriculumDataSelection(selection, release) {
 }
 
 let curriculumRowMenuTarget = null;
+let curriculumRowMenuOpenedAt = 0;
 
 function openCurriculumRowMenu(id, anchor) {
   const menu = document.getElementById("curriculumRowMenu");
@@ -444,6 +445,7 @@ function openCurriculumRowMenu(id, anchor) {
   const item = layout.planData.subjects.find((subject) => subject.id === id);
   if (!item) return;
   curriculumRowMenuTarget = id;
+  curriculumRowMenuOpenedAt = Date.now();
   const index = layout.planData.subjects.indexOf(item);
   const sameCategory = (other) => other && !other.fixed && planDataKey(other.category) === planDataKey(item.category);
   menu.querySelector('[data-row-action="up"]').disabled = !sameCategory(layout.planData.subjects[index - 1]);
@@ -552,7 +554,8 @@ function initCurriculumDataView() {
   document.addEventListener("pointerdown", (event) => {
     if (!menu.classList.contains("hidden") && !menu.contains(event.target) && !event.target.closest("[data-plan-row-menu]")) closeCurriculumRowMenu();
   });
-  wrap.addEventListener("scroll", closeCurriculumRowMenu, true);
+  // 메뉴를 연 직후의 스크롤(우클릭한 칸을 화면 안으로 맞추는 스크롤)로는 닫지 않는다.
+  wrap.addEventListener("scroll", () => { if (Date.now() - curriculumRowMenuOpenedAt > 300) closeCurriculumRowMenu(); }, true);
   const form = document.getElementById("curriculumGroupForm");
   form.addEventListener("input", refreshCurriculumGroupPreview);
   form.addEventListener("submit", (event) => { event.preventDefault(); applyCurriculumGroupDialog(false); });

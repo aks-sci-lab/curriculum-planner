@@ -6120,8 +6120,8 @@
         $("#curriculumMergeSelection").textContent = curriculumDataSelectionLabel(selectionLayout, curriculumCellSelection);
       }
       $("#curriculumMergeApply").disabled = !horizontal && endRow <= startRow;
-      $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic);
-      $("#curriculumMergeCredit").closest?.("label")?.classList.toggle("hidden", !academic);
+      $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic || Boolean(selectionLayout.planData));
+      $("#curriculumMergeCredit").closest?.("label")?.classList.toggle("hidden", !academic || Boolean(selectionLayout.planData));
       $("#curriculumMergeRelease").disabled = !curriculumChoiceBlocks(state.curriculumImportedLayout).some((block) =>
         block.column === column && startRow <= block.endRow && endRow >= block.startRow);
       const block = curriculumChoiceBlocks(state.curriculumImportedLayout).find((item) =>

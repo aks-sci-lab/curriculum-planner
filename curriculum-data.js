@@ -556,8 +556,12 @@ function curriculumSheetFromData(data, template) {
     if (!groupColumns.length) continue;
     set(start, groupColumns[0], `택${group.pick}`);
     merge(start, groupColumns[0], start, groupColumns.at(-1));
+    // 학점 칸 n개: 첫 칸에 학점을 적고 나머지는 첫 칸을 가리키는 수식이다. 이수학점·소계 SUM이 n × 학점을 센다.
     for (let offset = 1; offset <= group.pick && start + offset <= end; offset++) {
-      for (const column of groupColumns) set(start + offset, column, planDataNumberText(group.credit));
+      for (const column of groupColumns) {
+        set(start + offset, column, planDataNumberText(group.credit));
+        if (offset > 1) formulas[`${start + offset}:${column}`] = planDataRef(start + 1, column);
+      }
     }
   }
   // 구분·교과 영역·교과(군) 세로 병합은 데이터 묶음(같은 값이 이어진 과목)에 맞춰 다시 계산한다.
