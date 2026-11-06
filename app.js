@@ -48,6 +48,7 @@
       roundClosures: { "1": {} },
       roundStatuses: {},
       hoursStats: {},
+      courseChecks: {},
       curriculumVersions: {},
       applicationImportRevision: 0,
       applicationMenuGrade: "1",
@@ -343,6 +344,7 @@
           roundClosures: state.roundClosures,
           roundStatuses: state.roundStatuses,
           hoursStats: state.hoursStats,
+          courseChecks: state.courseChecks,
           curriculumVersions: state.curriculumVersions,
           students: state.students,
           courses: state.courses,
@@ -941,6 +943,7 @@
       state.roundClosures = { "1": {} };
       state.roundStatuses = {};
       state.hoursStats = {};
+      state.courseChecks = {};
       state.curriculumVersions = {};
       state.semesterAssignments = {};
       state.customGroupNames = [];
@@ -1057,6 +1060,9 @@
         state.hoursStats = plainObject(saved.hoursStats)
           ? Object.fromEntries(Object.entries(saved.hoursStats).filter(([year, value]) => /^\d{4}$/.test(year) && plainObject(value)))
           : {};
+        // 위계·이수학점 점검 설정(규칙·저장 막기·필수 학점·이전 학년 결과). 예전 저장분에는 없다.
+        state.courseChecks = typeof courseCheckNormalizeSettings === "function"
+          ? courseCheckNormalizeSettings(saved.courseChecks) : plainObject(saved.courseChecks) ? saved.courseChecks : {};
         state.curriculumVersions = plainObject(saved.curriculumVersions)
           ? Object.fromEntries(Object.entries(saved.curriculumVersions)
             .filter(([year, versions]) => /^(?:\d{4}|annual:\d{4})$/.test(year) && Array.isArray(versions))
@@ -3171,6 +3177,7 @@
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
             <tbody>${body}</tbody>
           </table>
+          ${typeof courseCheckCertificateHtml === "function" ? courseCheckCertificateHtml(student) : ""}
           ${gauge}
           <div class="paper-closing">
           <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
@@ -3499,6 +3506,7 @@
       return `<section class="aggregate-grade" data-aggregate-grade-section="${escapeHtml(grade)}">
         <div class="aggregate-grade-head">
           <h3 class="aggregate-grade-heading"><strong>${displayGrade}학년(현${escapeHtml(grade)}학년)</strong> · ${summary.students}명 · <span title="${summary.classSource === "planned" ? "내년도 편성 입력값" : "명단의 반 수"}">${summary.classes}학급</span> · 학급당 ${summary.averageClassSize.toFixed(2)} · 개설기준 ${summary.openingLimit.toFixed(2)} · 분반기준 ${summary.divisionLimit.toFixed(2)}</h3>
+          ${typeof courseCheckAggregateNote === "function" ? courseCheckAggregateNote(grade) : ""}
           <div class="aggregate-grade-actions">
             <button class="button" type="button" data-aggregate-adjust="grade" data-grade="${escapeHtml(grade)}"${lockTitle}>학급수 자동 조정(학년 전체)</button>
             ${canUndo ? `<button class="button" type="button" data-aggregate-undo="${escapeHtml(grade)}"${lockTitle}>조정 취소</button>` : ""}
@@ -3770,13 +3778,14 @@
       const nextRound = String(Number(sourceRound) + 1);
       const gradeSuffix = grade ? `현${grade}학년` : "";
       const sheetRows = [
-        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목"],
-        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", ")])
+        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점"],
+        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", "),
+          typeof courseCheckRetakeShortfall === "function" ? courseCheckRetakeShortfall(student, courses) : ""])
       ];
       const rowsXml = sheetRows.map((cells, rowIndex) =>
         `<row r="${rowIndex + 1}">${cells.map((value, column) =>
           `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`).join("")}</row>`).join("");
-      const columns = [8, 8, 8, 12, 10, 40].map((width, index) =>
+      const columns = [8, 8, 8, 12, 10, 40, 28].map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
       const workbook = createXlsxBlob({

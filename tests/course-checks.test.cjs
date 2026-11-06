@@ -149,15 +149,25 @@ test("credits: required credits per subject family use the plan column, then the
   const model = ctx.courseCheckPlanModel(syntheticPlan());
   const report = ctx.courseCheckCredits(model, { targetGrade: "2", selections: [{ name: "미적분Ⅰ", semester: "1" }] });
   const family = (name, value = report) => value.families.find((item) => item.family === name);
-  assert.deepEqual(plain(family("수학")), { family: "수학", required: 8, earned: 16, ok: true, source: "plan" });
+  assert.deepEqual(plain(family("수학")), { family: "수학", required: 8, earned: 16, possible: 0, ok: true, status: "ok", source: "plan" });
   assert.equal(family("과학").required, 10, "필수이수 열이 비면 2022 개정 기준 10학점");
   assert.equal(family("과학").source, "default");
-  assert.equal(family("과학").earned, 8, "1학년 지정 통합과학 8학점");
-  assert.equal(family("과학").ok, false, "필수 이수 미달");
+  assert.equal(family("과학").earned, 16, "1학년 지정 통합과학 8 + 3학년 과학만 있는 택2 묶음 8(무엇을 골라도 과학)");
+  assert.equal(family("과학").ok, true);
   assert.equal(family("사회(역사/도덕 포함)").required, 14);
-  const edited = ctx.courseCheckCredits(model, { targetGrade: "2", selections: [], required: { "과학": 6 } });
-  assert.equal(family("과학", edited).ok, true);
+  const edited = ctx.courseCheckCredits(model, { targetGrade: "2", selections: [], required: { "과학": 30 } });
+  assert.equal(family("과학", edited).status, "short", "교사가 입력한 기준보다 적으면 미달");
   assert.equal(family("과학", edited).source, "custom");
+  // 여러 교과(군)가 섞인 다른 학년 묶음은 '충족 가능'(pending)으로만 센다.
+  const certain = {};
+  const possible = ctx.courseCheckOpenGroupFamilies({ groups: [
+    { fields: ["sem31"], pick: 2, credit: 4, families: new Map([["a", "과학"], ["b", "사회(역사/도덕 포함)"]]) },
+    { fields: ["sem32"], pick: 1, credit: 3, families: new Map([["c", "기술·가정/정보/제2외국어/한문/교양"], ["d", "기술·가정/정보/제2외국어/한문/교양"]]) },
+    { fields: ["sem21"], pick: 1, credit: 4, families: new Map([["e", "과학"]]) }
+  ] }, "2", false, certain);
+  assert.deepEqual(plain(certain), { "기술·가정/정보/제2외국어/한문/교양": 3 });
+  assert.deepEqual(plain(possible), { "과학": 8, "사회(역사/도덕 포함)": 8 });
+  assert.equal(ctx.courseCheckFamily("제2외국어"), "기술·가정/정보/제2외국어/한문/교양", "'제2외국어'의 '국어'에 걸리지 않는다");
   assert.equal(ctx.courseCheckFamily("기술·가정\n/교양"), "기술·가정/정보/제2외국어/한문/교양");
   assert.equal(ctx.courseCheckFamily("한국사"), "사회(역사/도덕 포함)");
   assert.equal(ctx.courseCheckFamily("", "일본어 회화"), "기술·가정/정보/제2외국어/한문/교양");

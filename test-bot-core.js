@@ -155,6 +155,33 @@ var TestBotCore = (() => {
     return null;
   }
 
+  // 위계(선이수) 점검: 이벤트 자료(과목.requires·그룹.checks)를 앱 학생 화면과 같은 계산(course-checks.js)으로 본다.
+  // course-checks.js가 없거나 규칙이 없는 예전 신청이면 빈 목록이다.
+  function prerequisiteViolations(data, selections) {
+    const check = typeof courseCheckApplicationState === "function" ? courseCheckApplicationState
+      : typeof globalThis !== "undefined" && typeof globalThis.courseCheckApplicationState === "function" ? globalThis.courseCheckApplicationState : null;
+    if (!check || !data) return [];
+    return check(data, selections)?.violations || [];
+  }
+  function hasPrerequisiteRules(data) {
+    return (data?.courses || []).some((course) => Array.isArray(course?.requires) && course.requires.length);
+  }
+  // 그룹 규칙을 지키면서 위계도 지키는 선택(여러 번 다시 뽑는다). 끝내 못 찾으면 마지막 선택을 돌려준다.
+  function choosePrerequisiteSafe(data, choose, tries = 40) {
+    let picks = choose();
+    for (let attempt = 1; attempt < tries && prerequisiteViolations(data, picks).length; attempt++) picks = choose();
+    return picks;
+  }
+  // 일부러 위계를 어긴 선택(그룹 규칙은 지킴). 무작위로 못 찾으면 null.
+  function choosePrerequisiteViolation(data, choose, tries = 80) {
+    for (let attempt = 0; attempt < tries; attempt++) {
+      const picks = choose();
+      const violations = prerequisiteViolations(data, picks);
+      if (violations.length) return { selections: picks, description: `위계 위반(${violations[0].course} ← ${violations[0].requires})` };
+    }
+    return null;
+  }
+
   // 그룹이 없는 예전 신청(학기·과목 목록만 있음): 같은 과목 중복 없이 1~4과목.
   function chooseFreeSelections(courses, { weights = new Map(), rng = Math.random } = {}) {
     const names = (courses || []).map((course) => course.subject).filter(Boolean);
@@ -638,10 +665,25 @@ var TestBotCore = (() => {
       if (ctx.weights && !ctx.weights.size) {
         for (const [name, weight] of buildPopularityWeights(groups.length ? groups : [{ name: "전체", count: 1, courses: (data.courses || []).map((c) => c.subject) }], ctx.popularity, rng)) ctx.weights.set(name, weight);
       }
-      const choose = (avoid = []) => groups.length
+      const chooseAny = (avoid = []) => groups.length
         ? chooseSelections(groups, { weights: ctx.weights || new Map(), rng, locked, avoid })
         : chooseFreeSelections(data.courses, { weights: ctx.weights || new Map(), rng });
+      // 위계 규칙이 있는 신청에서는 정상 학생처럼 선이수 순서를 지켜 고른다(저장 막기를 켠 신청에서도 실패하지 않게).
+      const prerequisites = hasPrerequisiteRules(data);
+      const choose = (avoid = []) => prerequisites ? choosePrerequisiteSafe(data, () => chooseAny(avoid)) : chooseAny(avoid);
       let selections = choose();
+      // 4-1) 위계 위반 시도: 저장 막기가 서버에서 동작하면 거절되어야 하고, 아니면 경고만이므로 저장된다.
+      if (plan.violate && prerequisites && groups.length) {
+        const broken = choosePrerequisiteViolation(data, () => chooseAny());
+        if (broken) {
+          const blocking = data.prerequisiteBlock === true && groups.some((group) => group?.checks?.blockPrerequisites === true);
+          const refused = await save(code, broken.selections);
+          record.prerequisite = { description: broken.description, refused: !!refused.error, expected: blocking ? "거절" : "저장", message: refused.error || "" };
+          record.notes.push(refused.error ? `위계 위반 거절됨(${broken.description})`
+            : `위계 위반 저장됨(${broken.description}${blocking ? " · 저장 막기인데 저장됨!" : " · 경고만 하는 신청"})`);
+          if (blocking && !refused.error) record.prerequisite.unexpected = true;
+        }
+      }
       // 4) 규칙 위반 선택을 먼저 보내 서버가 거절하는지 본다.
       if (plan.violate && groups.length) {
         const broken = violateSelections(groups, selections, rng);
@@ -677,6 +719,7 @@ var TestBotCore = (() => {
       record.ok = true;
       record.status = "완료";
       if (record.violation && !record.violation.refused) { record.ok = false; record.status = "규칙 위반 저장됨"; record.failure = record.violation.description; }
+      if (record.prerequisite?.unexpected) { record.ok = false; record.status = "위계 위반 저장됨"; record.failure = record.prerequisite.description; }
       return record;
     } catch (error) {
       if (error?.stopped) return fail("중지됨", "사용자가 중지했습니다.");
@@ -732,6 +775,8 @@ var TestBotCore = (() => {
       maxMs: times.length ? Math.max(...times) : 0,
       violationsRefused: done.filter((record) => record.violation?.refused).length,
       violationsAccepted: done.filter((record) => record.violation && !record.violation.refused).length,
+      prerequisiteRefused: done.filter((record) => record.prerequisite?.refused).length,
+      prerequisiteSaved: done.filter((record) => record.prerequisite && !record.prerequisite.refused).length,
       locked: done.filter(expected).length,
       reasons: [...reasons].sort((a, b) => b[1] - a[1]),
     };
@@ -754,6 +799,7 @@ var TestBotCore = (() => {
       ["대상 학생", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["코드 변경", summary.codeChanged],
       ["요청 수", summary.requests], ["평균 응답(ms)", summary.averageMs], ["최대 응답(ms)", summary.maxMs],
       ["규칙 위반 거절", summary.violationsRefused], ["규칙 위반 저장됨", summary.violationsAccepted], ["잠김 확인", summary.locked],
+      ["위계 위반 거절", summary.prerequisiteRefused], ["위계 위반 저장됨(경고만 하는 신청)", summary.prerequisiteSaved],
       [],
       ["실패 사유", "학생 수"],
       ...summary.reasons.map(([reason, count]) => [reason, count]),
@@ -764,6 +810,7 @@ var TestBotCore = (() => {
   return {
     createRng, shuffle, pickIndexes, baseSubject, romanToDigits, hasRoman, compactName,
     buildPopularityWeights, chooseSelections, checkSelections, violateSelections, chooseFreeSelections,
+    prerequisiteViolations, choosePrerequisiteSafe, choosePrerequisiteViolation,
     generateRoster, parseRosterSheets, readWorkspaceSettings, buildResultEntries, buildWideRows, buildFormRows,
     resultFileName, courseCounts, createXlsxBytes, UNKNOWN_COURSE,
     parseEventInput, parseCodeSheets, selectStudents, isWeakCode, makeNewCode, createRpcClient, detectServerMode,

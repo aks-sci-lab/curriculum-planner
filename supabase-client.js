@@ -284,6 +284,7 @@ var updateRetakeReadiness;
     const courses = subjects?.[grade];
     if (!courses?.length) throw new Error(`${grade}학년 신청 과목이 없습니다. 편제표를 확인하세요.`);
     const groups = (event ? event.groups : getCourseApplicationGroups([grade]))?.filter((group) => group.grade === grade) || [];
+    if (!event && typeof courseCheckAttachToSetup === "function") courseCheckAttachToSetup({ subjects: { [grade]: courses }, groups });
     application = {
       student: {grade:currentGrade,classroom:"1",number:"1",name:"미리보기 학생"},
       schoolName:event?.school_name || byId("schoolName").value,
@@ -1102,6 +1103,8 @@ var updateRetakeReadiness;
         throw new Error(`현재 ${student.grade}학년이 신청할 ${targetGrade}학년 학생선택교육과정 과목을 찾지 못했습니다. 1단계 편제표의 교육과정 구분과 ${targetGrade}학년 학기 시수를 확인하세요.`);
       }
     }
+    // 위계 규칙·학기 지정 학점 등 학생 화면 점검 정보를 기존 subjects·groups jsonb에 싣는다(course-checks.js).
+    if (typeof courseCheckAttachToSetup === "function") courseCheckAttachToSetup(setup);
     return setup;
   }
   byId("cloudCreateEvent").addEventListener("click", () => {
@@ -1264,6 +1267,7 @@ var updateRetakeReadiness;
     }
     studentSemesters = [...new Set([...choices.children].map((fieldset) => fieldset.dataset.semester))]
       .sort((a, b) => (a === "0" ? 9 : Number(a)) - (b === "0" ? 9 : Number(b)));
+    if (typeof courseCheckStudentRender === "function") courseCheckStudentRender(data, { preview: previewMode });
     updateStudentSemester();
     updateSummary();
     updateStudentProgress();
@@ -1351,6 +1355,7 @@ var updateRetakeReadiness;
     for (const box of byId("cloudStudentChoices").querySelectorAll("input")) {
       if (!box.checked && selected.some((chosen) => baseApplicationSubject(chosen.value) === baseApplicationSubject(box.value))) box.disabled = true;
     }
+    if (typeof courseCheckStudentUpdate === "function") courseCheckStudentUpdate();
   }
   byId("cloudStudentChoices").addEventListener("change", (event) => {
     studentSaved = false;
@@ -1493,6 +1498,7 @@ var updateRetakeReadiness;
         const count = selected.filter((name) => group.courses.includes(name)).length;
         if (count !== group.count) throw new Error(`${group.name}: 정확히 ${group.count}과목을 선택하세요 (현재 ${count}개).`);
       }
+      if (typeof courseCheckStudentBeforeSave === "function") courseCheckStudentBeforeSave(selected);
       if (previewMode) {
         byId("cloudStudentMessage").textContent = "미리보기 제출 완료 · 실제 신청은 저장되지 않습니다.";
         window.showAppToast?.("미리보기 제출을 확인했습니다. 실제 신청은 저장되지 않았습니다.");
