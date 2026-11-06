@@ -238,6 +238,7 @@ test("hours statistics use planned classes and confirmed selections without doub
     allocations: { "과학-물리": { "1": 10 } }
   } };
   const layouts = Object.fromEntries(Object.keys(planByCohort).map((year) => [year, { rows: [] }]));
+  let drift = [];
   const ctx = vm.createContext({
     document: { getElementById: () => null },
     state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: settings, roundStatuses: { "1": { status: "confirmed", snapshot } } },
@@ -248,6 +249,7 @@ test("hours statistics use planned classes and confirmed selections without doub
     roundStatusData: () => ({ students: [{ grade: "1" }] }),
     isRoundLocked: () => true,
     buildRoundSnapshot: () => snapshot,
+    roundSnapshotDrift: () => drift,
     normalizeResultCourseName: (name) => String(name).replace(/[()]/g, "").replace(/\s+/g, "").toLowerCase(),
     resultExampleList: (items) => items.join(", "),
     columnName: (index) => String.fromCharCode(65 + index),
@@ -274,9 +276,24 @@ test("hours statistics use planned classes and confirmed selections without doub
   const sheets = ctx.buildHoursWorkbookSheets(stats);
   assert.equal(sheets[0].freeze, "A5");
   assert.ok(sheets[0].rows.some((row) => row.some((cell) => cell?.f?.includes("SUM(P"))));
-  const physicsRow = sheets[1].rows.findIndex((row) => row[2]?.v === "물리학");
+  const physicsRow = sheets[1].rows.findIndex((row) => row[4]?.v === "물리학");
   assert.ok(physicsRow > 0);
-  assert.equal(sheets[1].rows[physicsRow][8].f, `F${physicsRow + 1}*H${physicsRow + 1}`);
+  assert.equal(sheets[1].rows[physicsRow][10].f, `H${physicsRow + 1}*J${physicsRow + 1}`);
+  assert.deepEqual(plain(sheets[1].rows[physicsRow].slice(0, 3).map((cell) => cell.v)), [2, 2026, "현 1학년"]);
+  assert.equal(sheets[1].rows[physicsRow][11].v, "1차 확정");
+  assert.equal(sheets[1].rows[0][11].v, "근거 차수");
+  assert.deepEqual(plain(stats.grades.map((info) => info.label)),
+    ["1학년(2027 입학 · 신입생)", "2학년(2026 입학 · 현 1학년 1차 확정)", "3학년(2025 입학 · 현 2학년 결과 없음)"]);
+  const headerText = sheets[0].rows[2].map((cell) => cell.v);
+  assert.ok(headerText.includes("2학년\n(2026 입학 · 현 1학년 1차 확정)"));
+  assert.equal(stats.issues.some((issue) => issue.drift), false);
+  drift = ["내년 2학년 학급 수(확정 명단 반 수)"];
+  const drifted = ctx.computeHoursStats("2027");
+  const driftIssue = drifted.issues.find((issue) => issue.drift === "1");
+  assert.ok(driftIssue && driftIssue.level === "warning" && driftIssue.action === "4");
+  assert.ok(driftIssue.text.includes("1차 확정 이후") && driftIssue.text.includes("내년 2학년 학급 수"));
+  assert.equal(drifted.issues.filter((issue) => issue.drift).length, 1);
+  drift = [];
   settings["2027"].allocations["과학-물리"]["1"] = 31;
   const overallocated = ctx.computeHoursStats("2027");
   assert.ok(overallocated.issues.some((issue) => issue.level === "error" && issue.text.includes("과학 세부 교과")));
