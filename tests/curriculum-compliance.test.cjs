@@ -108,6 +108,12 @@ test("기준을 지킨 2022 개정 편제표는 자동 점검 20개가 O·자체
   const art = report.stats.families.find((row) => row.family === "예술");
   assert.equal(art.min, 10);
   assert.equal(report.subjectIssues.size, 0);
+  // 창체 행이 비어 있으면(울산 프로그램에서 불러온 편제표 등) 부족으로 보지 않고 별도 확인을 안내한다
+  const empty = compliantPlan();
+  empty.planTemplate.footer.rows[1] = ["창의적 체험활동", "", "", "", "", "", "", "", "", "", "", "", "", ""];
+  const emptyReport = ctx.planComplianceReport(empty, {});
+  assert.equal(item(emptyReport, 1).status, "O");
+  assert.match(item(emptyReport, 1).note, /창체 학점이 비어 있어 별도 확인필요/);
 });
 
 test("교과(군)별 학생 최소~최대: 택n 묶음의 선택지 수로 계산하고, 국수영 합은 한 묶음에서 함께 고르는 경우를 합친다", () => {

@@ -474,7 +474,8 @@ function planComplianceReport(layout, options = {}) {
     let ok = true;
     if (stats.totalMin < settings.subjects) { ok = false; notes.push(`교과 ${planComplianceRound(settings.subjects - stats.totalMin)}학점 부족(${planComplianceRound(stats.totalMin)}학점)`); }
     else notes.push(`교과 ${planComplianceRound(stats.totalMin)}${stats.totalMax > stats.totalMin ? `~${planComplianceRound(stats.totalMax)}` : ""}학점`);
-    if (creative) {
+    if (creative && !(creative.total > 0)) notes.push("창체 학점이 비어 있어 별도 확인필요");
+    else if (creative) {
       const zero = PLAN_COMPLIANCE_FIELDS.filter((field) => !(creative.values[field] > 0));
       if (creative.total < settings.creative) { ok = false; notes.push(`창체 ${planComplianceRound(settings.creative - creative.total)}학점 부족(${planComplianceRound(creative.total)}학점)`); }
       else notes.push(`창체 ${planComplianceRound(creative.total)}학점(${PLAN_COMPLIANCE_FIELDS.map((field) => planComplianceRound(creative.values[field])).join("·")})`);
