@@ -123,6 +123,8 @@ test("입학생 편제표는 울산 N학년_편제표 열·순서·선택군 병
   assert.equal(footer[8].f, "SUM(I5:I9)+2*I10");
   assert.equal(footer[8].v, 12);
   assert.equal(footer[11].f, "1*L13");
+  // 학점이 하나도 없는 학기(3-1)는 과목 영역 전체 SUM으로 둔다.
+  assert.equal(footer[10].f, "SUM(K5:K15)");
   assert.equal(footer[11].v, 3);
   assert.equal(footer[14].f, `SUM(G${sheet.footer + 1}:L${sheet.footer + 1})`);
   assert.equal(sheet.cells[sheet.footer + 2][6].f, `G${sheet.footer + 1}+G${sheet.footer + 2}`);
@@ -235,6 +237,7 @@ test("편성과목 입력 영역은 과목·학점·선택과목군·교차집�
   ]);
   assert.equal(byName["수학과 문명의 발달"].note, "소인수/2학년/2학기/4학점");
   assert.equal(byName["수학과 문명의 발달"].planSection, "extra");
+  assert.equal(byName["수학과 문명의 발달"].op, "4");
 
   // 앱 표(머리글·소계 행)로 만들고 3개년 과목 목록으로 읽힌다.
   const template = ctx.curriculumOfficeTemplate({ year: "2026", school: "천상고등학교", activity: ["3", "3", "3", "3", "3", "3"] });

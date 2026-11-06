@@ -294,7 +294,10 @@ function buildCurriculumOfficeSheet({ name, title, school, gradeLabels = ["1학�
         value += row.pickNumber * row.values[k];
       }
     });
-    return { f: plain.length ? plain.join("+") : "0", v: Math.round(value * 1000) / 1000 };
+    // 학점이 하나도 없는 학기는 나중에 과목을 넣으면 바로 더해지도록 과목 영역 전체 SUM으로 둔다.
+    const empty = rows.length && rows.every((row) => row.values[k] === "");
+    const fallback = empty ? `SUM(${letter}${bodyStart + 1}:${letter}${bodyStart + rows.length})` : "0";
+    return { f: plain.length ? plain.join("+") : fallback, v: Math.round(value * 1000) / 1000 };
   };
   const footerRow = (r, label, kind) => {
     const lastFooter = kind === "total";
@@ -638,6 +641,7 @@ function curriculumOfficeDataFromInputs(inputs, catalog = new Map()) {
   for (const row of inputs.other || []) {
     const fields = OFFICE_FIELDS.filter((field) => row.credits[field]);
     const subject = make(row, "extra", { credits: {} });
+    if (fields.length) subject.op = officeNumberText(row.credits[fields[0]]);
     if (fields.length) {
       const grade = fields[0].slice(3, 4);
       const semesters = fields.filter((field) => field.slice(3, 4) === grade).map((field) => field.slice(4, 5)).join(",");
@@ -841,7 +845,7 @@ function askCurriculumOfficeGrade(options, chosen, cohortYear) {
   }
   document.getElementById("curriculumOfficeImportScope").textContent = `${cohortYear}학년도 입학생 편제표로 불러올 학년 시트를 확인하세요. 지금 편제표는 바뀌고, 되돌리기로 돌아갈 수 있습니다.`;
   const list = document.getElementById("curriculumOfficeImportOptions");
-  list.innerHTML = options.map((option) => `<label class="curriculum-office-option"><input type="radio" name="curriculumOfficeGrade" value="${option.grade}"${option.grade === chosen ? " checked" : ""}${option.count ? "" : " disabled"}>
+  list.innerHTML = options.map((option) => `<label class="curriculum-office-option"><input type="radio" name="curriculumOfficeGrade" value="${option.grade}"${option.grade === chosen ? " checked" : ""}>
     <span><strong>${officeXml(option.sheet)}</strong> · ${option.year ? `${option.year}학년도 입학생` : "입학연도 미입력"} · ${option.count ? `편성 과목 ${option.count}개` : "편성 과목 없음"}${option.year && String(option.year) === String(cohortYear) ? " · 카드와 입학연도 일치" : ""}</span></label>`).join("");
   return new Promise((resolve) => {
     const finish = (value) => { dialog.close(); resolve(value); };
