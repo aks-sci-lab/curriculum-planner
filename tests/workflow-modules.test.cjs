@@ -479,3 +479,36 @@ test("workflow menu badges reflect plan, result and confirmation progress", () =
   assert.deepEqual(states[4], ["done", "확정"]);
   assert.deepEqual(states[7], ["done", "가능"]);
 });
+
+test("full reset asks twice, keeps the teacher login and clears only this app's workspace data", async () => {
+  const store = new Map([
+    ["course-certificate-studio-v1", "{}"], ["curriculum-color-semester-groups-v3", "[]"], ["curriculum-color-semester-groups-v3:2026-seeded", "[]"],
+    ["curriculum-last-backup-at", "1"], ["curriculum-cloud-links:u1", "[]"],
+    ["curriculum-teacher-session-v1", "keep"], ["curriculum-google-pkce", "keep"], ["other-app", "keep"]
+  ]);
+  let reloaded = 0, deletedDb = null, backups = 0, answers = { prompt: "초기화", confirm: true };
+  const toasts = [];
+  const ctx = vm.createContext({
+    localStorage: { get length() { return store.size; }, key: (index) => [...store.keys()][index], removeItem: (key) => store.delete(key) },
+    indexedDB: { deleteDatabase: (name) => { deletedDb = name; const request = {}; setTimeout(() => request.onsuccess(), 0); return request; } },
+    requireLocalWorkspaceAccess: () => true, lastWorkspaceBackup: () => 0, workspaceHasWork: () => true,
+    downloadWorkspaceBackup: () => { backups++; }, showAppToast: (message) => toasts.push(message), Date,
+    window: { confirm: () => answers.confirm, prompt: () => answers.prompt, clearTimeout() {}, location: { reload: () => { reloaded++; } } }
+  });
+  vm.runInContext("var statePersistenceBlocked = false, statePersistenceTimer = null;", ctx);
+  vm.runInContext(functionSource(app, "const WORKSPACE_RESET_KEYS", "function downloadWorkspaceBackup("), ctx);
+  answers.prompt = "취소";
+  await ctx.resetWorkspaceAll();
+  assert.equal(reloaded, 0);
+  assert.equal(store.size, 8, "a wrong confirmation word deletes nothing");
+  assert.match(toasts.at(-1), /취소/);
+  answers = { prompt: "초기화", confirm: false };
+  await ctx.resetWorkspaceAll();
+  assert.equal(store.size, 8, "declining the warning deletes nothing");
+  answers = { prompt: "초기화", confirm: true };
+  await ctx.resetWorkspaceAll();
+  assert.deepEqual([...store.keys()].sort(), ["curriculum-google-pkce", "curriculum-teacher-session-v1", "other-app"]);
+  assert.equal(deletedDb, "curriculum-original-workbooks");
+  assert.equal(reloaded, 1);
+  assert.ok(backups >= 1, "a backup is offered first when there is unsaved work");
+});

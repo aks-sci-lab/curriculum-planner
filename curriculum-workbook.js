@@ -338,11 +338,13 @@ document.getElementById("exportCurriculumPlan").addEventListener("click",async()
   if(typeof requireLocalWorkspaceAccess==="function" && !requireLocalWorkspaceAccess())return;
   const button=document.getElementById("exportCurriculumPlan");button.disabled=true;
   try{
-    const blob=await buildOriginalCurriculumWorkbook(state.curriculumImportedLayout);
+    const derived=!!state.curriculumImportedLayout?.derived;
+    const blob=derived?buildDerivedCurriculumWorkbook(state.curriculumImportedLayout):await buildOriginalCurriculumWorkbook(state.curriculumImportedLayout);
     const url=URL.createObjectURL(blob),link=document.createElement("a");
-    link.href=url;    link.download=state.curriculumPlanFileName.replace(/\.xlsx$/i,`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`);
+    link.href=url;
+    link.download=derived?`${state.curriculumCohortYear}학년도_전학년_편제표.xlsx`:state.curriculumPlanFileName.replace(/\.xlsx$/i,`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`);
     link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    status.textContent="원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
+    status.textContent=derived?"전학년 편제표 엑셀을 저장했습니다.":"원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
   }catch(error){status.textContent=`편제표 내보내기 실패: ${error.message}`;}
   finally{button.disabled=false;}
 });

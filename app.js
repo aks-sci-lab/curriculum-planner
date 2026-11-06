@@ -114,6 +114,8 @@
     const CURRICULUM_DETAIL_OPTIONS = ["공통", "일반선택", "진로선택", "융합선택"];
     const CURRICULUM_DIVISION_OPTIONS = ["학교 지정 교육과정", "학생 선택 교육과정"];
     const CURRICULUM_SEMESTER_FIELDS = ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"];
+    // 편제표 카드: 내년도 신입생("0")과 올해 1·2·3학년 입학생. 3학년 카드는 올해 전학년 편제표를 만드는 데만 쓴다.
+    const CURRICULUM_COHORT_GRADES = ["0", "1", "2", "3"];
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -428,6 +430,48 @@
       showAppToast(`${reason} 후 백업 파일을 받아 두세요. 자료는 이 브라우저에만 저장됩니다.`);
     }
 
+    // 이 앱이 브라우저에 남기는 작업 자료만 지운다. 교사 로그인 정보는 유지한다.
+    const WORKSPACE_RESET_KEYS = /^(?:course-certificate-studio-|curriculum-color-semester-groups-v3|curriculum-last-backup-at$|curriculum-cloud-links:)/;
+    let workspaceResetting = false;
+    function clearWorkspaceStorage() {
+      for (let index = localStorage.length - 1; index >= 0; index--) {
+        const key = localStorage.key(index);
+        if (key && WORKSPACE_RESET_KEYS.test(key)) localStorage.removeItem(key);
+      }
+    }
+
+    async function resetWorkspaceAll() {
+      if (!requireLocalWorkspaceAccess()) return;
+      const recentBackup = Date.now() - lastWorkspaceBackup() < 10 * 60 * 1000;
+      if (workspaceHasWork() && !recentBackup &&
+          window.confirm("전체 초기화 전에 지금 작업 자료를 백업 파일로 내려받을까요?\n(권장: 초기화하면 되돌릴 수 없습니다)")) {
+        downloadWorkspaceBackup();
+      }
+      if (!window.confirm("모든 작업 자료를 이 브라우저에서 삭제합니다.\n\n· 편제표(입학생별·전학년)와 변경 이력, 보관된 원본 엑셀\n· 모든 차수의 신청 결과·개설/폐강 결정·확정 상태\n· 선택 그룹 설정과 학교·학년도 설정\n\n되돌릴 수 없습니다. 계속할까요?")) return;
+      if (window.prompt("확인을 위해 '초기화'를 입력하세요.") !== "초기화") {
+        showAppToast("입력이 달라 전체 초기화를 취소했습니다.", "error");
+        return;
+      }
+      try {
+        workspaceResetting = true;
+        statePersistenceBlocked = true;
+        if (statePersistenceTimer !== null) {
+          window.clearTimeout(statePersistenceTimer);
+          statePersistenceTimer = null;
+        }
+        clearWorkspaceStorage();
+        await new Promise((resolve) => {
+          if (typeof indexedDB === "undefined") { resolve(); return; }
+          const request = indexedDB.deleteDatabase("curriculum-original-workbooks");
+          request.onsuccess = request.onerror = request.onblocked = () => resolve();
+        });
+        window.location.reload();
+      } catch (error) {
+        workspaceResetting = false;
+        showAppToast(`전체 초기화 실패: ${error.message}`, "error");
+      }
+    }
+
     function downloadWorkspaceBackup() {
       try {
         syncActiveRound();
@@ -669,10 +713,10 @@
       if (step === 1) {
         message.textContent = hasPlan
           ? state.curriculumPlanType === "annual"
-            ? "전학년 편제표는 올해 운영 자료로 별도 관리됩니다. 수강신청 과목은 신입생 3개년 편제표를 기준으로 확인하세요."
+            ? "전학년 편제표는 올해 1·2·3학년 입학생의 3개년 편제표에서 자동으로 만든 자료입니다. 수정은 각 입학생 편제표에서 하고 '다시 만들기'로 반영하세요."
             : "편제표를 확인한 뒤 2단계에서 신청 학년·그룹·선택 수를 확인하세요. 올해 전학년 편제표는 수강신청 기준에 사용하지 않습니다."
           : state.curriculumPlanType === "annual"
-            ? `${state.curriculumCohortYear}학년도 전학년 편제표를 업로드하거나, 수강신청에 필요한 신입생 3개년 편제표를 선택하세요.`
+            ? `${state.curriculumCohortYear}학년도 전학년 편제표는 올해 1·2·3학년 입학생 3개년 편제표를 모두 올린 뒤 '만들기'로 생성합니다.`
             : `${state.curriculumCohortYear}학년도 신입생의 3개년 편제표를 먼저 업로드하세요.`;
         action.textContent = state.curriculumPlanType === "annual"
           ? "수강신청 기준 편제표 확인"
@@ -1017,7 +1061,7 @@
           ? String(saved.curriculumCohortYear)
           : String($("#schoolYear").value || "2026");
         state.curriculumPlanType = saved.curriculumPlanType === "annual" ? "annual" : "cohort";
-        const availableCohortYears = ["0", "1", "2"].map((grade) =>
+        const availableCohortYears = CURRICULUM_COHORT_GRADES.map((grade) =>
           String(Number($("#schoolYear").value) - Number(grade) + 1));
         const activeCohortYear = state.curriculumPlanType === "annual"
           ? String($("#schoolYear").value || "2026")
@@ -2124,7 +2168,7 @@
               sourceRow >= Math.min(...courseRows) && sourceRow <= Math.max(...courseRows)
             ? ` data-choice-column="${column}" data-choice-start="${sourceRow}" data-choice-end="${merge?.endRow ?? sourceRow}" data-choice-end-column="${merge?.endColumn ?? column}"`
             : "";
-          cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${sourceRow}" data-source-column="${column}"${selectionData}${span}${fillStyle}>${escapeHtml(value)}</td>`);
+          cells.push(`<td contenteditable="${layout.derived ? "false" : "true"}" spellcheck="false" data-source-row="${sourceRow}" data-source-column="${column}"${selectionData}${span}${fillStyle}>${escapeHtml(value)}</td>`);
         }
         return `<tr${hasHeader ? ' class="curriculum-source-header"' : ""}${rowStyle}>${cells.join("")}</tr>`;
       }).join("");
@@ -2188,7 +2232,7 @@
 
     function curriculumSelectionGroupEditorHtml() {
       if (state.curriculumPlanType === "annual") {
-        return '<p class="note">전학년 편제표는 운영 현황 관리용입니다. 선택 그룹은 신입생 3개년 편제표에서 지정합니다.</p>';
+        return '<p class="note">전학년 편제표는 3개년 편제표에서 자동으로 만든 자료입니다. 선택 그룹은 각 입학생 3개년 편제표에서 지정합니다.</p>';
       }
       const rows = curriculumSelectionGroupRows();
       if (!rows.length) {
@@ -2631,11 +2675,16 @@
       $("#curriculumMergeToggle").disabled = !state.curriculumImportedLayout;
       $("#curriculumSplitMerged").disabled = !state.curriculumImportedLayout;
       $("#curriculumAddSubject").disabled = !state.curriculumImportedLayout;
+      if (isDerivedAnnualPlan()) {
+        for (const id of ["curriculumMergeToggle", "curriculumSplitMerged", "curriculumAddSubject", "addCurriculumPlanRow",
+          "openCurriculumVersionSave", "clearCurriculumPlan"]) $(`#${id}`).disabled = true;
+        $("#curriculumMergeControls").classList.add("hidden");
+      }
       renderCurriculumCohortUploads();
       if (typeof renderCurriculumVersions === "function") renderCurriculumVersions();
       if (typeof ensureCurriculumHiddenRows === "function") ensureCurriculumHiddenRows();
       $("#undoCurriculumEdit").disabled = !state.curriculumUndoStack.length;
-      $("#clearCurriculumPlan").disabled = !state.curriculumImportedLayout && !state.curriculumPlan.length;
+      $("#clearCurriculumPlan").disabled = (!state.curriculumImportedLayout && !state.curriculumPlan.length) || isDerivedAnnualPlan();
       $("#exportCurriculumPlan").disabled = !state.curriculumImportedLayout && !state.curriculumPlan.length;
       updateCurriculumFilterOptions();
       const planLabel = state.curriculumPlanType === "annual"
@@ -3299,7 +3348,7 @@
         uploadLabel.textContent = state.curriculumPlanFileName ? "선택 편제표 원본 교체" : "선택 편제표 업로드";
         uploadLabel.title = `${state.curriculumPlanType === "annual" ? "전학년" : "신입생 3개년"} 편제표 · 현재 선택한 ${state.curriculumCohortYear}학년도 자료`;
       }
-      const cohortCards = ["0", "1", "2"].map((grade) => {
+      const cohortCards = CURRICULUM_COHORT_GRADES.map((grade) => {
         const year = String(schoolYear - Number(grade) + 1);
         const active = state.curriculumPlanType !== "annual" && year === String(state.curriculumCohortYear);
         const fileName = active ? state.curriculumPlanFileName : state.curriculumCohorts?.[year]?.fileName;
@@ -3307,10 +3356,12 @@
           ? "내년도 1학년 시수 통계용 · 신입생 편제표가 정해지면 업로드"
           : grade === "1"
             ? `현 1학년은 이 편제표의 2학년 과목으로 신청`
-            : `현 2학년은 이 편제표의 3학년 과목으로 신청`;
+            : grade === "2"
+              ? `현 2학년은 이 편제표의 3학년 과목으로 신청`
+              : "올해 전학년 편제표의 3학년 열을 만드는 데 사용 · 수강신청에는 쓰지 않음";
         return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
           <h4>${year}학년도 입학생 · ${grade === "0" ? "내년도 신입생" : `현 ${grade}학년`}</h4>
-          <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>
+          <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>
           <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>
           <div><button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
@@ -3318,15 +3369,20 @@
       }).join("");
       const annualYear = String(schoolYear);
       const annualActive = state.curriculumPlanType === "annual" && annualYear === String(state.curriculumCohortYear);
-      const annualFileName = annualActive
-        ? state.curriculumPlanFileName
-        : state.curriculumAnnualPlans?.[annualYear]?.fileName;
+      const cohorts = annualSourceCohorts();
+      const sources = annualSourceStatus(cohorts, annualYear);
+      const missing = sources.filter((source) => !source.rows);
+      const stored = annualActive ? { signature: state.curriculumAnnualPlans?.[annualYear]?.signature, fileName: state.curriculumPlanFileName }
+        : state.curriculumAnnualPlans?.[annualYear];
+      const built = !!stored?.fileName;
+      const stale = built && stored.signature !== undefined && stored.signature !== annualCurriculumSignature(cohorts, annualYear);
+      const sourceLine = sources.map((source) => `${source.grade}학년 ${source.year} ${source.rows ? "✓" : "미업로드"}`).join(" · ");
       const annualCard = `<article class="curriculum-cohort-card curriculum-annual-card${annualActive ? " is-active" : ""}">
         <h4>${annualYear}학년도 전학년 편제표</h4>
-        <p title="올해 실제 운영 중인 1·2·3학년 편제표를 별도로 관리합니다. 수강신청 과목·그룹의 기준으로 사용하지 않습니다.">올해 운영 현황 · 수강신청 기준 아님</p>
-        <p class="curriculum-cohort-file" title="${escapeHtml(annualFileName || "미업로드 · 올해 실제 전학년 편제표")}">${escapeHtml(annualFileName || "미업로드")}</p>
-        <div><button class="button${annualFileName ? "" : " button-primary"}" type="button" data-annual-upload="${annualYear}" aria-label="${annualYear}학년도 전학년 편제표 ${annualFileName ? "원본 교체" : "업로드"}">${annualFileName ? "원본 교체" : "업로드"}</button>
-        <button class="button" type="button" data-annual-view="${annualYear}" aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "편집 중" : "편제표 보기"}</button></div>
+        <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>
+        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => `${source.grade}학년(${source.year})`).join("·")} 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
+        <div><button class="button${built && !stale ? "" : " button-primary"}" type="button" data-annual-build="${annualYear}"${missing.length ? " disabled" : ""} aria-label="${annualYear}학년도 전학년 편제표 ${built ? "다시 만들기" : "만들기"}">${built ? "다시 만들기" : "만들기"}</button>
+        <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
       </article>`;
       $("#curriculumCohortUploads").innerHTML = cohortCards + annualCard;
     }
@@ -3374,7 +3430,7 @@
     function switchCurriculumCohort(year) {
       const normalized = String(year || "").trim();
       const schoolYear = Number($("#schoolYear").value);
-      const availableYears = ["0", "1", "2"].map((grade) => String(schoolYear - Number(grade) + 1));
+      const availableYears = CURRICULUM_COHORT_GRADES.map((grade) => String(schoolYear - Number(grade) + 1));
       if (!availableYears.includes(normalized)) {
         status.textContent = "표시된 신입생 3개년 편제표 카드에서 학년도를 선택하세요.";
         return;
@@ -3392,23 +3448,117 @@
         : `${normalized}학년도 신입생 편제표가 없습니다. 이 학년도의 3개년 편제표를 업로드하세요.`;
     }
 
-    function switchCurriculumAnnualPlan(year) {
+    // 3개년 편제표의 plan 행에는 학기 칸이 ●로만 남으므로, 전학년 편제표에 옮길 학점은 편제표 표의 칸 값에서 읽는다.
+    // 병합된 선택과목군처럼 칸 값이 없으면 운영 학점으로 대신한다.
+    const annualResolvedCache = new Map();
+    function annualResolvedPlanRows(year, cohort) {
+      const plan = cohort?.plan || [];
+      const layout = cohort?.importedLayout || null;
+      const cached = annualResolvedCache.get(year);
+      if (cached && cached.plan === plan && cached.layout === layout) return cached.rows;
+      let rows = [];
+      if (plan.length) {
+        const columns = layout ? importedPlanColumnMap(layout) : null;
+        const sheetRows = layout ? expandCurriculumLayoutRows(layout) : [];
+        const contexts = new Map();
+        if (layout) {
+          for (const context of importedPlanCourseContexts(layout, columns)) {
+            for (const name of curriculumSubjectNames(context.subject)) contexts.set(name.replace(/\s+/g, ""), context);
+          }
+        }
+        rows = plan.map((row) => {
+          const context = contexts.get(String(row.subject ?? "").replace(/\s+/g, ""));
+          const resolved = { ...row };
+          CURRICULUM_SEMESTER_FIELDS.forEach((field, index) => {
+            if (!String(row[field] ?? "").trim()) { resolved[field] = ""; return; }
+            const column = columns?.semesters?.[index] ?? -1;
+            const cell = context && column >= 0 ? Number(String(sheetRows[context.rowIndex]?.[column] ?? "").replace(/,/g, "")) : NaN;
+            const credit = cell > 0 ? cell : Number(row.opCredit) || Number(row.baseCredit) || 0;
+            resolved[field] = credit > 0 ? String(credit) : "";
+          });
+          return resolved;
+        });
+      }
+      annualResolvedCache.set(year, { plan, layout, rows });
+      return rows;
+    }
+
+    // 현재 보고 있는 편제표가 신입생 3개년 편제표라면 그 내용을 합쳐서, 아니면 저장된 카드 내용 그대로 쓴다.
+    function annualSourceCohorts() {
+      const cohorts = { ...(state.curriculumCohorts || {}) };
+      if (state.curriculumPlanType !== "annual" && /^\d{4}$/.test(String(state.curriculumCohortYear))) {
+        cohorts[state.curriculumCohortYear] = {
+          fileName: state.curriculumPlanFileName, plan: state.curriculumPlan, importedLayout: state.curriculumImportedLayout
+        };
+      }
+      return Object.fromEntries(Object.entries(cohorts).filter(([year]) => /^\d{4}$/.test(year)).map(([year, cohort]) =>
+        [year, { fileName: cohort?.fileName || "", plan: annualResolvedPlanRows(year, cohort) }]));
+    }
+
+    function isDerivedAnnualPlan() {
+      return state.curriculumPlanType === "annual" && !!state.curriculumImportedLayout?.derived;
+    }
+
+    // 올해 1·2·3학년 입학생의 3개년 편제표에서 학년별 열을 가져와 전학년 편제표를 만든다.
+    function buildAnnualPlan(year) {
       const normalized = String(year || "").trim();
       const schoolYear = String($("#schoolYear").value || "");
       if (!/^\d{4}$/.test(normalized) || normalized !== schoolYear) {
-        status.textContent = "올해 전학년 편제표만 관리할 수 있습니다.";
+        status.style.color = "#a44939";
+        status.textContent = "올해 전학년 편제표만 만들 수 있습니다.";
+        return false;
+      }
+      syncActiveCurriculumCohort();
+      const cohorts = annualSourceCohorts();
+      const missing = annualSourceStatus(cohorts, normalized).filter((source) => !source.rows);
+      if (missing.length) {
+        status.style.color = "#a44939";
+        status.textContent = `${missing.map((source) => `${source.grade}학년 ${source.year}학년도 입학생`).join(", ")} 3개년 편제표를 먼저 업로드하세요.`;
+        return false;
+      }
+      const existing = state.curriculumAnnualPlans?.[normalized];
+      if (existing?.importedLayout && !existing.importedLayout.derived &&
+          !window.confirm("이전에 업로드한 전학년 편제표가 있습니다. 3개년 편제표로 만든 편제표로 바꿀까요?")) return false;
+      const layout = buildAnnualCurriculumLayout(cohorts, normalized);
+      const plan = curriculumPlanFromLayout(layout, `${normalized} 전학년 편제표`, []);
+      state.curriculumAnnualPlans ||= {};
+      state.curriculumAnnualPlans[normalized] = {
+        fileName: `${normalized}학년도 전학년 편제표 (3개년 편제표에서 자동 생성)`,
+        importedLayout: layout,
+        templateRows: plan.map((row) => normalizeCurriculumPlanRow(row)),
+        plan,
+        signature: annualCurriculumSignature(cohorts, normalized)
+      };
+      return true;
+    }
+
+    function switchCurriculumAnnualPlan(year, rebuild = false) {
+      const normalized = String(year || "").trim();
+      const schoolYear = String($("#schoolYear").value || "");
+      if (!/^\d{4}$/.test(normalized) || normalized !== schoolYear) {
+        status.style.color = "#a44939";
+        status.textContent = "올해 전학년 편제표만 볼 수 있습니다.";
         return;
       }
-      if (state.curriculumPlanType === "annual" && normalized === state.curriculumCohortYear) return;
-      syncActiveCurriculumCohort();
+      if (rebuild && !buildAnnualPlan(normalized)) {
+        renderCurriculumStep();
+        return;
+      }
+      if (!state.curriculumAnnualPlans?.[normalized]?.importedLayout) {
+        status.style.color = "#a44939";
+        status.textContent = "전학년 편제표를 먼저 만드세요.";
+        return;
+      }
+      if (!rebuild && state.curriculumPlanType === "annual" && normalized === state.curriculumCohortYear) return;
+      if (state.curriculumPlanType !== "annual" || normalized !== state.curriculumCohortYear) syncActiveCurriculumCohort();
       loadCurriculumPlanData("annual", normalized);
       renderCurriculumStep();
       renderWorkspaceContext();
       persistState();
-      status.style.color = "#596780";
-      status.textContent = state.curriculumImportedLayout
-        ? `${normalized}학년도 전학년 편제표를 불러왔습니다.`
-        : `${normalized}학년도 전학년 편제표가 없습니다. 올해 실제 운영 편제표를 업로드하세요.`;
+      status.style.color = "#287956";
+      status.textContent = rebuild
+        ? `${normalized}학년도 전학년 편제표를 3개년 편제표에서 다시 만들었습니다.`
+        : `${normalized}학년도 전학년 편제표를 불러왔습니다. 3개년 편제표를 고치면 '다시 만들기'로 반영하세요.`;
     }
     curriculumPlanVersionKey = () => state.curriculumPlanType === "annual"
       ? `annual:${state.curriculumCohortYear}`
@@ -5076,6 +5226,11 @@
     function handleCurriculumPlanWorkbook(file) {
       if (!file) return;
       if (!requireLocalWorkspaceAccess()) return;
+      if (state.curriculumPlanType === "annual") {
+        status.style.color = "#a44939";
+        status.textContent = "전학년 편제표는 업로드하지 않고 신입생 3개년 편제표에서 자동으로 만듭니다. 입학생 카드에서 업로드하세요.";
+        return;
+      }
       const cohortYear = String(state.curriculumCohortYear);
       const planType = state.curriculumPlanType === "annual" ? "annual" : "cohort";
       status.textContent = "";
@@ -5167,11 +5322,14 @@
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
     $("#curriculumCohortUploads").addEventListener("click", (event) => {
-      const button = event.target.closest("[data-cohort-upload], [data-cohort-view], [data-annual-upload], [data-annual-view]");
-      if (!button) return;
-      if (button.dataset.annualUpload || button.dataset.annualView) {
-        switchCurriculumAnnualPlan(button.dataset.annualUpload || button.dataset.annualView);
-        if (button.dataset.annualUpload) curriculumPlanInput.click();
+      const button = event.target.closest("[data-cohort-upload], [data-cohort-view], [data-annual-build], [data-annual-view]");
+      if (!button || button.disabled) return;
+      if (button.dataset.annualBuild) {
+        switchCurriculumAnnualPlan(button.dataset.annualBuild, true);
+        return;
+      }
+      if (button.dataset.annualView) {
+        switchCurriculumAnnualPlan(button.dataset.annualView);
         return;
       }
       switchCurriculumCohort(button.dataset.cohortUpload || button.dataset.cohortView);
@@ -5862,7 +6020,7 @@
         status.textContent = "학년도는 2000~2100 사이의 정수로 입력하세요.";
         return;
       }
-      const cohortYears = ["0", "1", "2"].map((grade) => String(year - Number(grade) + 1));
+      const cohortYears = CURRICULUM_COHORT_GRADES.map((grade) => String(year - Number(grade) + 1));
       if (state.curriculumPlanType === "annual") {
         switchCurriculumAnnualPlan(String(year));
       } else if (!cohortYears.includes(String(state.curriculumCohortYear))) {
@@ -5913,6 +6071,7 @@
       }
     });
     $("#downloadWorkspaceBackup").addEventListener("click", downloadWorkspaceBackup);
+    $("#resetWorkspaceAll").addEventListener("click", resetWorkspaceAll);
     $("#restoreWorkspaceBackup").addEventListener("change", (event) => {
       restoreWorkspaceBackup(event.target.files[0]);
       event.target.value = "";
@@ -6017,7 +6176,7 @@
       updateWorkspaceSaveStatus("다른 창에서 자료가 변경되었습니다. 덮어쓰기를 막기 위해 자동 저장을 중지했습니다.", true);
     });
     window.addEventListener("beforeunload", (event) => {
-      if (!statePersistenceReady) return;
+      if (workspaceResetting || !statePersistenceReady) return;
       if (!statePersistenceBlocked) persistState();
       if (workspaceSaveFailed || statePersistenceBlocked ||
           (typeof getApplicationGroupStorageIssue === "function" && getApplicationGroupStorageIssue())) {
