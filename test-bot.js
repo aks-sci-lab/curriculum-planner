@@ -218,7 +218,9 @@ function columnIndex(reference) {
     const summary = Core.summarize(records);
     const cells = [["대상", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["잠김 확인", summary.locked], ["코드 변경", summary.codeChanged],
       ["요청 수", summary.requests], ["평균 응답", `${summary.averageMs}ms`], ["최대 응답", `${summary.maxMs}ms`],
-      ["위반 거절", summary.violationsRefused]];
+      ["위반 거절", summary.violationsRefused],
+      // 위계(선이수) 위반 시도는 경고만이라 저장되는 것이 정상이다.
+      ...(summary.prerequisiteSaved || summary.prerequisiteRefused ? [["위계 경고 저장", summary.prerequisiteSaved]] : [])];
     byId("botStats").replaceChildren(...cells.map(([label, value]) => {
       const box = document.createElement("div");
       const strong = document.createElement("strong");

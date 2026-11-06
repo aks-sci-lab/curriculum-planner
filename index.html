@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-bot-repeat">
+  <link rel="stylesheet" href="styles.css?v=20261106-warn-only">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -313,7 +313,7 @@
               <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
               <p id="cloudRosterSummary" class="cloud-roster-summary" role="status">학생 명렬을 선택하면 업로드한 파일의 학년을 확인합니다.</p>
               <button class="button button-primary" id="cloudCreateEvent" type="button" disabled>수강신청 생성</button>
-              <p class="note">학생 화면에는 위계(선이수)·학기별 이수 학점 점검표가 함께 나옵니다. 규칙과 '위계 미충족이면 저장 막기'는 <button class="button button-quiet" id="courseCheckOpenOnline" type="button" aria-haspopup="dialog" data-open-dialog="courseCheckDialog">위계·학점 점검</button>에서 정한 뒤 생성하세요.</p>
+              <p class="note">학생 화면에는 위계(선이수)·학기별 이수 학점 점검표가 함께 나옵니다. 위계는 경고만 하며(저장은 막지 않음), 규칙은 <button class="button button-quiet" id="courseCheckOpenOnline" type="button" aria-haspopup="dialog" data-open-dialog="courseCheckDialog">위계·학점 점검</button>에서 정한 뒤 생성하세요.</p>
               <p class="note cloud-auto-test"><button class="button button-quiet" id="cloudAutoTest" type="button">수강신청 자동 테스트</button> 시험 삼아 확인할 때: 가상 학생으로 [테스트] 신청을 만들어 테스트봇이 접속·신청·교사 화면 대조·정리까지 자동으로 확인합니다(집계표에는 연동하지 않음).</p>
               <hr>
               <h4>2차 이후 수강신청</h4>
@@ -923,28 +923,28 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-data.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-data-view.js?v=20261106-bot-repeat" defer></script>
-  <script src="app-version.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-annual.js?v=20261106-bot-repeat" defer></script>
-  <script src="course-checks.js?v=20261106-bot-repeat" defer></script>
-  <script defer src="app.js?v=20261106-bot-repeat"></script>
-  <script src="xlsx-parser.js?v=20261106-bot-repeat" defer></script>
-  <script src="course-groups.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-workbook.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-data-export.js?v=20261106-bot-repeat" defer></script>
-  <script src="result-import.js?v=20261106-bot-repeat" defer></script>
-  <script src="round-status.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-versions.js?v=20261106-bot-repeat" defer></script>
-  <script src="hours-stats.js?v=20261106-bot-repeat" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261106-bot-repeat" defer></script>
-  <script src="workspace-file.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-subject-list.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-data.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-data-view.js?v=20261106-warn-only" defer></script>
+  <script src="app-version.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-annual.js?v=20261106-warn-only" defer></script>
+  <script src="course-checks.js?v=20261106-warn-only" defer></script>
+  <script defer src="app.js?v=20261106-warn-only"></script>
+  <script src="xlsx-parser.js?v=20261106-warn-only" defer></script>
+  <script src="course-groups.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-workbook.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-data-export.js?v=20261106-warn-only" defer></script>
+  <script src="result-import.js?v=20261106-warn-only" defer></script>
+  <script src="round-status.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-versions.js?v=20261106-warn-only" defer></script>
+  <script src="hours-stats.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261106-warn-only" defer></script>
+  <script src="workspace-file.js?v=20261106-warn-only" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261106-bot-repeat" defer></script>
-  <script src="test-bot-bridge.js?v=20261106-bot-repeat" defer></script>
-  <script src="supabase-client.js?v=20261106-bot-repeat" defer></script>
+  <script src="supabase-config.js?v=20261106-warn-only" defer></script>
+  <script src="test-bot-bridge.js?v=20261106-warn-only" defer></script>
+  <script src="supabase-client.js?v=20261106-warn-only" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

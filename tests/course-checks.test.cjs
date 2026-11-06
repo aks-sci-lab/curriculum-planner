@@ -180,3 +180,61 @@ test("korean particles follow the final consonant, roman numerals read as number
   assert.equal(ctx.courseCheckJosa("화학", "을/를"), "화학을");
   assert.equal(ctx.courseCheckJosa("지구과학", "을/를"), "지구과학을");
 });
+
+test("second languages: default rules link only the same language (general → career) and stay hidden unless the plan has both", () => {
+  const ctx = pureContext();
+  const rules = ctx.COURSE_CHECK_DEFAULT_RULES;
+  for (const [before, after] of rules) {
+    for (const name of [before, after]) assert.ok(ctx.findCurriculumOfficialSubject(name), `${name}: 2022 개정 과목 목록에 있는 이름만 쓴다`);
+  }
+  const languages = rules.filter(([before]) => ctx.findCurriculumOfficialSubject(before).area === "제2외국어/한문");
+  assert.equal(languages.length, 8 * 2 + 1);
+  for (const [before, after] of languages) {
+    assert.equal(ctx.findCurriculumOfficialSubject(before).type, "일반선택", before);
+    assert.equal(ctx.findCurriculumOfficialSubject(after).type, "진로선택", after);
+    // '심화 독일어'는 외국어 계열의 '심화 독일어*'와 같은 이름으로 찾아질 수 있다.
+    assert.match(ctx.findCurriculumOfficialSubject(after).area, /제2외국어/, after);
+    assert.ok(after.includes(before) || (before === "한문" && after === "한문 고전 읽기"), `${before} → ${after}: 같은 언어 안의 관계만`);
+    assert.doesNotMatch(after, /문화|한자/, "문화·융합 과목은 넣지 않는다");
+  }
+  assert.ok(languages.some(([before, after]) => before === "일본어" && after === "일본어 회화"));
+  assert.ok(languages.some(([before, after]) => before === "일본어" && after === "심화 일본어"));
+  // 실제 편제표처럼 2-1 일본어·중국어 택1 → 2-2 일본어 회화·중국어 회화 택1
+  let id = 0;
+  const subject = (area, name, credits = {}) => ({ id: `s${++id}`, area, name, credits, texts: {} });
+  const model = ctx.courseCheckPlanModel({ subjects: [subject("제2외국어", "일본어, 중국어"), subject("제2외국어", "일본어 회화, 중국어 회화")],
+    groups: [{ id: "g1", fields: ["sem21"], pick: 1, credit: 3, members: ["s1"] }, { id: "g2", fields: ["sem22"], pick: 1, credit: 3, members: ["s2"] }] });
+  const applicable = ctx.courseCheckApplicableDefaults([model]).map((rule) => `${rule.before}>${rule.after}`);
+  assert.deepEqual(plain(applicable), ["중국어>중국어 회화", "일본어>일본어 회화"], "편제표에 없는 심화·다른 언어 규칙은 보이지 않는다");
+  const check = (selections) => ctx.courseCheckPrerequisites(model, ctx.courseCheckApplicableDefaults([model]), { targetGrade: "2", selections });
+  assert.equal(check([{ name: "일본어", semester: "1" }, { name: "일본어 회화", semester: "2" }]).issues.length, 0);
+  const crossed = check([{ name: "중국어", semester: "1" }, { name: "일본어 회화", semester: "2" }]);
+  assert.equal(crossed.violations.length, 1);
+  assert.equal(crossed.violations[0].requires, "일본어");
+  assert.equal(crossed.violations[0].offeredEarlier, "2-1");
+});
+
+test("warn only: no save blocking in settings, event payload or the student screen, and old blocking values are ignored", () => {
+  const ctx = pureContext();
+  vm.runInContext(source.slice(source.indexOf("// ---- 앱 연결")), ctx);
+  const settings = ctx.courseCheckNormalizeSettings({ blockPrerequisites: true, off: ["a>b"] });
+  assert.equal("blockPrerequisites" in settings, false, "예전 저장분의 막기 값은 버린다");
+  assert.deepEqual(plain(settings.off), ["a>b"]);
+  const model = ctx.courseCheckPlanModel(syntheticPlan());
+  const rules = ctx.courseCheckApplicableDefaults([model]);
+  const courses = [{ subject: "미적분Ⅰ", credit: 4, semester: "1" }, { subject: "확률과 통계", credit: 4, semester: "1" },
+    { subject: "미적분Ⅱ", credit: 4, semester: "2" }, { subject: "기하", credit: 4, semester: "2" }];
+  const payload = ctx.courseCheckEventPayload(model, rules, { targetGrade: "2", courses, block: true });
+  assert.equal("blockPrerequisites" in payload.checks, false, "이벤트 설정에 막기 값을 싣지 않는다");
+  for (const course of courses) if (payload.requires.has(course.subject)) course.requires = payload.requires.get(course.subject);
+  // 예전 이벤트(막기 값 + 서버 막기 표시)도 경고만 계산한다.
+  const application = { prerequisiteBlock: true, courses, groups: [{ id: "g1", grade: "2", semester: "1", name: "2-1 택1", count: 1, courses: ["미적분Ⅰ", "확률과 통계"],
+    checks: { ...payload.checks, blockPrerequisites: true } }, { id: "g2", grade: "2", semester: "2", name: "2-2 택1", count: 1, courses: ["미적분Ⅱ", "기하"] }] };
+  const result = ctx.courseCheckApplicationState(application, ["확률과 통계", "미적분Ⅱ"]);
+  assert.equal(result.violations.length, 1);
+  assert.equal("blockConfigured" in result, false);
+  assert.equal(typeof ctx.courseCheckStudentBeforeSave, "undefined", "저장 막기 함수가 없다");
+  assert.doesNotMatch(source, /courseCheckBlock|blockConfigured|prerequisiteBlock ===/);
+  assert.doesNotMatch(fs.readFileSync(path.join(root, "supabase-client.js"), "utf8"), /courseCheckStudentBeforeSave/);
+  assert.ok(!fs.existsSync(path.join(root, "supabase", "proposed", "04-prerequisite-check.sql")), "서버 막기 SQL 초안은 지웠다");
+});

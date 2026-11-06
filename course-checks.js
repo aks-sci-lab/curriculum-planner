@@ -5,7 +5,10 @@
 
 var COURSE_CHECK_FIELDS = ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"];
 // 2022 개정 교육과정 대표 위계(앞 과목 → 뒤 과목). 과목명은 2022 개정 과목 목록에 있는 이름만 쓴다.
-// 제2외국어 '○○어 → ○○어 회화' 같은 관계는 근거가 확실하지 않아 넣지 않았다(교사가 팝업에서 추가).
+// 모든 위계는 학생 화면·결과 검증에서 경고만 한다(저장을 막지 않는다).
+// 제2외국어·한문은 같은 언어 안의 일반선택 → 진로선택만 넣는다(예: 일본어 → 일본어 회화·심화 일본어, 한문 → 한문 고전 읽기).
+// 문화·융합 과목(○○권 문화, 언어생활과 한자)은 선이수 관계가 확실하지 않아 넣지 않았다(교사가 팝업에서 추가).
+var COURSE_CHECK_SECOND_LANGUAGES = ["독일어", "프랑스어", "스페인어", "중국어", "일본어", "러시아어", "아랍어", "베트남어"];
 var COURSE_CHECK_DEFAULT_RULES = [
   ["공통수학1", "대수"], ["공통수학2", "대수"],
   ["공통수학1", "미적분Ⅰ"], ["공통수학2", "미적분Ⅰ"],
@@ -16,7 +19,9 @@ var COURSE_CHECK_DEFAULT_RULES = [
   ["물리학", "역학과 에너지"], ["물리학", "전자기와 양자"],
   ["화학", "물질과 에너지"], ["화학", "화학 반응의 세계"],
   ["생명과학", "세포와 물질대사"], ["생명과학", "생물의 유전"],
-  ["지구과학", "지구시스템과학"], ["지구과학", "행성우주과학"]
+  ["지구과학", "지구시스템과학"], ["지구과학", "행성우주과학"],
+  ...COURSE_CHECK_SECOND_LANGUAGES.flatMap((language) => [[language, `${language} 회화`], [language, `심화 ${language}`]]),
+  ["한문", "한문 고전 읽기"]
 ];
 // 2022 개정 총론 고등학교 교과(군)별 필수 이수 학점(편제표 '필수이수' 열이 비었을 때의 기본값).
 var COURSE_CHECK_FAMILIES = ["국어", "수학", "영어", "사회(역사/도덕 포함)", "과학", "체육", "예술", "기술·가정/정보/제2외국어/한문/교양"];
@@ -377,8 +382,9 @@ function courseCheckSemesterText(row, { short = false } = {}) {
 // 웹 수강신청 이벤트에 싣는 점검 정보(서버 스키마 변경 없이 기존 jsonb에 담는다).
 //  · 과목.requires: [{ name, designatedSemester?, options: [이 신청의 과목명], prior?: "elective" }]
 //    편제표 이전 학년 지정 과목으로 이미 충족되는 조건은 싣지 않는다. 편제표에 없는 선이수 과목도 싣지 않는다.
-//  · 그룹.checks: 학기별 지정·기준 학점, 교과(군) 기준(3년 지정 학점), 3년 누계(앞·뒤 학년 편제표 기준), 저장 막기
-function courseCheckEventPayload(model, rules, { targetGrade, courses = [], block = false, required = {} } = {}) {
+//  · 그룹.checks: 학기별 지정·기준 학점, 교과(군) 기준(3년 지정 학점), 3년 누계(앞·뒤 학년 편제표 기준)
+// 위계는 경고만 한다. 예전에 실었던 저장 막기 값(checks.blockPrerequisites)은 더 싣지 않고, 남아 있어도 무시한다.
+function courseCheckEventPayload(model, rules, { targetGrade, courses = [], required = {} } = {}) {
   const grade = String(targetGrade);
   const baseKey = (course) => courseCheckKey(course.groupSubject || String(course.subject ?? "").replace(/\s*\([12]학기\)\s*$/, ""));
   const earliest = courseCheckFieldIndex(grade, 1);
@@ -420,8 +426,7 @@ function courseCheckEventPayload(model, rules, { targetGrade, courses = [], bloc
     required: Number(required?.[family]) > 0 ? Number(required[family]) : Number(model.required?.[family]) > 0 ? Number(model.required[family]) : COURSE_CHECK_REQUIRED_DEFAULTS[family],
     base: base[family] || 0, possible: possible[family] || 0 }));
   return { requires, checks: { v: 1, grade, semesters, families,
-    cumulative: { before, after, target: COURSE_CHECK_TOTALS.subjects, creative: COURSE_CHECK_TOTALS.creative, total: COURSE_CHECK_TOTALS.total },
-    blockPrerequisites: block === true } };
+    cumulative: { before, after, target: COURSE_CHECK_TOTALS.subjects, creative: COURSE_CHECK_TOTALS.creative, total: COURSE_CHECK_TOTALS.total } } };
 }
 
 // 웹 수강신청 학생 화면의 점검(서버가 보낸 이벤트 자료와 지금 고른 과목으로 계산). 규칙·점검 정보가 없는 예전 이벤트는 null.
@@ -485,13 +490,13 @@ function courseCheckApplicationState(application, selected = []) {
     target: Number(checks.cumulative?.target) || COURSE_CHECK_TOTALS.subjects, creative: Number(checks.cumulative?.creative) || COURSE_CHECK_TOTALS.creative,
     total: Number(checks.cumulative?.total) || COURSE_CHECK_TOTALS.total } : null;
   return { grade, checks, issues, violations: issues.filter((issue) => issue.status === "violation"),
-    unknowns: issues.filter((issue) => issue.status === "unknown"), semesters, groups: groupRows, unplaced, families, cumulative,
-    blockConfigured: checks?.blockPrerequisites === true };
+    unknowns: issues.filter((issue) => issue.status === "unknown"), semesters, groups: groupRows, unplaced, families, cumulative };
 }
 
 // ---- 앱 연결 (아래는 화면·저장에 연결한다)
 
-// 설정(state.courseChecks): 기본 위계 중 삭제·끔, 추가 위계, 저장 막기, 교과(군) 필수 학점 수정값, 입학연도별 이전 학년 이수 결과.
+// 설정(state.courseChecks): 기본 위계 중 삭제·끔, 추가 위계, 교과(군) 필수 학점 수정값, 입학연도별 이전 학년 이수 결과.
+// 예전 저장분의 '저장 막기'(blockPrerequisites)는 버린다(위계는 경고만).
 function courseCheckNormalizeSettings(value) {
   const object = (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item);
   const source = object(value) ? value : {};
@@ -519,7 +524,7 @@ function courseCheckNormalizeSettings(value) {
       }))
     };
   }
-  return { removed: strings(source.removed), off: strings(source.off), custom, blockPrerequisites: source.blockPrerequisites === true, required, prior };
+  return { removed: strings(source.removed), off: strings(source.off), custom, required, prior };
 }
 
 let courseCheckContextCache = null;
@@ -788,8 +793,7 @@ function courseCheckAttachToSetup(setup) {
     if (!["2", "3"].includes(targetGrade) || !Array.isArray(courses) || !courses.length) continue;
     const model = courseCheckModel(courseCheckCohortYear(String(Number(targetGrade) - 1)));
     if (!model) continue;
-    const payload = courseCheckEventPayload(model, context.active, { targetGrade, courses,
-      block: context.settings.blockPrerequisites, required: context.settings.required });
+    const payload = courseCheckEventPayload(model, context.active, { targetGrade, courses, required: context.settings.required });
     for (const course of courses) {
       const requires = payload.requires.get(course.subject);
       if (requires?.length) course.requires = requires;
@@ -804,11 +808,6 @@ let courseCheckStudentApp = null;
 
 function courseCheckStudentSelected() {
   return [...document.querySelectorAll("#cloudStudentChoices input:checked")].map((box) => box.value);
-}
-
-function courseCheckStudentBlockActive(result) {
-  return Boolean(result?.blockConfigured && courseCheckStudentApp &&
-    (courseCheckStudentApp.preview || courseCheckStudentApp.application?.prerequisiteBlock === true));
 }
 
 // 학생 화면을 그린 뒤(renderStudentApplication) 한 번 부른다.
@@ -829,7 +828,6 @@ function courseCheckStudentUpdate() {
     return;
   }
   const esc = courseCheckEscape;
-  const blocking = courseCheckStudentBlockActive(result);
   for (const issue of result.issues) {
     const box = [...document.querySelectorAll("#cloudStudentChoices input")].find((input) => input.value === issue.courseSubject);
     if (!box || box.closest("label")?.querySelector(`.course-check-flag[data-requires="${CSS.escape(issue.requires)}"]`)) continue;
@@ -857,7 +855,7 @@ function courseCheckStudentUpdate() {
     ${semesterRows ? `<ul class="course-check-semesters">${semesterRows}</ul>` : ""}
     ${groupRows ? `<ul class="course-check-groups" aria-label="선택 그룹별 남은 선택 수">${groupRows}</ul>` : ""}
     ${issueRows ? `<ul class="course-check-issues" role="alert">${issueRows}</ul>` : `<p class="course-check-ok">위계(선이수) 점검: 이상 없음</p>`}
-    ${blocking && result.violations.length ? `<p class="course-check-block">위계 미충족 과목이 있으면 신청을 저장할 수 없습니다.</p>` : ""}
+    ${result.violations.length ? `<p class="course-check-warn-note">위계(선이수) 경고는 확인용입니다. 그대로 저장할 수 있으니 담당 선생님과 상의하세요.</p>` : ""}
     ${result.cumulative ? `<p class="course-check-total">3년 누계(앞·뒤 학년은 편제표 기준) <b>${result.cumulative.earned}/${result.cumulative.target}학점</b> · 창의적 체험활동 ${result.cumulative.creative}학점 포함 총 ${result.cumulative.earned + result.cumulative.creative}/${result.cumulative.total}</p>` : ""}
     ${familyRows ? `<details class="course-check-families"${familyShort ? " open" : ""}><summary>교과(군) 필수 이수 학점 ${familyShort ? `· 부족 ${familyShort}개` : "· 모두 충족"}</summary>
       <table><thead><tr><th scope="col">교과(군)</th><th scope="col">이수/필수</th><th scope="col">상태</th></tr></thead><tbody>${familyRows}</tbody></table>
@@ -865,12 +863,12 @@ function courseCheckStudentUpdate() {
   panel.classList.remove("hidden");
 }
 
-// 신청 저장 직전(교사가 '저장 막기'를 켰고 서버가 검증을 지원할 때만) 위계 미충족이면 막는다.
-function courseCheckStudentBeforeSave(selected) {
-  if (!courseCheckStudentApp) return;
+// 신청 저장 뒤 안내에 덧붙일 위계 경고(저장은 막지 않는다). 예전 이벤트의 막기 값·서버 표시가 있어도 경고만 한다.
+function courseCheckStudentSaveNote(selected) {
+  if (!courseCheckStudentApp) return "";
   const result = courseCheckApplicationState(courseCheckStudentApp.application, selected);
-  if (!result || !courseCheckStudentBlockActive(result) || !result.violations.length) return;
-  throw new Error(`위계 미충족 과목이 있어 저장할 수 없습니다. ${courseCheckIssueText(result.violations[0], { student: true })}`);
+  const count = result?.violations.length || 0;
+  return count ? ` 위계(선이수) 경고 ${count}건이 있는 채로 저장했습니다. ${courseCheckIssueText(result.violations[0], { student: true })}${count > 1 ? ` (외 ${count - 1}건)` : ""}` : "";
 }
 
 // ---- 2단계 '위계·학점 점검' 팝업
@@ -884,6 +882,21 @@ function courseCheckSubjectOptions(context) {
   }
   return [...names.values()].sort((a, b) => COURSE_CHECK_FAMILIES.indexOf(a.family) - COURSE_CHECK_FAMILIES.indexOf(b.family) ||
     a.name.localeCompare(b.name, "ko"));
+}
+
+// 규칙 팝업의 묶음: 뒤 과목(없으면 앞 과목)의 교과로 나눈다. 제2외국어·한문은 따로 묶는다.
+var COURSE_CHECK_RULE_GROUPS = ["수학", "영어", "과학", "제2외국어·한문", "기타"];
+function courseCheckRuleGroup(rule) {
+  for (const name of [rule?.after, rule?.before]) {
+    const official = typeof findCurriculumOfficialSubject === "function" ? findCurriculumOfficialSubject(name) : null;
+    const area = String(official?.area || "");
+    if (/제2외국어|한문/.test(area)) return "제2외국어·한문";
+    if (/정보/.test(area)) return "기타";
+    if (/수학/.test(area)) return "수학";
+    if (/영어/.test(area)) return "영어";
+    if (/과학/.test(area)) return "과학";
+  }
+  return "기타";
 }
 
 function courseCheckRefreshViews() {
@@ -900,10 +913,14 @@ function courseCheckRenderDialog() {
   const esc = courseCheckEscape;
   const options = courseCheckSubjectOptions(context);
   const optionHtml = options.map((item) => `<option value="${esc(item.name)}">${esc(item.name)} (${esc(item.family)})</option>`).join("");
-  const ruleRows = context.rules.map((rule) => `<tr${rule.off ? ' class="is-off"' : ""}><td>${esc(rule.before)}</td><td aria-hidden="true">→</td><td>${esc(rule.after)}</td>
+  const ruleRow = (rule) => `<tr${rule.off ? ' class="is-off"' : ""}><td>${esc(rule.before)}</td><td aria-hidden="true">→</td><td>${esc(rule.after)}</td>
       <td>${rule.source === "default" ? "기본" : "추가"}</td>
       <td><label class="course-check-switch"><input type="checkbox" data-cc-rule-toggle="${esc(rule.key)}"${rule.off ? "" : " checked"}> 사용</label></td>
-      <td><button class="button button-quiet" type="button" data-cc-rule-delete="${esc(rule.key)}" aria-label="${esc(`${rule.before} → ${rule.after} 위계 삭제`)}">삭제</button></td></tr>`).join("");
+      <td><button class="button button-quiet" type="button" data-cc-rule-delete="${esc(rule.key)}" aria-label="${esc(`${rule.before} → ${rule.after} 위계 삭제`)}">삭제</button></td></tr>`;
+  const ruleGroups = new Map(COURSE_CHECK_RULE_GROUPS.map((name) => [name, []]));
+  for (const rule of context.rules) ruleGroups.get(courseCheckRuleGroup(rule)).push(rule);
+  const ruleRows = [...ruleGroups].filter(([, rules]) => rules.length).map(([name, rules]) =>
+    `<tr class="course-check-rule-group"><th scope="colgroup" colspan="6">${esc(name)} <small>${rules.length}개</small></th></tr>${rules.map(ruleRow).join("")}`).join("");
   const grade = String(state.applicationMenuGrade || "1");
   const year = courseCheckCohortYear(grade);
   const model = courseCheckModel(year);
@@ -939,8 +956,7 @@ function courseCheckRenderDialog() {
     </section>
     <section class="course-check-section" aria-labelledby="courseCheckOnlineTitle">
       <h3 id="courseCheckOnlineTitle">웹 수강신청</h3>
-      <label class="course-check-switch"><input type="checkbox" id="courseCheckBlock"${context.settings.blockPrerequisites ? " checked" : ""}> 위계 미충족이면 학생 신청 저장 막기</label>
-      <p class="note">기본은 학생 화면에 경고만 보여 주고 저장은 허용합니다. 막기는 새로 만드는 신청부터 적용되며, 서버에 위계 검증(supabase/proposed/04-prerequisite-check.sql)이 적용된 경우에만 동작합니다. 적용 전에는 학생 화면에 경고만 표시됩니다.</p>
+      <p class="note">위계(선이수)는 모든 과목에서 <b>경고만</b> 합니다. 학생 화면에 점검표와 과목 옆 경고를 보여 주고, 위계를 지키지 않아도 신청은 저장됩니다. 서버는 위계를 검사하지 않습니다.</p>
     </section>
     <section class="course-check-section" aria-labelledby="courseCheckPriorTitle">
       <h3 id="courseCheckPriorTitle">이전 학년 이수 결과 (현 ${esc(grade)}학년 · ${esc(year)}학년도 입학생, 선택)</h3>
@@ -1072,10 +1088,6 @@ function initCourseChecks() {
         if (!toggle.checked) settings.off.push(key);
       });
       courseCheckSettingsChanged(toggle.checked ? "위계 규칙을 켰습니다." : "위계 규칙을 껐습니다.");
-    } else if (event.target.id === "courseCheckBlock") {
-      const on = event.target.checked;
-      courseCheckSaveSettings((settings) => { settings.blockPrerequisites = on; });
-      courseCheckSettingsChanged(on ? "새로 만드는 웹 수강신청에서 위계 미충족이면 저장을 막습니다(서버 검증 적용 시)." : "학생 화면에 경고만 표시합니다.");
     } else if (event.target.matches("[data-cc-required]")) {
       const family = event.target.dataset.ccRequired;
       const value = event.target.value.trim();
