@@ -4,6 +4,8 @@ var WORKSPACE_FILE_DB = "curriculum-workspace-file";
 var workspaceFileHandle = null;
 var workspaceFileState = { status: "none", name: "", savedAt: 0, message: "" };
 var workspaceFileLastText = "";
+// 이 브라우저가 마지막으로 파일을 쓰거나 읽었을 때의 파일 수정 시각. 실행 중 다른 PC가 파일을 고쳤는지 값싸게 알아보는 데 쓴다.
+var workspaceFileLastModified = 0;
 var workspaceFileTimer = null;
 var workspaceFileBusy = false;
 // 시작 확인 중이거나 파일이 브라우저 자료보다 최신이라 저장을 멈춘 동안 true. 이때는 어떤 경로로도 파일에 쓰지 않는다.
@@ -109,8 +111,10 @@ function workspaceFileTimeLabel(time) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-// 연결된 파일과 지금 브라우저 자료 중 어느 쪽이 최신인지 판단한다.
-// same: 내용이 같음 · browser: 브라우저가 최신(파일에 써도 됨) · file: 파일이 최신(묻기 전에는 쓰지 않음) · invalid: 작업 자료 파일이 아님
+// 연결된 파일을 브라우저 자료로 덮어써도 되는지 판단한다.
+// same: 내용이 같음 · browser: 파일이 이 브라우저가 마지막으로 쓴 그대로라 써도 됨
+// file: 파일이 이 브라우저가 쓴 내용과 달라(다른 PC에서 고쳤거나 기록이 없음) 묻기 전에는 쓰지 않음 · invalid: 작업 자료 파일이 아님
+// 저장 시각은 어느 쪽을 권할지 안내에만 쓰고, 덮어쓸지 여부는 지문으로만 정한다(PC마다 시계가 다르고 브라우저 저장이 나중이어도 파일의 다른 변경을 지울 수 있다).
 function compareWorkspaceFile({ fileText, fileModified = 0, browserComparable, browserSavedAt = 0, browserHasWork = true, syncHash = "" }) {
   if (!String(fileText || "").trim()) return { newer: "browser", fileTime: 0, browserTime: browserSavedAt };
   let backup;
@@ -123,8 +127,28 @@ function compareWorkspaceFile({ fileText, fileModified = 0, browserComparable, b
   if (fileComparable === browserComparable) return { ...result, newer: "same" };
   // 파일이 이 브라우저가 마지막으로 쓴 그대로라면 바뀐 쪽은 브라우저뿐이다.
   if (syncHash && workspaceTextHash(fileComparable) === syncHash) return { ...result, newer: "browser" };
-  if (!browserHasWork || fileTime > browserSavedAt) return { ...result, newer: "file" };
-  return { ...result, newer: "browser" };
+  const reason = (!browserHasWork || fileTime > browserSavedAt) ? "file-later" : syncHash ? "changed" : "unknown";
+  return { ...result, newer: "file", reason };
+}
+
+// 확인 문구. 양쪽 저장 시각을 함께 보여 주고, 파일이 더 이르더라도 다른 곳에서 바뀌었음을 알린다.
+function workspaceFileConflictMessage(result, name) {
+  const times = `파일: ${workspaceFileTimeLabel(result.fileTime)}, 브라우저: ${workspaceFileTimeLabel(result.browserTime)}`;
+  const head = result.reason === "file-later" ? `PC 파일이 더 최신입니다(${times}).`
+    : result.reason === "changed" ? `PC 파일이 이 브라우저가 마지막으로 저장한 뒤 다른 곳(다른 PC 등)에서 바뀌었습니다(${times}).`
+      : `PC 파일 내용이 이 브라우저 자료와 다릅니다(${times}).`;
+  return `${head} 파일 내용을 불러올까요?\n\n` +
+    `· 확인: 이 브라우저의 자료를 '${name}' 내용으로 바꿉니다.\n` +
+    "· 취소: 브라우저 자료는 그대로 두고, 덮어쓰지 않도록 이 파일에는 저장하지 않습니다.";
+}
+
+function workspaceFileStaleMessage(result) {
+  return result?.reason === "file-later" ? "PC 파일 저장 중지 — 파일이 더 최신"
+    : "PC 파일 저장 중지 — 파일이 다른 곳에서 바뀜";
+}
+
+async function workspaceFileModifiedTime(handle) {
+  try { return Number((await handle.getFile())?.lastModified) || 0; } catch { return 0; }
 }
 
 // 시작할 때(또는 권한을 다시 받았을 때) 파일을 먼저 읽어 보고, 파일이 더 최신이면 덮어쓰지 않고 불러올지 묻는다.
@@ -147,6 +171,7 @@ async function verifyWorkspaceFile(handle) {
     fileText, fileModified: file?.lastModified, browserComparable: comparable, browserSavedAt, browserHasWork,
     syncHash: readWorkspaceFileSync().hash || ""
   });
+  workspaceFileLastModified = Number(file?.lastModified) || 0;
   if (result.newer === "same") {
     workspaceFileHold = false;
     workspaceFileLastText = comparable;
@@ -162,17 +187,13 @@ async function verifyWorkspaceFile(handle) {
     setWorkspaceFileState({ status: "stale", message: "PC 파일 저장 중지 — 교육과정 작업 자료 파일이 아닙니다" });
     return false;
   }
-  const load = window.confirm(
-    `PC 파일이 더 최신입니다(파일: ${workspaceFileTimeLabel(result.fileTime)}, 브라우저: ${workspaceFileTimeLabel(result.browserTime)}). 파일 내용을 불러올까요?\n\n` +
-    `· 확인: 이 브라우저의 자료를 '${handle.name}' 내용으로 바꿉니다.\n` +
-    "· 취소: 브라우저 자료는 그대로 두고, 덮어쓰지 않도록 이 파일에는 저장하지 않습니다."
-  );
+  const load = window.confirm(workspaceFileConflictMessage(result, handle.name));
   if (load && typeof restoreWorkspaceBackup === "function") {
     const restored = await restoreWorkspaceBackup({ name: handle.name, text: async () => fileText },
       async () => rememberWorkspaceFileSync(result.fileComparable), { confirmed: true });
     if (restored) return true;
   }
-  setWorkspaceFileState({ status: "stale", message: "PC 파일 저장 중지 — 파일이 더 최신" });
+  setWorkspaceFileState({ status: "stale", message: workspaceFileStaleMessage(result) });
   return false;
 }
 
@@ -180,21 +201,27 @@ async function saveWorkspaceFileNow({ force = false } = {}) {
   if (!workspaceFileHandle || workspaceFileBusy || workspaceFileHold) return false;
   if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) return false;
   workspaceFileBusy = true;
+  const handle = workspaceFileHandle;
   try {
-    if (!(await workspaceFilePermission(workspaceFileHandle))) {
+    if (!(await workspaceFilePermission(handle))) {
       setWorkspaceFileState({ status: "needs-permission" });
       return false;
     }
     const { comparable, text } = workspaceFileText();
     if (!force && comparable === workspaceFileLastText) return true;
-    const writable = await workspaceFileHandle.createWritable();
-    await writable.write(text);
-    await writable.close();
-    workspaceFileLastText = comparable;
-    rememberWorkspaceFileSync(comparable);
-    if (typeof markWorkspaceBackup === "function") markWorkspaceBackup();
-    setWorkspaceFileState({ status: "saved", savedAt: Date.now(), message: "" });
-    return true;
+    // 실행 중에 다른 PC 등이 파일을 고쳤으면(수정 시각이 바뀜) 바로 쓰지 않고 아래에서 내용을 다시 확인한다.
+    const modified = force || !workspaceFileLastModified ? 0 : await workspaceFileModifiedTime(handle);
+    if (!modified || modified === workspaceFileLastModified) {
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      workspaceFileLastText = comparable;
+      rememberWorkspaceFileSync(comparable);
+      workspaceFileLastModified = await workspaceFileModifiedTime(handle);
+      if (typeof markWorkspaceBackup === "function") markWorkspaceBackup();
+      setWorkspaceFileState({ status: "saved", savedAt: Date.now(), message: "" });
+      return true;
+    }
   } catch (error) {
     const message = `파일 저장 실패: ${error?.message || "알 수 없는 오류"}`;
     if (workspaceFileState.status !== "error" && typeof showAppToast === "function") showAppToast(`PC ${message}`, "error");
@@ -203,6 +230,7 @@ async function saveWorkspaceFileNow({ force = false } = {}) {
   } finally {
     workspaceFileBusy = false;
   }
+  return verifyWorkspaceFile(handle);
 }
 
 // 파일 저장을 예약하고, 예약했으면 파일 이름을 돌려준다(브라우저 저장이 실패했을 때 안내에 쓴다).
@@ -217,6 +245,7 @@ async function linkWorkspaceFile(handle, { writeNow }) {
   workspaceFileHandle = handle;
   workspaceFileHold = false;
   workspaceFileLastText = "";
+  workspaceFileLastModified = 0;
   await workspaceFileStore("put", handle);
   setWorkspaceFileState({ status: "saved", name: handle.name, savedAt: 0, message: "" });
   if (writeNow) return saveWorkspaceFileNow({ force: true });
@@ -275,6 +304,7 @@ async function disconnectWorkspaceFile() {
   workspaceFileHandle = null;
   workspaceFileHold = false;
   workspaceFileLastText = "";
+  workspaceFileLastModified = 0;
   if (workspaceFileTimer !== null) { clearTimeout(workspaceFileTimer); workspaceFileTimer = null; }
   try { localStorage.removeItem(WORKSPACE_FILE_SYNC_KEY); } catch { /* 지문이 남아도 다른 파일 내용과는 맞지 않는다. */ }
   try { await workspaceFileStore("delete"); } catch { /* 연결 정보만 남을 뿐 저장은 이미 멈췄다. */ }

@@ -33,11 +33,11 @@ function backupText(workspace, createdAt) {
 
 function fakeHandle(name = "자료.json", { permission = "granted" } = {}) {
   const handle = {
-    name, content: "", writes: 0, permission,
+    name, content: "", writes: 0, permission, modified: 1000,
     queryPermission: async () => handle.permission,
     requestPermission: async () => { handle.permission = "granted"; return "granted"; },
-    createWritable: async () => ({ write: async (text) => { handle.pending = text; }, close: async () => { handle.content = handle.pending; handle.writes++; } }),
-    getFile: async () => ({ text: async () => handle.content })
+    createWritable: async () => ({ write: async (text) => { handle.pending = text; }, close: async () => { handle.content = handle.pending; handle.writes++; handle.modified++; } }),
+    getFile: async () => ({ lastModified: handle.modified, text: async () => handle.content })
   };
   return handle;
 }
@@ -221,15 +221,67 @@ test("the browser data is written without asking when only the browser changed s
   assert.equal(ctx.workspaceFileState.status, "saved");
 });
 
-test("identical content is not rewritten, and an older changed file is replaced by newer browser data", async () => {
+test("identical content is not rewritten, and a changed file is never replaced just because the browser saved later", async () => {
   const same = await start({ fileText: backupText({ a: 1 }, "2026-01-01T00:00:00.000Z"), browser: { a: 1 } });
   assert.equal(same.confirms.length, 0);
   assert.equal(same.handle.writes, 0);
   assert.equal(same.ctx.workspaceFileState.status, "saved");
   const older = await start({ fileText: backupText({ a: 5 }, "2026-01-01T00:00:00.000Z"), browser: { a: 1 }, browserSavedAt: Date.now() });
-  assert.equal(older.confirms.length, 0);
-  assert.equal(older.handle.writes, 1);
-  assert.deepEqual(JSON.parse(older.handle.content).workspace, { a: 1 });
+  assert.equal(older.confirms.length, 1, "without a record of what this browser wrote, a different file is asked about");
+  assert.match(older.confirms[0], /^PC 파일 내용이 이 브라우저 자료와 다릅니다\(파일: 2026-01-01 \d\d:\d\d, 브라우저: \d{4}-/);
+  assert.equal(older.handle.writes, 0);
+  assert.deepEqual(JSON.parse(older.handle.content).workspace, { a: 5 });
+});
+
+test("a file changed elsewhere after this browser's last save always asks, even when the browser saved later", async () => {
+  const storage = memoryStorage();
+  const written = backupText({ a: 1 }, "2026-11-01T00:00:00.000Z");
+  load({ storage }).ctx.rememberWorkspaceFileSync(JSON.stringify({ ...JSON.parse(written), createdAt: "" }));
+  const fileTime = new Date(2026, 10, 2, 8, 0).getTime();
+  const browserTime = new Date(2026, 10, 3, 15, 45).getTime();
+  const fileText = backupText({ a: 7 }, new Date(fileTime).toISOString());
+  const { ctx, handle, confirms } = await start({ fileText, browser: { a: 2 }, browserSavedAt: browserTime, storage, confirmAnswer: false });
+  assert.equal(confirms.length, 1);
+  assert.match(confirms[0], /^PC 파일이 이 브라우저가 마지막으로 저장한 뒤 다른 곳\(다른 PC 등\)에서 바뀌었습니다\(파일: 2026-11-02 08:00, 브라우저: 2026-11-03 15:45\)\. 파일 내용을 불러올까요\?/);
+  assert.equal(handle.writes, 0);
+  assert.equal(handle.content, fileText);
+  assert.equal(ctx.workspaceFileState.status, "stale");
+  assert.match(ctx.workspaceFileState.message, /파일이 다른 곳에서 바뀜/);
+  assert.equal(await ctx.saveWorkspaceFileNow({ force: true }), false);
+  assert.equal(handle.writes, 0);
+});
+
+test("a file changed by another PC while the app is open is checked before the next save", async () => {
+  const { ctx, confirms } = load();
+  const handle = fakeHandle("학교자료.json");
+  ctx.window.showSaveFilePicker = async () => handle;
+  await ctx.connectWorkspaceFile();
+  assert.equal(handle.writes, 1);
+  const other = backupText({ a: 42 }, new Date().toISOString());
+  handle.content = other;
+  handle.modified += 50;
+  ctx.confirmAnswer = false;
+  ctx.browserSavedAt = Date.now() + 60000;
+  ctx.buildWorkspaceBackup = () => ({ type: "curriculum-workspace-backup", backupVersion: 1, createdAt: "", workspace: { a: 2 } });
+  assert.equal(await ctx.saveWorkspaceFileNow(), false);
+  assert.equal(confirms.length, 1);
+  assert.match(confirms[0], /다른 곳\(다른 PC 등\)에서 바뀌었습니다/);
+  assert.equal(handle.writes, 1);
+  assert.equal(handle.content, other, "the other PC's changes are kept");
+  assert.equal(ctx.workspaceFileState.status, "stale");
+});
+
+test("a touched file whose content is still what this browser wrote keeps saving without asking", async () => {
+  const { ctx, confirms } = load();
+  const handle = fakeHandle("학교자료.json");
+  ctx.window.showSaveFilePicker = async () => handle;
+  await ctx.connectWorkspaceFile();
+  handle.modified += 50;
+  ctx.buildWorkspaceBackup = () => ({ type: "curriculum-workspace-backup", backupVersion: 1, createdAt: "", workspace: { a: 2 } });
+  assert.equal(await ctx.saveWorkspaceFileNow(), true);
+  assert.equal(confirms.length, 0);
+  assert.equal(handle.writes, 2);
+  assert.deepEqual(JSON.parse(handle.content).workspace, { a: 2 });
 });
 
 test("a file that is not workspace data is left alone", async () => {

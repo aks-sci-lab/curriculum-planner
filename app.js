@@ -98,7 +98,7 @@
 
     const state = observeState(rawState);
     const STORAGE_KEY = "course-certificate-studio-v1";
-    // 사용자가 자료를 바꿔 이 브라우저에 저장한 시각. 연결된 PC 파일이 더 최신인지 판단할 때 쓴다.
+    // 사용자가 자료를 바꿔 이 브라우저에 저장한 시각. 연결된 PC 파일과 내용이 다를 때 확인 문구에 양쪽 시각을 보여 주는 데 쓴다.
     const WORKSPACE_SAVED_AT_KEY = "course-certificate-studio-saved-at";
     // 시작할 때 화면을 그리며 생긴 정리용 저장은 사용자 수정이 아니므로 저장 시각을 바꾸지 않는다.
     let workspaceStartupFlush = false;
@@ -555,7 +555,7 @@
     }
 
     // afterWrite: 자료를 실제로 교체한 직후(새로고침 직전)에 한 번 부른다. 파일 연결처럼 교체가 끝난 뒤에만 해야 하는 일에 쓴다.
-    // confirmed: 호출한 쪽에서 이미 교체 확인을 받았을 때(PC 파일이 더 최신이라 불러올 때) 확인 창을 다시 띄우지 않는다.
+    // confirmed: 호출한 쪽에서 이미 교체 확인을 받았을 때(PC 파일이 바뀌어 불러올 때) 확인 창을 다시 띄우지 않는다.
     async function restoreWorkspaceBackup(file, afterWrite = null, { confirmed = false } = {}) {
       if (!file) return false;
       const previous = new Map();
