@@ -647,6 +647,13 @@ var updateRetakeReadiness;
         downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
         byId("cloudTeacherMessage").textContent = "전체 코드를 재발급했습니다. 새 코드를 저장하고 각 학생에게 다시 전달하세요. 기존 코드는 사용할 수 없습니다.";
       }), "button button-quiet"));
+      section.appendChild(button("학생 코드 개별 재발급", () => teacherAction(async () => {
+        await showReissuePanel(event, section);
+      }), "button button-quiet"));
+      section.appendChild(button("접속 잠금 해제", () => teacherAction(async () => {
+        const result = await rpc("unlock_course_event", { p_event: event.id }, true);
+        byId("cloudTeacherMessage").textContent = result.message;
+      }), "button button-quiet"));
       section.appendChild(button("명렬·결과 영구 삭제", () => teacherAction(async () => {
         if (!window.confirm(`${event.school_name} ${event.round}차의 모든 명렬과 신청을 영구 삭제할까요? 복구할 수 없습니다.`)) {
           byId("cloudTeacherMessage").textContent = "삭제를 취소했습니다.";
@@ -705,6 +712,33 @@ var updateRetakeReadiness;
     switchRound(String(source.round));
     switchWorkflowStep(4);
   });
+
+  async function showReissuePanel(event, parent) {
+    const old = parent.querySelector(".course-reissue");
+    if (old) old.remove();
+    const data = await rpc("get_teacher_course_applications", { p_event: event.id }, true);
+    const grade = String(state.applicationMenuGrade || "1");
+    const entries = data.entries.filter((student) => student.grade === grade);
+    if (!entries.length) throw new Error("선택한 학년의 학생이 없습니다.");
+    const panel = document.createElement("section");
+    panel.className = "course-reissue";
+    const select = document.createElement("select");
+    for (const student of entries) {
+      const option = document.createElement("option");
+      option.value = student.id;
+      option.textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}`;
+      select.appendChild(option);
+    }
+    panel.appendChild(select);
+    panel.appendChild(button("선택한 학생 코드 재발급", () => teacherAction(async () => {
+      const chosen = entries.find((student) => student.id === select.value);
+      if (!window.confirm(`${chosen.classroom}반 ${chosen.number}번 ${chosen.name} 학생의 기존 코드를 무효로 하고 새 코드를 발급할까요? 신청 결과는 유지되며, 학생은 새 코드로 처음 접속할 때 코드를 다시 바꿔야 합니다.`)) return;
+      const result = await rpc("reissue_course_code", { p_event: event.id, p_student: chosen.id }, true);
+      const issued = result.students[0];
+      byId("cloudTeacherMessage").textContent = `${issued.classroom}반 ${issued.number}번 ${issued.name} 새 코드: ${issued.code} (이 학생에게만 전달하세요. 이 화면을 닫으면 다시 볼 수 없습니다.)`;
+    }), "button button-primary"));
+    parent.appendChild(panel);
+  }
 
   async function openTeacherEditor(event) {
     const revision = sessionRevision;
@@ -1278,33 +1312,70 @@ var updateRetakeReadiness;
     }
     updateSummary();
   });
+  let pendingFirstCode = "";
+  function hideStudentChangeCode() {
+    pendingFirstCode = "";
+    byId("cloudStudentNewCode").value = "";
+    byId("cloudStudentNewCodeConfirm").value = "";
+    byId("cloudStudentChangeCode").classList.add("hidden");
+  }
+  function throwIfServerRefused(result) {
+    if (result?.error) throw new Error(result.error);
+    return result;
+  }
   byId("cloudStudentCode").addEventListener("input", () => {
     activeCode = "";
     application = null;
+    hideStudentChangeCode();
     byId("cloudStudentChoices").replaceChildren();
     byId("cloudStudentCourses").classList.add("hidden");
   });
+  async function loginStudent() {
+    activeCode = "";
+    application = null;
+    hideStudentChangeCode();
+    byId("cloudStudentChoices").replaceChildren();
+    byId("cloudStudentCourses").classList.add("hidden");
+    const code = byId("cloudStudentCode").value.trim().toLowerCase();
+    if (eventId && !validEvent.test(eventId)) throw new Error("학교 신청 링크가 잘못되었습니다.");
+    if (eventId ? !/^(\d{6}|[a-f0-9]{32})$/.test(code) : !/^[a-f0-9]{32}$/.test(code)) {
+      throw new Error(eventId ? "학교에서 받은 6자리 숫자 코드를 확인하세요." : "6자리 코드는 학교·차수별 신청 링크에서 입력하세요. 기존 긴 코드는 이 입구에서도 사용할 수 있습니다.");
+    }
+    const data = throwIfServerRefused(eventId
+      ? await rpc("get_scoped_course_application", { p_event: eventId, p_code: code })
+      : await rpc("get_course_application", { p_code: code }));
+    if (byId("cloudStudentCode").value.trim().toLowerCase() !== code) {
+      throw new Error("코드가 변경되었습니다. 다시 본인 확인을 해주세요.");
+    }
+    if (data.mustChangeCode) {
+      pendingFirstCode = code;
+      byId("cloudStudentChangeCode").classList.remove("hidden");
+      byId("cloudStudentMessage").textContent = `${data.student.grade}학년 ${data.student.classroom}반 ${data.student.number}번 ${data.student.name} · 새 6자리 코드를 정해 주세요.`;
+      byId("cloudStudentNewCode").focus?.();
+      return;
+    }
+    application = data;
+    activeCode = code;
+    renderStudentApplication(data);
+  }
   byId("cloudStudentLogin").addEventListener("submit", (event) => {
     event.preventDefault();
+    studentAction(loginStudent);
+  });
+  byId("cloudStudentChangeCode").addEventListener("submit", (event) => {
+    event.preventDefault();
     studentAction(async () => {
-      activeCode = "";
-      application = null;
-      byId("cloudStudentChoices").replaceChildren();
-      byId("cloudStudentCourses").classList.add("hidden");
-      const code = byId("cloudStudentCode").value.trim().toLowerCase();
-      if (eventId && !validEvent.test(eventId)) throw new Error("학교 신청 링크가 잘못되었습니다.");
-      if (eventId ? !/^(\d{6}|[a-f0-9]{32})$/.test(code) : !/^[a-f0-9]{32}$/.test(code)) {
-        throw new Error(eventId ? "학교에서 받은 6자리 숫자 코드를 확인하세요." : "6자리 코드는 학교·차수별 신청 링크에서 입력하세요. 기존 긴 코드는 이 입구에서도 사용할 수 있습니다.");
-      }
-      const data = eventId
-        ? await rpc("get_scoped_course_application", { p_event: eventId, p_code: code })
-        : await rpc("get_course_application", { p_code: code });
-      if (byId("cloudStudentCode").value.trim().toLowerCase() !== code) {
-        throw new Error("코드가 변경되었습니다. 다시 본인 확인을 해주세요.");
-      }
-      application = data;
-      activeCode = code;
-      renderStudentApplication(data);
+      const first = pendingFirstCode;
+      const next = byId("cloudStudentNewCode").value.trim();
+      if (!eventId || !first) throw new Error("처음 받은 코드로 먼저 접속하세요.");
+      if (!/^\d{6}$/.test(next)) throw new Error("새 코드는 6자리 숫자여야 합니다.");
+      if (next !== byId("cloudStudentNewCodeConfirm").value.trim()) throw new Error("새 코드 두 칸이 서로 다릅니다.");
+      if (next === first) throw new Error("받은 코드와 다른 새 코드를 정하세요.");
+      const result = throwIfServerRefused(await rpc("change_course_code", { p_event: eventId, p_code: first, p_new_code: next }));
+      byId("cloudStudentCode").value = next;
+      hideStudentChangeCode();
+      await loginStudent();
+      if (application) byId("cloudStudentMessage").textContent = `${result.message} 새 코드를 잊지 마세요.`;
     });
   });
   byId("cloudStudentApplication").addEventListener("submit", (event) => {
@@ -1326,9 +1397,9 @@ var updateRetakeReadiness;
         window.showAppToast?.("미리보기 제출을 확인했습니다. 실제 신청은 저장되지 않았습니다.");
         return;
       }
-      const result = eventId
+      const result = throwIfServerRefused(eventId
         ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
-        : await rpc("save_course_application", { p_code: code, p_selections: selected });
+        : await rpc("save_course_application", { p_code: code, p_selections: selected }));
       if (activeCode === code) {
         byId("cloudStudentMessage").textContent = result.message;
         studentSaved = true;

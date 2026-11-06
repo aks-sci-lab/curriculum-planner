@@ -1532,3 +1532,57 @@ test("deleting a round unlinks only its online events and prevents an in-flight 
   assert.equal(f.syncCalls.length,0);
   assert.ok(!f.requests.some((r)=>r.body?.p_action==="delete"));
 });
+
+test("first login asks the student to replace the issued code, then opens the application with the new code", async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const f = fixture({ href: `https://school.example/app/#event=${id}` });
+  const opened = {
+    student: { grade: "1", classroom: "1", number: "1", name: "가상" },
+    schoolName: "학교", schoolYear: "2026", round: "1", open: true,
+    courses: [{ subject: "수학", credit: 3 }], selections: [],
+  };
+  f.respond = async (request) => {
+    const name = request.url.split("/").pop();
+    if (name === "get_scoped_course_application") {
+      return { data: request.body.p_code === "123789"
+        ? { mustChangeCode: true, student: opened.student } : opened };
+    }
+    if (name === "change_course_code") return { data: { message: "코드를 변경했습니다." } };
+    return { data: { message: "저장 완료" } };
+  };
+  f.elements.cloudStudentCode.value = "123789";
+  await f.fire("cloudStudentLogin", "submit");
+  assert.equal(f.elements.cloudStudentChangeCode.classList.contains("hidden"), false);
+  assert.equal(f.elements.cloudStudentCourses.classList.contains("hidden"), true);
+  assert.match(f.elements.cloudStudentMessage.textContent, /새 6자리 코드/);
+
+  f.elements.cloudStudentNewCode.value = "12345";
+  f.elements.cloudStudentNewCodeConfirm.value = "12345";
+  await f.fire("cloudStudentChangeCode", "submit");
+  assert.match(f.elements.cloudStudentMessage.textContent, /6자리 숫자/);
+  f.elements.cloudStudentNewCode.value = "482915";
+  f.elements.cloudStudentNewCodeConfirm.value = "482910";
+  await f.fire("cloudStudentChangeCode", "submit");
+  assert.match(f.elements.cloudStudentMessage.textContent, /서로 다릅니다/);
+  f.elements.cloudStudentNewCodeConfirm.value = "482915";
+  await f.fire("cloudStudentChangeCode", "submit");
+
+  const change = f.requests.find((request) => request.url.endsWith("change_course_code"));
+  assert.deepEqual(change.body, { p_event: id, p_code: "123789", p_new_code: "482915" });
+  assert.equal(f.requests.at(-1).body.p_code, "482915");
+  assert.equal(f.elements.cloudStudentCode.value, "482915");
+  assert.equal(f.elements.cloudStudentChangeCode.classList.contains("hidden"), true);
+  assert.equal(f.elements.cloudStudentCourses.classList.contains("hidden"), false);
+  assert.match(f.elements.cloudStudentMessage.textContent, /코드를 변경했습니다/);
+});
+
+test("server refusals such as login lockout are shown to the student and never open the application", async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const f = fixture({ href: `https://school.example/app/#event=${id}` });
+  f.respond = async () => ({ data: { error: "접속 실패가 5회를 넘어 10분간 잠겼습니다.", locked: true } });
+  f.elements.cloudStudentCode.value = "000009";
+  await f.fire("cloudStudentLogin", "submit");
+  assert.match(f.elements.cloudStudentMessage.textContent, /10분간 잠겼습니다/);
+  assert.equal(f.elements.cloudStudentCourses.classList.contains("hidden"), true);
+  assert.equal(f.elements.cloudStudentChangeCode.classList.contains("hidden"), true);
+});
