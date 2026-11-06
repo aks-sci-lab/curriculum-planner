@@ -1791,3 +1791,7 @@
 .roster-controls .search-input { grid-column: 1 / -1; }
 .roster-controls .class-select { width: 100%; font-size: 12px; }
 .aggregate-missing-note { margin: 0 0 12px; padding: 8px 12px; border: 1px solid #e0c9a4; border-radius: 10px; background: #fff8ec; color: #7a5a1d; font-size: 13px; }
+
+.curriculum-versions-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.curriculum-version-dialog .curriculum-versions-form { margin: 12px 0; }
+.curriculum-version-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

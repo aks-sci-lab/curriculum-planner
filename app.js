@@ -2724,7 +2724,7 @@
       $("#curriculumAddSubject").disabled = !state.curriculumImportedLayout;
       if (isDerivedAnnualPlan()) {
         for (const id of ["curriculumMergeToggle", "curriculumSplitMerged", "curriculumAddSubject", "addCurriculumPlanRow",
-          "openCurriculumVersionSave", "clearCurriculumPlan"]) $(`#${id}`).disabled = true;
+          "openCurriculumVersionSave", "openCurriculumVersionDialog", "clearCurriculumPlan"]) $(`#${id}`).disabled = true;
         $("#curriculumMergeControls").classList.add("hidden");
       }
       renderCurriculumCohortUploads();
