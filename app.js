@@ -2912,14 +2912,24 @@
         preview.innerHTML = '<div class="placeholder-icon" aria-hidden="true">▤</div><strong>확인서 미리보기</strong><span>학생 목록에서 확인할 학생을 선택하세요.</span>';
         $("#previewSubheading").textContent = `${state.students.length}명의 확인서를 준비했습니다.`;
         $("#printSelected").disabled = true;
-        $("#printAll").disabled = visibleStudents().length === 0;
+        syncPrintAllButton();
         return;
       }
       preview.className = "preview-paper";
       preview.innerHTML = certificateMarkup(student);
       $("#previewSubheading").textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 · ${student.selections.length}과목 · ${student.totalCredits}학점`;
       $("#printSelected").disabled = false;
-      $("#printAll").disabled = visibleStudents().length === 0;
+      syncPrintAllButton();
+    }
+
+    // 반 필터를 고르면 그 반 학생만 한 번에 인쇄된다(학생마다 한 장). 인쇄 대상 인원을 버튼에 보여 준다.
+    function syncPrintAllButton() {
+      const count = visibleStudents().length;
+      const button = $("#printAll");
+      button.disabled = count === 0;
+      const classroom = $("#classFilter")?.value;
+      button.textContent = count === 0 ? "검색 결과 전체 인쇄"
+        : `${classroom ? `${classroom}반 ` : "검색 결과 "}전체 인쇄 (${count}명)`;
     }
 
     function renderSemesterClassifier() {

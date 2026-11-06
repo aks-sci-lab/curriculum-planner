@@ -341,3 +341,141 @@ test("application mode toggles the matching workflow tab and persists without de
   assert.equal(state.students, results);
   assert.equal(persisted, 1);
 });
+
+function resultImportContext(extra = {}) {
+  return vm.createContext({
+    document: { getElementById: () => null },
+    splitGoogleFormSelections: (text) => String(text).split(",").map((item) => item.trim()).filter(Boolean),
+    mergeApplications: (entries, subjects) => {
+      const courses = (subjects["2"] || []).map((item, index) => ({ column: `c${index}`, name: item.subject, semesterKey: item.semester }));
+      return { errors: [], courses, students: entries.map((entry) => ({
+        ...entry, id: `${entry.classroom}-${entry.number}`, totalCredits: 3,
+        selections: entry.selections.map((name) => courses.find((course) => course.name === name) || { name, column: name })
+      })) };
+    },
+    createRecords: () => ({ students: [], courses: [], skippedRows: [] }),
+    classifyApplicationRecords: () => [],
+    status: { style: {}, textContent: "" },
+    state: { currentRound: "2", applicationMenuGrade: "1", applicationImportRevision: 4 },
+    isRoundLocked: () => false,
+    renderWorkspaceContext() {},
+    ...extra
+  });
+}
+
+test("import warnings offer a jump to the matching settings and can be re-validated without re-uploading", () => {
+  const subjects = { "2": [{ subject: "물리학", semester: "1", credit: 3 }] };
+  let optionCalls = 0, jumped = null;
+  const ctx = resultImportContext({
+    resultImportOptions: () => { optionCalls++; return { subjects: optionCalls > 1 ? { "2": [...subjects["2"], { subject: "화학", semester: "2", credit: 3 }] } : subjects, existingStudents: [], groups: [] }; },
+    openApplicationWorkspaceTab: (name) => { jumped = name; }
+  });
+  vm.runInContext(resultImport, ctx);
+  const rows = [["차수", "학년", "반", "번호", "성명", "선택과목"], ["2", "1", "1", "1", "가", "물리학"]];
+  // 이 시점의 createRecords는 쓰지 않으므로 분류 경고를 직접 만든다.
+  ctx.classifyApplicationRecords = () => ["2학년 물리학"];
+  const preview = ctx.buildResultImportPreview([{ name: "응답", rows }], {
+    fileName: "r.xlsx", round: "2", grade: "1", revision: 4, subjects, groups: [], existingStudents: []
+  });
+  const actions = preview.candidates[0].issues.actions;
+  assert.deepEqual(plain(actions.map((action) => action.target)), ["groups"]);
+  assert.ok(preview.sheets, "the parsed sheets are kept so the file need not be uploaded again");
+
+  vm.runInContext("resultImportPending = null", ctx);
+  ctx.resultImportPending = preview;
+  ctx.resultImportElement = () => null;
+  // 설정을 고쳤다고 가정하고 분류 경고가 사라진 상태에서 다시 검증한다.
+  ctx.classifyApplicationRecords = () => [];
+  ctx.revalidateResultImport();
+  const refreshed = vm.runInContext("resultImportPending", ctx);
+  assert.equal(refreshed.candidates[0].issues.actions.length, 0);
+  assert.equal(optionCalls, 1, "re-validation reads the latest options");
+  assert.match(ctx.status.textContent, /다시 검증했습니다/);
+
+  // 차수가 바뀐 뒤에는 다시 검증하지 않고 미리보기를 닫는다.
+  ctx.state.currentRound = "3";
+  ctx.revalidateResultImport();
+  assert.equal(vm.runInContext("resultImportPending", ctx), null);
+  assert.match(ctx.status.textContent, /다시 업로드/);
+});
+
+test("a save failure keeps the validated preview while a stale preview is closed", () => {
+  let attempts = 0, ctx;
+  ctx = resultImportContext({
+    storeGradeResults: () => {
+      attempts++;
+      if (attempts === 1) throw new (vm.runInContext("Error", ctx))("저장 공간 부족");
+      return { kept: 0, dropped: 0 };
+    }
+  });
+  vm.runInContext(resultImport, ctx);
+  const makePreview = () => ({
+    round: "2", grade: "1", revision: 4, fileName: "r.xlsx", selected: 0,
+    candidates: [{ issues: { blocking: [] }, data: { students: [] }, summary: { students: 1 }, unclassified: ["미분류"] }]
+  });
+  ctx.resultImportPending = makePreview();
+  ctx.confirmResultImport();
+  assert.match(ctx.status.textContent, /저장 공간 부족/);
+  assert.ok(vm.runInContext("resultImportPending", ctx), "preview survives a transient save error");
+  ctx.confirmResultImport();
+  assert.equal(attempts, 2);
+  assert.match(ctx.status.textContent, /그룹 미확인 1개/);
+  assert.equal(vm.runInContext("resultImportPending", ctx), null);
+  ctx.state.currentRound = "9";
+  ctx.resultImportPending = makePreview();
+  ctx.confirmResultImport();
+  assert.equal(vm.runInContext("resultImportPending", ctx), null, "a stale preview is dropped");
+});
+
+test("backup status flags missing or old backups and nudges at most once per ten minutes", () => {
+  const store = new Map();
+  const label = { textContent: "", title: "", classList: { on: false, toggle(name, value) { this.on = value; } } };
+  const toasts = [];
+  const ctx = vm.createContext({
+    localStorage: { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) },
+    document: { getElementById: (id) => (id === "workspaceBackupStatus" ? label : null) },
+    state: { curriculumImportedLayout: null, students: [], rounds: {} },
+    showAppToast: (message) => toasts.push(message),
+    Date
+  });
+  vm.runInContext(functionSource(app, "const BACKUP_TIME_KEY", "function downloadWorkspaceBackup("), ctx);
+  ctx.renderBackupStatus();
+  assert.equal(label.classList.on, false, "nothing to protect yet");
+  ctx.state.students = [{ id: "s" }];
+  ctx.renderBackupStatus();
+  assert.equal(label.textContent, "백업 없음");
+  assert.equal(label.classList.on, true);
+  ctx.suggestWorkspaceBackup("결과 반영");
+  ctx.suggestWorkspaceBackup("결과 반영");
+  assert.equal(toasts.length, 1);
+  ctx.markWorkspaceBackup();
+  assert.match(label.textContent, /방금 백업/);
+  assert.equal(label.classList.on, false);
+  ctx.suggestWorkspaceBackup("차수 확정");
+  assert.equal(toasts.length, 1, "no nudge right after a backup");
+});
+
+test("workflow menu badges reflect plan, result and confirmation progress", () => {
+  const roundState = { value: "draft" };
+  const ctx = vm.createContext({
+    state: { curriculumImportedLayout: null, curriculumPlan: [], students: [], currentRound: "1" },
+    getApplicationPreparationStatus: () => ({ subjects: 3, unassigned: 1, invalidGroups: 0, hasSelections: true }),
+    roundStatus: () => roundState.value
+  });
+  vm.runInContext(functionSource(app, "function workflowStepStates(", "function renderWorkflowStepStates("), ctx);
+  let states = plain(ctx.workflowStepStates());
+  assert.deepEqual(states[1], ["todo", "필요"]);
+  assert.deepEqual(states[2], ["wait", "대기"]);
+  ctx.state.curriculumPlan = [{}];
+  states = plain(ctx.workflowStepStates());
+  assert.deepEqual(states[1], ["done", "완료"]);
+  assert.deepEqual(states[2], ["todo", "확인"], "unassigned subjects need attention");
+  ctx.state.students = [{ id: "s" }];
+  states = plain(ctx.workflowStepStates());
+  assert.deepEqual(states[2], ["done", "반영됨"]);
+  assert.deepEqual(states[4], ["todo", "확정 필요"]);
+  roundState.value = "confirmed";
+  states = plain(ctx.workflowStepStates());
+  assert.deepEqual(states[4], ["done", "확정"]);
+  assert.deepEqual(states[7], ["done", "가능"]);
+});
