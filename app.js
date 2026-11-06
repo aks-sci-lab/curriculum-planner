@@ -6084,6 +6084,11 @@
     });
     $("#downloadWorkspaceBackup").addEventListener("click", downloadWorkspaceBackup);
     $("#resetWorkspaceAll").addEventListener("click", resetWorkspaceAll);
+    document.addEventListener("click", (event) => {
+      const menu = $("#workspaceDataMenu");
+      if (!menu?.open) return;
+      if (!menu.contains(event.target) || event.target.closest(".workspace-data-menu-items button, .workspace-data-menu-items label")) menu.open = false;
+    });
     $("#restoreWorkspaceBackup").addEventListener("change", (event) => {
       restoreWorkspaceBackup(event.target.files[0]);
       event.target.value = "";

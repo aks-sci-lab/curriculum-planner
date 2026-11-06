@@ -47,7 +47,8 @@ function renderWorkspaceFileStatus() {
   const open = document.getElementById("openWorkspaceFile");
   const allow = document.getElementById("allowWorkspaceFile");
   const disconnect = document.getElementById("disconnectWorkspaceFile");
-  for (const element of [connect, open, label]) element?.classList.toggle("hidden", !supported);
+  for (const element of [connect, open]) element?.classList.toggle("hidden", !supported);
+  label.classList.toggle("hidden", !supported || workspaceFileState.status === "none");
   if (!supported) return;
   const { status, name, savedAt, message } = workspaceFileState;
   const linked = status !== "none";
