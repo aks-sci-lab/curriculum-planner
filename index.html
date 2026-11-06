@@ -143,13 +143,9 @@
         <details class="curriculum-versions" id="curriculumVersionsPanel">
           <summary><span>편제표 변경 이력</span> <span class="curriculum-versions-count" id="curriculumVersionsCount">저장된 이력 없음</span></summary>
           <div class="curriculum-versions-body">
-            <p class="note">수정 중에는 초안을 자동 보관합니다. 변경 사유·근거를 적고 새 시점으로 저장하면 전체 편제표 확정본이 추가되며, 이전 확정본은 변경·삭제되지 않습니다. 비교 기준은 마지막 저장본입니다. 롤백은 과거 확정본을 복사해 새로운 최신 시점으로 저장합니다. 기존 요약 이력은 비교만 가능합니다.</p>
-            <div class="curriculum-versions-form">
-              <label for="curriculumVersionReason">변경 사유</label>
-              <input id="curriculumVersionReason" type="text" maxlength="200" placeholder="예: 2학년 2학기 선택과목 추가">
-              <label for="curriculumVersionBasis">근거</label>
-              <input id="curriculumVersionBasis" type="text" maxlength="200" placeholder="예: 2026.10.20 교육과정위원회">
-              <button class="button button-primary" id="saveCurriculumVersion" type="button">새 시점으로 저장</button>
+            <div class="curriculum-versions-actions">
+              <button class="button button-primary" id="openCurriculumVersionDialog" type="button">새 시점으로 저장</button>
+              <span class="note">비교 기준은 마지막으로 저장한 시점입니다.</span>
             </div>
             <div class="curriculum-versions-list" id="curriculumVersionsList"></div>
             <div class="curriculum-versions-diff" id="curriculumVersionsDiff" aria-live="polite"></div>
@@ -722,6 +718,21 @@ function courseClient_() {
   });
 }
   </script>
+  <dialog class="curriculum-subject-dialog curriculum-version-dialog" id="curriculumVersionDialog" aria-labelledby="curriculumVersionDialogTitle">
+    <form method="dialog" id="curriculumVersionForm">
+      <h2 id="curriculumVersionDialogTitle">새 시점으로 저장</h2>
+      <p class="note" id="curriculumVersionDialogScope"></p>
+      <p class="note">지금 편제표 전체(학점·수식·병합·그룹)를 새 확정본으로 보존합니다. 이전 확정본은 바뀌거나 지워지지 않고, 이후 변경 표시는 이 시점과 비교합니다.</p>
+      <div class="curriculum-versions-form">
+        <label for="curriculumVersionReason">변경 사유 (필수)<input id="curriculumVersionReason" type="text" maxlength="200" placeholder="예: 2학년 2학기 선택과목 추가"></label>
+        <label for="curriculumVersionBasis">근거<input id="curriculumVersionBasis" type="text" maxlength="200" placeholder="예: 2026.10.20 교육과정위원회"></label>
+      </div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" id="cancelCurriculumVersion" type="button">취소</button>
+        <button class="button button-primary" id="saveCurriculumVersion" type="button">저장</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog" id="curriculumSubjectDialog" aria-labelledby="curriculumSubjectTitle" aria-describedby="curriculumSubjectCurrent">
     <form id="curriculumSubjectForm">
       <h2 id="curriculumSubjectTitle">과목 편성 변경</h2>
