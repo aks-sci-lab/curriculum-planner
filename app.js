@@ -378,12 +378,56 @@
           localStorage.setItem(STORAGE_KEY, serialized);
           lastSavedWorkspace = serialized;
         }
-        updateWorkspaceSaveStatus("로컬 저장 완료");
+        updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
         return true;
       } catch (error) {
-        updateWorkspaceSaveStatus(`로컬 저장 실패: ${error.message}`, true);
+        updateWorkspaceSaveStatus(`자동 저장 실패: ${error.message}`, true);
         return false;
       }
+    }
+
+    // 자료는 이 브라우저에만 저장되므로 마지막 백업 시각을 보여 주고, 오래되면 백업을 권한다.
+    const BACKUP_TIME_KEY = "curriculum-last-backup-at";
+    const BACKUP_STALE_MS = 24 * 60 * 60 * 1000;
+    let backupSuggestedAt = 0;
+    function lastWorkspaceBackup() {
+      try {
+        const value = Number(localStorage.getItem(BACKUP_TIME_KEY));
+        return Number.isFinite(value) && value > 0 ? value : 0;
+      } catch { return 0; }
+    }
+    function markWorkspaceBackup() {
+      try { localStorage.setItem(BACKUP_TIME_KEY, String(Date.now())); } catch { /* 표시용 기록이므로 실패해도 백업은 유효하다. */ }
+      renderBackupStatus();
+    }
+    function workspaceHasWork() {
+      return !!state.curriculumImportedLayout || state.students.length > 0 ||
+        Object.values(state.rounds || {}).some((data) => data?.students?.length);
+    }
+    function backupAgeLabel(time) {
+      if (!time) return "백업 없음";
+      const minutes = Math.floor((Date.now() - time) / 60000);
+      if (minutes < 1) return "방금 백업";
+      if (minutes < 60) return `${minutes}분 전 백업`;
+      if (minutes < 1440) return `${Math.floor(minutes / 60)}시간 전 백업`;
+      return `${Math.floor(minutes / 1440)}일 전 백업`;
+    }
+    function renderBackupStatus() {
+      const label = document.getElementById("workspaceBackupStatus");
+      if (!label) return;
+      const time = lastWorkspaceBackup();
+      const stale = workspaceHasWork() && (!time || Date.now() - time > BACKUP_STALE_MS);
+      label.textContent = backupAgeLabel(time);
+      label.classList.toggle("is-stale", stale);
+      label.title = stale ? "작업 내용이 이 브라우저에만 저장되어 있습니다. '파일로 백업하기'를 눌러 보관하세요." : "";
+    }
+    // 결과 반영·차수 확정처럼 되돌리기 번거로운 작업 직후에 호출한다(10분에 한 번만 알린다).
+    function suggestWorkspaceBackup(reason) {
+      const time = lastWorkspaceBackup();
+      if (!workspaceHasWork() || (time && Date.now() - time <= BACKUP_STALE_MS)) return;
+      if (Date.now() - backupSuggestedAt < 10 * 60 * 1000) return;
+      backupSuggestedAt = Date.now();
+      showAppToast(`${reason} 후 백업 파일을 받아 두세요. 자료는 이 브라우저에만 저장됩니다.`);
     }
 
     function downloadWorkspaceBackup() {
@@ -405,9 +449,10 @@
           note: "개인정보가 포함될 수 있습니다. 원본 엑셀과 온라인 서버 자료는 별도로 백업하세요. 로그인 정보는 포함하지 않습니다."
         };
         downloadTextFile(JSON.stringify(backup, null, 2), "교육과정_작업자료_백업.json", "application/json");
-        showAppToast("작업 자료 백업을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
+        markWorkspaceBackup();
+        showAppToast("백업 파일을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
       } catch (error) {
-        showAppToast(`작업 자료 백업 실패: ${error.message}`, "error");
+        showAppToast(`백업 실패: ${error.message}`, "error");
       }
     }
 
@@ -514,6 +559,43 @@
       persistState();
     }
 
+    // 업무 메뉴 각 단계에 완료·확인 필요·대기 상태를 표시해 어디서 막혔는지 한눈에 보이게 한다.
+    function workflowStepStates() {
+      const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
+      const hasResult = state.students.length > 0;
+      const preparation = typeof getApplicationPreparationStatus === "function" ? getApplicationPreparationStatus() : null;
+      const prepIssue = !preparation || preparation.storageIssue || !preparation.subjects || preparation.unassigned ||
+        preparation.invalidGroups || !preparation.hasSelections;
+      const round = state.currentRound;
+      const roundState = typeof roundStatus === "function" ? roundStatus(round) : "draft";
+      return {
+        1: hasPlan ? ["done", "완료"] : ["todo", "필요"],
+        2: hasResult ? ["done", "반영됨"] : hasPlan && prepIssue ? ["todo", "확인"] : ["wait", "대기"],
+        3: hasResult ? ["done", "가능"] : ["wait", "대기"],
+        4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
+          : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
+        7: roundState === "confirmed" ? ["done", "가능"] : ["wait", "대기"]
+      };
+    }
+
+    function renderWorkflowStepStates() {
+      const states = workflowStepStates();
+      for (const button of workflowSteps.querySelectorAll("[data-workflow-step]")) {
+        const entry = states[Number(button.dataset.workflowStep)];
+        let badge = button.querySelector(".workflow-step-state");
+        if (!entry) { badge?.remove(); continue; }
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "workflow-step-state";
+          button.append(badge);
+        }
+        badge.dataset.state = entry[0];
+        badge.textContent = entry[1];
+      }
+      const step = Number(state.workflowStep);
+      if (step === 5 || step === 6) $("#workflowDeferred").open = true;
+    }
+
     function renderWorkflowLayout() {
       const step = Number(state.workflowStep) || 3;
       if (step === 1) renderCurriculumStep();
@@ -563,6 +645,8 @@
     function renderWorkspaceContext() {
       const summary = $("#workspaceContextSummary");
       if (!summary) return;
+      renderBackupStatus();
+      renderWorkflowStepStates();
       const step = Number(state.workflowStep);
       const grade = state.applicationMenuGrade || "1";
       const cohortPlanLabel = state.curriculumPlanType === "annual"
@@ -801,7 +885,7 @@
           statePersistenceBlocked = false;
           protectedStoredState = null;
           lastSavedWorkspace = null;
-          updateWorkspaceSaveStatus("로컬 저장 준비 완료");
+          updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
           return;
         }
         const saved = JSON.parse(raw);

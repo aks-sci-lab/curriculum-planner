@@ -1745,3 +1745,15 @@
       .curriculum-top-collapsed #curriculumPlanUploadLabel,
       .curriculum-top-collapsed #clearCurriculumPlan { display: none; }
     }
+
+/* 마지막 백업 시각: 오래되었거나 없으면 눈에 띄게 표시한다. */
+.workspace-backup-status { font-size: 12px; color: #596780; }
+.workspace-backup-status.is-stale { color: #a44939; font-weight: 700; }
+
+/* 업무 메뉴 단계 상태 배지와 접이식 보류 메뉴 */
+.workflow-step-button { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.workflow-step-state { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #eef1f6; color: #596780; }
+.workflow-step-state[data-state="done"] { background: #e3f3ea; color: #287956; }
+.workflow-step-state[data-state="todo"] { background: #fdebe7; color: #a44939; }
+.workflow-deferred { margin-top: 6px; }
+.workflow-deferred > summary { cursor: pointer; font-size: 12px; color: #596780; padding: 4px 2px; }

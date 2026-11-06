@@ -343,6 +343,7 @@ function confirmResultImport() {
   }
   clearResultImportPreview();
   if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
+  if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("결과 반영");
   status.style.color = "#287956";
   status.textContent = `${preview.round}차 현재 ${preview.grade}학년 ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
     (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +

@@ -156,6 +156,7 @@ function confirmCurrentRound() {
   if (!window.confirm(question)) return false;
   setRoundStatus(round, "confirmed", snapshot);
   refreshAfterRoundStatusChange(`${round}차 결과를 확정했습니다. 5단계 시수 통계에서 이 결과를 사용합니다.`);
+  if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("차수 확정");
   return true;
 }
 

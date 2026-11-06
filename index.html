@@ -74,9 +74,11 @@
           <button class="workflow-step-button" type="button" data-workflow-step="3">3. 수강신청 확인서</button>
           <button class="workflow-step-button" type="button" data-workflow-step="4">4. 집계·개설 확정</button>
           <button class="workflow-step-button" type="button" data-workflow-step="7">5. 교과별 시수 통계</button>
-          <p class="workflow-steps-divider">보류 · 업무 파악 후 진행</p>
-          <button class="workflow-step-button is-deferred" type="button" data-workflow-step="5">이동수업 반편성 (보류)</button>
-          <button class="workflow-step-button is-deferred" type="button" data-workflow-step="6">시간표 작성 (보류)</button>
+          <details class="workflow-deferred" id="workflowDeferred">
+            <summary>보류 단계 2개 · 업무 파악 후 진행</summary>
+            <button class="workflow-step-button is-deferred" type="button" data-workflow-step="5">이동수업 반편성 (보류)</button>
+            <button class="workflow-step-button is-deferred" type="button" data-workflow-step="6">시간표 작성 (보류)</button>
+          </details>
         </div>
       </section>
     </aside>
@@ -94,9 +96,10 @@
           </div>
         </details>
         <div class="workspace-storage">
-          <span id="workspaceSaveStatus" role="status" aria-live="polite">로컬 저장 준비 중</span>
-          <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">작업 자료 백업</button>
-          <label class="file-button" for="restoreWorkspaceBackup">백업 복원<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json"></label>
+          <span id="workspaceSaveStatus" role="status" aria-live="polite">자동 저장 준비 중</span>
+          <span id="workspaceBackupStatus" class="workspace-backup-status" aria-live="polite"></span>
+          <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">파일로 백업하기</button>
+          <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json"></label>
           <button class="button button-secondary hidden" id="retryWorkspaceSave" type="button">저장·복원 재시도</button>
           <button class="button button-danger hidden" id="resumeWorkspaceSave" type="button">현재 자료로 저장 재개</button>
         </div>
