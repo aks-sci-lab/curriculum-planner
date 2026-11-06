@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-warn-only">
+  <link rel="stylesheet" href="styles.css?v=20261106-decisions">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -379,6 +379,7 @@
               <input class="search-input" id="searchInput" type="search" placeholder="이름·2학년·3반·1-3 검색" aria-label="이름, 학년, 반, 번호 검색" disabled>
               <select class="class-select" id="gradeFilter" aria-label="학년 필터" disabled><option value="">전체 학년</option></select>
               <select class="class-select" id="classFilter" aria-label="반 필터" disabled><option value="">전체 반</option></select>
+              <label class="roster-flag-filter" title="위계(선이수) 경고가 있는 학생만 봅니다(경고만, 신청은 그대로)."><input type="checkbox" id="prereqFilter"> 위계 경고만 <span class="roster-flag-count" id="prereqFilterCount">0</span></label>
             </div>
             <p class="note hidden" id="gradeFilterNote" role="status"></p>
             <div class="student-list" id="studentList" aria-live="polite">
@@ -481,6 +482,7 @@
     </section>
     <form id="cloudTeacherEditForm">
       <div class="teacher-edit-summary" id="cloudTeacherEditSummary" role="status" aria-live="polite"></div>
+      <ul class="teacher-edit-prereq" id="cloudTeacherEditPrereq" aria-live="polite"></ul>
       <p class="teacher-edit-hint">그룹마다 안내된 과목 수를 선택해야 저장할 수 있습니다. 학생을 바꾸면 저장하지 않은 선택은 취소됩니다.</p>
       <div id="cloudTeacherEditChoices"></div>
       <div class="teacher-edit-footer">
@@ -492,7 +494,7 @@
   </dialog>
   <dialog id="testBotAutoDialog" aria-labelledby="testBotAutoTitle">
     <h2 id="testBotAutoTitle">수강신청 자동 테스트</h2>
-    <p>지금 편제표·선택 그룹으로 <strong>[테스트]</strong> 수강신청을 만들고 가상 학생 코드를 테스트봇 창으로 보냅니다. 테스트봇은 받는 즉시 저장된 옵션으로 가상 학생 접속·신청·저장 확인, 교사 화면 대조, 정리(기본: 신청 닫기)까지 진행합니다. 실제 학생 명렬은 쓰지 않으며 집계표에도 연동하지 않습니다.</p>
+    <p>지금 편제표·선택 그룹으로 <strong>[테스트]</strong> 수강신청을 만들고 가상 학생 코드를 테스트봇 창으로 보냅니다. 테스트봇은 받는 즉시 저장된 옵션으로 가상 학생 접속·신청·저장 확인, 교사 화면 대조, 정리(끝날 때 확인 창에서 고름, 기본 선택: 닫고 삭제)까지 진행합니다. 실제 학생 명렬은 쓰지 않으며 집계표에도 연동하지 않습니다.</p>
     <p id="testBotAutoSummary"></p>
     <label>반 수 <input id="testBotAutoClasses" type="number" min="1" max="20" value="2"></label>
     <label>반별 인원 <input id="testBotAutoPerClass" type="number" min="1" max="40" value="10"></label>
@@ -779,6 +781,16 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
+  <dialog class="curriculum-subject-dialog course-check-dialog" id="prereqStudentsDialog" aria-labelledby="prereqStudentsTitle">
+    <form method="dialog">
+      <h2 id="prereqStudentsTitle">위계(선이수) 경고 학생</h2>
+      <div id="prereqStudentsBody"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" type="button" data-open-dialog="courseCheckDialog">위계·학점 점검 설정</button>
+        <button class="button button-primary" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog" id="groupHelpDialog" aria-labelledby="groupHelpTitle">
     <form method="dialog">
       <h2 id="groupHelpTitle">선택 그룹 설정 방법</h2>
@@ -923,28 +935,28 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-data.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-data-view.js?v=20261106-warn-only" defer></script>
-  <script src="app-version.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-annual.js?v=20261106-warn-only" defer></script>
-  <script src="course-checks.js?v=20261106-warn-only" defer></script>
-  <script defer src="app.js?v=20261106-warn-only"></script>
-  <script src="xlsx-parser.js?v=20261106-warn-only" defer></script>
-  <script src="course-groups.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-workbook.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-data-export.js?v=20261106-warn-only" defer></script>
-  <script src="result-import.js?v=20261106-warn-only" defer></script>
-  <script src="round-status.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-versions.js?v=20261106-warn-only" defer></script>
-  <script src="hours-stats.js?v=20261106-warn-only" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261106-warn-only" defer></script>
-  <script src="workspace-file.js?v=20261106-warn-only" defer></script>
+  <script src="curriculum-subject-list.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-data.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-data-view.js?v=20261106-decisions" defer></script>
+  <script src="app-version.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-annual.js?v=20261106-decisions" defer></script>
+  <script src="course-checks.js?v=20261106-decisions" defer></script>
+  <script defer src="app.js?v=20261106-decisions"></script>
+  <script src="xlsx-parser.js?v=20261106-decisions" defer></script>
+  <script src="course-groups.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-workbook.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-data-export.js?v=20261106-decisions" defer></script>
+  <script src="result-import.js?v=20261106-decisions" defer></script>
+  <script src="round-status.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-versions.js?v=20261106-decisions" defer></script>
+  <script src="hours-stats.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261106-decisions" defer></script>
+  <script src="workspace-file.js?v=20261106-decisions" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261106-warn-only" defer></script>
-  <script src="test-bot-bridge.js?v=20261106-warn-only" defer></script>
-  <script src="supabase-client.js?v=20261106-warn-only" defer></script>
+  <script src="supabase-config.js?v=20261106-decisions" defer></script>
+  <script src="test-bot-bridge.js?v=20261106-decisions" defer></script>
+  <script src="supabase-client.js?v=20261106-decisions" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

@@ -919,7 +919,7 @@ var TestBotCore = (() => {
 
   // 회차 반복 실행기. 화면·창 연결은 io로 받는다(test-bot.js, 테스트는 흉내).
   //   io.rpc, io.rng, io.signal, io.gate.wait(), io.teacher(action, {eventId, timeoutMs}), io.waitForTeacher(reason) → true(로그인 됨)/false(중지),
-  //   io.confirm(info), io.askCleanup(), io.acceptCreated(data), io.onRound/onStep/onRecord/onCodes/onEvent/onRoundEnd
+  //   io.confirm(info), io.askCleanup({ testEvent, round }), io.acceptCreated(data), io.onRound/onStep/onRecord/onCodes/onEvent/onRoundEnd
   async function runRepeatedTest({ source, opts = {}, repeat = {}, auto = false, connected = false, canCreate = false }, io) {
     const wanted = normalizeRepeat(repeat);
     const notes = [];
@@ -995,7 +995,7 @@ var TestBotCore = (() => {
       await runStep(round, "cleanup", async (step) => {
         if (plan.cleanup === "none") return skip(step, `마지막 회차(${plan.total}회차)가 끝난 뒤 정리합니다.`);
         if (!testEvent || !teacherAvailable) return skip(step, "앱이 자동 테스트로 만든 신청이 아니어서 그대로 둡니다.");
-        const choice = plan.cleanup === "ask" ? (io.askCleanup ? await io.askCleanup() : "close") : plan.cleanup;
+        const choice = plan.cleanup === "ask" ? (io.askCleanup ? await io.askCleanup({ testEvent, round: report.meta.round }) : "close") : plan.cleanup;
         step.expected = { close: "신청 닫기", delete: "신청 닫고 삭제", keep: "그대로 두기" }[choice] +
           (plan.freshEvent ? "(회차마다 새 수강신청 방식은 항상 닫고 삭제)" : "");
         if (choice === "keep") return skip(step, "그대로 두었습니다.");

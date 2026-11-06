@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>수강신청 테스트봇</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-warn-only">
+  <link rel="stylesheet" href="styles.css?v=20261106-decisions">
   <style>
     body.test-bot { background:#f4f6f9; color:#1f2a3a; margin:0; font-size:15px; }
     .bot-shell { max-width:1100px; margin:0 auto; padding:16px; }
@@ -109,7 +109,7 @@
           <label>저장 후 다시 바꿔 저장(재신청) 학생(%) <input id="botResubmitPercent" type="number" min="0" max="100" value="0"></label>
           <label>끝난 뒤 테스트 수강신청 정리
             <select id="botCleanup">
-              <option value="ask">끝나면 묻기(기본 선택: 닫기만)</option>
+              <option value="ask">끝나면 묻기(앱이 만든 [테스트] 신청은 기본 선택: 닫고 삭제)</option>
               <option value="close">닫기만</option>
               <option value="delete">닫고 삭제</option>
               <option value="keep">그대로 두기</option>
@@ -215,17 +215,17 @@
   </dialog>
   <dialog id="botCleanupDialog" aria-labelledby="botCleanupTitle">
     <h2 id="botCleanupTitle">테스트 수강신청 정리</h2>
-    <p id="botCleanupText">테스트가 끝났습니다. 앱이 만든 [테스트] 수강신청을 어떻게 할까요?</p>
+    <p id="botCleanupText">테스트가 끝났습니다. 앱이 만든 [테스트] 수강신청을 어떻게 할까요? 테스트 신청이라 실제 학생 자료와 무관하므로 기본은 닫고 삭제입니다.</p>
     <div class="bot-inline">
-      <button class="button button-primary" id="botCleanupClose" type="button" autofocus>닫기만(기본)</button>
-      <button class="button button-danger" id="botCleanupDelete" type="button">닫고 삭제</button>
+      <button class="button button-primary" id="botCleanupDelete" type="button" autofocus>닫고 삭제(기본)</button>
+      <button class="button" id="botCleanupClose" type="button">닫기만</button>
       <button class="button" id="botCleanupKeep" type="button">그대로 두기</button>
     </div>
   </dialog>
   <dialog id="botHelpDialog" aria-labelledby="botHelpTitle">
     <h2 id="botHelpTitle">수강신청 테스트봇 사용 안내</h2>
     <ul class="bot-help">
-      <li><strong>가장 쉬운 방법</strong>: 앱 2단계 → 온라인 신청 관리에서 구글 로그인 후 <em>수강신청 자동 테스트</em>를 누르세요. 가상 학생으로 [테스트] 수강신청을 만들고, 이 창이 접속·첫 코드 변경·과목 선택·저장 확인·교사 화면 대조·정리(기본: 닫기만)까지 자동으로 진행합니다.</li>
+      <li><strong>가장 쉬운 방법</strong>: 앱 2단계 → 온라인 신청 관리에서 구글 로그인 후 <em>수강신청 자동 테스트</em>를 누르세요. 가상 학생으로 [테스트] 수강신청을 만들고, 이 창이 접속·첫 코드 변경·과목 선택·저장 확인·교사 화면 대조·정리(끝날 때 확인 창에서 고름, 기본 선택: 닫고 삭제)까지 자동으로 진행합니다.</li>
       <li><strong>반복 횟수</strong>: 1~20회. 기본은 테스트 수강신청을 한 번만 만들고, 2회차부터 가상 학생이 바뀐 코드로 다시 접속해 새 무작위 선택으로 재신청합니다. 틀린 코드(잠금 확인)는 1회차에만 넣고, 잠긴 학생은 다음 회차 전에 교사 화면 경로로 잠금을 풀어 다시 참여시킵니다. 회차마다 교사 화면(신청 현황·과목별 인원·잠금)과 대조하고, 회차별 표와 회차 사이 변화를 화면·엑셀로 남깁니다. ‘회차마다 새 수강신청 만들기’를 켜면 회차마다 신청을 새로 만들고 닫고 삭제합니다. 반복이 길어져도 앱 창의 교사 로그인을 이어 두며, 로그인이 끝나면 멈췄다가 앱 창에서 다시 로그인하면 이어서 진행합니다.</li>
       <li><strong>이미 만든 테스트 신청</strong>: 앱에서 코드를 만든 뒤 <em>테스트봇으로 보내기</em>를 누르거나, 학생 신청 링크와 <em>학생별_신청코드.xlsx</em>를 ‘직접 넣기’에 넣고 <em>실행</em>을 누르세요. 확인 창에 ‘테스트’를 입력해야 시작합니다.</li>
       <li>가상 학생은 그룹마다 정확히 정해진 수만큼, 1·2학기 같은 과목을 겹치지 않게 무작위로 고릅니다. 오류 주입(틀린 코드, 규칙 위반, 재신청)은 서버가 막는지 확인하는 용도입니다. 규칙 위반 학생 중 위계(선이수)를 어긴 선택은 경고만이라 저장되는 것이 정상입니다(‘위계 경고 저장’). 첫 접속에서 바뀐 코드는 결과표·엑셀에만 남습니다.</li>
@@ -235,11 +235,11 @@
     <button class="button" id="botHelpClose" type="button">닫기</button>
   </dialog>
 
-  <script src="supabase-config.js?v=20261106-warn-only"></script>
-  <script src="xlsx-parser.js?v=20261106-warn-only"></script>
-  <script src="test-bot-bridge.js?v=20261106-warn-only"></script>
-  <script src="course-checks.js?v=20261106-warn-only"></script>
-  <script src="test-bot-core.js?v=20261106-warn-only"></script>
-  <script src="test-bot.js?v=20261106-warn-only"></script>
+  <script src="supabase-config.js?v=20261106-decisions"></script>
+  <script src="xlsx-parser.js?v=20261106-decisions"></script>
+  <script src="test-bot-bridge.js?v=20261106-decisions"></script>
+  <script src="course-checks.js?v=20261106-decisions"></script>
+  <script src="test-bot-core.js?v=20261106-decisions"></script>
+  <script src="test-bot.js?v=20261106-decisions"></script>
 </body>
 </html>

@@ -567,3 +567,30 @@ test("test bot 반복: 중지하면 끝난 회차까지 보고서를 만들고, 
     assert.equal((await ctx.db.query("select count(*)::int n from public.course_events")).rows[0].n, 0);
   } finally { await ctx.db.close(); }
 });
+
+test("test bot 정리: 끝나면 묻기 — 앱이 만든 [테스트] 신청은 확인 창 기본 선택이 '닫고 삭제'(창에 N차 테스트 표시)", async () => {
+  const ctx = await server({ hardened: true });
+  try {
+    const window = teacherWindow(ctx);
+    const asked = [];
+    const report = await Core.runRepeatedTest({
+      source: { eventId: ctx.event.id, students: freshStudents(ctx), testEvent: true },
+      opts: { scope: "all", concurrency: 3, teacherCheck: true, cleanup: "ask" },
+      repeat: { count: 1 }, auto: true, connected: true,
+    }, {
+      rpc: ctx.rpc, rng: Core.createRng(5), teacher: window.teacher,
+      askCleanup: async (info) => { asked.push(info); return info.testEvent ? "delete" : "close"; },
+    });
+    assert.equal(report.rounds[0].status, "done");
+    assert.equal(asked.length, 1, "확인 창은 그대로 묻는다");
+    assert.equal(asked[0].testEvent, true);
+    assert.match(String(asked[0].round), /^\d+$/, "확인 창에 몇 차 테스트인지 넘긴다");
+    assert.deepEqual(window.calls.filter((call) => /^(close|delete):/.test(call)), [`close:${ctx.event.id.slice(0, 8)}`, `delete:${ctx.event.id.slice(0, 8)}`]);
+  } finally { await ctx.db.close(); }
+  // 화면: 앱 [테스트] 신청이면 '닫고 삭제(기본)'에 초점, 그 밖의 신청이면 '닫기만(기본)'. Esc는 지우지 않는 '닫기만'.
+  const html = fs.readFileSync(path.join(root, "test-bot.html"), "utf8");
+  assert.match(html, /id="botCleanupDelete" type="button" autofocus>닫고 삭제\(기본\)</);
+  const js = fs.readFileSync(path.join(root, "test-bot.js"), "utf8");
+  assert.match(js, /const preferred = testEvent \? "delete" : "close";/);
+  assert.match(js, /addEventListener\("cancel", \(\) => finish\("close"\)/);
+});
