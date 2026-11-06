@@ -434,12 +434,13 @@ function columnIndex(reference) {
         const teacherCounts = count(submitted);
         const courseDiff = [...new Set([...botCounts.keys(), ...teacherCounts.keys()])]
           .filter((name) => (botCounts.get(name) || 0) !== (teacherCounts.get(name) || 0));
-        const others = source.testEvent ? [...entries.values()].filter((entry) => !targetKeys.has(key(entry)) && entry.submittedAt).length : 0;
+        // 이번 대상이 아닌 학생의 신청(이전 실행 등)은 참고로만 보여 준다.
+        const others = [...entries.values()].filter((entry) => !targetKeys.has(key(entry)) && entry.submittedAt).length;
         step.expected = `신청 완료 ${saved.length}명, 학생별 선택·과목별 인원 모두 일치`;
         step.actual = `교사 화면 신청 완료 ${submitted.length}명, 학생 불일치 ${mismatched.length}명, 과목 인원 불일치 ${courseDiff.length}과목` +
           (mismatched.length ? ` (${mismatched.slice(0, 5).join(", ")})` : "") + (courseDiff.length ? ` (${courseDiff.slice(0, 5).join(", ")})` : "") +
-          (others ? `, 대상이 아닌 학생 신청 ${others}명` : "");
-        if (mismatched.length || courseDiff.length || submitted.length !== saved.length || others) step.status = "fail";
+          (others ? ` · 참고: 이번 대상이 아닌 학생 신청 ${others}명(이전 실행 등)` : "");
+        if (mismatched.length || courseDiff.length || submitted.length !== saved.length) step.status = "fail";
       });
       // 4) 잠금 대조(새 방식 + 틀린 코드 주입 때만)
       await runStep(steps, "locks", async (step) => {
