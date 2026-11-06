@@ -6,6 +6,7 @@
     let curriculumSelectionAnchor = null;
     let curriculumSelectionDragging = false;
     let curriculumSelectionGesture = null;
+    let curriculumFirstRowCache = null;
     const curriculumBaselineLoads = new WeakSet();
     let curriculumTableSizeFrame = null;
     const rawState = {
@@ -259,7 +260,6 @@
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
     }
 
-    // 현재 활성 차수 데이터를 rounds에 동기화한다.
     function syncActiveRound() {
       if (!state.rounds || typeof state.rounds !== "object") state.rounds = { "1": null };
       if (state.students.length || state.fileName.startsWith("온라인 자동 연동")) {
@@ -378,12 +378,54 @@
           localStorage.setItem(STORAGE_KEY, serialized);
           lastSavedWorkspace = serialized;
         }
-        updateWorkspaceSaveStatus("로컬 저장 완료");
+        updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
         return true;
       } catch (error) {
-        updateWorkspaceSaveStatus(`로컬 저장 실패: ${error.message}`, true);
+        updateWorkspaceSaveStatus(`자동 저장 실패: ${error.message}`, true);
         return false;
       }
+    }
+
+    const BACKUP_TIME_KEY = "curriculum-last-backup-at";
+    const BACKUP_STALE_MS = 24 * 60 * 60 * 1000;
+    let backupSuggestedAt = 0;
+    function lastWorkspaceBackup() {
+      try {
+        const value = Number(localStorage.getItem(BACKUP_TIME_KEY));
+        return Number.isFinite(value) && value > 0 ? value : 0;
+      } catch { return 0; }
+    }
+    function markWorkspaceBackup() {
+      try { localStorage.setItem(BACKUP_TIME_KEY, String(Date.now())); } catch { /* 표시용 기록이므로 실패해도 백업은 유효하다. */ }
+      renderBackupStatus();
+    }
+    function workspaceHasWork() {
+      return !!state.curriculumImportedLayout || state.students.length > 0 ||
+        Object.values(state.rounds || {}).some((data) => data?.students?.length);
+    }
+    function backupAgeLabel(time) {
+      if (!time) return "백업 없음";
+      const minutes = Math.floor((Date.now() - time) / 60000);
+      if (minutes < 1) return "방금 백업";
+      if (minutes < 60) return `${minutes}분 전 백업`;
+      if (minutes < 1440) return `${Math.floor(minutes / 60)}시간 전 백업`;
+      return `${Math.floor(minutes / 1440)}일 전 백업`;
+    }
+    function renderBackupStatus() {
+      const label = document.getElementById("workspaceBackupStatus");
+      if (!label) return;
+      const time = lastWorkspaceBackup();
+      const stale = workspaceHasWork() && (!time || Date.now() - time > BACKUP_STALE_MS);
+      label.textContent = backupAgeLabel(time);
+      label.classList.toggle("is-stale", stale);
+      label.title = stale ? "작업 내용이 이 브라우저에만 저장되어 있습니다. '파일로 백업하기'를 눌러 보관하세요." : "";
+    }
+    function suggestWorkspaceBackup(reason) {
+      const time = lastWorkspaceBackup();
+      if (!workspaceHasWork() || (time && Date.now() - time <= BACKUP_STALE_MS)) return;
+      if (Date.now() - backupSuggestedAt < 10 * 60 * 1000) return;
+      backupSuggestedAt = Date.now();
+      showAppToast(`${reason} 후 백업 파일을 받아 두세요. 자료는 이 브라우저에만 저장됩니다.`);
     }
 
     function downloadWorkspaceBackup() {
@@ -405,9 +447,10 @@
           note: "개인정보가 포함될 수 있습니다. 원본 엑셀과 온라인 서버 자료는 별도로 백업하세요. 로그인 정보는 포함하지 않습니다."
         };
         downloadTextFile(JSON.stringify(backup, null, 2), "교육과정_작업자료_백업.json", "application/json");
-        showAppToast("작업 자료 백업을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
+        markWorkspaceBackup();
+        showAppToast("백업 파일을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
       } catch (error) {
-        showAppToast(`작업 자료 백업 실패: ${error.message}`, "error");
+        showAppToast(`백업 실패: ${error.message}`, "error");
       }
     }
 
@@ -514,6 +557,42 @@
       persistState();
     }
 
+    function workflowStepStates() {
+      const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
+      const hasResult = state.students.length > 0;
+      const preparation = typeof getApplicationPreparationStatus === "function" ? getApplicationPreparationStatus() : null;
+      const prepIssue = !preparation || preparation.storageIssue || !preparation.subjects || preparation.unassigned ||
+        preparation.invalidGroups || !preparation.hasSelections;
+      const round = state.currentRound;
+      const roundState = typeof roundStatus === "function" ? roundStatus(round) : "draft";
+      return {
+        1: hasPlan ? ["done", "완료"] : ["todo", "필요"],
+        2: hasResult ? ["done", "반영됨"] : hasPlan && prepIssue ? ["todo", "확인"] : ["wait", "대기"],
+        3: hasResult ? ["done", "가능"] : ["wait", "대기"],
+        4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
+          : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
+        7: roundState === "confirmed" ? ["done", "가능"] : ["wait", "대기"]
+      };
+    }
+
+    function renderWorkflowStepStates() {
+      const states = workflowStepStates();
+      for (const button of workflowSteps.querySelectorAll("[data-workflow-step]")) {
+        const entry = states[Number(button.dataset.workflowStep)];
+        let badge = button.querySelector(".workflow-step-state");
+        if (!entry) { badge?.remove(); continue; }
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "workflow-step-state";
+          button.append(badge);
+        }
+        badge.dataset.state = entry[0];
+        badge.textContent = entry[1];
+      }
+      const step = Number(state.workflowStep);
+      if (step === 5 || step === 6) $("#workflowDeferred").open = true;
+    }
+
     function renderWorkflowLayout() {
       const step = Number(state.workflowStep) || 3;
       if (step === 1) renderCurriculumStep();
@@ -545,7 +624,6 @@
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
     }
 
-    // 메뉴 순서는 업무 흐름(편제표 → 수강신청 → 확인서 → 집계 → 시수 통계)을 따른다.
     // 내부 단계 번호 5·6(이동수업·시간표)은 보류 중이고 시수 통계는 7번으로 저장한다.
     function workflowStepLabel(step) {
       return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
@@ -563,6 +641,8 @@
     function renderWorkspaceContext() {
       const summary = $("#workspaceContextSummary");
       if (!summary) return;
+      renderBackupStatus();
+      renderWorkflowStepStates();
       const step = Number(state.workflowStep);
       const grade = state.applicationMenuGrade || "1";
       const cohortPlanLabel = state.curriculumPlanType === "annual"
@@ -662,7 +742,6 @@
       switchRound(next);
     }
 
-    // 차수를 전환한다. 현재 활성 데이터를 rounds에 저장하고 대상 차수 데이터를 활성화한다.
     function switchRound(round, skipRender = false) {
       const next = String(round);
       if (!/^[1-9]\d{0,8}$/.test(next) || !Object.hasOwn(state.rounds || {}, next)) return;
@@ -801,7 +880,7 @@
           statePersistenceBlocked = false;
           protectedStoredState = null;
           lastSavedWorkspace = null;
-          updateWorkspaceSaveStatus("로컬 저장 준비 완료");
+          updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
           return;
         }
         const saved = JSON.parse(raw);
@@ -1534,7 +1613,6 @@
       return records;
     }
 
-    // 화면 레이아웃에서 과목 데이터를 만들고 택n 묶음을 선택 그룹으로 연결한다.
     // previousPlan이 있으면 사용자가 직접 지정한 학기 선택 그룹(묶음 연동이 아닌 것)을 이어받는다.
     function curriculumPlanFromLayout(layout, context = "", previousPlan = null) {
       let plan = [];
@@ -1640,10 +1718,16 @@
       return `<div class="curriculum-hours-summary"><span class="curriculum-hours-title">${escapeHtml(grade)}학년 시수</span>${chips}</div>`;
     }
 
+    function sheetMergeReferenceSet(layout) {
+      return new Set(typeof curriculumSheetMerges === "function" && layout
+        ? curriculumSheetMerges(layout).map((merge) => merge.reference) : []);
+    }
+
     function importedPlanCoveredCells(layout) {
       const covered = new Set();
+      const sheetMergeReferences = sheetMergeReferenceSet(layout);
       for (const reference of layout?.mergedRanges || []) {
-        if (typeof curriculumSheetMerges === "function" && curriculumSheetMerges(layout).some((merge) => merge.reference === reference)) continue;
+        if (sheetMergeReferences.has(reference)) continue;
         const [startRef, endRef = startRef] = String(reference).split(":");
         const startColumn = columnIndex(startRef);
         const endColumn = columnIndex(endRef);
@@ -1659,7 +1743,6 @@
       return covered;
     }
 
-    // 편제표의 각 과목 행에 대해 위쪽 셀·병합에서 이어받은 학년/교육과정/교과군/선택 유형 문맥을 계산한다.
     function importedPlanCourseContexts(layout, columns = importedPlanColumnMap(layout)) {
       const expandedRows = expandCurriculumLayoutRows(layout);
       const coveredCells = importedPlanCoveredCells(layout);
@@ -1912,6 +1995,8 @@
         layout.columnWidths?.length || 0
       );
       if (!rowCount || !columnCount) return "";
+      const sheetMergeByReference = new Map((typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout) : [])
+        .map((item) => [item.reference, item]));
       const emptySubjectRows = new Set(typeof curriculumEmptySubjectRows === "function" ? curriculumEmptySubjectRows(layout) : []);
       const isHiddenRow = (rowIndex) => (!layout.showEmptySubjectRows && emptySubjectRows.has(rowIndex)) ||
         (hasActiveFilter && courseRows.has(rowIndex) && !matchingRows.has(rowIndex));
@@ -1989,8 +2074,7 @@
           const fill = curriculumCellFill(layout, sourceRow, column);
           const fillStyle = /^#[0-9A-F]{6}$/i.test(fill) ? ` style="background-color:${fill}"` : "";
           const value = String((merge ? rows[merge.startRow] : row)?.[column] ?? "");
-          const sheetMerge = merge && typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout)
-            .find((item) => item.reference === `${columnName(merge.startColumn)}${merge.startRow + 1}:${columnName(merge.endColumn)}${merge.endRow + 1}`) : null;
+          const sheetMerge = merge ? sheetMergeByReference.get(`${columnName(merge.startColumn)}${merge.startRow + 1}:${columnName(merge.endColumn)}${merge.endRow + 1}`) : null;
           if (sheetMerge && sheetMerge.kind !== "plain") {
             const block = choiceBlocks.find((block) => block.sheetMerge === sheetMerge.reference && block.column === column);
             const label = curriculumSheetMergeLabel(sheetMerge);
@@ -2544,6 +2628,7 @@
       $("#curriculumMergePick").closest("label").classList.remove("hidden");
       $("#curriculumMergeCredit").closest("label").classList.remove("hidden");
       $("#curriculumMergeToggle").disabled = !state.curriculumImportedLayout;
+      $("#curriculumSplitMerged").disabled = !state.curriculumImportedLayout;
       $("#curriculumAddSubject").disabled = !state.curriculumImportedLayout;
       renderCurriculumCohortUploads();
       if (typeof renderCurriculumVersions === "function") renderCurriculumVersions();
@@ -2828,14 +2913,23 @@
         preview.innerHTML = '<div class="placeholder-icon" aria-hidden="true">▤</div><strong>확인서 미리보기</strong><span>학생 목록에서 확인할 학생을 선택하세요.</span>';
         $("#previewSubheading").textContent = `${state.students.length}명의 확인서를 준비했습니다.`;
         $("#printSelected").disabled = true;
-        $("#printAll").disabled = visibleStudents().length === 0;
+        syncPrintAllButton();
         return;
       }
       preview.className = "preview-paper";
       preview.innerHTML = certificateMarkup(student);
       $("#previewSubheading").textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 · ${student.selections.length}과목 · ${student.totalCredits}학점`;
       $("#printSelected").disabled = false;
-      $("#printAll").disabled = visibleStudents().length === 0;
+      syncPrintAllButton();
+    }
+
+    function syncPrintAllButton() {
+      const count = visibleStudents().length;
+      const button = $("#printAll");
+      button.disabled = count === 0;
+      const classroom = $("#classFilter")?.value;
+      button.textContent = count === 0 ? "검색 결과 전체 인쇄"
+        : `${classroom ? `${classroom}반 ` : "검색 결과 "}전체 인쇄 (${count}명)`;
     }
 
     function renderSemesterClassifier() {
@@ -2997,7 +3091,6 @@
       $("#downloadAggregate").disabled = false;
     }
 
-    // 차수 탭·배지·차수별 보관 현황을 동기화한다.
     function renderRoundStatus() {
       const statusLabel = (round) => typeof roundStatusLabel === "function" ? roundStatusLabel(round) : "";
       $("#roundSelector").innerHTML = applicationRoundNumbers().map((round) =>
@@ -3024,7 +3117,6 @@
       }).join("");
     }
 
-    // 현재 차수의 개설·폐강 검토를 집계표와 함께 표시한다.
     function renderClosurePanel(round) {
       const data = state.rounds?.[round];
       $("#closureTitle").textContent = `${round}차 개설/폐강 검토`;
@@ -3083,7 +3175,6 @@
       }).join("");
     }
 
-    // 등록된 차수별 폐강 결정을 종합해 마지막 신청 명단의 대상을 계산한다.
     function retakeTargets() {
       const rounds = applicationRoundNumbers();
       const sourceRound = [...rounds].reverse().find((round) => state.rounds?.[round]) || "1";
@@ -3119,6 +3210,20 @@
       return { sourceRound, data, rows, closedCount: closedKeys.size };
     }
 
+    function renderRetakeProgress({ sourceRound, nextRound, data, rows, closedCount }) {
+      const list = $("#retakeProgress");
+      if (!list) return;
+      const nextHasResult = !!state.rounds?.[nextRound]?.students?.length;
+      const steps = [
+        { done: closedCount > 0, label: "폐강 확정", detail: data ? (closedCount ? `${closedCount}과목 폐강` : "아래 집계표에서 개설/폐강을 정하세요") : `${sourceRound}차 결과 필요` },
+        { done: closedCount > 0 && rows.length > 0, label: "재신청 대상 확인", detail: rows.length ? `대상 학생 ${rows.length}명 · 명단을 내려받거나 웹 수강신청에서 재신청 생성` : "폐강 과목을 신청한 학생이 없습니다" },
+        { done: nextHasResult, label: `${nextRound}차 결과 반영`, detail: nextHasResult ? `${nextRound}차 결과 반영됨` : `2단계에서 ${nextRound}차를 추가해 결과 업로드` }
+      ];
+      const currentIndex = steps.findIndex((step) => !step.done);
+      list.innerHTML = steps.map((step, index) =>
+        `<li data-state="${step.done ? "done" : index === currentIndex ? "current" : "wait"}"${index === currentIndex ? ' aria-current="step"' : ""}><strong>${index + 1}. ${escapeHtml(step.label)}</strong><span>${escapeHtml(step.detail)}</span></li>`).join("");
+    }
+
     function renderRetakePanel() {
       const { sourceRound, data, rows, closedCount } = retakeTargets();
       const nextRound = String(Number(sourceRound) + 1);
@@ -3127,6 +3232,7 @@
       $("#retakePanel h2").textContent = `${nextRound}차 수강신청 대상자`;
       $("#retakeNextRoundNote").textContent = `${nextRound}차 결과는 2단계에서 차수를 추가한 뒤 불러오세요.`;
       $("#downloadRetakeList").disabled = !rows.length;
+      renderRetakeProgress({ sourceRound, nextRound, data, rows, closedCount });
       if (!data) {
         description.textContent = "수강신청 데이터가 없습니다. 2단계에서 명단을 불러오세요.";
         content.innerHTML = "";
@@ -3482,7 +3588,6 @@
       if (typeof renderCourseGroups === "function") renderCourseGroups();
     }
 
-    // 학생용 수강신청 웹페이지(독립 실행 HTML)를 만든다.
     function buildApplicationPageHtml(subjects) {
       const schoolName = String($("#schoolName").value || "").trim();
       const schoolYear = String($("#schoolYear").value || "").trim();
@@ -3584,7 +3689,6 @@
       ].join("\n");
     }
 
-    // 학생 신청 파일(JSON)들을 명단(학생·과목 구조)으로 합친다.
     function mergeApplications(entries, applicationSubjects = null) {
       const subjects = applicationSubjects || collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
       const nameCount = new Map();
@@ -3925,7 +4029,6 @@
       }
     }
 
-    // 신청 항목 배열을 명단으로 합쳐 현재 차수에 저장한다.
     function applyCloudApplicationResults(round, entries, subjects, groups = []) {
       round = String(round);
       if (!/^[1-9]\d{0,8}$/.test(round)) throw new Error("연동할 신청 차수를 확인하세요.");
@@ -4016,11 +4119,27 @@
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
-    // 외부 프로그램 결과를 현재 차수의 해당 학년 자료로 교체한다.
+    // 개설/폐강 결정은 차수마다 새로 내려야 하므로 이어받지 않는다.
+    function priorRoundSettings(grade) {
+      const current = Number(state.currentRound);
+      for (const round of applicationRoundNumbers().filter((item) => Number(item) < current).reverse()) {
+        const data = state.rounds?.[round];
+        const courses = (data?.courses || []).filter((course) => course.applicationCurrentGrade === grade);
+        if (courses.length) {
+          return {
+            round, courses,
+            classOverrides: data.classOverrides || {},
+            semesterAssignments: data.semesterAssignments || {},
+            groupAssignments: data.groupAssignments || {}
+          };
+        }
+      }
+      return null;
+    }
+
     // 같은 과목(과목명·학기)의 개설 학급 수·개설 결정·학기·그룹 지정은 새 열로 옮겨 유지한다.
     function storeGradeResults(data, sourceLabel, grade) {
       grade = String(grade);
-      // 확정된 차수의 결과는 호출 경로와 관계없이 이 함수에서 교체를 막는다.
       if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
         throw new Error(`${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 업로드하세요.`);
       }
@@ -4045,17 +4164,22 @@
       });
       const nextCourses = [...remapped.values()];
       const courseName = (course) => String(course.name || "").replace(/\s+/g, "");
-      const candidates = new Map();
-      for (const previous of previousCourses) {
-        const sameName = nextCourses.filter((course) => courseName(course) === courseName(previous));
-        const sameSemester = sameName.filter((course) => String(course.semesterKey || "") === String(previous.semesterKey || ""));
-        const match = sameSemester.length === 1 ? sameSemester[0] : sameName.length === 1 ? sameName[0] : null;
-        if (match) candidates.set(String(previous.column), String(match.column));
-      }
-      const targetCounts = new Map();
-      for (const target of candidates.values()) targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
-      const columnMap = new Map([...candidates].filter(([, target]) => targetCounts.get(target) === 1));
-      const carry = { kept: 0, dropped: 0 };
+      const mapColumns = (fromCourses) => {
+        const candidates = new Map();
+        for (const previous of fromCourses) {
+          const sameName = nextCourses.filter((course) => courseName(course) === courseName(previous));
+          const sameSemester = sameName.filter((course) => String(course.semesterKey || "") === String(previous.semesterKey || ""));
+          const match = sameSemester.length === 1 ? sameSemester[0] : sameName.length === 1 ? sameName[0] : null;
+          if (match) candidates.set(String(previous.column), String(match.column));
+        }
+        const targetCounts = new Map();
+        for (const target of candidates.values()) targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
+        return new Map([...candidates].filter(([, target]) => targetCounts.get(target) === 1));
+      };
+      const columnMap = mapColumns(previousCourses);
+      const inherited = previousCourses.length ? null : priorRoundSettings(grade);
+      const inheritedMap = inherited ? mapColumns(inherited.courses) : new Map();
+      const carry = { kept: 0, dropped: 0, inheritedFrom: null, inherited: 0 };
       const remapGradeKeys = (source) => {
         const result = {};
         for (const [key, value] of Object.entries(source || {})) {
@@ -4092,6 +4216,22 @@
       state.classOverrides = remapGradeKeys(state.classOverrides);
       state.semesterAssignments = remapColumnKeys(state.semesterAssignments);
       state.groupAssignments = remapColumnKeys(state.groupAssignments);
+      if (inherited) {
+        const inheritInto = (target, source, build) => {
+          for (const [key, value] of Object.entries(source)) {
+            const mapped = build(key);
+            if (mapped && !Object.hasOwn(target, mapped)) { target[mapped] = value; carry.inherited++; }
+          }
+        };
+        inheritInto(state.classOverrides, inherited.classOverrides, (key) => {
+          const separator = key.indexOf(":");
+          return separator > 0 && key.slice(0, separator) === grade && inheritedMap.has(key.slice(separator + 1))
+            ? `${grade}:${inheritedMap.get(key.slice(separator + 1))}` : null;
+        });
+        inheritInto(state.semesterAssignments, inherited.semesterAssignments, (key) => inheritedMap.get(key) || null);
+        inheritInto(state.groupAssignments, inherited.groupAssignments, (key) => inheritedMap.get(key) || null);
+        if (carry.inherited) carry.inheritedFrom = inherited.round;
+      }
       state.roundClosures ||= {};
       state.roundClosures[state.currentRound] = remapGradeKeys(state.roundClosures[state.currentRound]);
       state.customGroupNames ||= [];
@@ -4152,7 +4292,6 @@
       }
     }
 
-    // 구글폼을 자동 생성하는 Google Apps Script 코드를 만든다.
     function buildAppsScriptCode(subjects) {
       const schoolName = String($("#schoolName").value || "").trim();
       const schoolYear = String($("#schoolYear").value || "").trim();
@@ -4242,7 +4381,6 @@
       return found;
     }
 
-    // 구글폼 응답 시트 행들을 신청 항목 배열로 변환한다.
     function parseGoogleFormsRows(rows, subjects) {
       const headerIndex = rows.findIndex((row) =>
         (row || []).some((value) => /이름|성명/.test(String(value ?? ""))) &&
@@ -4321,7 +4459,6 @@
       return name;
     }
 
-    // 학년 1개분의 집계표 시트 XML을 만든다. 학년별로 시트를 나누어보낸다.
     function createWorksheetXml(report, openingPercent, divisionPercent) {
       const { summary, semesters } = report;
       //보내기 서식: 과목 6개씩 한 묶음(열)으로 배치하고, 총 학급수는 학기 전체를 하나로 병합한다.
@@ -4528,7 +4665,6 @@
       });
     }
 
-    // 학년별 시트로 나눈 집계표 xlsx 파일 구성을 만든다.
     function buildAggregateXlsxFiles() {
       const { openingPercent, divisionPercent } = aggregateThresholds();
       const aggregate = aggregateRecords(
@@ -4582,7 +4718,13 @@
       persistState();
     }
 
-    // 결과 엑셀을 읽어 검증 미리보기를 띄운다. 실제 반영은 미리보기의 '반영' 버튼에서 한다.
+    function resultImportOptions(grade) {
+      return {
+        subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }),
+        existingStudents: state.students
+      };
+    }
+
     function handleWorkbook(file) {
       if (!file) return;
       status.textContent = "";
@@ -4608,9 +4750,8 @@
           if ((state.applicationMenuGrade || "1") !== uploadGrade) throw new Error("파일을 읽는 중 학년 메뉴가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
           if (state.applicationImportRevision !== importRevision) throw new Error("파일을 읽는 중 데이터가 삭제되었습니다. 다시 업로드하세요.");
           const preview = buildResultImportPreview(sheets, {
-            fileName: file.name, round: uploadRound, grade: uploadGrade, revision: importRevision,
-            subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: uploadGrade }),
-            existingStudents: state.students
+            ...resultImportOptions(uploadGrade),
+            fileName: file.name, round: uploadRound, grade: uploadGrade, revision: importRevision
           });
           showResultImportPreview(preview);
           const candidate = preview.candidates[preview.selected];
@@ -4787,7 +4928,6 @@
       return nextLayout;
     }
 
-    // 드롭한 과목이 들어갈 행 번호와 이어받을 문맥(학년·교육과정·교과군·선택 유형)을 찾는다.
     function appendBlankImportedPlanRow() {
       const layout = state.curriculumImportedLayout;
       if (!layout) {
@@ -4904,8 +5044,9 @@
 
     function expandCurriculumLayoutRows(layout) {
       const rows = layout.rows.map((row) => [...row]);
+      const sheetMergeReferences = sheetMergeReferenceSet(layout);
       for (const reference of layout.mergedRanges || []) {
-        if (typeof curriculumSheetMerges === "function" && curriculumSheetMerges(layout).some((merge) => merge.reference === reference)) continue;
+        if (sheetMergeReferences.has(reference)) continue;
         const [startRef, endRef = startRef] = String(reference).split(":");
         const startColumn = columnIndex(startRef);
         const startRow = Number(startRef.match(/\d+/)?.[0]) - 1;
@@ -4976,7 +5117,6 @@
             } catch (error) {
               parseError = error;
             }
-            // 헤더 규칙으로 못 읽으면 표 레이아웃에서 과목 행을 만든다.
             if (!sheetPlan.length) sheetPlan = planRowsFromImportedLayout(layout);
             if (sheetPlan.length || !importedLayout) {
               importedLayout = layout;
@@ -5292,8 +5432,13 @@
         item.setAttribute("aria-pressed", String(selected));
       });
       const horizontal = endColumn > startColumn;
-      const semesterColumns = importedPlanColumnMap(state.curriculumImportedLayout).semesters;
-      const academic = semesterColumns.includes(startColumn) && semesterColumns.includes(endColumn);
+      const selectionLayout = state.curriculumImportedLayout;
+      const selectionColumns = importedPlanColumnMap(selectionLayout);
+      if (!curriculumFirstRowCache || curriculumFirstRowCache.revision !== state.curriculumMutationRevision) {
+        curriculumFirstRowCache = { revision: state.curriculumMutationRevision, row: curriculumFirstCourseRow(selectionLayout, selectionColumns) };
+      }
+      const semesterColumns = selectionColumns.semesters;
+      const academic = startRow >= curriculumFirstRowCache.row && semesterColumns.includes(startColumn) && semesterColumns.includes(endColumn);
       $("#curriculumMergeSelection").textContent = `${columnName(startColumn)}${startRow + 1}:${columnName(endColumn)}${endRow + 1} · ${academic ? horizontal ? "교차집중 선택과목군" : "선택과목군" : "일반 셀 병합"}`;
       $("#curriculumMergeApply").disabled = !horizontal && endRow <= startRow;
       $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic);
@@ -5449,6 +5594,22 @@
         showAppToast(status.textContent, "error");
       }
     }
+    $("#curriculumSplitMerged").addEventListener("click", () => {
+      if (!state.curriculumImportedLayout) return;
+      if (!curriculumCellSelectionMode || !curriculumCellSelection) {
+        if (!curriculumCellSelectionMode) {
+          curriculumCellSelectionMode = true;
+          $("#curriculumMergeToggle").setAttribute("aria-pressed", "true");
+          $("#curriculumMergeControls").classList.remove("hidden");
+          renderCurriculumStep();
+        }
+        status.style.color = "#596780";
+        status.textContent = "분리할 병합 셀을 표에서 선택한 뒤 '병합 셀 분리'를 다시 누르세요.";
+        showAppToast(status.textContent);
+        return;
+      }
+      applyCurriculumCellSelection(true);
+    });
     $("#curriculumMergeApply").addEventListener("click", () => applyCurriculumCellSelection());
     $("#curriculumMergeRelease").addEventListener("click", () => applyCurriculumCellSelection(true));
     $("#curriculumInsertSelectionRow").addEventListener("click", () => applyCurriculumCellSelection(false, "row"));

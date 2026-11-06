@@ -22,9 +22,10 @@ function curriculumChoiceRange(reference) {
 
 function curriculumSheetMerges(layout) {
   const saved = layout.sheetMerges || [];
+  const savedReferences = new Set(saved.map((merge) => merge.reference));
   const result = saved.map((merge) => ({ ...merge, ...curriculumChoiceRange(merge.reference) }));
   for (const reference of layout.mergedRanges || []) {
-    if (saved.some((merge) => merge.reference === reference)) continue;
+    if (savedReferences.has(reference)) continue;
     const range = curriculumChoiceRange(reference);
     if (!range) continue;
     const label = String(layout.rows[range.startRow]?.[range.startColumn] || "");
@@ -33,6 +34,11 @@ function curriculumSheetMerges(layout) {
       pick: Number(match[2]), credit: Number(match[3]) });
   }
   return result;
+}
+
+function curriculumFirstCourseRow(layout, columns) {
+  const rows = importedPlanCourseContexts(layout, columns).map((context) => context.rowIndex);
+  return rows.length ? Math.min(...rows) : Infinity;
 }
 
 function curriculumSheetMergeLabel(merge) {
@@ -48,7 +54,9 @@ function mergeCurriculumSheetCells(layout, selection, values = {}) {
       endColumn >= Math.max(...layout.rows.map((row) => row.length)) ||
       (startRow === endRow && column === endColumn)) throw new Error("병합할 셀을 두 개 이상 선택하세요.");
   const columns = importedPlanColumnMap(layout);
-  const semesters = columns.semesters.filter((c) => c >= column && c <= endColumn);
+  // 머리글(학년·학기 제목) 행의 병합은 글자를 그대로 두는 일반 병합이다. 선택과목군으로 바꾸면 제목이 학점 칸으로 바뀐다.
+  const inHeader = startRow < curriculumFirstCourseRow(layout, columns);
+  const semesters = inHeader ? [] : columns.semesters.filter((c) => c >= column && c <= endColumn);
   let kind = "plain";
   if (semesters.length) {
     const index = columns.semesters.indexOf(column);

@@ -53,7 +53,6 @@ var updateRetakeReadiness;
     const studentRoute = !!eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=");
     const offlineWorkspace = isOfflineWorkspace();
     const loggedIn = !!session && Date.now() - lastActivity < IDLE_MS && !studentRoute;
-    // 교사 작업 화면(편제표·결과 업로드·집계·통계)은 로그인 없이 항상 표시하고, 웹 수강신청만 로그인을 요구한다.
     byId("teacherHeader").classList[studentRoute ? "add" : "remove"]("hidden");
     byId("teacherWorkspace").classList[studentRoute ? "add" : "remove"]("hidden");
     byId("headerTeacherLogout").classList[loggedIn ? "remove" : "add"]("hidden");

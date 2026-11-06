@@ -1,5 +1,4 @@
 "use strict";
-// 외부 수강신청 프로그램의 결과 엑셀을 검증하고, 미리보기에서 확인한 뒤 현재 차수·학년에 반영한다.
 var resultImportPending = null;
 
 function normalizeResultCourseName(name) {
@@ -132,9 +131,11 @@ function countResultSelections(students, courses) {
   return counts;
 }
 
-// 반영 전에 확인해야 할 오류·경고·참고 사항과 기존 결과 대비 변화를 계산한다.
 function analyzeResultCandidate(candidate, options) {
-  const issues = { blocking: [], warnings: [], info: [] };
+  const issues = { blocking: [], warnings: [], info: [], actions: [] };
+  const addAction = (target, label) => {
+    if (!issues.actions.some((action) => action.target === target)) issues.actions.push({ target, label });
+  };
   if (candidate.error) {
     issues.blocking.push(candidate.error);
     return { ...candidate, issues, comparison: [], summary: null };
@@ -173,6 +174,7 @@ function analyzeResultCandidate(candidate, options) {
     const unknown = courses.filter((course) => !curriculumNames.has(normalizeResultCourseName(course.name)));
     if (unknown.length) {
       issues.warnings.push(`${targetGrade}학년 편제표에 없는 과목 ${unknown.length}개: ${resultExampleList(unknown.map((course) => course.name))}. 과목명이 편제표와 다르면 그룹 분류와 시수 통계 연결이 끊어지니 편제표 또는 파일의 과목명을 맞추세요.`);
+      addAction("curriculum", "1단계 편제표 확인");
     }
     const missing = curriculum.filter((item) => !fileNames.has(normalizeResultCourseName(item.subject)));
     if (missing.length) issues.info.push(`편제표의 ${targetGrade}학년 선택 과목 중 결과 파일에 없는 과목 ${missing.length}개: ${resultExampleList(missing.map((item) => item.subject))}.`);
@@ -197,6 +199,7 @@ function analyzeResultCandidate(candidate, options) {
   }
   if (unclassified.length) {
     issues.warnings.push(`선택 그룹이 정해지지 않은 과목 ${unclassified.length}개: ${resultExampleList(unclassified)}. 2단계 과목·그룹 설정에서 그룹에 넣으면 집계표가 그룹별로 정리됩니다.`);
+    addAction("groups", "과목·그룹 설정으로");
   }
   const groupOf = (selection) => {
     const course = courses.find((item) => item.column === selection.column) || selection;
@@ -213,6 +216,7 @@ function analyzeResultCandidate(candidate, options) {
     if (mismatched.length) {
       const label = `${["1", "2"].includes(group.semester) ? `${group.semester}학기 ` : ""}${group.name}`;
       issues.warnings.push(`${label}: ${group.count}과목 선택 기준과 다른 학생 ${mismatched.length}명 (${resultExampleList(mismatched.map(({ student, picked }) => `${student.classroom}-${student.number} ${student.name} ${picked}과목`), 3)}).`);
+      addAction("groups", "과목·그룹 설정으로");
     }
   }
 
@@ -247,7 +251,7 @@ function buildResultImportPreview(sheets, options) {
   const selected = Math.max(0, candidates.findIndex((candidate) => !candidate.issues.blocking.length));
   return {
     fileName: options.fileName, round: String(options.round), grade: String(options.grade),
-    revision: options.revision, candidates, selected
+    revision: options.revision, candidates, selected, sheets
   };
 }
 
@@ -306,6 +310,8 @@ function renderResultImportPreview() {
     ${list(candidate.issues.warnings, "is-warning", "확인이 필요한 경고")}
     ${list(candidate.issues.info, "is-info", "참고")}
     ${comparison}
+    ${candidate.issues.actions?.length ? `<div class="result-import-fixes"><span>설정을 고친 뒤 파일을 다시 올리지 않고 아래 버튼으로 다시 검증할 수 있습니다.</span>${candidate.issues.actions.map((action) =>
+      `<button class="button" type="button" data-result-import-fix="${esc(action.target)}">${esc(action.label)}</button>`).join("")}<button class="button" id="revalidateResultImport" type="button">다시 검증</button></div>` : ""}
     <div class="result-import-actions">
       <button class="button button-primary" id="confirmResultImport" type="button"${blocked ? " disabled" : ""}>${warningCount ? `경고 ${warningCount}건 확인 후 결과 반영` : "결과 반영"}</button>
       <button class="button" id="cancelResultImport" type="button">취소</button>
@@ -313,12 +319,10 @@ function renderResultImportPreview() {
   container.classList.remove("hidden");
 }
 
-// 미리보기를 만든 뒤 차수·학년·데이터가 바뀌지 않았는지 다시 확인하고 반영한다.
 function confirmResultImport() {
   const preview = resultImportPending;
   if (!preview) return;
   const candidate = preview.candidates[preview.selected];
-  // 미리보기가 더 이상 맞지 않는 경우(차수·학년·잠금 변경)에만 미리보기를 닫는다.
   try {
     if (!candidate || candidate.issues.blocking.length) throw new Error("오류가 있는 시트는 반영할 수 없습니다.");
     if (state.currentRound !== preview.round) throw new Error("미리보기 이후 차수가 바뀌었습니다. 해당 차수에서 다시 업로드하세요.");
@@ -343,6 +347,7 @@ function confirmResultImport() {
   }
   clearResultImportPreview();
   if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
+  if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("결과 반영");
   status.style.color = "#287956";
   status.textContent = `${preview.round}차 현재 ${preview.grade}학년 ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
     (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +
@@ -350,11 +355,44 @@ function confirmResultImport() {
     (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개.` : "");
 }
 
+function revalidateResultImport() {
+  const previous = resultImportPending;
+  if (!previous?.sheets) return;
+  if (state.currentRound !== previous.round || (state.applicationMenuGrade || "1") !== previous.grade ||
+      state.applicationImportRevision !== previous.revision) {
+    clearResultImportPreview();
+    status.style.color = "#a44939";
+    status.textContent = "차수·학년·결과 데이터가 바뀌어 다시 검증할 수 없습니다. 파일을 다시 업로드하세요.";
+    return;
+  }
+  const preview = buildResultImportPreview(previous.sheets, {
+    ...resultImportOptions(previous.grade),
+    fileName: previous.fileName, round: previous.round, grade: previous.grade, revision: previous.revision
+  });
+  const keep = preview.candidates[previous.selected];
+  if (keep && !keep.issues.blocking.length) preview.selected = previous.selected;
+  showResultImportPreview(preview);
+  const candidate = preview.candidates[preview.selected];
+  status.style.color = "#596780";
+  status.textContent = candidate.issues.blocking.length
+    ? `다시 검증했지만 반영할 수 없습니다: ${candidate.issues.blocking[0]}`
+    : `다시 검증했습니다. 경고 ${candidate.issues.warnings.length}건입니다.`;
+}
+
 function initResultImport() {
   const container = resultImportElement();
   if (!container) return;
   container.addEventListener("click", (event) => {
-    if (event.target.closest("#confirmResultImport")) confirmResultImport();
+    const fix = event.target.closest("[data-result-import-fix]");
+    if (fix) {
+      if (fix.dataset.resultImportFix === "curriculum" && typeof switchWorkflowStep === "function") switchWorkflowStep(1);
+      else if (typeof openApplicationWorkspaceTab === "function") openApplicationWorkspaceTab("groups");
+      status.style.color = "#596780";
+      status.textContent = "설정을 고친 뒤 2단계 '결과' 탭의 검증 화면에서 '다시 검증'을 누르세요. 업로드한 파일은 유지됩니다.";
+      return;
+    }
+    if (event.target.closest("#revalidateResultImport")) revalidateResultImport();
+    else if (event.target.closest("#confirmResultImport")) confirmResultImport();
     else if (event.target.closest("#cancelResultImport")) {
       clearResultImportPreview();
       status.style.color = "#596780";
