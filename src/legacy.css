@@ -1697,12 +1697,13 @@
       .workspace-settings[open] + .workspace-storage { grid-column: 3; grid-row: 1; }
       .workspace-storage > span { font-size: 12px; }
       .workspace-settings[open] { grid-column: 1 / -1; grid-row: 2; }
-      .curriculum-cohort-uploads { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .curriculum-cohort-uploads { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .aggregate-settings { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .aggregate-context-grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
       .aggregate-context-grid .aggregate-note { padding: 6px 10px; }
     }
     @media screen and (min-width: 1600px) {
+      .curriculum-cohort-uploads { grid-template-columns: repeat(5, minmax(0, 1fr)); }
       .workspace { grid-template-columns: 204px minmax(0, 1fr); gap: 12px; }
       .certificate-setup-grid { grid-template-columns: 280px minmax(0, 1fr); }
       .aggregate-context-grid { grid-template-columns: minmax(520px, 1fr) minmax(0, 1fr); align-items: center; }
@@ -1766,3 +1767,15 @@
 .app-version { margin-left: 6px; font-size: 11px; color: #596780; }
 .workspace-file-status { font-size: 12px; color: #596780; }
 .workspace-file-status.is-warning { color: #a44939; font-weight: 700; }
+
+/* 자료 관리 메뉴: 백업·파일 저장·초기화 버튼을 한곳에 모아 상단 줄을 간결하게 한다. */
+.workspace-data-menu { position: relative; }
+.workspace-data-menu > summary { list-style: none; cursor: pointer; }
+.workspace-data-menu > summary::-webkit-details-marker { display: none; }
+.workspace-data-menu > summary::after { content: " ▾"; }
+.workspace-data-menu-items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 210px; padding: 8px; border: 1px solid #d7dfed; border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(30, 50, 90, 0.15); }
+.workspace-data-menu-items .button, .workspace-data-menu-items .file-button { width: 100%; justify-content: flex-start; text-align: left; }
+@media screen and (min-width: 1500px) {
+  .curriculum-cohort-uploads { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.workspace-data-menu-items .file-button { border-color: transparent; background: transparent; box-shadow: none; }

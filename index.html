@@ -98,14 +98,19 @@
         <div class="workspace-storage">
           <span id="workspaceSaveStatus" role="status" aria-live="polite">자동 저장 준비 중</span>
           <span id="workspaceBackupStatus" class="workspace-backup-status" aria-live="polite"></span>
-          <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">파일로 백업하기</button>
-          <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json"></label>
           <span id="workspaceFileStatus" class="workspace-file-status hidden" aria-live="polite">PC 파일 자동 저장 안 함</span>
-          <button class="button button-quiet hidden" id="connectWorkspaceFile" type="button" title="작업 자료를 내 PC의 파일 하나에 자동으로 저장합니다. Chrome·Edge에서 쓸 수 있습니다.">자동 저장 파일 연결</button>
-          <button class="button button-quiet hidden" id="openWorkspaceFile" type="button" title="이전에 저장한 자료 파일을 열어 복원하고, 그 파일에 계속 자동 저장합니다.">자료 파일 열기</button>
-          <button class="button button-secondary hidden" id="allowWorkspaceFile" type="button">저장 허용</button>
-          <button class="button button-quiet hidden" id="disconnectWorkspaceFile" type="button">연결 해제</button>
-          <button class="button button-quiet" id="resetWorkspaceAll" type="button" title="이 브라우저에 저장된 모든 작업 자료를 삭제하고 처음 상태로 되돌립니다.">전체 초기화</button>
+          <details class="workspace-data-menu" id="workspaceDataMenu">
+            <summary class="button button-quiet">자료 관리</summary>
+            <div class="workspace-data-menu-items">
+            <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">파일로 백업하기</button>
+            <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json"></label>
+            <button class="button button-quiet hidden" id="connectWorkspaceFile" type="button" title="작업 자료를 내 PC의 파일 하나에 자동으로 저장합니다. Chrome·Edge에서 쓸 수 있습니다.">자동 저장 파일 연결</button>
+            <button class="button button-quiet hidden" id="openWorkspaceFile" type="button" title="이전에 저장한 자료 파일을 열어 복원하고, 그 파일에 계속 자동 저장합니다.">자료 파일 열기</button>
+            <button class="button button-secondary hidden" id="allowWorkspaceFile" type="button">저장 허용</button>
+            <button class="button button-quiet hidden" id="disconnectWorkspaceFile" type="button">연결 해제</button>
+            <button class="button button-quiet" id="resetWorkspaceAll" type="button" title="이 브라우저에 저장된 모든 작업 자료를 삭제하고 처음 상태로 되돌립니다.">전체 초기화</button>
+            </div>
+          </details>
           <button class="button button-secondary hidden" id="retryWorkspaceSave" type="button">저장·복원 재시도</button>
           <button class="button button-danger hidden" id="resumeWorkspaceSave" type="button">현재 자료로 저장 재개</button>
         </div>
