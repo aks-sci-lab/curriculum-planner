@@ -30,7 +30,8 @@ function columnIndex(reference) {
 
   // ---------- 설정 저장(코드 제외) ----------
   const optionFields = ["botScope", "botScopeCount", "botScopeClasses", "botConcurrency", "botDelay", "botPopularity",
-    "botWrongPercent", "botWrongTimes", "botViolationPercent", "botResubmitPercent", "botCleanup", "botTeacherCheck"];
+    "botWrongPercent", "botWrongTimes", "botViolationPercent", "botResubmitPercent", "botCleanup", "botTeacherCheck",
+    "botRepeat", "botRepeatFresh"];
   function loadOptions() {
     try {
       const saved = JSON.parse(localStorage.getItem(OPTIONS_KEY) || "{}");
@@ -67,6 +68,7 @@ function columnIndex(reference) {
       wrongCodePercent: number("botWrongPercent", 0, 100, 0), wrongCodeTimes: Math.floor(number("botWrongTimes", 0, 12, 0)),
       violationPercent: number("botViolationPercent", 0, 100, 0), resubmitPercent: number("botResubmitPercent", 0, 100, 0),
       cleanup: byId("botCleanup").value, teacherCheck: byId("botTeacherCheck").checked, importToApp: byId("botImport").checked,
+      repeatCount: Math.floor(number("botRepeat", 1, Core.REPEAT_MAX, 1)), repeatFresh: byId("botRepeatFresh").checked,
     };
   }
 
@@ -92,10 +94,11 @@ function columnIndex(reference) {
   function appConnected() {
     return !!nonce && !!window.opener && !window.opener.closed;
   }
-  function announceReady() {
+  // quiet: 교사 로그인을 기다리며 다시 알리는 경우(앱 창이 다시 로그인하며 새로 열렸으면 이 신호로 다시 연결된다).
+  function announceReady(quiet = false) {
     if (!appConnected()) return;
     window.opener.postMessage({ type: Bridge.READY, nonce }, Bridge.targetOrigin(window.location));
-    byId("botBridgeStatus").textContent = "앱 창과 연결했습니다. 학생 코드를 기다리는 중…";
+    if (!quiet) byId("botBridgeStatus").textContent = "앱 창과 연결했습니다. 학생 코드를 기다리는 중…";
   }
   window.addEventListener("hashchange", () => {
     const next = Bridge.nonceFromHash(window.location.hash);
@@ -106,8 +109,16 @@ function columnIndex(reference) {
     if (!nonce) return;
     const payload = Bridge.acceptCodes(event, bridgeOptions());
     if (payload) {
+      // 실행 중에는 전체 코드를 다시 받지 않는다(회차 사이에 바뀐 코드가 처음 코드로 되돌아가지 않게). 재발급(일부 학생)만 반영한다.
+      if (running && !payload.partial) return;
       const merged = Bridge.mergePayload(source?.from === "app" ? source : null, payload);
-      source = { ...merged, from: "app", receivedAt: new Date() };
+      source = { ...merged, from: "app", receivedAt: new Date(), autoCreated: payload.partial ? !!source?.autoCreated : payload.autoRun === true };
+      if (payload.repeat && !payload.partial) {
+        // 앱 자동 테스트 설정 창에서 정한 반복 설정을 이 창 설정에도 맞춘다.
+        byId("botRepeat").value = String(payload.repeat.count);
+        byId("botRepeatFresh").checked = payload.repeat.freshEvent;
+        saveOptions();
+      }
       byId("botBridgeStatus").textContent = payload.partial
         ? `앱에서 재발급한 학생 코드 ${payload.students.length}명을 갱신했습니다.`
         : "앱 창에서 학생 코드를 받았습니다. 코드는 이 창의 메모리에만 있습니다.";
@@ -130,7 +141,7 @@ function columnIndex(reference) {
     }
   });
   let requestSeq = 0;
-  function teacherRequest(action, timeoutMs = 60000) {
+  function teacherRequest(action, timeoutMs = 60000, eventId = source?.eventId) {
     if (!appConnected()) return Promise.reject(new Error("앱 창이 닫혀 교사 화면 요청을 보낼 수 없습니다."));
     const id = `r${++requestSeq}-${Date.now().toString(36)}`;
     return new Promise((resolve, reject) => {
@@ -139,7 +150,7 @@ function columnIndex(reference) {
         reject(new Error("앱 창이 응답하지 않습니다(교사 로그인 만료 또는 창 닫힘)."));
       }, timeoutMs);
       pendingRequests.set(id, { resolve, reject, timer });
-      window.opener.postMessage({ type: Bridge.TEACHER_REQUEST, nonce, id, action, eventId: source.eventId }, Bridge.targetOrigin(window.location));
+      window.opener.postMessage({ type: Bridge.TEACHER_REQUEST, nonce, id, action, eventId }, Bridge.targetOrigin(window.location));
     });
   }
   announceReady();
@@ -178,31 +189,21 @@ function columnIndex(reference) {
   byId("botEventInput").addEventListener("change", applyManualSource);
 
   // ---------- 실행 ----------
-  const STEPS = [
-    ["server", "서버·수강신청 확인"],
-    ["students", "가상 학생 접속·첫 코드 변경·신청·저장 확인"],
-    ["teacher", "교사 화면 신청 현황 대조"],
-    ["locks", "교사 화면 잠금 현황 대조"],
-    ["import", "앱 2단계 결과 반영(선택)"],
-    ["cleanup", "테스트 수강신청 정리"],
-    ["report", "보고서"],
-  ];
-  function newSteps() {
-    return STEPS.map(([key, name]) => ({ key, name, status: "pending", expected: "", actual: "", ms: 0 }));
-  }
-  function renderSteps(steps) {
+  // 회차 반복·단계 진행은 Core.runRepeatedTest가 하고, 여기서는 화면 표시·확인 창·앱 창 요청만 맡는다.
+  const STEP_LABELS = { pending: "대기", running: "진행 중", pass: "통과", fail: "실패", skip: "건너뜀" };
+  function renderSteps(round) {
     const marks = { pending: "·", running: "…", pass: "✓", fail: "✗", skip: "–" };
-    const labels = { pending: "대기", running: "진행 중", pass: "통과", fail: "실패", skip: "건너뜀" };
-    byId("botChecklist").replaceChildren(...steps.map((step) => {
+    byId("botChecklistTitle").textContent = round ? `${round.round}/${round.total}회차 단계` : "단계";
+    byId("botChecklist").replaceChildren(...(round?.steps || []).map((step) => {
       const item = document.createElement("li");
       item.dataset.status = step.status;
       item.dataset.step = step.key;
       const mark = document.createElement("span");
       mark.className = "mark";
       mark.textContent = marks[step.status];
-      mark.setAttribute("aria-label", labels[step.status]);
+      mark.setAttribute("aria-label", STEP_LABELS[step.status]);
       const title = document.createElement("span");
-      title.textContent = `${step.name} · ${labels[step.status]}${step.ms ? ` · ${(step.ms / 1000).toFixed(1)}초` : ""}`;
+      title.textContent = `${step.name} · ${STEP_LABELS[step.status]}${step.ms ? ` · ${(step.ms / 1000).toFixed(1)}초` : ""}`;
       item.append(mark, title);
       if (step.expected || step.actual) {
         const detail = document.createElement("small");
@@ -211,22 +212,6 @@ function columnIndex(reference) {
       }
       return item;
     }));
-  }
-  async function runStep(steps, key, work) {
-    const step = steps.find((item) => item.key === key);
-    step.status = "running";
-    renderSteps(steps);
-    const started = Date.now();
-    try {
-      const result = await work(step);
-      step.status = result === "skip" ? "skip" : step.status === "running" ? "pass" : step.status;
-    } catch (error) {
-      step.status = "fail";
-      step.actual = step.actual ? `${step.actual} · ${error.message}` : error.message;
-    }
-    step.ms = Date.now() - started;
-    renderSteps(steps);
-    return step;
   }
 
   function renderStats(records) {
@@ -247,7 +232,7 @@ function columnIndex(reference) {
     if (summary.reasons.length) {
       const table = document.createElement("table");
       table.className = "bot-table";
-      table.innerHTML = "<caption>실패 사유별 학생 수</caption><thead><tr><th>사유</th><th>학생 수</th></tr></thead>";
+      table.innerHTML = "<caption>실패 사유별 학생 수(이번 회차)</caption><thead><tr><th>사유</th><th>학생 수</th></tr></thead>";
       const body = document.createElement("tbody");
       for (const [reason, count] of summary.reasons) {
         const row = body.insertRow();
@@ -262,11 +247,62 @@ function columnIndex(reference) {
   function renderRecord(record) {
     const row = document.createElement("tr");
     if (!record.ok && record.status !== "잠김 확인") row.className = "is-failed";
-    for (const value of [`${record.grade}-${record.classroom}-${record.number} ${record.name}`, record.status, record.newCode,
+    for (const value of [`${record.round || 1}회차`, `${record.grade}-${record.classroom}-${record.number} ${record.name}`, record.status, record.newCode,
       record.selections.join(", "), record.notes.join(" / "), record.failure]) {
       row.insertCell().textContent = value || "";
     }
     byId("botResults").appendChild(row);
+  }
+  // 회차별 표 + 합계 + 회차 사이 변화.
+  function renderRounds(report) {
+    const box = byId("botRounds");
+    box.replaceChildren();
+    if (!report?.rounds.length) return;
+    const { rows, totals, trends } = Core.repeatSummary(report);
+    const table = document.createElement("table");
+    table.className = "bot-table bot-round-table";
+    table.id = "botRoundTable";
+    const caption = document.createElement("caption");
+    caption.textContent = `회차별 결과 · ${report.repeat.count}회 반복 · ${report.repeat.freshEvent ? "회차마다 새 수강신청(회차마다 닫고 삭제)" : "같은 수강신청에서 재신청"}`;
+    table.appendChild(caption);
+    const head = table.createTHead().insertRow();
+    for (const label of ["회차", "결과", "대상", "성공", "실패", "잠김", "위반 거절", "대조 불일치", "평균 응답", "최대 응답"]) {
+      const cell = document.createElement("th");
+      cell.textContent = label;
+      head.appendChild(cell);
+    }
+    const body = table.createTBody();
+    const line = (row, label, status, className = "") => {
+      const tr = body.insertRow();
+      if (className) tr.className = className;
+      for (const value of [label, status, row.targets, row.ok, row.failed, row.locked, row.violationsRefused,
+        row.mismatches === null ? "대조 안 함" : row.mismatches, `${row.averageMs}ms`, `${row.maxMs}ms`]) {
+        tr.insertCell().textContent = String(value);
+      }
+      return tr;
+    };
+    for (const row of rows) {
+      const tr = line(row, `${row.round}회차`, row.status, row.failedSteps || row.stopped ? "is-failed" : "");
+      tr.dataset.round = String(row.round);
+    }
+    if (rows.length > 1 || report.rounds[0]?.status !== "running") {
+      line(totals, `합계(끝난 ${totals.rounds}회차)`, totals.failedSteps ? `실패 단계 ${totals.failedSteps}개` : "통과", "bot-total-row");
+    }
+    box.appendChild(table);
+    const notes = [...trends, ...(report.notes || [])];
+    if (notes.length) {
+      const title = document.createElement("p");
+      title.className = "bot-note";
+      title.textContent = "회차 사이 변화";
+      const list = document.createElement("ul");
+      list.id = "botRoundTrends";
+      for (const note of notes) {
+        const item = document.createElement("li");
+        item.textContent = note;
+        list.appendChild(item);
+      }
+      box.append(title, list);
+    }
   }
 
   function waitForConfirm(info) {
@@ -306,7 +342,7 @@ function columnIndex(reference) {
     });
   }
 
-  // 일시정지 관문: 진행 중인 학생은 끝까지 하고, 새 학생은 이어하기를 누를 때까지 기다린다.
+  // 일시정지 관문: 진행 중인 학생은 끝까지 하고, 새 학생은 이어하기를 누를 때까지 기다린다(회차 중간에서도 같음).
   function createGate() {
     let paused = false;
     let release = null;
@@ -320,21 +356,52 @@ function columnIndex(reference) {
   }
 
   const key = (student) => `${Number(student.grade)}-${Number(student.classroom)}-${Number(student.number)}`;
+  const pauseFor = (ms, signal) => new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+
+  // 교사 로그인이 끝났을 때: 진행을 멈추고, 앱 창에서 다시 로그인하면(같은 창에서 다시 로그인해도 앱이 이 창과 다시 연결) 이어서 진행한다.
+  async function waitForTeacher(reason) {
+    if (!running) return false;
+    if (!appConnected()) throw new Error("앱 창이 닫혀 교사 화면 요청을 이어 갈 수 없습니다. 앱을 다시 열고 자동 테스트를 새로 시작하세요.");
+    const { controller } = running;
+    running.waitingLogin = true;
+    const notice = byId("botLoginNotice");
+    notice.hidden = false;
+    notice.textContent = `교사 로그인 필요 — 앱 창에서 다시 로그인하면 이어서 진행합니다. (${reason})`;
+    byId("botProgressText").textContent = "교사 로그인 필요 — 다시 로그인하면 이어서 진행";
+    try {
+      for (;;) {
+        if (controller.signal.aborted) return false;
+        if (!appConnected()) throw new Error("앱 창이 닫혀 이어서 진행할 수 없습니다.");
+        announceReady(true);
+        try {
+          const state = await teacherRequest("session", 8000);
+          if (state?.loggedIn) return true;
+        } catch { /* 앱 창이 다시 열리는 중이거나 아직 로그인 전이다. */ }
+        await pauseFor(4000, controller.signal);
+      }
+    } finally {
+      if (running) running.waitingLogin = false;
+      notice.hidden = true;
+    }
+  }
 
   async function startRun({ auto = false } = {}) {
     if (!source || running) return;
     if (!config) { byId("botProgressText").textContent = "서버 설정(supabase-config.js)을 불러오지 못했습니다."; return; }
     const opts = options();
+    const repeat = Core.normalizeRepeat({ count: opts.repeatCount, freshEvent: opts.repeatFresh });
     const controller = new AbortController();
     const gate = createGate();
-    const steps = newSteps();
-    const records = [];
-    running = { controller, gate };
-    const meta = { eventId: source.eventId, schoolName: source.schoolName, schoolYear: source.schoolYear, round: source.round,
-      startedAt: new Date().toLocaleString("ko-KR"), mode: "" };
+    running = { controller, gate, waitingLogin: false };
     byId("botResults").replaceChildren();
     byId("botStats").replaceChildren();
     byId("botReasons").replaceChildren();
+    byId("botRounds").replaceChildren();
+    byId("botLoginNotice").hidden = true;
     byId("botDownload").disabled = true;
     byId("botRun").disabled = true;
     byId("botStop").disabled = false;
@@ -342,166 +409,93 @@ function columnIndex(reference) {
     byId("botPause").textContent = "일시정지";
     byId("botProgressText").textContent = auto ? "앱에서 받은 코드로 자동 실행을 시작합니다…" : "서버와 수강신청을 확인하는 중…";
     byId("botProgress").value = 0;
-    renderSteps(steps);
+    renderSteps(null);
     const rng = Core.createRng(Date.now());
     const rpc = Core.createRpcClient({ projectUrl: config.projectUrl, publicKey: config.publicKey, fetchImpl: (...args) => fetch(...args) });
-    const targets = Core.planStudents(Core.selectStudents(source.students, opts), { ...opts, rng });
-    let server = null;
+    const connected = appConnected() && source.from === "app";
+    let current = null;
+    let currentEventId = source.eventId;
+    const progress = () => {
+      if (!current || running?.waitingLogin) return;
+      const done = current.records.length;
+      byId("botProgress").max = Math.max(1, current.targets.length);
+      byId("botProgress").value = done;
+      byId("botProgressText").textContent = `${current.round}/${current.total}회차 · 학생 ${done}/${current.targets.length}${gate.paused ? " · 일시정지" : ""}`;
+    };
+    // 긴 회차 동안에도 앱 창의 교사 세션(5분 무활동 로그아웃)을 이어 둔다. 실패해도 다음 교사 요청에서 다시 확인한다.
+    const keepAlive = connected ? setInterval(() => {
+      if (!running || running.waitingLogin) return;
+      teacherRequest("session", 15000, currentEventId).then((state) => {
+        if (state?.loggedIn === false) byId("botBridgeStatus").textContent = "앱 창의 교사 로그인이 끝났습니다. 다음 교사 화면 대조 전에 다시 로그인하면 이어서 진행합니다.";
+      }).catch(() => { /* 다음 교사 요청에서 다시 확인한다. */ });
+    }, 60000) : null;
+    let report = null;
     try {
-      // 1) 서버 방식과 수강신청 확인
-      const serverStep = await runStep(steps, "server", async (step) => {
-        if (!targets.length) throw new Error("대상 학생이 없습니다. 대상 학생 설정을 확인하세요.");
-        server = await Core.detectServerMode(rpc, source.eventId);
-        meta.mode = server.mode;
-        let info = server.form;
-        if (!info) {
-          // 예전 방식: 학교·차수를 알려 주는 입구가 없어 첫 학생으로 읽기만 한다.
-          const { data } = await rpc("get_scoped_course_application", { p_event: source.eventId, p_code: targets[0].code });
-          info = data || {};
-        }
-        meta.schoolName = info.schoolName || meta.schoolName;
-        meta.schoolYear = String(info.schoolYear || meta.schoolYear || "");
-        meta.round = String(info.round || meta.round || "");
-        step.expected = "수강신청 정보를 읽을 수 있음";
-        step.actual = `${meta.schoolYear}학년도 ${meta.schoolName} ${meta.round}차 · ${server.mode === "hardened" ? "반·번호+코드(새 방식)" : "코드만(예전 방식)"} · 대상 ${targets.length}명`;
-      });
-      if (serverStep.status === "fail") throw new Error(serverStep.actual);
-      if (!auto) {
-        const accepted = await waitForConfirm(`${meta.schoolYear}학년도 ${meta.schoolName} ${meta.round}차 · 대상 가상 학생 ${targets.length}명 · 동시 접속 ${opts.concurrency}`);
-        if (!accepted) {
-          steps.find((step) => step.key === "students").actual = "사용자가 취소했습니다.";
-          throw Object.assign(new Error("취소했습니다."), { cancelled: true });
-        }
-      }
-      // 2) 가상 학생 실행
-      byId("botProgress").max = targets.length;
-      byId("botProgress").value = 0;
-      const ctx = { rpc, eventId: source.eventId, mode: server.mode, gradeRequired: server.gradeRequired, rng,
-        delayMs: opts.delayMs, signal: controller.signal, weights: new Map(), popularity: opts.popularity };
-      await runStep(steps, "students", async (step) => {
-        await Core.runPool(targets, opts.concurrency, async (student) => {
-          await gate.wait();
-          if (controller.signal.aborted) return null;
-          return Core.runVirtualStudent(student, ctx);
-        }, {
-          signal: controller.signal,
-          onResult: (record, index) => {
-            if (!record) return;
-            records.push(record);
-            const original = source.students.find((item) => key(item) === key(targets[index]));
-            if (record.newCode && original) original.code = record.newCode; // 이후 재실행은 바뀐 코드로(메모리에만)
-            renderRecord(record);
-            byId("botProgress").value = records.length;
-            byId("botProgressText").textContent = `${records.length}/${targets.length}명 처리${gate.paused ? " · 일시정지" : ""}`;
-            renderStats(records);
-          },
-        });
-        const summary = renderStats(records);
-        const violationOk = summary.violationsAccepted === 0;
-        step.expected = `${targets.length}명 모두 저장·다시 불러오기 일치${opts.violationPercent ? ", 규칙 위반은 서버가 거절" : ""}`;
-        step.actual = `성공 ${summary.ok}명, 실패 ${summary.failed}명${summary.locked ? `, 잠김 확인 ${summary.locked}명` : ""}, 코드 변경 ${summary.codeChanged}명, 평균 응답 ${summary.averageMs}ms` +
-          (summary.violationsRefused + summary.violationsAccepted ? `, 위반 거절 ${summary.violationsRefused}/${summary.violationsRefused + summary.violationsAccepted}` : "") +
-          (controller.signal.aborted ? " · 중지됨" : "");
-        if (controller.signal.aborted || summary.ok + summary.locked !== targets.length || summary.failed || !violationOk) step.status = "fail";
-      });
-      if (controller.signal.aborted) throw Object.assign(new Error("중지했습니다."), { cancelled: true });
-      const connected = appConnected() && source.from === "app";
-      // 3) 교사 화면 대조
-      await runStep(steps, "teacher", async (step) => {
-        if (!opts.teacherCheck || !connected) {
-          step.actual = !opts.teacherCheck ? "설정에서 껐습니다." : "앱 창과 연결되지 않아 건너뜁니다(앱의 ‘테스트봇으로 보내기’로 열면 대조합니다).";
-          return "skip";
-        }
-        const data = await teacherRequest("applications");
-        const entries = new Map((data?.entries || []).map((entry) => [key(entry), entry]));
-        const saved = records.filter((record) => record.verified);
-        const mismatched = [];
-        for (const record of saved) {
-          const entry = entries.get(key(record));
-          const stored = Array.isArray(entry?.selections) ? entry.selections : [];
-          if (!entry || !entry.submittedAt || stored.length !== record.selections.length || !record.selections.every((name) => stored.includes(name))) {
-            mismatched.push(`${record.classroom}-${record.number} ${record.name}`);
+      report = await Core.runRepeatedTest({ source, opts, repeat, auto, connected, canCreate: !!source.autoCreated }, {
+        rpc, rng, signal: controller.signal, gate,
+        now: () => new Date().toLocaleString("ko-KR"),
+        teacher: (action, { eventId, timeoutMs } = {}) => teacherRequest(action, timeoutMs, eventId),
+        waitForTeacher,
+        confirm: (info) => waitForConfirm(`${info.schoolYear}학년도 ${info.schoolName} ${info.round}차 · 대상 가상 학생 ${info.targets}명 · 동시 접속 ${opts.concurrency}` +
+          ` · 반복 ${info.repeat.count}회(${info.repeat.freshEvent ? "회차마다 새 수강신청을 만들고 회차가 끝나면 닫고 삭제" : "같은 수강신청에서 바뀐 코드로 재신청"})`),
+        askCleanup,
+        acceptCreated: (data) => Bridge.validatePayload(data),
+        onRound: (round, state) => {
+          current = round;
+          lastReport = state;
+          if (!round.records.length && !round.targets.length) {
+            byId("botStats").replaceChildren();
+            byId("botReasons").replaceChildren();
           }
-        }
-        const targetKeys = new Set(targets.map(key));
-        const submitted = [...entries.values()].filter((entry) => targetKeys.has(key(entry)) && entry.submittedAt);
-        const count = (list) => {
-          const map = new Map();
-          for (const item of list) for (const name of item.selections || []) map.set(name, (map.get(name) || 0) + 1);
-          return map;
-        };
-        const botCounts = count(saved);
-        const teacherCounts = count(submitted);
-        const courseDiff = [...new Set([...botCounts.keys(), ...teacherCounts.keys()])]
-          .filter((name) => (botCounts.get(name) || 0) !== (teacherCounts.get(name) || 0));
-        // 이번 대상이 아닌 학생의 신청(이전 실행 등)은 참고로만 보여 준다.
-        const others = [...entries.values()].filter((entry) => !targetKeys.has(key(entry)) && entry.submittedAt).length;
-        step.expected = `신청 완료 ${saved.length}명, 학생별 선택·과목별 인원 모두 일치`;
-        step.actual = `교사 화면 신청 완료 ${submitted.length}명, 학생 불일치 ${mismatched.length}명, 과목 인원 불일치 ${courseDiff.length}과목` +
-          (mismatched.length ? ` (${mismatched.slice(0, 5).join(", ")})` : "") + (courseDiff.length ? ` (${courseDiff.slice(0, 5).join(", ")})` : "") +
-          (others ? ` · 참고: 이번 대상이 아닌 학생 신청 ${others}명(이전 실행 등)` : "");
-        if (mismatched.length || courseDiff.length || submitted.length !== saved.length) step.status = "fail";
+          renderSteps(round);
+          renderRounds(state);
+          progress();
+        },
+        onStep: (round) => { if (round === current) renderSteps(round); },
+        onRecord: (record, round) => {
+          renderRecord(record);
+          renderStats(round.records);
+          progress();
+        },
+        onCodes: (records, eventId) => {
+          // 이후 회차·재실행은 바뀐 코드로(메모리에만)
+          if (source.eventId !== eventId) return;
+          for (const record of records) {
+            const original = source.students.find((item) => key(item) === key(record));
+            if (record.newCode && original) original.code = record.newCode;
+          }
+        },
+        onEvent: (created) => {
+          currentEventId = created.eventId;
+          source = { ...source, ...created, from: "app", testEvent: true, autoCreated: true, receivedAt: new Date() };
+          byId("botBridgeStatus").textContent = `앱이 새 [테스트] 수강신청을 만들어 학생 ${created.students.length}명의 코드를 보냈습니다.`;
+          renderSource();
+        },
+        onRoundEnd: (round, state) => {
+          renderSteps(round);
+          renderRounds(state);
+        },
       });
-      // 4) 잠금 대조(새 방식 + 틀린 코드 주입 때만)
-      await runStep(steps, "locks", async (step) => {
-        const tried = records.filter((record) => record.wrongCode?.attempts);
-        if (!opts.teacherCheck || !connected || server.mode !== "hardened" || !tried.length) {
-          step.actual = server.mode !== "hardened" ? "예전 방식 서버는 잠금이 없습니다." : !tried.length ? "틀린 코드 주입이 없어 건너뜁니다." : "앱 창과 연결되지 않았거나 대조를 껐습니다.";
-          return "skip";
-        }
-        const data = await teacherRequest("locks");
-        const listed = new Map((data?.students || []).map((student) => [key(student), student]));
-        const expectedLocked = new Set(tried.filter((record) => record.wrongCode.lockedAfter).map(key));
-        const expectedListed = new Set(tried.map(key));
-        const missing = [...expectedListed].filter((item) => !listed.has(item));
-        const lockedActual = new Set([...listed].filter(([, student]) => student.teacherLock || student.lockedSeconds > 0).map(([item]) => item));
-        const lockMismatch = [...new Set([...expectedLocked, ...lockedActual])].filter((item) => expectedLocked.has(item) !== lockedActual.has(item));
-        const targetKeys = new Set(targets.map(key));
-        const extra = [...listed.keys()].filter((item) => targetKeys.has(item) && !expectedListed.has(item));
-        step.expected = `실패 기록 ${expectedListed.size}명, 잠김 ${expectedLocked.size}명`;
-        step.actual = `교사 화면 실패 기록 ${listed.size}명(누락 ${missing.length}, 예상 밖 ${extra.length}), 잠김 ${lockedActual.size}명(불일치 ${lockMismatch.length})`;
-        if (missing.length || extra.length || lockMismatch.length) step.status = "fail";
-      });
-      // 5) 앱 2단계 반영(기본 꺼짐)
-      await runStep(steps, "import", async (step) => {
-        if (!opts.importToApp) { step.actual = "기본 꺼짐(교사 작업 자료 보호)"; return "skip"; }
-        if (!connected || !source.testEvent) { step.actual = "앱의 ‘수강신청 자동 테스트’로 만든 신청만 반영할 수 있습니다."; return "skip"; }
-        const result = await teacherRequest("import", 180000);
-        const saved = records.filter((record) => record.verified).length;
-        step.expected = `${meta.round}차에 신청 학생 ${saved}명 이상 반영`;
-        step.actual = `${result.round}차 학생 ${result.students}명`;
-        if (Number(result.students) < saved) step.status = "fail";
-      });
-      // 6) 정리
-      await runStep(steps, "cleanup", async (step) => {
-        if (!source.testEvent || !connected) { step.actual = "앱이 자동 테스트로 만든 신청이 아니어서 그대로 둡니다."; return "skip"; }
-        const choice = opts.cleanup === "ask" ? await askCleanup() : opts.cleanup;
-        step.expected = { close: "신청 닫기", delete: "신청 닫고 삭제", keep: "그대로 두기" }[choice];
-        if (choice === "keep") { step.actual = "그대로 두었습니다."; return "skip"; }
-        const closed = await teacherRequest("close");
-        step.actual = closed?.message || "닫았습니다.";
-        if (choice === "delete") {
-          const removed = await teacherRequest("delete");
-          step.actual += ` · ${removed?.message || "삭제했습니다."}`;
-        }
-      });
+      lastReport = report;
     } catch (error) {
-      if (!error?.cancelled) byId("botProgressText").textContent = `실행 실패: ${error.message}`;
+      byId("botProgressText").textContent = `실행 실패: ${error?.message}`;
     } finally {
-      await runStep(steps, "report", async (step) => {
-        const summary = Core.summarize(records);
-        const failedSteps = steps.filter((item) => item.status === "fail");
-        lastReport = { steps: steps.map((item) => ({ ...item })), records, meta };
-        step.actual = `실패 단계 ${failedSteps.length}개 · 학생 성공 ${summary.ok}/${summary.total}`;
-        if (failedSteps.length) step.status = "fail";
-      });
-      const failed = steps.filter((item) => item.status === "fail").length;
-      byId("botProgressText").textContent = controller.signal.aborted ? `중지했습니다 · ${records.length}명 처리`
-        : failed ? `끝났습니다 · 실패 단계 ${failed}개(체크리스트 확인)` : `끝났습니다 · 모든 단계 통과 (${records.length}명)`;
+      clearInterval(keepAlive);
       running = null;
       byId("botStop").disabled = true;
       byId("botPause").disabled = true;
-      byId("botDownload").disabled = !lastReport;
+      byId("botLoginNotice").hidden = true;
+      if (report) {
+        renderRounds(report);
+        const { totals } = Core.repeatSummary(report);
+        const done = report.rounds.filter((round) => round.status !== "stopped").length;
+        byId("botProgressText").textContent = report.cancelled ? "취소했습니다."
+          : report.stopped ? `중지했습니다 · 끝난 회차 ${done}/${report.repeat.count} · 보고서는 끝난 회차까지`
+            : report.error ? `실행 실패: ${report.error} · 끝난 회차까지 보고서를 남겼습니다.`
+              : totals.failedSteps ? `끝났습니다 · ${report.repeat.count}회차 · 실패 단계 ${totals.failedSteps}개(회차별 결과·체크리스트 확인)`
+                : `끝났습니다 · ${report.repeat.count}회차 모두 통과 (학생 ${totals.total}건)`;
+      }
+      byId("botDownload").disabled = !lastReport?.rounds?.length;
       renderSource();
     }
   }
@@ -511,7 +505,7 @@ function columnIndex(reference) {
     if (!running) return;
     running.controller.abort();
     running.gate.resume();
-    byId("botProgressText").textContent = "중지하는 중… 진행 중인 요청이 끝나면 멈춥니다.";
+    byId("botProgressText").textContent = "중지하는 중… 진행 중인 요청이 끝나면 멈추고, 끝난 회차까지 보고서를 만듭니다.";
   });
   byId("botPause").addEventListener("click", () => {
     if (!running) return;
@@ -537,14 +531,10 @@ function columnIndex(reference) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   byId("botDownload").addEventListener("click", () => {
-    if (!lastReport) return;
-    const labels = { pending: "대기", running: "진행 중", pass: "통과", fail: "실패", skip: "건너뜀" };
-    const stepRows = [["단계", "결과", "기대값", "실제값", "걸린 시간(초)"],
-      ...lastReport.steps.map((step) => [step.name, labels[step.status], step.expected, step.actual, Number((step.ms / 1000).toFixed(1))])];
-    const sheets = [{ name: "단계별 결과", rows: stepRows }, ...Core.resultSheets(lastReport.records, lastReport.meta)];
+    if (!lastReport?.rounds?.length) return;
     const stamp = new Date();
     const date = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, "0")}-${String(stamp.getDate()).padStart(2, "0")}`;
-    downloadBytes(Core.createXlsxBytes(sheets), `테스트봇_웹수강신청_결과_${date}.xlsx`);
+    downloadBytes(Core.createXlsxBytes(Core.repeatReportSheets(lastReport)), `테스트봇_웹수강신청_결과_${date}.xlsx`);
   });
 
   // ---------- 결과 파일 만들기(로컬) ----------

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-course-checks">
+  <link rel="stylesheet" href="styles.css?v=20261106-bot-repeat">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -496,6 +496,9 @@
     <p id="testBotAutoSummary"></p>
     <label>반 수 <input id="testBotAutoClasses" type="number" min="1" max="20" value="2"></label>
     <label>반별 인원 <input id="testBotAutoPerClass" type="number" min="1" max="40" value="10"></label>
+    <label>반복 횟수(1~20) <input id="testBotAutoRepeat" type="number" min="1" max="20" value="1"></label>
+    <label><input id="testBotAutoFresh" type="checkbox"> 회차마다 새 수강신청 만들기</label>
+    <p class="note" id="testBotAutoRepeatNote" role="status">테스트 수강신청을 한 번 만들고 가상 학생 신청 과정을 1회 진행합니다.</p>
     <p class="note" id="testBotAutoMessage" role="status"></p>
     <button class="button button-primary" id="testBotAutoStart" type="button">테스트 수강신청 만들고 자동 실행</button>
     <button class="button" id="testBotAutoCancel" type="button">취소</button>
@@ -920,28 +923,28 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-data.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-data-view.js?v=20261106-course-checks" defer></script>
-  <script src="app-version.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-annual.js?v=20261106-course-checks" defer></script>
-  <script src="course-checks.js?v=20261106-course-checks" defer></script>
-  <script defer src="app.js?v=20261106-course-checks"></script>
-  <script src="xlsx-parser.js?v=20261106-course-checks" defer></script>
-  <script src="course-groups.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-workbook.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-data-export.js?v=20261106-course-checks" defer></script>
-  <script src="result-import.js?v=20261106-course-checks" defer></script>
-  <script src="round-status.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-versions.js?v=20261106-course-checks" defer></script>
-  <script src="hours-stats.js?v=20261106-course-checks" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261106-course-checks" defer></script>
-  <script src="workspace-file.js?v=20261106-course-checks" defer></script>
+  <script src="curriculum-subject-list.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-data.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-data-view.js?v=20261106-bot-repeat" defer></script>
+  <script src="app-version.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-annual.js?v=20261106-bot-repeat" defer></script>
+  <script src="course-checks.js?v=20261106-bot-repeat" defer></script>
+  <script defer src="app.js?v=20261106-bot-repeat"></script>
+  <script src="xlsx-parser.js?v=20261106-bot-repeat" defer></script>
+  <script src="course-groups.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-workbook.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-data-export.js?v=20261106-bot-repeat" defer></script>
+  <script src="result-import.js?v=20261106-bot-repeat" defer></script>
+  <script src="round-status.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-versions.js?v=20261106-bot-repeat" defer></script>
+  <script src="hours-stats.js?v=20261106-bot-repeat" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261106-bot-repeat" defer></script>
+  <script src="workspace-file.js?v=20261106-bot-repeat" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261106-course-checks" defer></script>
-  <script src="test-bot-bridge.js?v=20261106-course-checks" defer></script>
-  <script src="supabase-client.js?v=20261106-course-checks" defer></script>
+  <script src="supabase-config.js?v=20261106-bot-repeat" defer></script>
+  <script src="test-bot-bridge.js?v=20261106-bot-repeat" defer></script>
+  <script src="supabase-client.js?v=20261106-bot-repeat" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>
