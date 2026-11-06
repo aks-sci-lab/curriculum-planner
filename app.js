@@ -1342,8 +1342,35 @@
         (!hint || group.semester === hint) &&
         group.courses.some((name) => normalize(name) === normalize(course.name)));
       if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
-      if (!matches.length) return course.applicationGroups?.[String(currentGrade)] || null;
-      return null;
+      const assigned = course.applicationGroups?.[String(currentGrade)] || null;
+      if (!matches.length) return assigned;
+      // 두 학기 묶음에 모두 있는 과목은 결과로 추론해 둔 학기 그룹이 그중 하나일 때만 쓴다.
+      return assigned && matches.some((group) => group.name === assigned.name && String(group.semester) === String(assigned.semester))
+        ? assigned : null;
+    }
+
+    // 편제표의 1·2학기 묶음에 모두 있는데 결과에 학기 표시가 없는 과목은, 이 과목을 고른 학생들이
+    // 어느 학기 그룹에서 선택 수가 정확히 하나 모자란지로 실제 선택 학기를 정한다(두 학기에 다 개설돼도 선택은 한 학기에 몰릴 수 있다).
+    function inferApplicationGroup(course, grade, groups, students, courses = []) {
+      const target = String(Number(grade) + 1);
+      const key = (name) => normalizeRomanNumerals(String(name ?? "").replace(/\s*\((?:[23]학년|[12]학기|일반|진로|융합)(?:선택)?\)/g, "")).replace(/\s+/g, "");
+      const candidates = groups.filter((group) => group.grade === target && Number.isInteger(group.count) && group.count > 0 &&
+        group.courses.some((name) => key(name) === key(course.name)));
+      if (candidates.length < 2) return null;
+      const choosers = students.filter((student) => String(student.grade) === grade &&
+        student.selections.some((selection) => selection.column === course.column));
+      if (!choosers.length) return null;
+      const scores = candidates.map((group) => ({
+        group,
+        short: choosers.filter((student) => student.selections.filter((selection) => {
+          if (selection.column === course.column) return false;
+          const owner = applicationGroupForCourse(selection, grade, groups) ||
+            courses.find((item) => item.column === selection.column)?.applicationGroups?.[grade];
+          return owner && owner.name === group.name && String(owner.semester) === String(group.semester);
+        }).length === group.count - 1).length
+      })).sort((a, b) => b.short - a.short);
+      if (scores[0].short * 2 < choosers.length || scores[0].short === scores[1].short) return null;
+      return { name: scores[0].group.name, semester: scores[0].group.semester, inferred: true };
     }
 
     // 편제표에는 "미적분Ⅱ"처럼, 결과 파일에는 "미적분2"처럼 적는 로마 숫자 표기를 같은 과목으로 맞춘다.
@@ -1355,15 +1382,28 @@
     function classifyApplicationRecords(data) {
       const groups = typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
       const warnings = new Set();
+      const unresolved = [];
       for (const course of data.courses) {
         course.applicationGroups = {};
         for (const grade of new Set(data.students.filter((student) =>
           student.selections.some((selection) => selection.column === course.column)).map((student) => String(student.grade)))) {
           const group = applicationGroupForCourse(course, grade, groups);
           if (group) course.applicationGroups[grade] = group;
-          else warnings.add(`${Number(grade)+1}학년 ${course.name}`);
+          else unresolved.push({ course, grade });
         }
       }
+      // 학기를 추론해야 하는 과목끼리 함께 선택된 경우가 있어, 정해진 과목을 반영하며 몇 번 반복한다.
+      for (let pass = 0; pass < 4 && unresolved.length; pass++) {
+        const before = unresolved.length;
+        for (const item of [...unresolved]) {
+          const group = inferApplicationGroup(item.course, item.grade, groups, data.students, data.courses);
+          if (!group) continue;
+          item.course.applicationGroups[item.grade] = group;
+          unresolved.splice(unresolved.indexOf(item), 1);
+        }
+        if (unresolved.length === before) break;
+      }
+      for (const { course, grade } of unresolved) warnings.add(`${Number(grade)+1}학년 ${course.name}`);
       for (const student of data.students) for (const course of student.selections) {
         course.applicationGroups = data.courses.find((item) => item.column === course.column)?.applicationGroups || {};
       }

@@ -590,3 +590,24 @@ test("the retake list download names the next round without throwing", () => {
   assert.match(files["xl/workbook.xml"], /2차 대상자/);
   assert.match(files["xl/worksheets/sheet1.xml"], /신청 학년/);
 });
+
+test("a subject offered in both semesters is placed in the semester where its choosers are one pick short", () => {
+  const groups = [
+    { grade: "3", semester: "1", name: "3-1 택2", count: 2, courses: ["물리", "화학", "기후"] },
+    { grade: "3", semester: "2", name: "3-2 택2", count: 2, courses: ["생명", "지구", "기후"] }
+  ];
+  const ctx = vm.createContext({ getApplicationGroupSettings: () => groups, parseSemesterFromCourseName: () => "" });
+  vm.runInContext(functionSource(app, "function applicationGroupForCourse(", "function courseGroupLabel("), ctx);
+  const course = (column, name) => ({ column, name });
+  const courses = [course("a", "물리"), course("b", "화학"), course("c", "생명"), course("d", "지구"), course("e", "기후")];
+  const student = (picks) => ({ grade: "2", selections: picks.map((column) => ({ ...courses.find((c) => c.column === column) })) });
+  // 기후를 고른 학생은 1학기 2과목을 이미 채웠고 2학기는 1과목뿐이다 → 2학기에 고른 것
+  const data = { courses, students: [student(["a", "b", "c", "e"]), student(["a", "b", "d", "e"]), student(["a", "b", "c", "d"])] };
+  const warnings = ctx.classifyApplicationRecords(data);
+  assert.deepEqual(plain(warnings), []);
+  assert.deepEqual(plain(courses[4].applicationGroups["2"]), { name: "3-2 택2", semester: "2", inferred: true });
+  assert.deepEqual(plain(ctx.applicationGroupForCourse(courses[4], "2", groups)), { name: "3-2 택2", semester: "2", inferred: true });
+  // 증거가 엇갈리면 추측하지 않는다
+  const unclear = { courses: courses.map((c) => ({ ...c })), students: [student(["a", "c", "e"]), student(["a", "b", "c", "d"])] };
+  assert.deepEqual(plain(ctx.classifyApplicationRecords(unclear)), ["3학년 기후"]);
+});
