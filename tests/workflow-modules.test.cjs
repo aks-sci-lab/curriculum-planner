@@ -590,3 +590,53 @@ test("the retake list download names the next round without throwing", () => {
   assert.match(files["xl/workbook.xml"], /2차 대상자/);
   assert.match(files["xl/worksheets/sheet1.xml"], /신청 학년/);
 });
+
+test("aggregate uses integer math for class counts and at-risk checks and zeroes closed courses", () => {
+  const ctx = vm.createContext({
+    collectApplicationSubjects: () => [], state: {}, UNASSIGNED_GROUP: "미분류",
+    parseSemesterFromCourseName: () => "", applicationGroupForCourse: () => null,
+    parseAssignedGroupLabel: () => ({ semesterKey: "", category: "" }), applicationCourseLabel: (subject) => subject.subject
+  });
+  vm.runInContext(functionSource(app, "function aggregateRecords(", "function currentStudent("), ctx);
+  const build = (sizes, targets) => {
+    const students = []; const used = {};
+    sizes.forEach((size, classIndex) => {
+      for (let number = 1; number <= size; number++) {
+        const selections = [];
+        targets.forEach((target, column) => {
+          used[column] = used[column] || 0;
+          if (used[column] < target) { used[column]++; selections.push({ column }); }
+        });
+        students.push({ grade: "1", classroom: String(classIndex + 1), number, selections });
+      }
+    });
+    return { students, courses: targets.map((_, column) => ({ column, name: `과목${column}` })) };
+  };
+  const courseOf = (aggregate, column) => aggregate.reports[0].semesters[0].groups[0].courses.find((item) => item.column === column);
+  // 64명 3학급 50%/50%: 32명은 정확히 3학급, 64명은 6학급이어야 한다(실수 계산은 4·7로 올림).
+  const float = build([22, 21, 21], [32, 64]);
+  const a = ctx.aggregateRecords(float.students, float.courses, 50, 50);
+  assert.equal(courseOf(a, 0).classCount, 3);
+  assert.equal(courseOf(a, 1).classCount, 6);
+  // 100명 3학급 120%: 개설기준 40.00 → 40명은 기준 충족.
+  const edge = build([34, 33, 33], [40, 39]);
+  const b = ctx.aggregateRecords(edge.students, edge.courses, 120, 120);
+  assert.equal(courseOf(b, 0).atRisk, false);
+  assert.equal(courseOf(b, 1).atRisk, true);
+  // 폐강 결정은 개설 학급수 0과 합계 제외로 반영되고, 해제하면 원래 값으로 돌아온다.
+  const base = build([10, 10, 10], [12, 22]);
+  const open = ctx.aggregateRecords(base.students, base.courses, 90, 110, {}, {}, {}, {}, {});
+  const closed = ctx.aggregateRecords(base.students, base.courses, 90, 110, {}, {}, {}, {}, { "1:1": "closed" });
+  assert.equal(courseOf(open, 1).classCount, 2);
+  assert.equal(courseOf(closed, 1).classCount, 0);
+  assert.equal(courseOf(closed, 1).closed, true);
+  assert.equal(courseOf(closed, 1).rawClassCount, 2);
+  assert.equal(closed.reports[0].semesters[0].groups[0].totalClasses, open.reports[0].semesters[0].groups[0].totalClasses - 2);
+});
+
+test("round status locks threshold inputs while confirmed and the snapshot reuses the aggregate at-risk flag", () => {
+  assert.match(roundStatus, /input\.disabled = status === "confirmed"/);
+  assert.match(roundStatus, /const atRisk = course\.atRisk;/);
+  assert.doesNotMatch(roundStatus, /course\.enrollment < summary\.openingLimit/);
+  assert.match(app, /if \(typeof renderRoundStatusControls === "function"\) renderRoundStatusControls\(\);\n\s+if \(Number\(state\.workflowStep\) === 4\) renderClosurePanel/);
+});
