@@ -897,16 +897,46 @@ test("result Excel upload opens a validated preview and never replaces data whil
   assert.match(status.textContent,/반영할 수 없습니다: 차수가 다릅니다/);
 });
 
+test("a new round inherits class counts and groups from the previous round but not open/close decisions", () => {
+  const state={currentRound:"2",students:[],courses:[],classOverrides:{},semesterAssignments:{},groupAssignments:{},roundClosures:{"1":{},"2":{}},
+    rounds:{"1":{
+      students:[{id:"s"}],
+      courses:[{column:"result-1-0",name:"공통 이름",semesterKey:"1",applicationCurrentGrade:"1"}],
+      classOverrides:{"1:result-1-0":2},semesterAssignments:{"result-1-0":"1"},groupAssignments:{"result-1-0":"유지할 그룹"}
+    },"2":null}};
+  const ctx=vm.createContext({
+    state,$:()=>({}),normalizeCourses:(courses)=>courses,
+    applyClassFilterOptions(){},renderRoster(){},renderPreview(){},renderSemesterClassifier(){},renderAggregate(){},renderRoundStatus(){},
+    applicationRoundNumbers:()=>Object.keys(state.rounds).sort((a,b)=>Number(a)-Number(b)),
+    persistState(){ctx.syncActiveRound();},
+  });
+  vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
+  vm.runInContext(functionSource("function priorRoundSettings(", "async function handleApplicationFiles("),ctx);
+  state.roundClosures["1"]={"1:result-1-0":"closed"};
+  const carry=ctx.storeGradeResults({
+    courses:[{column:7,name:"새 과목",semesterKey:"1"},{column:4,name:"공통 이름",semesterKey:"1"}],
+    students:[{id:"n",grade:"1",name:"학생",classroom:"1",number:"1",selections:[{column:4,name:"공통 이름",semesterKey:"1"}]}]
+  },"2차.xlsx","1");
+  const column=state.students[0].selections[0].column;
+  assert.equal(state.classOverrides[`1:${column}`],2);
+  assert.equal(state.semesterAssignments[column],"1");
+  assert.equal(state.groupAssignments[column],"유지할 그룹");
+  assert.equal(carry.inheritedFrom,"1");
+  assert.equal(carry.inherited,3);
+  assert.deepEqual(plain(state.roundClosures["2"]),{}, "closure decisions are never inherited");
+});
+
 test("grade results replace only the chosen grade and carry settings to re-imported courses by name and semester", () => {
   const state={currentRound:"1",students:[],courses:[],rounds:{"1":null,"2":{students:[{id:"other-round"}]}}};
   const ctx=vm.createContext({
     state,$:()=>({}),normalizeCourses:(courses)=>courses,
     applyClassFilterOptions(){},renderRoster(){},renderPreview(){},renderSemesterClassifier(){},renderAggregate(){},
     renderRoundStatus(){},
+    applicationRoundNumbers:()=>Object.keys(state.rounds).sort((a,b)=>Number(a)-Number(b)),
     persistState(){ctx.syncActiveRound();},
   });
   vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
-  vm.runInContext(functionSource("function storeGradeResults(", "async function handleApplicationFiles("),ctx);
+  vm.runInContext(functionSource("function priorRoundSettings(", "async function handleApplicationFiles("),ctx);
   const defaultCourses=[{column:4,name:"공통 이름",credits:3,semesterKey:"1"},{column:5,name:"미신청 과목",credits:3,semesterKey:"2"}];
   const data=(grade,name,courses=defaultCourses)=>({
     courses,
@@ -944,7 +974,7 @@ test("grade results replace only the chosen grade and carry settings to re-impor
   assert.equal(state.semesterAssignments[movedColumn],"1");
   assert.equal(state.groupAssignments[movedColumn],"유지할 그룹");
   assert.equal(state.classOverrides[`2:${secondColumn}`],3);
-  assert.deepEqual(plain(carry),{kept:4,dropped:1});
+  assert.deepEqual(plain(carry),{kept:4,dropped:1,inheritedFrom:null,inherited:0});
   assert.equal(state.courses.length,4);
   assert.deepEqual(plain(state.rounds["1"].gradeFiles),{"1":"1학년_수정.xlsx","2":"2학년.xlsx"});
   const restored=plain(state.rounds["1"]);

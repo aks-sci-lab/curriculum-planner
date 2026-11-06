@@ -4100,6 +4100,25 @@
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
+    // 새 차수에 해당 학년 결과가 처음 들어올 때, 직전 차수의 학급 수·학기·그룹 설정을 이어받을 근거를 찾는다.
+    // 개설/폐강 결정은 차수마다 새로 내려야 하므로 이어받지 않는다.
+    function priorRoundSettings(grade) {
+      const current = Number(state.currentRound);
+      for (const round of applicationRoundNumbers().filter((item) => Number(item) < current).reverse()) {
+        const data = state.rounds?.[round];
+        const courses = (data?.courses || []).filter((course) => course.applicationCurrentGrade === grade);
+        if (courses.length) {
+          return {
+            round, courses,
+            classOverrides: data.classOverrides || {},
+            semesterAssignments: data.semesterAssignments || {},
+            groupAssignments: data.groupAssignments || {}
+          };
+        }
+      }
+      return null;
+    }
+
     // 외부 프로그램 결과를 현재 차수의 해당 학년 자료로 교체한다.
     // 같은 과목(과목명·학기)의 개설 학급 수·개설 결정·학기·그룹 지정은 새 열로 옮겨 유지한다.
     function storeGradeResults(data, sourceLabel, grade) {
@@ -4129,17 +4148,23 @@
       });
       const nextCourses = [...remapped.values()];
       const courseName = (course) => String(course.name || "").replace(/\s+/g, "");
-      const candidates = new Map();
-      for (const previous of previousCourses) {
-        const sameName = nextCourses.filter((course) => courseName(course) === courseName(previous));
-        const sameSemester = sameName.filter((course) => String(course.semesterKey || "") === String(previous.semesterKey || ""));
-        const match = sameSemester.length === 1 ? sameSemester[0] : sameName.length === 1 ? sameName[0] : null;
-        if (match) candidates.set(String(previous.column), String(match.column));
-      }
-      const targetCounts = new Map();
-      for (const target of candidates.values()) targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
-      const columnMap = new Map([...candidates].filter(([, target]) => targetCounts.get(target) === 1));
-      const carry = { kept: 0, dropped: 0 };
+      const mapColumns = (fromCourses) => {
+        const candidates = new Map();
+        for (const previous of fromCourses) {
+          const sameName = nextCourses.filter((course) => courseName(course) === courseName(previous));
+          const sameSemester = sameName.filter((course) => String(course.semesterKey || "") === String(previous.semesterKey || ""));
+          const match = sameSemester.length === 1 ? sameSemester[0] : sameName.length === 1 ? sameName[0] : null;
+          if (match) candidates.set(String(previous.column), String(match.column));
+        }
+        const targetCounts = new Map();
+        for (const target of candidates.values()) targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
+        return new Map([...candidates].filter(([, target]) => targetCounts.get(target) === 1));
+      };
+      const columnMap = mapColumns(previousCourses);
+      // 이 차수에 해당 학년 결과가 처음이면 직전 차수 설정을 같은 방식(과목명·학기)으로 옮긴다.
+      const inherited = previousCourses.length ? null : priorRoundSettings(grade);
+      const inheritedMap = inherited ? mapColumns(inherited.courses) : new Map();
+      const carry = { kept: 0, dropped: 0, inheritedFrom: null, inherited: 0 };
       const remapGradeKeys = (source) => {
         const result = {};
         for (const [key, value] of Object.entries(source || {})) {
@@ -4176,6 +4201,22 @@
       state.classOverrides = remapGradeKeys(state.classOverrides);
       state.semesterAssignments = remapColumnKeys(state.semesterAssignments);
       state.groupAssignments = remapColumnKeys(state.groupAssignments);
+      if (inherited) {
+        const inheritInto = (target, source, build) => {
+          for (const [key, value] of Object.entries(source)) {
+            const mapped = build(key);
+            if (mapped && !Object.hasOwn(target, mapped)) { target[mapped] = value; carry.inherited++; }
+          }
+        };
+        inheritInto(state.classOverrides, inherited.classOverrides, (key) => {
+          const separator = key.indexOf(":");
+          return separator > 0 && key.slice(0, separator) === grade && inheritedMap.has(key.slice(separator + 1))
+            ? `${grade}:${inheritedMap.get(key.slice(separator + 1))}` : null;
+        });
+        inheritInto(state.semesterAssignments, inherited.semesterAssignments, (key) => inheritedMap.get(key) || null);
+        inheritInto(state.groupAssignments, inherited.groupAssignments, (key) => inheritedMap.get(key) || null);
+        if (carry.inherited) carry.inheritedFrom = inherited.round;
+      }
       state.roundClosures ||= {};
       state.roundClosures[state.currentRound] = remapGradeKeys(state.roundClosures[state.currentRound]);
       state.customGroupNames ||= [];
