@@ -1877,3 +1877,4 @@
   .print-page .paper-checks { margin-top: 2.5mm; padding: 1.2mm 2mm; border-color: #999; background: none; font-size: 10px; line-height: 1.35; break-inside: avoid; }
   .print-page.paper-dense .paper-checks { margin-top: 1.5mm; padding: .8mm 1.5mm; font-size: 9px; line-height: 1.25; }
 }
+.course-check-details .aggregate-sheet-wrap { max-height: 360px; overflow: auto; }
