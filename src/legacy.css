@@ -716,11 +716,11 @@
       gap: 4px 10px;
       text-align: left;
     }
-    #applicationResultsPanel .dropzone .upload-icon { grid-row: 1 / span 2; }
+    #applicationResultsPanel .dropzone .upload-icon { grid-row: 1 / span 3; }
     #applicationResultsPanel .dropzone strong { grid-column: 2; }
     #applicationResultsPanel .dropzone span { grid-column: 2; }
-    #applicationResultsPanel .dropzone label,
-    #applicationResultsPanel .dropzone a { grid-row: 1 / span 2; }
+    #applicationResultsPanel .dropzone label { grid-column: 3; grid-row: 1 / span 3; }
+    #applicationResultsPanel .dropzone a { grid-column: 4; grid-row: 1 / span 3; }
     #applicationResultsPanel .dropzone input { display: none; }
     .semester-classifier {
       margin: 0 0 14px;

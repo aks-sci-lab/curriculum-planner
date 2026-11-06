@@ -227,8 +227,8 @@
         </div>
         <div class="application-navigation">
         <div class="group-scope-tabs" role="tablist" aria-label="수강신청 현재 학년 선택">
-          <button class="button" id="applicationGrade1Tab" role="tab" aria-selected="true" aria-controls="applicationGradeWorkspace" type="button">1학년 → 2학년 수강신청</button>
-          <button class="button" id="applicationGrade2Tab" role="tab" aria-selected="false" aria-controls="applicationGradeWorkspace" tabindex="-1" type="button">2학년 → 3학년 수강신청</button>
+          <button class="button" id="applicationGrade1Tab" role="tab" aria-selected="true" aria-controls="applicationGradeWorkspace" type="button">현 1학년 → 2학년 과목 신청</button>
+          <button class="button" id="applicationGrade2Tab" role="tab" aria-selected="false" aria-controls="applicationGradeWorkspace" tabindex="-1" type="button">현 2학년 → 3학년 과목 신청</button>
         </div>
         <div class="group-scope-tabs" id="applicationWorkspaceTabs" role="tablist" aria-label="수강신청 작업">
           <button class="button" id="applicationGroupsTab" role="tab" aria-selected="true" aria-controls="applicationGroupsPanel" type="button">① 과목·그룹 확인</button>
@@ -257,12 +257,13 @@
           <div class="upload-icon" aria-hidden="true">↑</div>
           <strong id="resultDropHint">선택한 학년·차수의 수강신청 결과 엑셀을 여기에 놓으세요</strong>
           <span>학년·반·번호·성명과 과목 열이 있는 결과표, 또는 차수·학년·반·번호·성명·선택과목 형식</span>
+          <span id="resultGradeNote">파일의 학년은 현재 학년입니다(현 1학년 → 2학년 과목 신청).</span>
           <label class="file-button" for="rosterInput" tabindex="0" role="button">결과 엑셀 선택</label>
           <a class="file-button" href="선택과목 수강신청결과 예시.xlsx" download>예시 엑셀 다운로드</a>
           <input class="hidden" id="rosterInput" type="file" accept=".xlsx">
         </div>
         <section class="result-import-preview hidden" id="resultImportPreview" aria-live="polite" aria-label="결과 엑셀 검증"></section>
-        <div class="file-name" id="fileName">불러온 파일 없음</div>
+        <div class="file-name" id="fileName">현 1학년: 업로드 없음 / 현 2학년: 업로드 없음</div>
         <div style="margin-top:10px">
           <button class="button button-danger" id="resetData" type="button">선택한 차수 데이터 삭제 (두 학년 전체)</button>
         </div>

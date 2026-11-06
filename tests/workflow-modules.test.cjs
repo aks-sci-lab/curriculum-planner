@@ -436,7 +436,7 @@ test("a save failure keeps the validated preview while a stale preview is closed
   assert.ok(vm.runInContext("resultImportPending", ctx), "preview survives a transient save error");
   ctx.confirmResultImport();
   assert.equal(attempts, 2);
-  assert.match(ctx.status.textContent, /그룹 미확인 1개/);
+  assert.match(ctx.status.textContent, /그룹 미확인 2학년 과목\(현 1학년 신청\) 1개/);
   assert.equal(vm.runInContext("resultImportPending", ctx), null);
   ctx.state.currentRound = "9";
   ctx.resultImportPending = makePreview();
@@ -712,4 +712,63 @@ test("round status locks threshold inputs while confirmed and the snapshot reuse
   assert.match(roundStatus, /const atRisk = course\.atRisk;/);
   assert.doesNotMatch(roundStatus, /course\.enrollment < summary\.openingLimit/);
   assert.match(app, /if \(typeof renderRoundStatusControls === "function"\) renderRoundStatusControls\(\);\n\s+if \(Number\(state\.workflowStep\) === 4\) renderClosurePanel/);
+});
+
+test("result import names the file's actual current grade and the tab it belongs to", () => {
+  const ctx = resultImportContext();
+  vm.runInContext(resultImport, ctx);
+  const subjects = { "2": [{ subject: "물리학", semester: "1", credit: 3 }] };
+  const options = { fileName: "r.xlsx", round: "2", grade: "1", revision: 4, subjects, groups: [], existingStudents: [] };
+  const header = ["차수", "학년", "반", "번호", "성명", "선택과목"];
+  // 현 2학년 결과를 '현 1학년' 탭에 올린 경우
+  const wrongTab = ctx.buildResultImportPreview([{ name: "응답", rows: [header, ["2", "2", "1", "1", "가", "물리학"], ["2", "2", "1", "2", "나", "물리학"]] }], options);
+  const message = wrongTab.candidates[0].issues.blocking[0];
+  assert.match(message, /이 파일은 현 2학년\(3학년 과목 신청\) 2명 결과입니다/);
+  assert.match(message, /지금 선택한 탭은 '현 1학년'입니다/);
+  assert.match(message, /'현 2학년' 탭에 올려 주세요/);
+  assert.match(message, /학년 열은 현재 학년입니다\(현 1학년 → 2학년 과목 신청/);
+
+  // 학생별 과목 표시 형식도 같은 안내를 쓴다. 신청 학년(3)을 적은 파일은 현재 학년으로 고치라고 알린다.
+  ctx.createRecords = () => ({ students: [{ grade: "3", classroom: "1", number: "1", name: "다", selections: [] }], courses: [], skippedRows: [] });
+  const targetGrade = ctx.buildResultImportPreview([{ name: "결과", rows: [] }], { ...options, grade: "2" });
+  assert.match(targetGrade.candidates[0].issues.blocking[0], /학년이 '3'인 학생 1명/);
+  assert.match(targetGrade.candidates[0].issues.blocking[0], /현재 학년으로 고쳐 주세요/);
+
+  // 두 학년이 섞인 파일은 선택한 학년만 쓰고 나머지 학년이 어느 탭인지 알려 준다.
+  const mixed = ctx.buildResultImportPreview([{ name: "응답", rows: [header, ["2", "1", "1", "1", "가", "물리학"], ["2", "2", "1", "1", "나", "물리학"]] }], options);
+  assert.equal(mixed.candidates[0].issues.blocking.length, 0);
+  assert.ok(mixed.candidates[0].issues.info.includes("현 2학년(3학년 과목 신청) 1명은 제외했습니다. '현 2학년' 탭에서 따로 올려 주세요."));
+});
+
+test("result import warnings say which grade's subjects (and which current grade) they are about", () => {
+  const ctx = resultImportContext({ classifyApplicationRecords: () => ["2학년 물리학"] });
+  vm.runInContext(resultImport, ctx);
+  const subjects = { "2": [{ subject: "물리학", semester: "1", credit: 3 }, { subject: "화학", semester: "2", credit: 3 }] };
+  const rows = [["차수", "학년", "반", "번호", "성명", "선택과목"], ["2", "1", "1", "1", "가", "물리학, 지구과학"]];
+  ctx.mergeApplications = (entries) => {
+    const courses = [{ column: "c0", name: "물리학", semesterKey: "1" }, { column: "c1", name: "지구과학", semesterKey: "1" }];
+    return { errors: [], courses, students: entries.map((entry) => ({ ...entry, id: "s", selections: courses })) };
+  };
+  const preview = ctx.buildResultImportPreview([{ name: "응답", rows }], {
+    fileName: "r.xlsx", round: "2", grade: "1", revision: 4, subjects, cohortYear: "2026", groups: [], existingStudents: []
+  });
+  const { warnings, info } = preview.candidates[0].issues;
+  assert.ok(warnings.some((item) => item.startsWith("2학년 과목(현 1학년 신청) 중 2026학년도 입학생 편제표(2학년 열)에 없는 과목 1개: 지구과학")), warnings.join("\n"));
+  assert.ok(warnings.some((item) => item.startsWith("선택 그룹이 정해지지 않은 2학년 과목(현 1학년 신청) 1개: 물리학.")), warnings.join("\n"));
+  assert.ok(info.some((item) => item.startsWith("2026학년도 입학생 편제표(2학년 열)의 2학년 과목(현 1학년 신청) 중 결과 파일에 없는 과목 1개: 화학")), info.join("\n"));
+});
+
+test("result file line lists each current grade's file and says when a grade has none", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functionSource(app, "function resultFileNameLabel(", "function clearApplicationRound("), ctx);
+  assert.equal(ctx.resultFileNameLabel(null), "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음");
+  assert.equal(ctx.resultFileNameLabel({ fileName: "현 1학년: a.xlsx", gradeFiles: { "1": "a.xlsx" } }), "현 1학년: a.xlsx / 현 2학년: 업로드 없음");
+  assert.equal(ctx.resultFileNameLabel({ gradeFiles: { "1": "a.xlsx", "2": "b.xlsx" } }), "현 1학년: a.xlsx / 현 2학년: b.xlsx");
+  assert.equal(ctx.resultFileNameLabel({ fileName: "온라인 자동 연동 5명", gradeFiles: {} }), "온라인 자동 연동 5명");
+  vm.runInContext(functionSource(app, "function describeUnclassifiedCourses(", "function courseGroupLabel("), ctx);
+  assert.equal(ctx.describeUnclassifiedCourses(["2학년 물리학", "3학년 기하", "2학년 화학"]),
+    "2학년 과목(현 1학년 신청) 물리학, 화학 / 3학년 과목(현 2학년 신청) 기하");
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  assert.match(html, /id="resultGradeNote">파일의 학년은 현재 학년입니다\(현 1학년 → 2학년 과목 신청\)/);
+  assert.match(app, /gradeNote\.textContent = `파일의 학년은 현재 학년입니다\(현 \$\{grade\}학년/);
 });

@@ -36,6 +36,55 @@ function resultExampleList(items, limit = 5) {
   return list.slice(0, limit).join(", ") + (list.length > limit ? ` 외 ${list.length - limit}개` : "");
 }
 
+// 결과 파일의 학년 열은 현재 학년이다. 현 N학년 학생은 N+1학년 과목을 신청한다.
+const RESULT_UPLOAD_GRADES = ["1", "2"];
+
+function resultGradeText(grade) {
+  const text = String(grade ?? "").trim();
+  return /^\d+$/.test(text) ? String(Number(text)) : text;
+}
+
+function resultTargetLabel(grade) {
+  return `${Number(grade) + 1}학년 과목(현 ${Number(grade)}학년 신청)`;
+}
+
+function resultCurrentLabel(grade) {
+  return `현 ${Number(grade)}학년(${Number(grade) + 1}학년 과목 신청)`;
+}
+
+function resultGradeCounts(grades) {
+  const counts = new Map();
+  for (const value of grades) {
+    const grade = resultGradeText(value);
+    if (grade) counts.set(grade, (counts.get(grade) || 0) + 1);
+  }
+  return counts;
+}
+
+// 선택한 학년 탭의 학생이 하나도 없을 때, 파일 안의 실제 학년과 올려야 할 탭을 알려 준다.
+function resultGradeMismatchMessage(grade, counts) {
+  const selected = `지금 선택한 탭은 '현 ${grade}학년'입니다.`;
+  const rule = `결과 파일의 학년 열은 현재 학년입니다(현 1학년 → 2학년 과목 신청, 현 2학년 → 3학년 과목 신청).`;
+  if (!counts.size) return `학년이 적힌 학생 행이 없습니다. ${rule}`;
+  const uploadable = [...counts.keys()].filter((value) => RESULT_UPLOAD_GRADES.includes(value) && value !== grade);
+  const others = [...counts.keys()].filter((value) => !RESULT_UPLOAD_GRADES.includes(value));
+  const parts = [];
+  if (uploadable.length) {
+    parts.push(`이 파일은 ${uploadable.map((value) => `${resultCurrentLabel(value)} ${counts.get(value)}명`).join(", ")} 결과입니다. ${selected} ${uploadable.map((value) => `'현 ${value}학년'`).join("·")} 탭에 올려 주세요.`);
+  }
+  if (others.length) {
+    parts.push(`${uploadable.length ? "또 이 파일에는" : `${selected} 이 파일에는`} 학년이 ${others.map((value) => `'${value}'`).join(", ")}인 학생 ${others.reduce((sum, value) => sum + counts.get(value), 0)}명이 있습니다. 신청할 과목의 학년을 적었다면 현재 학년으로 고쳐 주세요.`);
+  }
+  parts.push(rule);
+  return parts.join(" ");
+}
+
+function resultOtherGradeNote(counts) {
+  return [...counts].map(([value, count]) => RESULT_UPLOAD_GRADES.includes(value)
+    ? `${resultCurrentLabel(value)} ${count}명은 제외했습니다. '현 ${value}학년' 탭에서 따로 올려 주세요.`
+    : `학년이 '${value}'인 학생 ${count}명은 제외했습니다. 결과 파일의 학년 열은 현재 학년이어야 합니다.`);
+}
+
 function sortResultStudents(students) {
   return students.sort((a, b) =>
     Number(a.grade) - Number(b.grade) || Number(a.classroom) - Number(b.classroom) ||
@@ -46,7 +95,7 @@ function sortResultStudents(students) {
 function parseResultSheet(sheet, options) {
   const rows = sheet?.rows || [];
   const grade = String(options.grade);
-  const base = { format: "", data: null, error: "", otherGradeCount: 0, skippedRows: [] };
+  const base = { format: "", data: null, error: "", otherGradeCount: 0, otherGrades: [], skippedRows: [] };
   const firstRow = rows[0] || [];
   if (String(firstRow[0] ?? "").trim() === "차수" && String(firstRow[5] ?? "").trim() === "선택과목") {
     base.format = "form";
@@ -62,7 +111,9 @@ function parseResultSheet(sheet, options) {
     }
     const gradeRows = body.filter(({ row }) => String(row[1] ?? "").trim() === grade);
     base.otherGradeCount = body.length - gradeRows.length;
-    if (!gradeRows.length) return { ...base, error: `현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.` };
+    const otherCounts = resultGradeCounts(body.filter(({ row }) => String(row[1] ?? "").trim() !== grade).map(({ row }) => row[1]));
+    base.otherGrades = resultOtherGradeNote(otherCounts);
+    if (!gradeRows.length) return { ...base, error: resultGradeMismatchMessage(grade, otherCounts) };
     const items = options.subjects?.[String(Number(grade) + 1)] || [];
     const known = new Set([
       ...items.map((item) => item.subject),
@@ -111,8 +162,10 @@ function parseResultSheet(sheet, options) {
   }
   const students = data.students.filter((student) => String(student.grade) === grade);
   base.otherGradeCount = data.students.length - students.length;
+  const otherCounts = resultGradeCounts(data.students.filter((student) => String(student.grade) !== grade).map((student) => student.grade));
+  base.otherGrades = resultOtherGradeNote(otherCounts);
   base.skippedRows = data.skippedRows || [];
-  if (!students.length) return { ...base, error: `현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.` };
+  if (!students.length) return { ...base, error: resultGradeMismatchMessage(grade, otherCounts) };
   return { ...base, data: { students, courses: data.courses } };
 }
 
@@ -143,6 +196,8 @@ function analyzeResultCandidate(candidate, options) {
   }
   const grade = String(options.grade);
   const targetGrade = String(Number(grade) + 1);
+  const target = resultTargetLabel(grade);
+  const plan = options.cohortYear ? `${options.cohortYear}학년도 입학생 편제표(${targetGrade}학년 열)` : `${targetGrade}학년 편제표`;
   const students = candidate.data.students;
   const courses = candidate.data.courses.filter((course) =>
     !course.applicationCurrentGrade || course.applicationCurrentGrade === grade);
@@ -155,7 +210,7 @@ function analyzeResultCandidate(candidate, options) {
     else seats.set(key, student);
   }
   if (duplicates.length) {
-    issues.warnings.push(`같은 반·번호가 두 번 이상 나옵니다(${duplicates.length}건: ${resultExampleList(duplicates)}). 학생 수와 과목 인원이 부풀려질 수 있으니 원본을 확인하세요.`);
+    issues.warnings.push(`현 ${grade}학년 결과에 같은 반·번호가 두 번 이상 나옵니다(${duplicates.length}건: ${resultExampleList(duplicates)}). 학생 수와 과목 인원이 부풀려질 수 있으니 원본을 확인하세요.`);
   }
   const summaryRows = candidate.skippedRows.filter((row) => /학년·반·번호·성명/.test(row.reason));
   const brokenRows = candidate.skippedRows.filter((row) => !summaryRows.includes(row));
@@ -165,7 +220,7 @@ function analyzeResultCandidate(candidate, options) {
   if (summaryRows.length) issues.info.push(`학생 정보가 없는 합계·빈 행 ${summaryRows.length}개는 제외했습니다.`);
   const empty = students.filter((student) => !student.selections.length);
   if (empty.length) {
-    issues.warnings.push(`선택 과목이 없는 학생 ${empty.length}명: ${resultExampleList(empty.map((student) => `${student.classroom}-${student.number} ${student.name}`))}. 재적 학생 수에는 포함되지만 과목 인원에는 반영되지 않습니다.`);
+    issues.warnings.push(`${target}을 하나도 고르지 않은 학생 ${empty.length}명: ${resultExampleList(empty.map((student) => `${student.classroom}-${student.number} ${student.name}`))}. 재적 학생 수에는 포함되지만 과목 인원에는 반영되지 않습니다.`);
   }
 
   const curriculum = options.subjects?.[targetGrade] || [];
@@ -174,13 +229,13 @@ function analyzeResultCandidate(candidate, options) {
     const fileNames = new Set(courses.map((course) => normalizeResultCourseName(course.name)));
     const unknown = courses.filter((course) => !curriculumNames.has(normalizeResultCourseName(course.name)));
     if (unknown.length) {
-      issues.warnings.push(`${targetGrade}학년 편제표에 없는 과목 ${unknown.length}개: ${resultExampleList(unknown.map((course) => course.name))}. 과목명이 편제표와 다르면 그룹 분류와 시수 통계 연결이 끊어지니 편제표 또는 파일의 과목명을 맞추세요.`);
+      issues.warnings.push(`${target} 중 ${plan}에 없는 과목 ${unknown.length}개: ${resultExampleList(unknown.map((course) => course.name))}. 과목명이 편제표와 다르면 그룹 분류와 시수 통계 연결이 끊어지니 편제표 또는 파일의 과목명을 맞추세요.`);
       addAction("curriculum", "1단계 편제표 확인");
     }
     const missing = curriculum.filter((item) => !fileNames.has(normalizeResultCourseName(item.subject)));
-    if (missing.length) issues.info.push(`편제표의 ${targetGrade}학년 선택 과목 중 결과 파일에 없는 과목 ${missing.length}개: ${resultExampleList(missing.map((item) => item.subject))}.`);
+    if (missing.length) issues.info.push(`${plan}의 ${target} 중 결과 파일에 없는 과목 ${missing.length}개: ${resultExampleList(missing.map((item) => item.subject))}.`);
   } else {
-    issues.info.push(`${targetGrade}학년 편제표 과목을 찾지 못해 과목명 대조를 건너뛰었습니다. 1단계에서 해당 입학연도 편제표를 확인하세요.`);
+    issues.info.push(`${plan}에서 ${target}을 찾지 못해 과목명 대조를 건너뛰었습니다. 1단계에서 해당 입학연도 편제표를 확인하세요.`);
   }
 
   let groups = options.groups;
@@ -199,7 +254,9 @@ function analyzeResultCandidate(candidate, options) {
     issues.info.push(`과목 그룹 분류를 건너뛰었습니다(${error instanceof Error ? error.message : "설정 확인 필요"}).`);
   }
   if (unclassified.length) {
-    issues.warnings.push(`선택 그룹이 정해지지 않은 과목 ${unclassified.length}개: ${resultExampleList(unclassified)}. 2단계 과목·그룹 설정에서 그룹에 넣으면 집계표가 그룹별로 정리됩니다.`);
+    // 분류 경고는 "2학년 물리학"처럼 신청 학년을 앞에 붙여 오므로, 학년은 문장 앞에 한 번만 적는다.
+    const names = unclassified.map((item) => String(item).replace(new RegExp(`^${targetGrade}학년\\s+`), ""));
+    issues.warnings.push(`선택 그룹이 정해지지 않은 ${target} ${unclassified.length}개: ${resultExampleList(names)}. 2단계 과목·그룹 설정에서 그룹에 넣으면 집계표가 그룹별로 정리됩니다.`);
     addAction("groups", "과목·그룹 설정으로");
   }
   const groupOf = (selection) => {
@@ -216,16 +273,17 @@ function analyzeResultCandidate(candidate, options) {
     })).filter(({ picked }) => picked !== group.count);
     if (mismatched.length) {
       const label = `${["1", "2"].includes(group.semester) ? `${group.semester}학기 ` : ""}${group.name}`;
-      issues.warnings.push(`${label}: ${group.count}과목 선택 기준과 다른 학생 ${mismatched.length}명 (${resultExampleList(mismatched.map(({ student, picked }) => `${student.classroom}-${student.number} ${student.name} ${picked}과목`), 3)}).`);
+      issues.warnings.push(`${target} ${label}: ${group.count}과목 선택 기준과 다른 학생 ${mismatched.length}명 (${resultExampleList(mismatched.map(({ student, picked }) => `${student.classroom}-${student.number} ${student.name} ${picked}과목`), 3)}).`);
       addAction("groups", "과목·그룹 설정으로");
     }
   }
 
-  if (candidate.otherGradeCount) issues.info.push(`다른 학년 ${candidate.otherGradeCount}명은 제외했습니다. 해당 학년 메뉴에서 따로 업로드하세요.`);
+  if (candidate.otherGrades?.length) issues.info.push(...candidate.otherGrades);
+  else if (candidate.otherGradeCount) issues.info.push(`다른 학년 ${candidate.otherGradeCount}명은 제외했습니다. 해당 학년 탭에서 따로 올려 주세요.`);
   const classes = new Set(students.map((student) => String(student.classroom))).size;
   const enrolled = new Set(students.flatMap((student) => student.selections.map((selection) => String(selection.column))));
   const zero = courses.filter((course) => !enrolled.has(String(course.column)));
-  if (zero.length) issues.info.push(`신청자가 없는 과목 ${zero.length}개: ${resultExampleList(zero.map((course) => course.name))}.`);
+  if (zero.length) issues.info.push(`신청자가 없는 ${target} ${zero.length}개: ${resultExampleList(zero.map((course) => course.name))}.`);
 
   const previousStudents = (options.existingStudents || []).filter((student) => String(student.grade) === grade);
   const before = countResultSelections(previousStudents, []);
@@ -288,7 +346,7 @@ function renderResultImportPreview() {
     ? `<div class="result-import-issues ${className}"><strong>${title} ${items.length}건</strong><ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>`
     : "";
   const summary = candidate.summary
-    ? `<p class="result-import-summary">현재 ${preview.grade}학년 <b>${candidate.summary.previousStudents ? `${candidate.summary.previousStudents}명 → ` : ""}${candidate.summary.students}명</b> · 반 ${candidate.summary.classes}개 · 과목 ${candidate.summary.courses}개</p>`
+    ? `<p class="result-import-summary">${esc(resultCurrentLabel(preview.grade))} <b>${candidate.summary.previousStudents ? `${candidate.summary.previousStudents}명 → ` : ""}${candidate.summary.students}명</b> · 반 ${candidate.summary.classes}개 · 과목 ${candidate.summary.courses}개</p>`
     : "";
   const changed = candidate.comparison.filter((row) => row.before === null || row.before !== row.after);
   const comparisonRows = candidate.comparison.map((row) => {
@@ -303,7 +361,7 @@ function renderResultImportPreview() {
   const blocked = candidate.issues.blocking.length > 0;
   const warningCount = candidate.issues.warnings.length;
   container.innerHTML = `<div class="result-import-head">
-      <div><strong>결과 파일 검증 · ${esc(preview.round)}차 현재 ${esc(preview.grade)}학년</strong><span>${esc(preview.fileName)} · ${formatLabel}</span></div>
+      <div><strong>결과 파일 검증 · ${esc(preview.round)}차 ${esc(resultCurrentLabel(preview.grade))}</strong><span>${esc(preview.fileName)} · ${formatLabel}</span></div>
       ${sheetPicker}
     </div>
     ${summary}
@@ -350,10 +408,10 @@ function confirmResultImport() {
   if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
   if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("결과 반영");
   status.style.color = "#287956";
-  status.textContent = `${preview.round}차 현재 ${preview.grade}학년 ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
+  status.textContent = `${preview.round}차 ${resultCurrentLabel(preview.grade)} ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
     (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +
     (carry.dropped ? ` 새 결과에 없는 과목의 설정 ${carry.dropped}건은 해제했습니다.` : "") +
-    (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개.` : "");
+    (unclassified.length ? ` 그룹 미확인 ${resultTargetLabel(preview.grade)} ${unclassified.length}개.` : "");
 }
 
 function revalidateResultImport() {

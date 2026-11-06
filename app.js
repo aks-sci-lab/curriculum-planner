@@ -741,6 +741,8 @@
       summary.textContent = `${$("#schoolYear").value}학년도 · ${scope}`;
       const dropHint = document.getElementById("resultDropHint");
       if (dropHint) dropHint.textContent = `현 ${grade}학년(${Number(grade) + 1}학년 신청) ${state.currentRound}차 수강신청 결과 엑셀을 여기에 놓으세요`;
+      const gradeNote = document.getElementById("resultGradeNote");
+      if (gradeNote) gradeNote.textContent = `파일의 학년은 현재 학년입니다(현 ${grade}학년 → ${Number(grade) + 1}학년 과목 신청). 이 탭에는 학년 열이 ${grade}인 결과를 올립니다.`;
       const selector = $("#workspaceRound");
       const options = applicationRoundNumbers().map((round) =>
         `<option value="${round}">${round}차</option>`).join("");
@@ -785,11 +787,11 @@
           action.textContent = "웹 수강신청 관리";
           action.dataset.nextStep = "online";
         } else if (!gradeStudents) {
-          message.textContent = `신청 과목 ${preparation.subjects}개 · 그룹 준비 완료. 외부 프로그램에서 받은 현재 ${grade}학년 ${state.currentRound}차 결과 엑셀을 업로드하세요.`;
+          message.textContent = `신청 과목 ${preparation.subjects}개 · 그룹 준비 완료. 외부 프로그램에서 받은 현 ${grade}학년(${Number(grade) + 1}학년 과목 신청) ${state.currentRound}차 결과 엑셀을 업로드하세요. 파일의 학년 열은 현재 학년(${grade})입니다.`;
           action.textContent = "결과 엑셀 업로드";
           action.dataset.nextStep = "results";
         } else {
-          message.textContent = `${state.currentRound}차 현재 ${grade}학년 결과 ${gradeStudents}명 반영됨. 4단계에서 집계를 확인하고 개설 여부를 확정하세요.`;
+          message.textContent = `${state.currentRound}차 현 ${grade}학년(${Number(grade) + 1}학년 과목 신청) 결과 ${gradeStudents}명 반영됨. 4단계에서 집계를 확인하고 개설 여부를 확정하세요.`;
           action.textContent = "집계·개설 확정으로";
           action.dataset.nextStep = "4";
         }
@@ -845,7 +847,7 @@
       state.lastSelectedCourseColumn = null;
       state.selectedId = state.students[0]?.id || null;
       $("#round").value = `${next}차`;
-      $("#fileName").textContent = state.fileName || "불러온 파일 없음";
+      $("#fileName").textContent = resultFileNameLabel(data);
       applyClassFilterOptions(state.students);
       renderRoster();
       renderPreview();
@@ -854,6 +856,13 @@
       renderRoundStatus();
       if (!skipRender) renderWorkflowLayout();
       persistState();
+    }
+
+    // 결과 파일명 줄: 학년별로 "현 1학년: 파일명 / 현 2학년: 업로드 없음". 온라인 연동처럼 학년별 파일이 없는 자료는 저장된 이름을 그대로 쓴다.
+    function resultFileNameLabel(data) {
+      const gradeFiles = data?.gradeFiles && typeof data.gradeFiles === "object" ? data.gradeFiles : {};
+      if (!Object.keys(gradeFiles).length && data?.fileName) return data.fileName;
+      return ["1", "2"].map((grade) => `현 ${grade}학년: ${gradeFiles[grade] || "업로드 없음"}`).join(" / ");
     }
 
     function clearApplicationRound() {
@@ -873,7 +882,7 @@
       state.customGroupNames = [];
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
-      $("#fileName").textContent = "불러온 파일 없음";
+      $("#fileName").textContent = "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음";
       $("#searchInput").value = "";
       $("#searchInput").disabled = true;
       $("#classFilter").disabled = true;
@@ -926,7 +935,7 @@
       state.curriculumMutationRevision += 1;
       state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
       state.workflowStep = 1;
-      $("#fileName").textContent = "불러온 파일 없음";
+      $("#fileName").textContent = "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음";
       $("#round").value = "1차";
       $("#closureContent").innerHTML = "";
       $("#retakeContent").innerHTML = "";
@@ -1094,7 +1103,9 @@
           ? saved.applicationMode
           : "external";
 
-        $("#fileName").textContent = state.fileName || "불러온 파일 없음";
+        $("#fileName").textContent = typeof resultFileNameLabel === "function"
+          ? resultFileNameLabel(activeRound)
+          : state.fileName || "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음";
         $("#openingPercent").value = saved.openingPercent || "90";
         $("#divisionPercent").value = saved.divisionPercent || "110";
         $("#schoolYear").value = saved.schoolYear || $("#schoolYear").value;
@@ -1408,6 +1419,20 @@
         course.applicationGroups = data.courses.find((item) => item.column === course.column)?.applicationGroups || {};
       }
       return [...warnings];
+    }
+
+    // classifyApplicationRecords의 "2학년 물리학" 목록을 "2학년 과목(현 1학년 신청) 물리학, …"처럼 학년별로 묶는다.
+    function describeUnclassifiedCourses(list) {
+      const byGrade = new Map();
+      for (const item of list || []) {
+        const match = String(item).match(/^(\d+)학년\s+(.+)$/);
+        const key = match ? match[1] : "";
+        if (!byGrade.has(key)) byGrade.set(key, []);
+        byGrade.get(key).push(match ? match[2] : String(item));
+      }
+      return [...byGrade].map(([grade, names]) => grade && Number(grade) > 1
+        ? `${grade}학년 과목(현 ${Number(grade) - 1}학년 신청) ${names.join(", ")}`
+        : names.join(", ")).join(" / ");
     }
 
     function courseGroupLabel(course, currentGrade, groupSettings = null) {
@@ -3307,10 +3332,12 @@
       if (!list) return;
       list.innerHTML = applicationRoundNumbers().map((round) => {
         const data = state.rounds?.[round];
-        const students = data?.students.filter((student) => String(student.grade) === (state.applicationMenuGrade || "1")) || [];
+        const grade = state.applicationMenuGrade || "1";
+        const students = data?.students.filter((student) => String(student.grade) === grade) || [];
+        const gradeFile = data?.gradeFiles?.[grade] || (Object.keys(data?.gradeFiles || {}).length ? "" : data?.fileName);
         const info = data
-          ? `${escapeHtml(data.gradeFiles?.[state.applicationMenuGrade || "1"] || data.fileName || "이전 파일")} · 현재 ${state.applicationMenuGrade || "1"}학년 ${students.length}명`
-          : "불러온 명단 없음";
+          ? `현 ${grade}학년(${Number(grade) + 1}학년 과목 신청): ${gradeFile || students.length ? `${escapeHtml(gradeFile || "이전 파일")} · ${students.length}명` : "업로드 없음"}`
+          : `현 ${grade}학년(${Number(grade) + 1}학년 과목 신청): 업로드 없음`;
         const current = round === state.currentRound ? " · 현재 보기" : "";
         const roundState = statusLabel(round) ? ` · ${escapeHtml(statusLabel(round))}` : "";
         const button = data && round !== state.currentRound
@@ -4381,7 +4408,7 @@
         state.customGroupNames = [...data.customGroupNames];
         state.fileName = data.fileName;
         if (!state.students.some((student) => student.id === state.selectedId)) state.selectedId = state.students[0]?.id || null;
-        $("#fileName").textContent = state.fileName;
+        $("#fileName").textContent = typeof resultFileNameLabel === "function" ? resultFileNameLabel(data) : state.fileName;
         $("#searchInput").disabled = !state.students.length;
         $("#classFilter").disabled = !state.students.length;
         applyClassFilterOptions(state.students);
@@ -4416,6 +4443,9 @@
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       state.fileName = `${sourceLabel} ${merged.students.length}명`;
+      // 학년별 결과 파일을 모두 대신하므로 이전 학년별 파일명은 지운다.
+      if (state.rounds?.[state.currentRound]) state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles: {}};
+      $("#fileName").textContent = state.fileName;
       state.selectedId = merged.students[0].id;
       $("#round").value = `${state.currentRound}차`;
       applyClassFilterOptions(merged.students);
@@ -4430,7 +4460,7 @@
       status.style.color = merged.errors.length ? "#a44939" : "#287956";
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
         (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
-        (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
+        (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${typeof describeUnclassifiedCourses === "function" ? describeUnclassifiedCourses(unclassified) : unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
     // 개설/폐강 결정은 차수마다 새로 내려야 하므로 이어받지 않는다.
@@ -4458,7 +4488,7 @@
         throw new Error(`${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 업로드하세요.`);
       }
       const students = data.students.filter((student) => String(student.grade) === grade);
-      if (!students.length) throw new Error(`현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
+      if (!students.length) throw new Error(`현 ${grade}학년(${Number(grade) + 1}학년 과목 신청) 학생이 없는 결과 파일입니다. 파일의 학년 열(현재 학년)에 맞는 탭에서 올려 주세요.`);
       const courses = normalizeCourses(data.courses.filter((course) =>
         !course.applicationCurrentGrade || course.applicationCurrentGrade === grade));
       const otherStudents = state.students.filter((student) => String(student.grade) !== grade);
@@ -4552,7 +4582,9 @@
       state.rounds ||= {"1":null};
       const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
       state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
-      state.fileName = Object.entries(gradeFiles).map(([g,name]) => `${g}학년: ${name}`).join(" / ");
+      state.fileName = typeof resultFileNameLabel === "function"
+        ? resultFileNameLabel({gradeFiles})
+        : Object.entries(gradeFiles).map(([g,name]) => `현 ${g}학년: ${name}`).join(" / ");
       state.selectedId = nextStudents[0].id;
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
@@ -5052,6 +5084,7 @@
     function resultImportOptions(grade) {
       return {
         subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }),
+        cohortYear: typeof applicationCohortYear === "function" ? applicationCohortYear(grade) : "",
         existingStudents: state.students
       };
     }
