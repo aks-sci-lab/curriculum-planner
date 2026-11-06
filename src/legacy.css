@@ -1054,6 +1054,13 @@
     }
     @media print { #cloudCodeDialog, #cloudCodeDialog::backdrop { display: none !important; } }
     .course-history { max-height: 500px; overflow: auto; padding: 12px; background: #f2f5fb; }
+    .course-code-locks { grid-column: 1 / -1; display: grid; gap: 8px; padding: 12px; border-radius: 10px; background: #f2f5fb; }
+    .course-code-locks h5 { margin: 0; font-size: 14px; }
+    .course-code-locks .note { margin: 0; color: #52627d; font-size: 12px; line-height: 1.6; }
+    .course-code-lock-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid #dfe6f1; border-radius: 8px; background: #fff; }
+    .course-code-lock-row.is-locked { border-color: #f1c4c4; background: #fff7f7; }
+    .course-code-lock-row strong { color: #b42318; }
+    .course-reissue { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     #courseGroupEditor { display:block; min-width:0; }
     #courseGroupEditor > h4, #courseGroupEditor > .course-group-semester-columns { min-width:0; }
     #courseGroupEditor > h4 { margin:4px 0; }
@@ -1176,6 +1183,11 @@
     #supabaseStudentEntry > .note { color: #52627d; font-size: 14px; line-height: 1.7; }
     #cloudStudentLogin { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; max-width: 540px; }
     #cloudStudentLogin label { grid-column: 1 / -1; margin-bottom: -6px; font-weight: 700; }
+    #cloudStudentLogin .cloud-student-identity { display: flex; flex-wrap: wrap; gap: 10px; grid-column: 1 / -1; }
+    #cloudStudentLogin .cloud-student-identity.hidden, #cloudStudentLogin .cloud-student-identity label.hidden { display: none; }
+    #cloudStudentLogin .cloud-student-identity label { display: grid; gap: 4px; margin: 0; font-weight: 700; }
+    #cloudStudentLogin .cloud-student-identity input, #cloudStudentLogin .cloud-student-identity select { width: 96px; min-height: 46px; font-size: 18px; }
+    #cloudStudentLogin .cloud-student-identity select { padding: 0 8px; border: 1px solid #c9d4ea; border-radius: 8px; background: #fff; width: 128px; }
     #cloudStudentCode { min-height: 46px; font-size: 18px; letter-spacing: .18em; }
     #cloudStudentLogin .button { min-height: 46px; }
     #cloudStudentMessage { min-height: 24px; margin: 12px 0; color: #405473; font-weight: 600; }

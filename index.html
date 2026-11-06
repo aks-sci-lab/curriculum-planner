@@ -27,8 +27,19 @@
   </section>
   <section class="student-entry hidden" id="supabaseStudentEntry" aria-label="온라인 학생 수강신청">
     <h1>학생 수강신청</h1>
-    <p class="note">학교·차수별 신청 링크로 접속해 6자리 숫자 코드를 입력하세요. 본인 코드만 사용하고 다른 사람에게 공유하지 마세요. 처음 접속하면 받은 코드를 새 6자리 숫자로 바꿔야 합니다. 접속에 5회 실패하면 10분간 잠깁니다.</p>
+    <p class="note">학교·차수별 신청 링크로 접속해 <strong>본인의 반·번호와 6자리 숫자 코드</strong>를 입력하세요. 코드는 다른 사람에게 공유하지 마세요. 처음 접속하면 받은 코드를 새 6자리 숫자로 바꿔야 합니다. 5회 연속 틀리면 10분간 잠기고, 그 뒤에도 계속 틀리면 선생님이 잠금을 풀어 주셔야 합니다.</p>
     <form id="cloudStudentLogin">
+      <div class="cloud-student-identity" id="cloudStudentIdentityFields">
+        <label class="hidden" id="cloudStudentGradeField">현재 학년
+          <select id="cloudStudentGrade"><option value="">선택</option><option value="1">현 1학년</option><option value="2">현 2학년</option></select>
+        </label>
+        <label>반
+          <input class="application-link-field" id="cloudStudentClassroom" type="text" inputmode="numeric" maxlength="3" autocomplete="off">
+        </label>
+        <label>번호
+          <input class="application-link-field" id="cloudStudentNumber" type="text" inputmode="numeric" maxlength="3" autocomplete="off">
+        </label>
+      </div>
       <label for="cloudStudentCode">개인 신청 코드</label>
       <input class="application-link-field" id="cloudStudentCode" type="password" inputmode="numeric" autocomplete="off" required>
       <button class="button" type="submit">수강신청으로 이동</button>

@@ -37,7 +37,7 @@ class Element {
   click() { this.clicked = true; }
   focus() { this.focused = true; }
   querySelector(selector) {
-    return this.children.find((child) => selector === ".course-history" && child.className === "course-history" ||
+    return this.children.find((child) => selector.startsWith(".") && child.className === selector.slice(1) ||
       selector === "legend" && child.tag === "legend") || null;
   }
   remove() { this.parent.children = this.parent.children.filter((child) => child !== this); }
@@ -74,6 +74,9 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
   const network = { onLine };
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) elements[match[2]] = new Element(match[1]);
+  // 학생 접속은 반·번호 + 코드. 기본 가상 학생은 1반 1번.
+  elements.cloudStudentClassroom.value = "1";
+  elements.cloudStudentNumber.value = "1";
   for (const [name,panel] of [["Groups","applicationGroupsPanel"],["Online","supabaseTeacherPanel"],
     ["Results","applicationResultsPanel"]]) {
     elements[`application${name}Tab`].setAttribute("aria-controls",panel);
@@ -737,18 +740,21 @@ test("Google login reports missing provider, missing verifier, expired verifier 
 test("six-digit codes preserve leading zeroes and always use the scoped school event", async () => {
   const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
   const f = fixture({ href: `https://school.example/app/#event=${id}` });
-  f.respond = async (request) => ({ data: request.url.endsWith("get_scoped_course_application") ? {
+  f.respond = async (request) => ({ data: request.url.endsWith("get_student_course_application") ? {
     student: { grade: "1", classroom: "1", number: "1", name: "가상" },
     schoolName: "학교", schoolYear: "2026", round: "1", open: true,
     courses: [{ subject: "수학", credit: 3 }], selections: ["수학"],
   } : { message: "저장 완료" } });
   f.elements.cloudStudentCode.value = "001234";
   await f.fire("cloudStudentLogin", "submit");
-  assert.equal(f.requests[0].body.p_code, "001234");
-  assert.equal(f.requests[0].body.p_event, id);
-  await f.fire("cloudStudentApplication", "submit");
-  assert.ok(f.requests[1].url.endsWith("save_scoped_course_application"));
+  assert.equal(f.requests[1].body.p_code, "001234");
+  assert.ok(f.requests[0].url.endsWith("get_course_login_form"));
+  assert.deepEqual([f.requests[1].body.p_grade, f.requests[1].body.p_classroom, f.requests[1].body.p_number], ["", "1", "1"]);
   assert.equal(f.requests[1].body.p_event, id);
+  await f.fire("cloudStudentApplication", "submit");
+  assert.ok(f.requests[2].url.endsWith("save_student_course_application"));
+  assert.equal(f.requests[2].body.p_event, id);
+  assert.equal(f.requests[2].body.p_classroom, "1");
   const common = fixture();
   common.elements.cloudStudentCode.value = "001234";
   await common.fire("cloudStudentLogin", "submit");
@@ -840,7 +846,7 @@ test("teacher log controls send the exact server cutoff and optional student id"
   test("student group counters and exact counts prevent incomplete or excess submissions", async () => {
     const id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const f=fixture({href:`https://school.example/app/#event=${id}`});
-    f.respond=async(r)=>({data:r.url.endsWith("get_scoped_course_application")?{
+    f.respond=async(r)=>({data:r.url.endsWith("get_student_course_application")?{
       student:{grade:"1",classroom:"1",number:"1",name:"가상"},schoolName:"학교",schoolYear:"2026",round:"1",open:true,
       courses:[{subject:"A",credit:3,type:"융합선택"},{subject:"B",credit:4,type:"진로선택"}],selections:[],
       groups:[{id:"g",name:"교과",count:1,courses:["A","B"]}],
@@ -855,12 +861,12 @@ test("teacher log controls send the exact server cutoff and optional student id"
     fieldset.children[2].children[0].checked=true;
     await f.fire("cloudStudentApplication","submit");
     assert.match(f.elements.cloudStudentMessage.textContent,/정확히 1/);
-    assert.equal(f.requests.length,1);
+    assert.equal(f.requests.length,2);
     fieldset.children[2].children[0].checked=false;
     await f.fire("cloudStudentChoices","change");
     assert.match(fieldset.children[0].textContent,/1\/1/);
     await f.fire("cloudStudentApplication","submit");
-    assert.equal(f.requests.length,2);
+    assert.equal(f.requests.length,3);
   });
 
   test("group editor reflects curriculum assignments and validates configured counts", () => {
@@ -987,7 +993,7 @@ test("affected student keeps locked open courses and only replaces closed choice
     lockedSelections:["유지"],reselectionAllowed:true,selections:["유지"],
     courses:[{subject:"유지",credit:3,semester:"1"},{subject:"대체",credit:3,semester:"1"},{subject:"다른",credit:3,semester:"1"}],
     groups:[{id:"s1",grade:"2",semester:"1",name:"선택",count:2,courses:["유지","대체","다른"]}]};
-  f.respond=async(r)=>r.url.includes("get_scoped")?{data}:{data:{message:"저장"}};
+  f.respond=async(r)=>r.url.includes("get_student")?{data}:{data:{message:"저장"}};
   f.elements.cloudStudentCode.value="123456";
   await f.fire("cloudStudentLogin","submit");
   const [locked,replacement]=f.elements.cloudStudentChoices.querySelectorAll("input");
@@ -1000,7 +1006,7 @@ test("affected student keeps locked open courses and only replaces closed choice
   replacement.checked=true;
   f.elements.cloudStudentChoices.listeners.change({target:replacement});
   await f.fire("cloudStudentApplication","submit");
-  assert.deepEqual(f.requests[1].body.p_selections,["유지","대체"]);
+  assert.deepEqual(f.requests.at(-1).body.p_selections,["유지","대체"]);
 });
 
 test("teacher creates next round from exact semester closures and chosen reselection mode", async () => {
@@ -1485,7 +1491,7 @@ test("virtual first- and second-grade rosters complete semester applications wit
       ],
     };
     const f = fixture({ href: "https://school.example/app/#event=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" });
-    f.respond = async (request) => request.url.includes("get_scoped_course_application")
+    f.respond = async (request) => request.url.includes("get_student_course_application")
       ? { data: application }
       : { data: { message: "가상 신청 저장 완료" } };
     f.elements.cloudStudentCode.value = "123456";
@@ -1537,19 +1543,21 @@ test("first login asks the student to replace the issued code, then opens the ap
   const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
   const f = fixture({ href: `https://school.example/app/#event=${id}` });
   const opened = {
-    student: { grade: "1", classroom: "1", number: "1", name: "가상" },
+    student: { grade: "1", classroom: "2", number: "7", name: "가상" },
     schoolName: "학교", schoolYear: "2026", round: "1", open: true,
     courses: [{ subject: "수학", credit: 3 }], selections: [],
   };
   f.respond = async (request) => {
     const name = request.url.split("/").pop();
-    if (name === "get_scoped_course_application") {
+    if (name === "get_student_course_application") {
       return { data: request.body.p_code === "123789"
         ? { mustChangeCode: true, student: opened.student } : opened };
     }
     if (name === "change_course_code") return { data: { message: "코드를 변경했습니다." } };
     return { data: { message: "저장 완료" } };
   };
+  f.elements.cloudStudentClassroom.value = "02";
+  f.elements.cloudStudentNumber.value = "7";
   f.elements.cloudStudentCode.value = "123789";
   await f.fire("cloudStudentLogin", "submit");
   assert.equal(f.elements.cloudStudentChangeCode.classList.contains("hidden"), false);
@@ -1568,21 +1576,135 @@ test("first login asks the student to replace the issued code, then opens the ap
   await f.fire("cloudStudentChangeCode", "submit");
 
   const change = f.requests.find((request) => request.url.endsWith("change_course_code"));
-  assert.deepEqual(change.body, { p_event: id, p_code: "123789", p_new_code: "482915" });
+  assert.deepEqual(change.body, { p_event: id, p_grade: "", p_classroom: "2", p_number: "7", p_code: "123789", p_new_code: "482915" });
   assert.equal(f.requests.at(-1).body.p_code, "482915");
+  assert.equal(f.requests.at(-1).body.p_classroom, "2");
   assert.equal(f.elements.cloudStudentCode.value, "482915");
   assert.equal(f.elements.cloudStudentChangeCode.classList.contains("hidden"), true);
   assert.equal(f.elements.cloudStudentCourses.classList.contains("hidden"), false);
   assert.match(f.elements.cloudStudentMessage.textContent, /코드를 변경했습니다/);
+  f.elements.cloudStudentChoices.querySelectorAll("input")[0].checked = true;
+  await f.fire("cloudStudentApplication", "submit");
+  const saved = f.requests.at(-1);
+  assert.ok(saved.url.endsWith("save_student_course_application"));
+  assert.deepEqual([saved.body.p_classroom, saved.body.p_number, saved.body.p_code], ["2", "7", "482915"]);
 });
 
-test("server refusals such as login lockout are shown to the student and never open the application", async () => {
+test("student lock refusals are shown and never open the application", async () => {
   const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
   const f = fixture({ href: `https://school.example/app/#event=${id}` });
-  f.respond = async () => ({ data: { error: "접속 실패가 5회를 넘어 10분간 잠겼습니다.", locked: true } });
+  f.respond = async () => ({ data: { error: "접속에 5회 연속 실패해 10분간 잠겼습니다. 약 10분 뒤 다시 시도하거나 선생님께 잠금 해제를 요청하세요.", locked: true } });
   f.elements.cloudStudentCode.value = "000009";
   await f.fire("cloudStudentLogin", "submit");
   assert.match(f.elements.cloudStudentMessage.textContent, /10분간 잠겼습니다/);
   assert.equal(f.elements.cloudStudentCourses.classList.contains("hidden"), true);
   assert.equal(f.elements.cloudStudentChangeCode.classList.contains("hidden"), true);
+});
+
+test("six-digit login requires class and number, and asks for the grade when the event has two grades", async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const f = fixture({ href: `https://school.example/app/#event=${id}`, respond: async (request) =>
+    request.url.endsWith("get_course_login_form") ? { data: { grades: ["1", "2"], schoolName: "학교" } }
+      : { data: { error: "반·번호 또는 코드가 맞지 않습니다." } } });
+  await f.settle();
+  assert.equal(f.elements.cloudStudentGradeField.classList.contains("hidden"), false);
+  assert.equal(f.elements.cloudStudentIdentityFields.classList.contains("hidden"), false);
+  f.elements.cloudStudentNumber.value = "";
+  f.elements.cloudStudentCode.value = "123456";
+  await f.fire("cloudStudentLogin", "submit");
+  assert.match(f.elements.cloudStudentMessage.textContent, /반과 번호/);
+  f.elements.cloudStudentNumber.value = "12";
+  await f.fire("cloudStudentLogin", "submit");
+  assert.match(f.elements.cloudStudentMessage.textContent, /현재 학년을 선택/);
+  assert.equal(f.requests.length, 1, "입력이 모자라면 서버에 보내지 않는다");
+  f.elements.cloudStudentGrade.value = "2";
+  await f.fire("cloudStudentLogin", "submit");
+  assert.deepEqual(f.requests.at(-1).body, { p_event: id, p_grade: "2", p_classroom: "1", p_number: "12", p_code: "123456" });
+  assert.equal(f.elements.cloudStudentMessage.textContent, "반·번호 또는 코드가 맞지 않습니다.");
+
+  // 학년 칸이 없을 때 서버가 학년을 요구하면 칸을 보여 준다.
+  const single = fixture({ href: `https://school.example/app/#event=${id}`, respond: async (request) =>
+    request.url.endsWith("get_course_login_form") ? { data: { grades: ["1"] } } : { data: { error: "학년을 선택하세요.", needGrade: true } } });
+  await single.settle();
+  assert.equal(single.elements.cloudStudentGradeField.classList.contains("hidden"), true);
+  single.elements.cloudStudentCode.value = "123456";
+  await single.fire("cloudStudentLogin", "submit");
+  assert.equal(single.elements.cloudStudentGradeField.classList.contains("hidden"), false);
+  assert.match(single.elements.cloudStudentMessage.textContent, /학년을 선택/);
+
+  // 공통 입구(긴 코드)는 반·번호 칸을 쓰지 않는다.
+  const common = fixture();
+  assert.equal(common.elements.cloudStudentIdentityFields.classList.contains("hidden"), true);
+});
+
+test("teacher sees per-student lock status and can unlock one student or all students", async () => {
+  const event = { id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", school_name: "테스트", school_year: "2026",
+    round: "1", is_open: true, created_at: "2026-10-06T08:00:00Z", subjects: { "2": [{ subject: "A", credit: 3 }], "3": [] } };
+  const storage = new Map([["curriculum-teacher-session-v1", JSON.stringify({
+    lastActivity: Date.now(), session: { access_token: "token", refresh_token: "refresh",
+      expires_at: Date.now() / 1000 + 3600, user: { id: "owner", email: "teacher@example.com" } }
+  })]]);
+  let locks = [
+    { id: "s1", grade: "1", classroom: "3", number: "5", name: "잠김학생", failStreak: 0, failTotal: 5, lockCount: 1, teacherLock: false, lockedSeconds: 420 },
+    { id: "s2", grade: "1", classroom: "3", number: "6", name: "교사해제", failStreak: 0, failTotal: 11, lockCount: 2, teacherLock: true, lockedSeconds: 0 },
+    { id: "s3", grade: "1", classroom: "4", number: "1", name: "오타학생", failStreak: 2, failTotal: 2, lockCount: 0, teacherLock: false, lockedSeconds: 0 },
+  ];
+  const roster = locks.map(({ id, grade, classroom, number, name }) => ({ id, grade, classroom, number, name, selections: [] }));
+  const f = fixture({ storage, respond: async (request) => {
+    if (request.url.includes("/course_events?")) return { data: [event] };
+    if (request.url.endsWith("/get_course_code_locks")) return { data: { students: locks } };
+    if (request.url.endsWith("/get_teacher_course_applications")) return { data: { entries: roster, subjects: event.subjects, groups: [] } };
+    if (request.url.endsWith("/unlock_course_student")) {
+      locks = locks.filter((student) => student.id !== request.body.p_student);
+      return { data: { message: "1학년 3반 6번 교사해제 학생의 접속 잠금을 해제했습니다." } };
+    }
+    if (request.url.endsWith("/unlock_course_event")) { locks = []; return { data: { message: "학생 2명의 접속 잠금·실패 기록을 모두 해제했습니다." } }; }
+    if (request.url.endsWith("/reissue_course_code")) {
+      locks = locks.filter((student) => student.id !== request.body.p_student);
+      return { data: { students: [{ classroom: "3", number: "5", name: "잠김학생", code: "135790" }] } };
+    }
+    return { data: [] };
+  } });
+  await f.settle();
+  const card = f.elements.cloudEventList.children[0];
+  const labels = card.children.map((child) => child.textContent);
+  assert.ok(!labels.includes("접속 잠금 해제"));
+  card.children.find((child) => child.textContent === "학생 접속 잠금 · 코드 재발급").listeners.click();
+  await f.settle();
+  let panel = card.querySelector(".course-code-locks");
+  assert.match(panel.children[0].textContent, /잠김 2명 \(교사 해제 필요 1명\)/);
+  assert.match(panel.children[1].textContent, /일부러 틀려 잠글 수도/);
+  const lockRows = () => card.querySelector(".course-code-locks").children
+    .filter((child) => String(child.className).startsWith("course-code-lock-row"));
+  const status = (row) => row.children[0].textContent + row.children[0].children[0].textContent;
+  let rows = lockRows();
+  assert.match(status(rows[0]), /3반 5번 잠김학생 · 잠김 · 약 7분 남음\(자동 해제\) · 10분 잠금 1회/);
+  assert.match(status(rows[1]), /3반 6번 교사해제 · 잠김 · 교사 해제 필요/);
+  assert.match(status(rows[2]), /4반 1번 오타학생 · 실패 2회 · 연속 2회/);
+  assert.equal(rows[1].className, "course-code-lock-row is-locked");
+  assert.equal(rows[2].className, "course-code-lock-row");
+
+  rows[1].children.find((child) => child.textContent === "잠금 해제").listeners.click();
+  await f.settle();
+  const unlock = f.requests.find((request) => request.url.endsWith("/unlock_course_student"));
+  assert.deepEqual(unlock.body, { p_event: event.id, p_student: "s2" });
+  assert.ok(unlock.options.headers.Authorization);
+  assert.match(f.elements.cloudTeacherMessage.textContent, /잠금을 해제했습니다/);
+  assert.equal(lockRows().length, 2);
+
+  panel = card.querySelector(".course-code-locks");
+  const reissue = panel.children.find((child) => child.className === "course-reissue");
+  reissue.children[0].value = "s1";
+  reissue.children[1].listeners.click();
+  await f.settle();
+  assert.deepEqual(f.requests.find((request) => request.url.endsWith("/reissue_course_code")).body, { p_event: event.id, p_student: "s1" });
+  assert.match(f.elements.cloudTeacherMessage.textContent, /새 코드: 135790 · 잠금 해제됨/);
+  assert.equal(lockRows().length, 1);
+
+  card.children.find((child) => child.textContent === "학생 잠금 전체 해제").listeners.click();
+  await f.settle();
+  assert.deepEqual(f.requests.find((request) => request.url.endsWith("/unlock_course_event")).body, { p_event: event.id });
+  assert.match(f.elements.cloudTeacherMessage.textContent, /모두 해제/);
+  assert.equal(lockRows().length, 0);
+  assert.match(card.querySelector(".course-code-locks").children[2].textContent, /실패 기록이 있는 학생이 없습니다/);
 });

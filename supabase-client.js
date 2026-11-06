@@ -647,12 +647,14 @@ var updateRetakeReadiness;
         downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
         byId("cloudTeacherMessage").textContent = "전체 코드를 재발급했습니다. 새 코드를 저장하고 각 학생에게 다시 전달하세요. 기존 코드는 사용할 수 없습니다.";
       }), "button button-quiet"));
-      section.appendChild(button("학생 코드 개별 재발급", () => teacherAction(async () => {
-        await showReissuePanel(event, section);
+      section.appendChild(button("학생 접속 잠금 · 코드 재발급", () => teacherAction(async () => {
+        await showStudentAccessPanel(event, section);
       }), "button button-quiet"));
-      section.appendChild(button("접속 잠금 해제", () => teacherAction(async () => {
+      section.appendChild(button("학생 잠금 전체 해제", () => teacherAction(async () => {
+        if (!window.confirm("이 신청의 모든 학생 접속 잠금과 실패 기록을 지울까요? 코드는 바뀌지 않습니다.")) return;
         const result = await rpc("unlock_course_event", { p_event: event.id }, true);
         byId("cloudTeacherMessage").textContent = result.message;
+        if (section.querySelector(".course-code-locks")) await showStudentAccessPanel(event, section);
       }), "button button-quiet"));
       section.appendChild(button("명렬·결과 영구 삭제", () => teacherAction(async () => {
         if (!window.confirm(`${event.school_name} ${event.round}차의 모든 명렬과 신청을 영구 삭제할까요? 복구할 수 없습니다.`)) {
@@ -713,15 +715,56 @@ var updateRetakeReadiness;
     switchWorkflowStep(4);
   });
 
-  async function showReissuePanel(event, parent) {
-    const old = parent.querySelector(".course-reissue");
+  function codeLockStatus(student) {
+    if (student.teacherLock) return "잠김 · 교사 해제 필요";
+    if (student.lockedSeconds > 0) return `잠김 · 약 ${Math.ceil(student.lockedSeconds / 60)}분 남음(자동 해제)`;
+    return `실패 ${student.failTotal}회 · 연속 ${student.failStreak}회`;
+  }
+
+  // 학생 단위 접속 잠금 현황(실패 기록이 있는 학생만)과 학생별 잠금 해제·코드 재발급.
+  async function showStudentAccessPanel(event, parent) {
+    const [locks, data] = await Promise.all([
+      rpc("get_course_code_locks", { p_event: event.id }, true),
+      rpc("get_teacher_course_applications", { p_event: event.id }, true),
+    ]);
+    const old = parent.querySelector(".course-code-locks");
     if (old) old.remove();
-    const data = await rpc("get_teacher_course_applications", { p_event: event.id }, true);
+    const panel = document.createElement("section");
+    panel.className = "course-code-locks";
+    const heading = document.createElement("h5");
+    const locked = locks.students.filter((student) => student.teacherLock || student.lockedSeconds > 0);
+    heading.textContent = `학생 접속 잠금 · 잠김 ${locked.length}명 (교사 해제 필요 ${locked.filter((student) => student.teacherLock).length}명)`;
+    panel.appendChild(heading);
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "5회 연속 실패 → 10분 잠금, 누적 10회 뒤 또 실패 → 교사 해제 필요. 반·번호를 아는 다른 사람이 일부러 틀려 잠글 수도 있으니, 학생이 잠겼다고 하면 본인임을 확인한 뒤 해제하세요. 코드를 잊었다면 아래에서 재발급하세요(잠금도 함께 풀립니다).";
+    panel.appendChild(note);
+    if (!locks.students.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "접속 실패 기록이 있는 학생이 없습니다.";
+      panel.appendChild(empty);
+    }
+    for (const student of locks.students) {
+      const row = document.createElement("div");
+      const isLocked = student.teacherLock || student.lockedSeconds > 0;
+      row.className = `course-code-lock-row${isLocked ? " is-locked" : ""}`;
+      const label = document.createElement("span");
+      label.textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name} · `;
+      const status = document.createElement(isLocked ? "strong" : "span");
+      status.textContent = codeLockStatus(student) + (student.lockCount ? ` · 10분 잠금 ${student.lockCount}회` : "");
+      label.appendChild(status);
+      row.appendChild(label);
+      row.appendChild(button("잠금 해제", () => teacherAction(async () => {
+        const result = await rpc("unlock_course_student", { p_event: event.id, p_student: student.id }, true);
+        await showStudentAccessPanel(event, parent);
+        byId("cloudTeacherMessage").textContent = result.message;
+      }), isLocked ? "button button-primary" : "button button-quiet"));
+      panel.appendChild(row);
+    }
     const grade = String(state.applicationMenuGrade || "1");
     const entries = data.entries.filter((student) => student.grade === grade);
-    if (!entries.length) throw new Error("선택한 학년의 학생이 없습니다.");
-    const panel = document.createElement("section");
-    panel.className = "course-reissue";
+    const reissue = document.createElement("div");
+    reissue.className = "course-reissue";
     const select = document.createElement("select");
     for (const student of entries) {
       const option = document.createElement("option");
@@ -729,14 +772,17 @@ var updateRetakeReadiness;
       option.textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}`;
       select.appendChild(option);
     }
-    panel.appendChild(select);
-    panel.appendChild(button("선택한 학생 코드 재발급", () => teacherAction(async () => {
+    reissue.appendChild(select);
+    reissue.appendChild(button("선택한 학생 코드 재발급", () => teacherAction(async () => {
       const chosen = entries.find((student) => student.id === select.value);
-      if (!window.confirm(`${chosen.classroom}반 ${chosen.number}번 ${chosen.name} 학생의 기존 코드를 무효로 하고 새 코드를 발급할까요? 신청 결과는 유지되며, 학생은 새 코드로 처음 접속할 때 코드를 다시 바꿔야 합니다.`)) return;
+      if (!chosen) throw new Error("선택한 학년의 학생이 없습니다.");
+      if (!window.confirm(`${chosen.classroom}반 ${chosen.number}번 ${chosen.name} 학생의 기존 코드를 무효로 하고 새 코드를 발급할까요? 신청 결과는 유지되고 접속 잠금도 풀립니다. 학생은 새 코드로 처음 접속할 때 코드를 다시 바꿔야 합니다.`)) return;
       const result = await rpc("reissue_course_code", { p_event: event.id, p_student: chosen.id }, true);
       const issued = result.students[0];
-      byId("cloudTeacherMessage").textContent = `${issued.classroom}반 ${issued.number}번 ${issued.name} 새 코드: ${issued.code} (이 학생에게만 전달하세요. 이 화면을 닫으면 다시 볼 수 없습니다.)`;
-    }), "button button-primary"));
+      await showStudentAccessPanel(event, parent);
+      byId("cloudTeacherMessage").textContent = `${issued.classroom}반 ${issued.number}번 ${issued.name} 새 코드: ${issued.code} · 잠금 해제됨 (이 학생에게만 전달하세요. 이 화면을 닫으면 다시 볼 수 없습니다.)`;
+    }), "button button-quiet"));
+    panel.appendChild(reissue);
     parent.appendChild(panel);
   }
 
@@ -1313,8 +1359,11 @@ var updateRetakeReadiness;
     updateSummary();
   });
   let pendingFirstCode = "";
+  let pendingIdentity = null;
+  let activeIdentity = null;
   function hideStudentChangeCode() {
     pendingFirstCode = "";
+    pendingIdentity = null;
     byId("cloudStudentNewCode").value = "";
     byId("cloudStudentNewCodeConfirm").value = "";
     byId("cloudStudentChangeCode").classList.add("hidden");
@@ -1323,32 +1372,68 @@ var updateRetakeReadiness;
     if (result?.error) throw new Error(result.error);
     return result;
   }
-  byId("cloudStudentCode").addEventListener("input", () => {
+  // 6자리 코드는 반·번호(학년이 둘인 신청은 학년도)와 함께 보내 서버가 학생 단위로 확인·잠금한다.
+  function studentIdentity() {
+    const value = (id) => String(byId(id).value || "").trim().replace(/^0+(?=\d)/, "");
+    return {
+      p_grade: gradeRequired ? value("cloudStudentGrade") : "",
+      p_classroom: value("cloudStudentClassroom"),
+      p_number: value("cloudStudentNumber"),
+    };
+  }
+  function sameIdentity(a, b) {
+    return !!a && !!b && a.p_grade === b.p_grade && a.p_classroom === b.p_classroom && a.p_number === b.p_number;
+  }
+  let gradeRequired = false;
+  byId("cloudStudentGradeField").classList.add("hidden");
+  function showStudentGradeField() {
+    gradeRequired = true;
+    byId("cloudStudentGradeField").classList.remove("hidden");
+  }
+  function resetStudentLogin() {
     activeCode = "";
+    activeIdentity = null;
     application = null;
     hideStudentChangeCode();
     byId("cloudStudentChoices").replaceChildren();
     byId("cloudStudentCourses").classList.add("hidden");
-  });
+  }
+  byId("cloudStudentCode").addEventListener("input", resetStudentLogin);
+  byId("cloudStudentClassroom").addEventListener("input", resetStudentLogin);
+  byId("cloudStudentNumber").addEventListener("input", resetStudentLogin);
+  byId("cloudStudentGrade").addEventListener("change", resetStudentLogin);
+  if (!eventId) byId("cloudStudentIdentityFields").classList.add("hidden");
+  else if (validEvent.test(eventId)) {
+    rpc("get_course_login_form", { p_event: eventId }).then((form) => {
+      if (Array.isArray(form?.grades) && form.grades.length > 1) showStudentGradeField();
+    }).catch((error) => {
+      if (!activeCode && !studentBusy) byId("cloudStudentMessage").textContent = error.message;
+    });
+  }
   async function loginStudent() {
-    activeCode = "";
-    application = null;
-    hideStudentChangeCode();
-    byId("cloudStudentChoices").replaceChildren();
-    byId("cloudStudentCourses").classList.add("hidden");
+    resetStudentLogin();
     const code = byId("cloudStudentCode").value.trim().toLowerCase();
     if (eventId && !validEvent.test(eventId)) throw new Error("학교 신청 링크가 잘못되었습니다.");
     if (eventId ? !/^(\d{6}|[a-f0-9]{32})$/.test(code) : !/^[a-f0-9]{32}$/.test(code)) {
       throw new Error(eventId ? "학교에서 받은 6자리 숫자 코드를 확인하세요." : "6자리 코드는 학교·차수별 신청 링크에서 입력하세요. 기존 긴 코드는 이 입구에서도 사용할 수 있습니다.");
     }
-    const data = throwIfServerRefused(eventId
-      ? await rpc("get_scoped_course_application", { p_event: eventId, p_code: code })
-      : await rpc("get_course_application", { p_code: code }));
-    if (byId("cloudStudentCode").value.trim().toLowerCase() !== code) {
+    const identity = eventId && /^\d{6}$/.test(code) ? studentIdentity() : null;
+    if (identity) {
+      if (!/^\d{1,3}$/.test(identity.p_classroom) || !/^\d{1,3}$/.test(identity.p_number)) {
+        throw new Error("반과 번호를 숫자로 입력하세요.");
+      }
+      if (gradeRequired && !identity.p_grade) throw new Error("현재 학년을 선택하세요.");
+    }
+    const data = await rpc(identity ? "get_student_course_application" : eventId ? "get_scoped_course_application" : "get_course_application",
+      identity ? { p_event: eventId, ...identity, p_code: code } : eventId ? { p_event: eventId, p_code: code } : { p_code: code });
+    if (data?.needGrade) showStudentGradeField();
+    throwIfServerRefused(data);
+    if (byId("cloudStudentCode").value.trim().toLowerCase() !== code || (identity && !sameIdentity(identity, studentIdentity()))) {
       throw new Error("코드가 변경되었습니다. 다시 본인 확인을 해주세요.");
     }
     if (data.mustChangeCode) {
       pendingFirstCode = code;
+      pendingIdentity = identity;
       byId("cloudStudentChangeCode").classList.remove("hidden");
       byId("cloudStudentMessage").textContent = `${data.student.grade}학년 ${data.student.classroom}반 ${data.student.number}번 ${data.student.name} · 새 6자리 코드를 정해 주세요.`;
       byId("cloudStudentNewCode").focus?.();
@@ -1356,6 +1441,7 @@ var updateRetakeReadiness;
     }
     application = data;
     activeCode = code;
+    activeIdentity = identity;
     renderStudentApplication(data);
   }
   byId("cloudStudentLogin").addEventListener("submit", (event) => {
@@ -1366,12 +1452,13 @@ var updateRetakeReadiness;
     event.preventDefault();
     studentAction(async () => {
       const first = pendingFirstCode;
+      const identity = pendingIdentity;
       const next = byId("cloudStudentNewCode").value.trim();
-      if (!eventId || !first) throw new Error("처음 받은 코드로 먼저 접속하세요.");
+      if (!eventId || !first || !identity) throw new Error("처음 받은 코드로 먼저 접속하세요.");
       if (!/^\d{6}$/.test(next)) throw new Error("새 코드는 6자리 숫자여야 합니다.");
       if (next !== byId("cloudStudentNewCodeConfirm").value.trim()) throw new Error("새 코드 두 칸이 서로 다릅니다.");
       if (next === first) throw new Error("받은 코드와 다른 새 코드를 정하세요.");
-      const result = throwIfServerRefused(await rpc("change_course_code", { p_event: eventId, p_code: first, p_new_code: next }));
+      const result = throwIfServerRefused(await rpc("change_course_code", { p_event: eventId, ...identity, p_code: first, p_new_code: next }));
       byId("cloudStudentCode").value = next;
       hideStudentChangeCode();
       await loginStudent();
@@ -1384,6 +1471,7 @@ var updateRetakeReadiness;
       if (!activeCode || !application?.open) throw new Error("본인 확인 및 접수 상태를 확인하세요.");
       if (studentSemesterIndex < studentSemesters.length - 1) throw new Error("1학기 선택을 완료하고 다음 학기로 이동한 뒤 모든 학기 신청을 저장하세요.");
       const code = activeCode;
+      const identity = activeIdentity;
       const selected = [...byId("cloudStudentChoices").querySelectorAll("input:checked")].map((box) => box.value);
       validateUniqueApplicationCourses(selected);
       if (application.lockedSelections?.some((name) => !selected.includes(name))) throw new Error("기존 개설 과목은 변경할 수 없습니다.");
@@ -1397,9 +1485,11 @@ var updateRetakeReadiness;
         window.showAppToast?.("미리보기 제출을 확인했습니다. 실제 신청은 저장되지 않았습니다.");
         return;
       }
-      const result = throwIfServerRefused(eventId
-        ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
-        : await rpc("save_course_application", { p_code: code, p_selections: selected }));
+      const result = throwIfServerRefused(identity
+        ? await rpc("save_student_course_application", { p_event: eventId, ...identity, p_code: code, p_selections: selected })
+        : eventId
+          ? await rpc("save_scoped_course_application", { p_event: eventId, p_code: code, p_selections: selected })
+          : await rpc("save_course_application", { p_code: code, p_selections: selected }));
       if (activeCode === code) {
         byId("cloudStudentMessage").textContent = result.message;
         studentSaved = true;
@@ -1475,7 +1565,7 @@ var updateRetakeReadiness;
         alt:"학교·차수별 수강신청 페이지로 이동하는 QR코드"});
       return students.map((s) => `<section class="print-page"><h2>수강신청 안내</h2>
         <p>${escapeHtml(s.grade)}학년 ${escapeHtml(s.classroom)}반 ${escapeHtml(s.number)}번 <strong>${escapeHtml(s.name)}</strong></p>
-        <p>QR코드를 스캔하거나 아래 학교·차수 신청 주소로 접속하여 본인 코드를 입력하세요.</p>
+        <p>QR코드를 스캔하거나 아래 학교·차수 신청 주소로 접속하여 본인의 반·번호와 코드를 입력하세요. 처음 접속하면 새 6자리 코드로 바꿔야 합니다.</p>
         <figure class="code-qr">${qrImage}<figcaption>학생 수강신청 페이지</figcaption></figure>
         <p style="overflow-wrap:anywhere">${escapeHtml(link)}</p>
         <p style="font-size:28px">개인 신청 코드: <strong>${escapeHtml(s.code)}</strong></p>
