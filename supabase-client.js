@@ -682,11 +682,11 @@ var updateRetakeReadiness;
   updateRetakeReadiness = () => {
     const source = knownEvents.find((event) => event.id === byId("cloudRetakeSource").value);
     const lines = [];
+    const data = source ? state.rounds?.[String(source.round)] : null;
+    const closed = data ? retakeClosedSubjects(source) : [];
     if (!source) {
       lines.push("이 학년·학년도의 이전 신청을 선택하세요.");
     } else {
-      const data = state.rounds?.[String(source.round)];
-      const closed = retakeClosedSubjects(source);
       lines.push(`${source.round}차 · ${source.is_open ? "접수 중 — 먼저 마감하세요." : "마감 완료"}`);
       lines.push(data ? `로컬 연동 명단 ${data.students.length}명 · 폐강 확정 ${closed.length}과목` : "집계표 연동이 필요합니다.");
       lines.push(byId("cloudRetakeMode").value === "affected"
@@ -695,9 +695,8 @@ var updateRetakeReadiness;
       lines.push("새 신청 링크·개인 코드가 발급됩니다. 생성 후 새 코드를 저장·안내하세요.");
     }
     byId("cloudRetakeReadiness").textContent = lines.join("\n");
-    byId("cloudReviewRetake").disabled = !source || !state.rounds?.[String(source?.round)];
-    byId("cloudCreateRetake").disabled = teacherBusy || !session || !source || source.is_open ||
-      !state.rounds?.[String(source?.round)] || !retakeClosedSubjects(source).length;
+    byId("cloudReviewRetake").disabled = !data;
+    byId("cloudCreateRetake").disabled = teacherBusy || !session || !data || source.is_open || !closed.length;
   };
   byId("cloudRetakeSource").addEventListener("change", updateRetakeReadiness);
   byId("cloudRetakeMode").addEventListener("change", updateRetakeReadiness);

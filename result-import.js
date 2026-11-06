@@ -232,7 +232,7 @@ function analyzeResultCandidate(candidate, options) {
     after: after.get(key)?.count || 0
   }));
   return {
-    ...candidate, issues, comparison,
+    ...candidate, issues, comparison, unclassified,
     summary: { students: students.length, previousStudents: previousStudents.length, classes, courses: courses.length }
   };
 }
@@ -318,27 +318,36 @@ function confirmResultImport() {
   const preview = resultImportPending;
   if (!preview) return;
   const candidate = preview.candidates[preview.selected];
+  // 미리보기가 더 이상 맞지 않는 경우(차수·학년·잠금 변경)에만 미리보기를 닫는다.
   try {
     if (!candidate || candidate.issues.blocking.length) throw new Error("오류가 있는 시트는 반영할 수 없습니다.");
     if (state.currentRound !== preview.round) throw new Error("미리보기 이후 차수가 바뀌었습니다. 해당 차수에서 다시 업로드하세요.");
     if ((state.applicationMenuGrade || "1") !== preview.grade) throw new Error("미리보기 이후 학년 메뉴가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
     if (state.applicationImportRevision !== preview.revision) throw new Error("미리보기 이후 차수 데이터가 삭제되었습니다. 다시 업로드하세요.");
     if (typeof isRoundLocked === "function" && isRoundLocked(preview.round)) throw new Error(`${preview.round}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 업로드하세요.`);
-    let unclassified = [];
-    try { unclassified = classifyApplicationRecords(candidate.data); } catch { unclassified = []; }
-    const carry = storeGradeResults(candidate.data, preview.fileName, preview.grade) || { kept: 0, dropped: 0 };
-    clearResultImportPreview();
-    if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
-    status.style.color = "#287956";
-    status.textContent = `${preview.round}차 현재 ${preview.grade}학년 ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
-      (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +
-      (carry.dropped ? ` 새 결과에 없는 과목의 설정 ${carry.dropped}건은 해제했습니다.` : "") +
-      (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개.` : "");
   } catch (error) {
     clearResultImportPreview();
     status.style.color = "#a44939";
     status.textContent = error instanceof Error ? error.message : "결과를 반영하지 못했습니다.";
+    return;
   }
+  const unclassified = candidate.unclassified || [];
+  let carry;
+  try {
+    carry = storeGradeResults(candidate.data, preview.fileName, preview.grade) || { kept: 0, dropped: 0 };
+  } catch (error) {
+    // 저장 공간 부족 같은 일시적 오류에서는 검증한 미리보기를 유지해 다시 시도할 수 있게 한다.
+    status.style.color = "#a44939";
+    status.textContent = error instanceof Error ? error.message : "결과를 반영하지 못했습니다.";
+    return;
+  }
+  clearResultImportPreview();
+  if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
+  status.style.color = "#287956";
+  status.textContent = `${preview.round}차 현재 ${preview.grade}학년 ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
+    (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +
+    (carry.dropped ? ` 새 결과에 없는 과목의 설정 ${carry.dropped}건은 해제했습니다.` : "") +
+    (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개.` : "");
 }
 
 function initResultImport() {

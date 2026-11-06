@@ -3978,6 +3978,11 @@
     }
 
     function applyMergedApplications(entries, sourceLabel) {
+      if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
+        status.style.color = "#a44939";
+        status.textContent = `${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 불러오세요.`;
+        return;
+      }
       const merged = mergeApplications(entries);
       if (!merged.students.length) {
         status.style.color = "#a44939";
@@ -4015,6 +4020,10 @@
     // 같은 과목(과목명·학기)의 개설 학급 수·개설 결정·학기·그룹 지정은 새 열로 옮겨 유지한다.
     function storeGradeResults(data, sourceLabel, grade) {
       grade = String(grade);
+      // 확정된 차수의 결과는 호출 경로와 관계없이 이 함수에서 교체를 막는다.
+      if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
+        throw new Error(`${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 업로드하세요.`);
+      }
       const students = data.students.filter((student) => String(student.grade) === grade);
       if (!students.length) throw new Error(`현재 ${grade}학년 학생이 없는 결과 파일입니다. 해당 학년 메뉴에서 업로드하세요.`);
       const courses = normalizeCourses(data.courses.filter((course) =>

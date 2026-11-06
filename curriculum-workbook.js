@@ -12,15 +12,37 @@ function shiftPlanFormula(formula, rowDelta, columnDelta = 0, insertionRow = nul
   })).join("");
 }
 
+// 병합 영역을 셀 좌표로 한 번만 색인해 셀·범위 조회를 O(1)에 가깝게 유지한다.
+function planMergeLookup(merges) {
+  const cells = new Map();
+  for (const merge of merges) {
+    for (let r = merge.startRow; r <= merge.endRow; r++) {
+      for (let c = merge.startColumn; c <= merge.endColumn; c++) cells.set(`${r}:${c}`, merge);
+    }
+  }
+  return {
+    at: (row, column) => cells.get(`${row}:${column}`),
+    // 범위와 겹치는 병합마다 (겹치는 열 수 × 선택 수 × 학점)을 돌려준다. 재계산과 내보내기가 같은 규칙을 쓴다.
+    overlaps(startRow, endRow, startColumn, endColumn) {
+      const result = [];
+      for (const merge of merges) {
+        if (merge.startRow > endRow || merge.endRow < startRow) continue;
+        const columns = Math.max(0, Math.min(endColumn, merge.endColumn) - Math.max(startColumn, merge.startColumn) + 1);
+        if (columns) result.push({ merge, columns, total: columns * merge.pick * merge.credit });
+      }
+      return result;
+    }
+  };
+}
+
 function recalculatePlanFormulas(layout) {
   const formulas = layout.formulas || {};
   const covered = typeof importedPlanCoveredCells === "function" ? importedPlanCoveredCells(layout) : new Set();
   const computed = new Map(), visiting = new Set();
-  const sheetMerges = typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout).filter((merge) => merge.kind !== "plain") : [];
+  const mergeLookup = planMergeLookup(typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout).filter((merge) => merge.kind !== "plain") : []);
   function cellValue(row, column) {
     const key = `${row}:${column}`;
-    const merge = sheetMerges.find((merge) => row >= merge.startRow && row <= merge.endRow &&
-      column >= merge.startColumn && column <= merge.endColumn);
+    const merge = mergeLookup.at(row, column);
     if (merge) return row === merge.startRow ? merge.pick * merge.credit : 0;
     if (covered.has(key)) return 0;
     if (computed.has(key)) return computed.get(key);
@@ -42,16 +64,9 @@ function recalculatePlanFormulas(layout) {
       }
       const r1 = Number(a.match(/\d+/)[0])-1, r2 = Number(b.match(/\d+/)[0])-1;
       const c1 = columnIndex(a.replace(/\$/g, "")), c2 = columnIndex(b.replace(/\$/g, ""));
-      let total = 0;
-      for (const merge of sheetMerges) {
-        if (merge.startRow <= r2 && merge.endRow >= r1) {
-          const columns = Math.max(0, Math.min(c2, merge.endColumn) - Math.max(c1, merge.startColumn) + 1);
-          total += columns * merge.pick * merge.credit;
-        }
-      }
+      let total = mergeLookup.overlaps(r1, r2, c1, c2).reduce((sum, { total: part }) => sum + part, 0);
       for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) {
-        if (sheetMerges.some((merge) => r >= merge.startRow && r <= merge.endRow &&
-          c >= merge.startColumn && c <= merge.endColumn)) continue;
+        if (mergeLookup.at(r, c)) continue;
         total += cellValue(r,c);
       }
       return total;
@@ -171,11 +186,13 @@ async function buildOriginalCurriculumWorkbook(layout) {
   for(const row of layout.rowInsertions || [])shiftSheetRow(row+offsetRow);
   const covered=importedPlanCoveredCells(layout);
   const sheetMerges = typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout) : [];
+  const choiceMerges = sheetMerges.filter((merge) => merge.kind !== "plain");
+  const choiceMergeLookup = planMergeLookup(choiceMerges);
+  const allMergeLookup = planMergeLookup(sheetMerges);
   const exportFormula = (formula) => {
     const valueAt = (ref) => {
       const row = Number(ref.match(/\d+/)[0]) - 1, column = columnIndex(ref.replace(/\$/g, ""));
-      const merge = sheetMerges.find((merge) => merge.kind !== "plain" && row >= merge.startRow &&
-        row <= merge.endRow && column >= merge.startColumn && column <= merge.endColumn);
+      const merge = choiceMergeLookup.at(row, column);
       return merge ? String(row === merge.startRow ? merge.pick * merge.credit : 0) : ref;
     };
     return formula.split(/("(?:[^"]|"")*")/).map((part) => part.startsWith('"') ? part :
@@ -183,18 +200,11 @@ async function buildOriginalCurriculumWorkbook(layout) {
         const range = term.trim().match(/^(\$?[A-Z]+\$?\d+):(\$?[A-Z]+\$?\d+)$/);
         if (!range) return [term];
         const bounds = curriculumChoiceRange(`${range[1].replace(/\$/g, "")}:${range[2].replace(/\$/g, "")}`);
-        if (!sheetMerges.some((merge) => merge.kind !== "plain" && merge.startRow <= bounds.endRow &&
-          merge.endRow >= bounds.startRow && merge.startColumn <= bounds.endColumn && merge.endColumn >= bounds.startColumn)) return [term];
-        const refs = [];
-        for (const merge of sheetMerges.filter((merge) => merge.kind !== "plain")) {
-          if (merge.startRow <= bounds.endRow && merge.endRow >= bounds.startRow) {
-            const count = Math.max(0, Math.min(bounds.endColumn, merge.endColumn) - Math.max(bounds.startColumn, merge.startColumn) + 1);
-            if (count) refs.push(String(count * merge.pick * merge.credit));
-          }
-        }
+        const overlaps = choiceMergeLookup.overlaps(bounds.startRow, bounds.endRow, bounds.startColumn, bounds.endColumn);
+        if (!overlaps.length) return [term];
+        const refs = overlaps.map(({ total }) => String(total));
         for (let r = bounds.startRow; r <= bounds.endRow; r++) for (let c = bounds.startColumn; c <= bounds.endColumn; c++) {
-          if (sheetMerges.some((merge) => merge.kind !== "plain" && r >= merge.startRow && r <= merge.endRow &&
-            c >= merge.startColumn && c <= merge.endColumn)) continue;
+          if (choiceMergeLookup.at(r, c)) continue;
           refs.push(`${columnName(c)}${r + 1}`);
         }
         return refs;
@@ -211,8 +221,7 @@ async function buildOriginalCurriculumWorkbook(layout) {
     const value=String(layout.rows[r][c] ?? ""), sourceRow=rowSources[r];
     const old=sourceRow===null?"":String(original.rows[sourceRow]?.[c+offsetColumn] ?? "");
     const originalFormula = sourceRow === null ? null : original.layout.formulas?.[`${sourceRow}:${c+offsetColumn}`];
-    const merge = sheetMerges.find((merge) => r >= merge.startRow && r <= merge.endRow &&
-      c >= merge.startColumn && c <= merge.endColumn);
+    const merge = allMergeLookup.at(r, c);
     if(value===old && !merge && !layout.sheetCellEdits?.[`${r}:${c}`] &&
         !Object.hasOwn(layout.formulas || {}, `${r}:${c}`) && !originalFormula)continue;
     const ref=`${columnName(c+offsetColumn)}${r+offsetRow+1}`;
@@ -222,7 +231,7 @@ async function buildOriginalCurriculumWorkbook(layout) {
         formula=originalFormula;
         for(const insertedRow of layout.rowInsertions || [])formula=shiftPlanFormula(formula,1,0,insertedRow+offsetRow);
       } else formula=shiftPlanFormula(formula,offsetRow,offsetColumn);
-      if (sheetMerges.some((merge) => merge.kind !== "plain")) {
+      if (choiceMerges.length) {
         formula = shiftPlanFormula(exportFormula(shiftPlanFormula(formula, -offsetRow, -offsetColumn)), offsetRow, offsetColumn);
       }
     }
@@ -249,10 +258,11 @@ async function buildOriginalCurriculumWorkbook(layout) {
   }
   const dimension = sheet.getElementsByTagNameNS(NS_MAIN,"dimension")[0];
   if (typeof curriculumEmptySubjectRows === "function") {
-    const blocks = curriculumChoiceBlocks(layout);
+    const blockStarts = new Set(curriculumChoiceBlocks(layout).map((block) => block.startRow));
+    const rowsByNumber = new Map([...sheetData.children].map((node) => [Number(node.getAttribute("r")), node]));
     for (const index of curriculumEmptySubjectRows(layout)) {
-      if (blocks.some((block) => block.startRow === index)) continue;
-      const row = [...sheetData.children].find((node) => Number(node.getAttribute("r")) === index + offsetRow + 1);
+      if (blockStarts.has(index)) continue;
+      const row = rowsByNumber.get(index + offsetRow + 1);
       if (row) row.setAttribute("hidden", "1");
     }
   }
@@ -277,7 +287,9 @@ async function buildOriginalCurriculumWorkbook(layout) {
       if(r>=offsetRow && r<offsetRow+layout.rows.length && c>=offsetColumn && c<offsetColumn+(layout.columnWidths?.length || layout.rows[0].length))merge.remove();
     }
     for(const ref of layout.mergedRanges || []){const node=sheet.createElementNS(NS_MAIN,"mergeCell");node.setAttribute("ref",shiftPlanFormula(ref,offsetRow,offsetColumn));merges.appendChild(node);}
-    merges.setAttribute("count",String(merges.children.length));
+    // 병합이 하나도 없으면 빈 mergeCells를 남기지 않는다(Excel이 파일을 손상으로 본다).
+    if(merges.children.length)merges.setAttribute("count",String(merges.children.length));
+    else merges.remove();
   }
   files[layout.sheetPath]=serializer.serializeToString(sheet);
   const workbook=parseXml(files["xl/workbook.xml"],"통합 문서");
