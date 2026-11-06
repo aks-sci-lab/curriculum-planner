@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261106-decisions">
+  <link rel="stylesheet" href="styles.css?v=20261106-office-format">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -150,7 +150,8 @@
           <label class="file-button button-primary" id="curriculumPlanUploadLabel" for="curriculumPlanInput" tabindex="0" role="button">선택한 신입생 3개년 편제표 업로드</label>
           <button class="button button-danger" id="clearCurriculumPlan" type="button">편제표 초기화</button>
           <button class="button" id="exportCurriculumPlan" type="button">엑셀 내보내기</button>
-          <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx">
+          <button class="button" id="exportCurriculumOfficePlan" type="button" title="울산광역시교육청 편제 점검 프로그램의 「N학년_편제표」·「편제표통합」과 같은 양식으로 저장합니다.">교육청 양식으로 내보내기</button>
+          <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx,.xlsb">
         </div>
         </div>
         <div class="curriculum-cohort-uploads" id="curriculumCohortUploads" aria-label="신입생 3개년 편제표와 올해 전학년 편제표"></div>
@@ -854,6 +855,18 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
+  <dialog class="curriculum-subject-dialog curriculum-version-dialog" id="curriculumOfficeImportDialog" aria-labelledby="curriculumOfficeImportTitle">
+    <form method="dialog">
+      <h2 id="curriculumOfficeImportTitle">울산 편제 점검 프로그램 불러오기</h2>
+      <p class="note" id="curriculumOfficeImportScope"></p>
+      <div class="curriculum-office-options" id="curriculumOfficeImportOptions"></div>
+      <p class="note">학교지정·교차집중·학생선택(그룹·선택 수)·그 외(소인수·공동) 입력 영역을 읽어 과목·학점·선택과목군으로 바꿉니다.</p>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" id="cancelCurriculumOfficeImport" type="button">취소</button>
+        <button class="button button-primary" id="confirmCurriculumOfficeImport" type="button">불러오기</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog certificate-info-dialog" id="certificateInfoDialog" aria-labelledby="certificateInfoDialogTitle">
     <form method="dialog" id="certificateInfoForm">
       <h2 id="certificateInfoDialogTitle">확인서 기본 정보</h2>
@@ -935,29 +948,30 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-data.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-data-view.js?v=20261106-decisions" defer></script>
-  <script src="app-version.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-annual.js?v=20261106-decisions" defer></script>
-  <script src="course-checks.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-compliance.js?v=20261106-decisions" defer></script>
-  <script defer src="app.js?v=20261106-decisions"></script>
-  <script src="xlsx-parser.js?v=20261106-decisions" defer></script>
-  <script src="course-groups.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-workbook.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-data-export.js?v=20261106-decisions" defer></script>
-  <script src="result-import.js?v=20261106-decisions" defer></script>
-  <script src="round-status.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-versions.js?v=20261106-decisions" defer></script>
-  <script src="hours-stats.js?v=20261106-decisions" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261106-decisions" defer></script>
-  <script src="workspace-file.js?v=20261106-decisions" defer></script>
+  <script src="curriculum-subject-list.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-data.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-data-view.js?v=20261106-office-format" defer></script>
+  <script src="app-version.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-annual.js?v=20261106-office-format" defer></script>
+  <script src="course-checks.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-compliance.js?v=20261106-office-format" defer></script>
+  <script defer src="app.js?v=20261106-office-format"></script>
+  <script src="xlsx-parser.js?v=20261106-office-format" defer></script>
+  <script src="course-groups.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-workbook.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-data-export.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-office-format.js?v=20261106-office-format" defer></script>
+  <script src="result-import.js?v=20261106-office-format" defer></script>
+  <script src="round-status.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-versions.js?v=20261106-office-format" defer></script>
+  <script src="hours-stats.js?v=20261106-office-format" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261106-office-format" defer></script>
+  <script src="workspace-file.js?v=20261106-office-format" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261106-decisions" defer></script>
-  <script src="test-bot-bridge.js?v=20261106-decisions" defer></script>
-  <script src="supabase-client.js?v=20261106-decisions" defer></script>
+  <script src="supabase-config.js?v=20261106-office-format" defer></script>
+  <script src="test-bot-bridge.js?v=20261106-office-format" defer></script>
+  <script src="supabase-client.js?v=20261106-office-format" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

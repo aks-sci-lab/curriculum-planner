@@ -344,9 +344,9 @@ document.getElementById("exportCurriculumPlan").addEventListener("click",async()
     const blob=derived?buildDerivedCurriculumWorkbook(state.curriculumImportedLayout):await buildOriginalCurriculumWorkbook(state.curriculumImportedLayout);
     const url=URL.createObjectURL(blob),link=document.createElement("a");
     link.href=url;
-    link.download=derived?`${state.curriculumCohortYear}학년도_전학년_편제표.xlsx`:state.curriculumPlanFileName.replace(/\.xlsx$/i,`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`);
+    link.download=derived?`${state.curriculumCohortYear}학년도_전학년_편제표.xlsx`:state.curriculumPlanFileName.replace(/\.xls[xb]$/i,"")+`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`;
     link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    status.textContent=derived?"전학년 편제표 엑셀을 저장했습니다.":"원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
+    status.textContent=derived?"전학년 편제표 엑셀을 저장했습니다.":state.curriculumImportedLayout?.officeImport?"원본 양식이 없어 기본 양식(화면 표 그대로)으로 저장했습니다. 제출용은 '교육청 양식으로 내보내기'를 쓰세요.":"원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
   }catch(error){status.textContent=`편제표 내보내기 실패: ${error.message}`;}
   finally{button.disabled=false;}
 });

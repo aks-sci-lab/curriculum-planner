@@ -2883,6 +2883,7 @@
       $("#undoCurriculumEdit").disabled = !state.curriculumUndoStack.length;
       $("#clearCurriculumPlan").disabled = (!state.curriculumImportedLayout && !state.curriculumPlan.length) || isDerivedAnnualPlan();
       $("#exportCurriculumPlan").disabled = !state.curriculumImportedLayout && !state.curriculumPlan.length;
+      if ($("#exportCurriculumOfficePlan")) $("#exportCurriculumOfficePlan").disabled = !state.curriculumImportedLayout;
       updateCurriculumFilterOptions();
       const planLabel = state.curriculumPlanType === "annual"
         ? `${state.curriculumCohortYear}학년도 전학년`
@@ -6027,6 +6028,11 @@
       const cohortYear = String(state.curriculumCohortYear);
       const planType = state.curriculumPlanType === "annual" ? "annual" : "cohort";
       status.textContent = "";
+      // 울산 편제 점검 프로그램(xlsb)은 curriculum-office-format.js가 읽는다.
+      if (/\.xlsb$/i.test(file.name) && typeof importCurriculumOfficeXlsbFile === "function") {
+        importCurriculumOfficeXlsbFile(file).catch((error) => { status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
+        return;
+      }
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
         status.style.color = "#a44939";
         status.textContent = "편제표는 .xlsx 형식만 지원합니다.";
@@ -6052,6 +6058,10 @@
         try {
           const sheets = await parseWorkbook(reader.result, { expandMergedCells: true, includeLayout: true });
           verifyTarget();
+          if (typeof isCurriculumOfficeProgram === "function" && isCurriculumOfficeProgram(sheets)) {
+            await importCurriculumOfficeProgram(sheets, file, verifyTarget);
+            return;
+          }
           let plan = [];
           let importedLayout = null;
           let parseError = null;
