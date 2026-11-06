@@ -856,7 +856,7 @@ test("result Excel upload opens a validated preview and never replaces data whil
     buildResultImportPreview:(sheets,options)=>{built=options;return {candidates:[{issues:{blocking:[]}}],selected:0};},
     showResultImportPreview:(preview)=>{previewed=preview;},
   });
-  vm.runInContext(functionSource("function handleWorkbook(", "function importedPlanColumnMap("),ctx);
+  vm.runInContext(functionSource("function resultImportOptions(", "function importedPlanColumnMap("),ctx);
   ctx.handleWorkbook({name:"results.csv"});
   assert.match(status.textContent,/xlsx/);
   locked = true;

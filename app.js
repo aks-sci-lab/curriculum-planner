@@ -4666,6 +4666,14 @@
       persistState();
     }
 
+    // 미리보기 검증에 쓰는 현재 편제표 과목·기존 결과. 다시 검증할 때도 최신 설정으로 새로 만든다.
+    function resultImportOptions(grade) {
+      return {
+        subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }),
+        existingStudents: state.students
+      };
+    }
+
     // 결과 엑셀을 읽어 검증 미리보기를 띄운다. 실제 반영은 미리보기의 '반영' 버튼에서 한다.
     function handleWorkbook(file) {
       if (!file) return;
@@ -4692,9 +4700,8 @@
           if ((state.applicationMenuGrade || "1") !== uploadGrade) throw new Error("파일을 읽는 중 학년 메뉴가 바뀌었습니다. 해당 학년에서 다시 업로드하세요.");
           if (state.applicationImportRevision !== importRevision) throw new Error("파일을 읽는 중 데이터가 삭제되었습니다. 다시 업로드하세요.");
           const preview = buildResultImportPreview(sheets, {
-            fileName: file.name, round: uploadRound, grade: uploadGrade, revision: importRevision,
-            subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: uploadGrade }),
-            existingStudents: state.students
+            ...resultImportOptions(uploadGrade),
+            fileName: file.name, round: uploadRound, grade: uploadGrade, revision: importRevision
           });
           showResultImportPreview(preview);
           const candidate = preview.candidates[preview.selected];
