@@ -400,51 +400,45 @@
         </div>
       </section>
       <section class="panel aggregate-panel hidden" id="aggregatePanel">
-        <div class="roster-header">
-          <div><h2 class="panel-heading">과목별 수강 신청 집계 <span class="count-pill" id="aggregateRoundBadge">1차</span></h2><p class="panel-subtitle" id="aggregateDescription">학생별 신청 명단에서 과목별 인원을 계산했습니다.</p></div>
-          <button class="button button-primary" id="downloadAggregate" type="button">집계표 엑셀 다운로드</button>
-        </div>
-        <div class="round-confirm-bar" id="roundConfirmBar" aria-label="차수 결과 진행 상태">
+        <div class="aggregate-toolbar round-confirm-bar" id="roundConfirmBar" aria-label="차수 결과 진행 상태">
+          <h2 class="panel-heading aggregate-toolbar-title">집계·개설 확정</h2>
           <span class="round-confirm-state" id="roundConfirmState" role="status">작성 중</span>
-          <span class="round-confirm-note" id="roundConfirmNote">기준 미달 과목의 개설/폐강을 결정한 뒤 확정하세요. 확정하면 결과 교체·과목별 개설 반 수·개설 결정이 잠깁니다.</span>
           <div class="round-confirm-actions">
             <button class="button" id="roundMarkReview" type="button">협의회 검토 중으로 표시</button>
             <button class="button button-primary" id="roundConfirm" type="button">이 차수 결과 확정</button>
             <button class="button button-danger hidden" id="roundUnlock" type="button">확정 해제</button>
           </div>
-        </div>
-        <div class="aggregate-context-grid">
-          <div class="aggregate-settings">
-            <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
-            <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
-            <div class="field"><label for="nextYearClasses2">내년 2학년 학급 수</label><input id="nextYearClasses2" class="next-year-class-input" data-next-grade="2" type="number" min="0" max="40" step="1" placeholder="명단 반 수"></div>
-            <div class="field"><label for="nextYearClasses3">내년 3학년 학급 수</label><input id="nextYearClasses3" class="next-year-class-input" data-next-grade="3" type="number" min="0" max="40" step="1" placeholder="명단 반 수"></div>
+          <div class="aggregate-toolbar-settings">
+            <button class="button" id="openAggregateSettings" type="button" aria-haspopup="dialog">기준 설정</button>
+            <span class="aggregate-settings-summary" id="aggregateSettingsSummary">개설 90% · 분반 110% · 최대 34명</span>
           </div>
-          <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 학급 수로 계산합니다. 내년도 학급 수를 입력하면 그 값을, 비워 두면 명단의 반 수를 씁니다(5단계 시수 통계와 같은 값). 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">기준 미달</b>이며 폐강 확정이 아닙니다. 아래 개설/폐강 검토에서 교사가 최종 결정합니다. 과목별 개설 학급수는 직접 수정할 수 있으며 집계와 엑셀에 반영됩니다.</p>
+          <button class="button button-primary" id="downloadAggregate" type="button">집계표 엑셀 다운로드</button>
         </div>
+        <p class="aggregate-status-line"><span id="roundConfirmNote" class="round-confirm-note">기준 미달 과목의 개설/폐강을 결정한 뒤 확정하세요.</span> <span class="aggregate-scope-note">확정·해제는 학년 탭과 관계없이 이 차수의 두 학년 결과 전체에 함께 적용됩니다.</span> <span class="panel-subtitle" id="aggregateDescription">학생별 신청 명단에서 과목별 인원을 계산했습니다.</span></p>
+        <div class="aggregate-grade-bar" id="aggregateGradeBar"></div>
         <div class="aggregate-content" id="aggregateContent"></div>
       </section>
-      <section class="panel hidden" id="closurePanel">
-        <div class="roster-header">
-          <div><h2 class="panel-heading" id="closureTitle">폐강 검토</h2><p class="panel-subtitle" id="closureDescription"></p></div>
-        </div>
-        <div class="aggregate-content" id="closureContent"></div>
+      <section class="panel hidden aggregate-fold-panel" id="retakePanel">
+        <details class="aggregate-fold" id="retakeDetails">
+          <summary><h2 class="panel-heading">다음 차수 수강신청 대상자</h2><span class="aggregate-fold-count" id="retakeSummaryCount"></span></summary>
+          <div class="roster-header">
+            <p class="panel-subtitle" id="retakeDescription">폐강이 확정된 과목을 신청한 학생 명단입니다.</p>
+            <button class="button button-primary" id="downloadRetakeList" type="button">대상자 명단 엑셀 다운로드</button>
+          </div>
+          <ol class="retake-progress" id="retakeProgress" aria-label="폐강 후 재신청 진행 상태"></ol>
+          <p class="aggregate-note" id="retakeNextRoundNote">다음 차수 결과는 2단계에서 차수를 추가한 뒤 불러오세요.</p>
+          <div class="aggregate-content" id="retakeContent"></div>
+        </details>
       </section>
-      <section class="panel hidden" id="retakePanel">
-        <div class="roster-header">
-          <div><h2 class="panel-heading">다음 차수 수강신청 대상자</h2><p class="panel-subtitle" id="retakeDescription">폐강이 확정된 과목을 신청한 학생 명단입니다.</p></div>
-          <button class="button button-primary" id="downloadRetakeList" type="button">대상자 명단 엑셀 다운로드</button>
-        </div>
-        <ol class="retake-progress" id="retakeProgress" aria-label="폐강 후 재신청 진행 상태"></ol>
-        <p class="aggregate-note" id="retakeNextRoundNote">다음 차수 결과는 2단계에서 차수를 추가한 뒤 불러오세요.</p>
-        <div class="aggregate-content" id="retakeContent"></div>
-      </section>
-      <section class="panel hidden" id="roundComparePanel">
-        <div class="roster-header">
-          <div><h2 class="panel-heading">차수별 신청 인원 비교</h2><p class="panel-subtitle" id="roundCompareDescription">결과가 있는 차수의 과목별 신청 인원을 나란히 비교합니다.</p></div>
-          <button class="button" id="downloadRoundCompare" type="button">비교표 엑셀 다운로드</button>
-        </div>
-        <div class="aggregate-content" id="roundCompareContent"></div>
+      <section class="panel hidden aggregate-fold-panel" id="roundComparePanel">
+        <details class="aggregate-fold" id="roundCompareDetails">
+          <summary><h2 class="panel-heading">차수별 신청 인원 비교</h2><span class="aggregate-fold-count" id="roundCompareSummaryCount"></span></summary>
+          <div class="roster-header">
+            <p class="panel-subtitle" id="roundCompareDescription">결과가 있는 차수의 과목별 신청 인원을 나란히 비교합니다.</p>
+            <button class="button" id="downloadRoundCompare" type="button">비교표 엑셀 다운로드</button>
+          </div>
+          <div class="aggregate-content" id="roundCompareContent"></div>
+        </details>
       </section>
       <section class="workflow-step-panel hidden" id="workflowStep7Panel">
         <div class="hours-heading">
@@ -735,6 +729,24 @@ function courseClient_() {
   });
 }
   </script>
+  <dialog class="curriculum-subject-dialog aggregate-settings-dialog" id="aggregateSettingsDialog" aria-labelledby="aggregateSettingsTitle">
+    <form method="dialog" id="aggregateSettingsForm">
+      <h2 id="aggregateSettingsTitle">집계 기준 설정</h2>
+      <p class="note" id="aggregateSettingsLockNote"></p>
+      <div class="aggregate-settings">
+        <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
+        <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
+        <div class="field"><label for="maxClassSize">반별 최대 인원 (명)</label><input id="maxClassSize" type="number" min="1" max="99" step="1" value="34"></div>
+        <div class="field"><label for="nextYearClasses2">내년 2학년 학급 수</label><input id="nextYearClasses2" class="next-year-class-input" data-next-grade="2" type="number" min="0" max="40" step="1" placeholder="명단 반 수"></div>
+        <div class="field"><label for="nextYearClasses3">내년 3학년 학급 수</label><input id="nextYearClasses3" class="next-year-class-input" data-next-grade="3" type="number" min="0" max="40" step="1" placeholder="명단 반 수"></div>
+      </div>
+      <p class="aggregate-note">학급당 기준 인원은 학년별 재적 학생 수 ÷ 학급 수로 계산합니다. 내년도 학급 수를 입력하면 그 값을, 비워 두면 명단의 반 수를 씁니다(5단계 시수 통계와 같은 값). 신청 인원이 개설 기준보다 적은 과목은 <b class="at-risk-text">기준 미달</b>이며 폐강 확정이 아닙니다. 개설/폐강은 집계표의 교사 결정 칸에서 정합니다.</p>
+      <p class="aggregate-note">선택 그룹(택n)의 총 학급수는 <b>n × 학급 수</b>와 같아야 합니다. 맞지 않으면 반별 인원이 최대 인원을 넘지 않는 범위에서 학급수를 조절한 뒤(학급수 자동 조정) 협의회에서 확정합니다.</p>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" id="closeAggregateSettings" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog curriculum-version-dialog" id="curriculumVersionDialog" aria-labelledby="curriculumVersionDialogTitle">
     <form method="dialog" id="curriculumVersionForm">
       <h2 id="curriculumVersionDialogTitle">새 시점으로 저장</h2>

@@ -269,3 +269,15 @@ test("a slower earlier curriculum upload cannot replace the newer uploaded plan"
   assert.equal(vm.runInContext("state.curriculumPlanFileName", f.context), "최신.xlsx");
   assert.match(f.element("#status").textContent, /새 업로드/);
 });
+
+test("the per-class maximum defaults to 34 for older saved data and is saved with the workspace", () => {
+  const older = fixture(JSON.stringify(valid()));
+  older.context.restorePersistedState();
+  assert.equal(older.element("#maxClassSize").value, "34", "data saved before the setting existed uses 34");
+  const saved = fixture(JSON.stringify(valid({ maxClassSize: "30" })));
+  saved.context.restorePersistedState();
+  assert.equal(saved.element("#maxClassSize").value, "30");
+  assert.equal(saved.context.workspacePayload().maxClassSize, "30");
+  saved.context.downloadWorkspaceBackup();
+  assert.equal(saved.context.downloaded.workspace.maxClassSize, "30");
+});

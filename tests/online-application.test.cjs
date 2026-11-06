@@ -17,28 +17,30 @@ function plain(value) {
 }
 
 test("closure defaults open eligible courses and leave at-risk courses undecided, preserving manual decisions", () => {
-  const elements = new Map(["#closureTitle", "#closureDescription", "#closureContent", "#openingPercent", "#divisionPercent"]
-    .map((id) => [id, { value: id === "#openingPercent" ? "90" : "110" }]));
-  const ctx = vm.createContext({
-    $: (id) => elements.get(id),
-    state: { rounds: { "1": { students: [], courses: [] } }, roundClosures: { "1": { "1:3": "", "1:4": "closed", "1:5": "open" } } },
-    escapeHtml: String,
-    aggregateRecords: () => ({ reports: [{ summary: { grade: "1", students: 350, openingLimit: 31.5 },
-      semesters: [{ name: "1", groups: [{ courses: [
-        { column: 1, name: "개설기준 일치", enrollment: 31.5, atRisk: false },
-        { column: 2, name: "미달", enrollment: 5, atRisk: true },
-        { column: 3, name: "수동 미정", enrollment: 100, atRisk: false },
-        { column: 4, name: "수동 폐강", enrollment: 100, atRisk: false },
-        { column: 5, name: "수동 개설", enrollment: 5, atRisk: true }
-      ] }] }] }] })
-  });
+  // 개설/폐강 결정은 집계표의 과목 행 안에 있다(별도 개설/폐강 검토 표 없음).
+  const ctx = vm.createContext({ $: () => ({ value: "" }), state: {}, escapeHtml: String });
   vm.runInContext(functionSource("function aggregateThresholds(", "function renderAggregate("), ctx);
-  vm.runInContext(functionSource("function renderClosurePanel(", "function retakeTargets("), ctx);
-  ctx.renderClosurePanel("1");
-  const markup = elements.get("#closureContent").innerHTML;
-  const selections = [...markup.matchAll(/data-closure-key="([^"]+)"[\s\S]*?<option value="([^"]*)" selected/g)];
-  assert.deepEqual(selections.map((match) => [match[1], match[2]]),
-    [["1:1", "open"], ["1:2", ""], ["1:3", ""], ["1:4", "closed"], ["1:5", "open"]]);
+  const course = (column, name, enrollment, atRisk) => ({ column, name, enrollment, atRisk, closed: false, classCount: 1,
+    enrollmentPerDivision: 1, averageClassSize: enrollment });
+  const report = { summary: { grade: "1", students: 350, classes: 10, classSource: "roster", averageClassSize: 35, openingLimit: 31.5, divisionLimit: 38.5 },
+    semesters: [{ name: "2학년 1학기", groups: [{ category: "2-1 택1", choiceCount: 1, totalClasses: 5, courses: [
+      course(1, "개설기준 일치", 31.5, false),
+      course(2, "미달", 5, true),
+      course(3, "수동 미정", 100, false),
+      course(4, "수동 폐강", 100, false),
+      course(5, "수동 개설", 5, true)
+    ] }] }] };
+  const closures = { "1:3": "", "1:4": "closed", "1:5": "open" };
+  const options = { closures, round: "1", locked: false, maxClassSize: 34, riskOnly: false, canUndo: false };
+  const decisions = (markup) => [...markup.matchAll(/data-closure-key="([^"]+)"[\s\S]*?<option value="([^"]*)" selected/g)]
+    .map((match) => [match[1], match[2]]);
+  const markup = ctx.aggregateGradeSectionMarkup(report, options);
+  assert.deepEqual(decisions(markup), [["1:1", "open"], ["1:2", ""], ["1:3", ""], ["1:4", "closed"], ["1:5", "open"]]);
+  assert.match(markup, /data-closure-round="1"/);
+  // 기준 미달·미정만 보기: 기준 미달이거나 결정이 미정인 과목만 남는다.
+  assert.deepEqual(decisions(ctx.aggregateGradeSectionMarkup(report, { ...options, riskOnly: true })).map(([key]) => key), ["1:2", "1:3", "1:5"]);
+  // 확정된 차수는 결정 칸이 잠긴다.
+  assert.equal(ctx.aggregateGradeSectionMarkup(report, { ...options, locked: true }).match(/<select class="closure-select"[^>]* disabled/g).length, 5);
   assert.match(frontend, /state\.roundClosures\[round\]\[key\] = select\.value/);
 });
 
@@ -1010,7 +1012,7 @@ test("workflow menus reveal their matching panels without changing the selected 
     $:(id)=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);},
     renderCurriculumStep(){},renderRoundStatus(){},renderApplicationSubjects(){},
     renderApplicationMode(){},
-    renderClosurePanel:(round)=>{ctx.closureRound=round;},renderRetakePanel(){},
+    renderAggregate:()=>{ctx.aggregateRendered=(ctx.aggregateRendered||0)+1;},renderRetakePanel(){},
     renderHoursStats:()=>{ctx.hoursRendered=(ctx.hoursRendered||0)+1;},
     renderRoundCompare:()=>{ctx.compareRendered=true;},
     persistState:()=>{saved++;}});
@@ -1024,11 +1026,12 @@ test("workflow menus reveal their matching panels without changing the selected 
   assert.equal(elements.get("#certificatePanel").classList.states.hidden,false);
   ctx.switchWorkflowStep(4);
   assert.equal(elements.get("#aggregatePanel").classList.states.hidden,false);
-  assert.equal(elements.get("#closurePanel").classList.states.hidden,false);
   assert.equal(elements.get("#retakePanel").classList.states.hidden,false);
   assert.equal(elements.get("#roundComparePanel").classList.states.hidden,false);
   assert.equal(ctx.compareRendered,true);
-  assert.equal(ctx.closureRound,"4");
+  // 개설/폐강 결정은 집계표 안에 있으므로 4단계로 오면 집계표를 다시 그린다(별도 폐강 검토 패널 없음).
+  assert.ok(ctx.aggregateRendered>0);
+  assert.doesNotMatch(html,/id="closurePanel"/);
   ctx.switchWorkflowStep(7);
   assert.equal(elements.get("#workflowStep7Panel").classList.states.hidden,false);
   assert.equal(elements.get("#aggregatePanel").classList.states.hidden,true);
