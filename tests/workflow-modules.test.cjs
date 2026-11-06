@@ -559,3 +559,18 @@ test("bulk certificate printing reads the group settings once instead of once pe
   for (const student of students) ctx.certificateMarkup(student, true, groups);
   assert.equal(reads, 1, "50 certificates, one read");
 });
+
+test("the student list can be limited by grade so classes of different grades are never mixed", () => {
+  const values = { "#searchInput": "", "#classFilter": "", "#gradeFilter": "" };
+  const students = [
+    { id: "a", grade: "1", classroom: "1", number: "1", name: "가" }, { id: "b", grade: "2", classroom: "1", number: "1", name: "나" },
+    { id: "c", grade: "2", classroom: "2", number: "1", name: "다" }
+  ];
+  const ctx = vm.createContext({ state: { students }, $: (selector) => ({ value: values[selector] }) });
+  vm.runInContext(functionSource(app, "function visibleStudents(", "function renderRoster("), ctx);
+  assert.equal(ctx.visibleStudents().length, 3);
+  values["#classFilter"] = "1";
+  assert.equal(ctx.visibleStudents().length, 2, "1반 alone mixes the grades");
+  values["#gradeFilter"] = "2";
+  assert.deepEqual(plain(ctx.visibleStudents().map((s) => s.id)), ["b"]);
+});

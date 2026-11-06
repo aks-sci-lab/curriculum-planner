@@ -255,11 +255,25 @@
       return `${String(row.grade || "1")}::${bundle}`;
     }
 
+    // 학년·반 필터 선택지를 만든다. 반은 고른 학년의 학생만 보여 주어 1학년 1반과 2학년 1반이 섞이지 않게 한다.
     function applyClassFilterOptions(students) {
-      const classes = [...new Set(students.map((student) => student.classroom))]
-        .sort((a, b) => Number(a) - Number(b));
-      $("#classFilter").innerHTML = '<option value="">전체 반</option>' +
+      const gradeSelect = $("#gradeFilter");
+      const classSelect = $("#classFilter");
+      const grades = [...new Set(students.map((student) => String(student.grade)))].sort((a, b) => Number(a) - Number(b));
+      const previousGrade = gradeSelect?.value || "";
+      const grade = grades.includes(previousGrade) ? previousGrade : "";
+      if (gradeSelect) {
+        gradeSelect.innerHTML = '<option value="">전체 학년</option>' +
+          grades.map((value) => `<option value="${escapeHtml(value)}">현 ${escapeHtml(value)}학년</option>`).join("");
+        gradeSelect.value = grade;
+        gradeSelect.disabled = !students.length;
+      }
+      const previousClass = classSelect.value;
+      const classes = [...new Set(students.filter((student) => !grade || String(student.grade) === grade)
+        .map((student) => student.classroom))].sort((a, b) => Number(a) - Number(b));
+      classSelect.innerHTML = '<option value="">전체 반</option>' +
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
+      if (classes.includes(previousClass)) classSelect.value = previousClass;
     }
 
     function syncActiveRound() {
@@ -2899,9 +2913,11 @@
     function visibleStudents() {
       const query = $("#searchInput").value.trim().toLocaleLowerCase();
       const classValue = $("#classFilter").value;
+      const gradeValue = $("#gradeFilter")?.value || "";
       return state.students.filter((student) => {
         const searchable = `${student.name} ${student.grade} ${student.classroom} ${student.number}`.toLocaleLowerCase();
         return (!query || searchable.includes(query)) &&
+          (!gradeValue || String(student.grade) === gradeValue) &&
           (!classValue || student.classroom === classValue);
       });
     }
@@ -2968,7 +2984,7 @@
       return `<article class="${printMode ? "print-page" : "preview-paper"}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
-          <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span><span></span></div>
+          <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span><span>${escapeHtml(Number(student.grade) + 1)}학년 선택과목 신청</span></div>
           <p class="paper-student">${escapeHtml(student.grade)} 학년&nbsp;&nbsp; ${escapeHtml(student.classroom)} 반&nbsp;&nbsp; ${escapeHtml(student.number)} 번&nbsp;&nbsp; ${escapeHtml(student.name)}</p>
           <table class="certificate-table">
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
@@ -3009,8 +3025,10 @@
       const button = $("#printAll");
       button.disabled = count === 0;
       const classroom = $("#classFilter")?.value;
+      const grade = $("#gradeFilter")?.value;
+      const scope = `${grade ? `현 ${grade}학년 ` : classroom ? "전 학년 " : ""}${classroom ? `${classroom}반 ` : ""}`;
       button.textContent = count === 0 ? "검색 결과 전체 인쇄"
-        : `${classroom ? `${classroom}반 ` : "검색 결과 "}전체 인쇄 (${count}명)`;
+        : `${scope || "검색 결과 "}전체 인쇄 (${count}명)`;
     }
 
     function renderSemesterClassifier() {
@@ -5886,7 +5904,17 @@
       status.textContent = "편제표를 초기화했습니다.";
     });
     $("#searchInput").addEventListener("input", () => { renderRoster(); renderPreview(); });
-    $("#classFilter").addEventListener("change", () => { renderRoster(); renderPreview(); });
+    function showFirstVisibleStudent() {
+      const visible = visibleStudents();
+      if (visible.length && !visible.some((student) => student.id === state.selectedId)) state.selectedId = visible[0].id;
+      renderRoster();
+      renderPreview();
+    }
+    $("#gradeFilter").addEventListener("change", () => {
+      applyClassFilterOptions(state.students);
+      showFirstVisibleStudent();
+    });
+    $("#classFilter").addEventListener("change", showFirstVisibleStudent);
     $("#studentList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-student-id]");
       if (!button) return;
