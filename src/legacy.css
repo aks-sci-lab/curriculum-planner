@@ -1880,3 +1880,36 @@
   .print-page.paper-dense .paper-checks { margin-top: 1.5mm; padding: .8mm 1.5mm; font-size: 9px; line-height: 1.25; }
 }
 .course-check-details .aggregate-sheet-wrap { max-height: 360px; overflow: auto; }
+
+/* 위계(선이수) 경고 표시 — 4단계 집계표 배지·팝업, 3단계 학생 목록, 재신청 명단, 웹 신청 현황 (course-checks.js) */
+.aggregate-check-notes { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.aggregate-check-note.is-muted { border-color: #e3e7ee; background: #f6f7f9; color: #7b8494; }
+button.prereq-badge { border: 1px solid #f1b7ae; background: #fdecea; color: #a3261c; cursor: pointer; font: inherit; font-size: 10px; font-weight: 700; }
+button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6d1; }
+.prereq-unknown-badge { display: inline-block; margin-left: 4px; padding: 1px 6px; border: 1px dashed #d4d9e2; border-radius: 999px; background: transparent; color: #8a93a3; font-size: 10px; cursor: pointer; }
+.prereq-unknown-badge:hover, .prereq-unknown-badge:focus-visible { color: #4b556a; border-color: #aab2c0; }
+.prereq-dialog-scope { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
+.prereq-dialog-heading { margin: 8px 0 6px; font-size: 15px; color: #8d3025; }
+.prereq-student-list { margin: 0 0 8px; padding-left: 18px; font-size: 13px; line-height: 1.6; max-height: 50vh; overflow: auto; }
+.prereq-student-list li { color: #5b1d16; }
+.prereq-student-list.is-unknown li { color: #6b7485; }
+.prereq-unknown-details { margin: 10px 0 0; padding: 6px 10px; border: 1px solid #e3e7ee; border-radius: 8px; background: #f8f9fb; }
+.prereq-unknown-details summary { cursor: pointer; color: #59667b; font-size: 13px; }
+.roster-flag-filter { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #5b1d16; cursor: pointer; }
+.roster-flag-count { padding: 0 6px; border-radius: 999px; background: #fdecea; color: #a3261c; font-size: 11px; font-weight: 700; }
+.student-prereq-flag { display: inline-block; padding: 0 5px; border-radius: 999px; background: #fdecea; color: #a3261c; font-size: 10px; font-weight: 700; vertical-align: 1px; }
+.retake-prereq { text-align: left; font-size: 12px; }
+.retake-prereq.has-issue { color: #8d3025; }
+.cloud-application-status { margin: 10px 0 0; padding: 10px 12px; border: 1px solid #d7e0f2; border-radius: 10px; background: #fff; }
+.cloud-application-status h5 { margin: 0 0 6px; font-size: 14px; }
+.cloud-application-status .cloud-status-summary { margin: 0 0 6px; font-size: 13px; }
+.cloud-application-status .cloud-status-summary b.has-issue { color: #a3261c; }
+.cloud-application-status table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cloud-application-status th, .cloud-application-status td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.cloud-application-status tr.has-prereq td { background: #fff6f4; }
+.cloud-application-status .is-violation { color: #8d3025; }
+.cloud-application-status .is-unknown { color: #7b8494; }
+.teacher-edit-prereq { margin: 6px 0 0; font-size: 12px; }
+.teacher-edit-prereq li { margin: 2px 0; }
+.teacher-edit-prereq .is-violation { color: #8d3025; }
+.teacher-edit-prereq .is-unknown { color: #7b8494; }

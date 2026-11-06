@@ -614,6 +614,9 @@ var updateRetakeReadiness;
       section.appendChild(button("학생 화면 미리보기", () => teacherAction(async () => {
         openStudentPreview(event);
       }), "button button-quiet"));
+      section.appendChild(button("신청 현황 · 위계 점검", () => teacherAction(async () => {
+        await showApplicationStatusPanel(event, section);
+      }), "button button-quiet"));
       section.appendChild(button("학생 선택 과목 변경", () => teacherAction(async () => {
         await openTeacherEditor(event);
       }), "button button-primary"));
@@ -719,6 +722,89 @@ var updateRetakeReadiness;
     switchWorkflowStep(4);
   });
 
+  // 신청 현황: 학생별 신청 목록과 위계(선이수) 경고. 서버가 준 학생 선택과 이벤트에 실린 과목.requires로 화면에서 계산한다
+  // (서버 변경·서버 검사 없음, 경고만). 이전 학년 근거가 필요한 위계는 '확인 불가'로 따로 센다.
+  async function showApplicationStatusPanel(event, parent) {
+    const data = await rpc("get_teacher_course_applications", { p_event: event.id }, true);
+    parent.querySelector(".cloud-application-status")?.remove();
+    const grade = String(state.applicationMenuGrade || "1");
+    const target = String(Number(grade) + 1);
+    const review = typeof courseCheckTeacherReview === "function" ? courseCheckTeacherReview(data, grade) : null;
+    const panel = document.createElement("section");
+    panel.className = "cloud-application-status";
+    const heading = document.createElement("h5");
+    heading.textContent = `신청 현황 · 현 ${grade}학년 → ${target}학년 과목`;
+    panel.appendChild(heading);
+    const rows = review?.rows || data.entries.filter((entry) => String(entry.grade) === grade).map((entry) => ({ entry, violations: [], unknowns: [] }));
+    const summary = document.createElement("p");
+    summary.className = "cloud-status-summary";
+    summary.setAttribute("role", "status");
+    const submitted = review ? review.submitted : rows.filter(({ entry }) => entry.submittedAt || entry.selections?.length).length;
+    const violators = document.createElement("b");
+    violators.className = review?.violators ? "has-issue" : "";
+    violators.textContent = review?.available ? `위계 경고 ${review.violators}명` : "위계 점검 정보 없음";
+    summary.append(`학생 ${rows.length}명 · 제출 ${submitted}명 · `, violators,
+      review?.available ? ` · 확인 불가 ${review.unknowns}명(이전 학년 근거 없음, 위반 아님)` : " (점검 정보 없이 만든 예전 신청)");
+    panel.appendChild(summary);
+    const filterLabel = document.createElement("label");
+    const filter = document.createElement("input");
+    filter.type = "checkbox";
+    filter.className = "cloud-status-prereq-filter";
+    filterLabel.append(filter, " 위계 경고만");
+    panel.appendChild(filterLabel);
+    const table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th scope=\"col\">반</th><th scope=\"col\">번호</th><th scope=\"col\">이름</th><th scope=\"col\">제출</th><th scope=\"col\">신청 과목</th><th scope=\"col\">위계 점검</th><th scope=\"col\"><span class=\"sr-only\">변경</span></th></tr></thead>";
+    const body = document.createElement("tbody");
+    for (const { entry, violations, unknowns } of rows) {
+      const row = document.createElement("tr");
+      row.className = violations.length ? "has-prereq" : "";
+      row.dataset.prereq = violations.length ? "violation" : unknowns.length ? "unknown" : "";
+      const cell = (text) => { const td = document.createElement("td"); td.textContent = text; row.appendChild(td); return td; };
+      cell(entry.classroom); cell(entry.number); cell(entry.name);
+      cell(entry.submittedAt ? "제출" : "미제출");
+      cell((entry.selections || []).join(", "));
+      const status = cell("");
+      for (const issue of violations) {
+        const line = document.createElement("div");
+        line.className = "is-violation";
+        line.textContent = `⚠ ${issue.course}: ${issue.brief}`;
+        status.appendChild(line);
+      }
+      for (const issue of unknowns) {
+        const line = document.createElement("div");
+        line.className = "is-unknown";
+        line.textContent = `확인 불가 · ${issue.course}: ${issue.brief}`;
+        status.appendChild(line);
+      }
+      if (!violations.length && !unknowns.length) status.textContent = !review?.available ? "—" : entry.selections?.length ? "이상 없음" : "";
+      const action = document.createElement("td");
+      action.appendChild(button("과목 변경", () => teacherAction(async () => {
+        await openTeacherEditor(event, entry.id);
+      }), "button button-quiet"));
+      row.appendChild(action);
+      body.appendChild(row);
+    }
+    table.appendChild(body);
+    const wrap = document.createElement("div");
+    wrap.className = "aggregate-sheet-wrap";
+    wrap.appendChild(table);
+    panel.appendChild(wrap);
+    const empty = document.createElement("p");
+    empty.className = "note hidden";
+    empty.textContent = "위계 경고 학생이 없습니다.";
+    panel.appendChild(empty);
+    filter.addEventListener("change", () => {
+      let shown = 0;
+      for (const row of body.children) {
+        row.hidden = filter.checked && row.dataset.prereq !== "violation";
+        if (!row.hidden) shown++;
+      }
+      empty.classList.toggle("hidden", shown > 0);
+    });
+    parent.appendChild(panel);
+    byId("cloudTeacherMessage").textContent = `신청 현황을 불러왔습니다(현 ${grade}학년 ${rows.length}명${review?.available ? ` · 위계 경고 ${review.violators}명` : ""}). 위계는 경고만 하며 서버는 검사하지 않습니다.`;
+  }
+
   function codeLockStatus(student) {
     if (student.teacherLock) return "잠김 · 교사 해제 필요";
     if (student.lockedSeconds > 0) return `잠김 · 약 ${Math.ceil(student.lockedSeconds / 60)}분 남음(자동 해제)`;
@@ -792,22 +878,25 @@ var updateRetakeReadiness;
     parent.appendChild(panel);
   }
 
-  async function openTeacherEditor(event) {
+  async function openTeacherEditor(event, studentId = "") {
     const revision = sessionRevision;
     const data = await rpc("get_teacher_course_applications", { p_event: event.id }, true);
     if (!session || revision !== sessionRevision) throw new Error("다시 로그인하세요.");
     const entries = data.entries.filter((student) => student.grade === String(state.applicationMenuGrade || "1"));
     if (!entries.length) throw new Error("선택한 학년의 학생이 없습니다.");
+    // 위계(선이수) 경고 학생은 목록에 표시한다(화면 계산, 경고만).
+    const review = typeof courseCheckTeacherReview === "function" ? courseCheckTeacherReview(data, String(state.applicationMenuGrade || "1")) : null;
+    const flagged = new Set((review?.rows || []).filter((row) => row.violations.length).map((row) => row.entry.id));
     teacherEdit = { eventId: event.id, entries, subjects: data.subjects, groups: data.groups };
     const select = byId("cloudTeacherEditStudent");
     select.replaceChildren();
     for (const student of entries) {
       const option = document.createElement("option");
       option.value = student.id;
-      option.textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}${student.submittedAt ? "" : " · 미제출"}`;
+      option.textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}${student.submittedAt ? "" : " · 미제출"}${flagged.has(student.id) ? " · ⚠ 위계 경고" : ""}`;
       select.appendChild(option);
     }
-    select.value = entries[0].id;
+    select.value = entries.some((student) => student.id === studentId) ? studentId : entries[0].id;
     byId("cloudTeacherEditSearch").value = "";
     byId("cloudTeacherEditSearch").addEventListener("input", filterTeacherEditStudents);
     renderTeacherEditor();
@@ -889,6 +978,20 @@ var updateRetakeReadiness;
     }
     const studentLabel = student ? `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}` : "학생 선택";
     byId("cloudTeacherEditSummary").textContent = `${studentLabel} · 현재 ${selected}과목 선택`;
+    // 지금 고른 과목의 위계(선이수) 경고(저장은 막지 않는다).
+    const prereqList = byId("cloudTeacherEditPrereq");
+    if (prereqList) {
+      prereqList.replaceChildren();
+      const review = student && typeof courseCheckTeacherReview === "function"
+        ? courseCheckTeacherReview({ entries: [{ ...student, selections: picked }], subjects: teacherEdit.subjects, groups: teacherEdit.groups }, student.grade) : null;
+      const row = review?.rows[0];
+      for (const issue of [...(row?.violations || []), ...(row?.unknowns || [])]) {
+        const item = document.createElement("li");
+        item.className = issue.status === "violation" ? "is-violation" : "is-unknown";
+        item.textContent = `${issue.status === "violation" ? "⚠ 위계 경고" : "확인 불가"} · ${issue.course}: ${issue.brief}`;
+        prereqList.appendChild(item);
+      }
+    }
   }
 
   byId("cloudTeacherEditStudent").addEventListener("change", () => {

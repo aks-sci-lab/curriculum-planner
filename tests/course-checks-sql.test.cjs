@@ -208,3 +208,28 @@ test("prerequisite checks on top of code hardening: the test bot's violation att
     assert.equal(checks.courseCheckApplicationState(app, record.selections).violations.length, 0, record.selections.join(","));
   }
 });
+
+test("teacher application status: warnings are computed on screen from get_teacher_course_applications (no server change)", async () => {
+  const { db, call } = await server();
+  const event = await call("create_course_event", { p_setup: setup() }, "authenticated");
+  const juniors = event.students.filter((item) => String(item.grade) === "1");
+  const senior = event.students.find((item) => String(item.grade) === "2");
+  for (const [code, picks] of [[juniors[0].code, noCalculus], [juniors[1].code, ok], [juniors[2].code, noBiology], [senior.code, ["전자기와 양자"]]]) {
+    assert.match((await call("save_scoped_course_application", { p_event: event.id, p_code: code, p_selections: picks })).message, /저장/);
+  }
+  const data = await call("get_teacher_course_applications", { p_event: event.id }, "authenticated");
+  assert.ok(Array.isArray(data.entries), JSON.stringify(data).slice(0, 200));
+  const review = checks.courseCheckTeacherReview(data, "1");
+  assert.equal(review.available, true, "이벤트 과목에 실린 requires로 계산한다");
+  assert.equal(review.entries, 6);
+  assert.equal(review.submitted, 3);
+  assert.equal(review.violators, 2, "미적분Ⅰ 없이 미적분Ⅱ, 생명과학 없이 생물의 유전");
+  const byName = new Map(review.rows.map((row) => [row.entry.name, row]));
+  assert.equal(byName.get(juniors[0].name).violations[0].brief, "미적분Ⅰ 미이수(2-1에 미적분Ⅰ 없음)");
+  assert.equal(byName.get(juniors[2].name).violations[0].course, "생물의 유전");
+  assert.equal(byName.get(juniors[1].name).violations.length, 0);
+  const seniors = checks.courseCheckTeacherReview(data, "2");
+  assert.equal(seniors.violators, 0);
+  assert.equal(seniors.unknowns, 1, "이전 학년 근거가 없으면 확인 불가");
+  assert.deepEqual(await prerequisiteFunctions(db), [], "서버에는 위계 검사 함수가 없다");
+});

@@ -493,6 +493,57 @@ function courseCheckApplicationState(application, selected = []) {
     unknowns: issues.filter((issue) => issue.status === "unknown"), semesters, groups: groupRows, unplaced, families, cumulative };
 }
 
+// 집계표·학생 목록·엑셀에 쓰는 짧은 근거. 예: "화학 미이수(2-1·2-2에 화학 없음)".
+// grade: 신청 학년(현 N학년이면 N+1), offered: 그 학년에서 선이수 과목을 고를 수 있는 학기 라벨(["2-1", "2-2"]).
+function courseCheckIssueBrief(issue, { grade = "", offered = [] } = {}) {
+  const need = issue.requires;
+  if (issue.status === "unknown") {
+    return issue.reason === "semester" ? `${need} 이수 확인 불가(학기를 알 수 없음)` : `${need} 이수 확인 불가(이전 학년 이수 결과 없음)`;
+  }
+  if (issue.reason === "same") return `${need} 같은 학기 선택(${grade ? `${grade}-` : ""}${issue.semester}학기, 선이수 불인정)`;
+  if (String(issue.reason).startsWith("later:")) return `${need} 뒤 학기(${issue.reason.slice(6)})에 선택`;
+  if (String(issue.reason).startsWith("designated-later:")) return `${courseCheckJosa(need, "은/는")} ${issue.reason.slice(17)} 지정 과목(뒤 학기)`;
+  const labels = [...new Set(offered)].sort();
+  return `${need} 미이수(${labels.length ? `${labels.join("·")}에 ${need} 없음` : "이수 근거 없음"})`;
+}
+
+// 편제표 모델에서 신청 학년에 선이수 과목이 나오는 학기 라벨.
+function courseCheckOfferedLabels(model, need, grade) {
+  return [...new Set((model?.places?.get(courseCheckKey(need)) || []).filter((place) => place.field.slice(3, 4) === String(grade))
+    .map((place) => courseCheckFieldLabel(place.field)))].sort();
+}
+
+// 웹 수강신청 교사 화면(신청 현황): 서버가 준 학생 선택(get_teacher_course_applications)과 이벤트에 실린 requires로 화면에서 계산한다.
+// 서버는 위계를 검사하지 않는다. 점검 정보가 없는 예전 이벤트면 available=false.
+function courseCheckTeacherReview(data, currentGrade) {
+  const grade = String(currentGrade);
+  const target = String(Number(grade) + 1);
+  const courses = Array.isArray(data?.subjects?.[target]) ? data.subjects[target] : [];
+  const groups = (Array.isArray(data?.groups) ? data.groups : []).filter((group) => String(group.grade) === target);
+  const application = { courses, groups, student: { grade } };
+  const semesterOf = (course) => ["1", "2"].includes(String(course?.semester)) ? String(course.semester) : "";
+  const baseKey = (course) => courseCheckKey(course.groupSubject || String(course.subject ?? "").replace(/\s*\([12]학기\)\s*$/, ""));
+  const offered = (need) => [...new Set(courses.filter((course) => baseKey(course) === courseCheckKey(need) && semesterOf(course))
+    .map((course) => `${target}-${semesterOf(course)}`))].sort();
+  const rows = [];
+  const review = { grade, target, available: courseCheckApplicationState(application, []) !== null, rows,
+    entries: 0, submitted: 0, violators: 0, unknowns: 0 };
+  for (const entry of Array.isArray(data?.entries) ? data.entries : []) {
+    if (String(entry?.grade) !== grade) continue;
+    review.entries++;
+    const selections = Array.isArray(entry.selections) ? entry.selections : [];
+    if (entry.submittedAt || selections.length) review.submitted++;
+    const result = review.available && selections.length ? courseCheckApplicationState(application, selections) : null;
+    const brief = (issue) => ({ ...issue, brief: courseCheckIssueBrief(issue, { grade: target, offered: offered(issue.requires) }) });
+    const violations = (result?.violations || []).map(brief);
+    const unknowns = (result?.unknowns || []).map(brief);
+    if (violations.length) review.violators++;
+    if (unknowns.length) review.unknowns++;
+    rows.push({ entry, violations, unknowns });
+  }
+  return review;
+}
+
 // ---- 앱 연결 (아래는 화면·저장에 연결한다)
 
 // 설정(state.courseChecks): 기본 위계 중 삭제·끔, 추가 위계, 교과(군) 필수 학점 수정값, 입학연도별 이전 학년 이수 결과.
@@ -771,16 +822,156 @@ function courseCheckRetakeShortfall(student, closedCourses) {
   return short.length ? short.map((row) => `${row.label} ${-row.diff}학점(${row.earned}/${row.target})`).join(", ") : "없음";
 }
 
-// 4단계 학년 머리줄 요약.
-function courseCheckAggregateNote(grade) {
+// 학생 묶음의 위계 경고를 한 번 계산해 학생·과목(학년:열)·학년별 Map으로 묶는다.
+// 4단계 집계표 배지·팝업·'처리할 것만'·엑셀 시트, 3단계 학생 목록 표시·필터가 함께 쓴다.
+// 같은 학생 배열·설정·편제표면 다시 계산하지 않는다(문맥 캐시가 바뀌면 새로 만든다). 위계는 경고만 한다.
+function courseCheckFlags(students = typeof state !== "undefined" ? state.students : [], context = courseCheckContext()) {
+  if (!context.flags) context.flags = new WeakMap();
+  const list = Array.isArray(students) ? students : [];
+  if (context.flags.has(list)) return context.flags.get(list);
+  const flags = { students: new Map(), courses: new Map(), grades: new Map() };
+  const bucket = (key) => {
+    if (!flags.courses.has(key)) flags.courses.set(key, { violations: [], unknowns: [], violators: new Set(), unknownStudents: new Set() });
+    return flags.courses.get(key);
+  };
+  for (const student of list) {
+    if (!(student?.selections || []).length) continue;
+    const report = courseCheckStudentReport(student, context);
+    if (!report) continue;
+    const grade = String(student.grade);
+    if (!flags.grades.has(grade)) flags.grades.set(grade, { checked: 0, violators: [], unknowns: [] });
+    const gradeFlags = flags.grades.get(grade);
+    gradeFlags.checked++;
+    const { violations, unknowns } = report.prerequisites;
+    if (!violations.length && !unknowns.length) continue;
+    const brief = (issue) => ({ issue, brief: courseCheckIssueBrief(issue, { grade: report.targetGrade,
+      offered: courseCheckOfferedLabels(report.model, issue.requires, report.targetGrade) }) });
+    const entry = { student, report, violations: violations.map(brief), unknowns: unknowns.map(brief) };
+    flags.students.set(student, entry);
+    if (entry.violations.length) gradeFlags.violators.push(entry);
+    if (entry.unknowns.length) gradeFlags.unknowns.push(entry);
+    const columns = new Map();
+    for (const selection of student.selections) {
+      if (!columns.has(selection.name)) columns.set(selection.name, []);
+      columns.get(selection.name).push(selection.column);
+    }
+    for (const item of entry.violations) {
+      for (const column of columns.get(item.issue.course) || []) {
+        const target = bucket(`${grade}:${column}`);
+        target.violations.push({ student, ...item });
+        target.violators.add(student);
+      }
+    }
+    for (const item of entry.unknowns) {
+      for (const column of columns.get(item.issue.course) || []) {
+        const target = bucket(`${grade}:${column}`);
+        target.unknowns.push({ student, ...item });
+        target.unknownStudents.add(student);
+      }
+    }
+  }
+  context.flags.set(list, flags);
+  return flags;
+}
+
+function courseCheckStudentLine(student) {
+  return `현 ${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}`;
+}
+
+function courseCheckSortItems(items) {
+  return [...items].sort((a, b) => Number(a.student.grade) - Number(b.student.grade) || Number(a.student.classroom) - Number(b.student.classroom) ||
+    Number(a.student.number) - Number(b.student.number) || String(a.issue.course).localeCompare(String(b.issue.course), "ko"));
+}
+
+// 집계표 과목 행의 배지(위계 경고 수, 흐린 확인 불가 수). 누르면 그 과목의 학생 목록 팝업이 열린다.
+function courseCheckCourseBadges(flags, key, label = "") {
+  const flag = flags?.courses?.get(key);
+  if (!flag) return "";
+  const esc = courseCheckEscape;
+  const attrs = `data-open-dialog="prereqStudentsDialog" data-prereq-course="${esc(key)}" data-prereq-label="${esc(label)}"`;
+  return (flag.violators.size ? `<button type="button" class="at-risk-badge prereq-badge" ${attrs} title="${esc(`${label} 신청자 중 위계(선이수) 경고 ${flag.violators.size}명 — 눌러서 학생 보기`)}">위계 경고 ${flag.violators.size}</button>` : "") +
+    (flag.unknownStudents.size ? `<button type="button" class="prereq-unknown-badge" ${attrs} title="${esc(`이전 학년 이수 결과가 없어 판단하지 못한 학생 ${flag.unknownStudents.size}명(위반 아님)`)}">확인 불가 ${flag.unknownStudents.size}</button>` : "");
+}
+
+// 팝업 본문: 위계 경고 학생 목록(+ 확인 불가는 접어서 따로).
+function courseCheckStudentsDialogHtml(violations, unknowns, { title = "", limit = 500 } = {}) {
+  const esc = courseCheckEscape;
+  const line = (item) => `<li>${esc(`${courseCheckStudentLine(item.student)} · ${item.issue.course}: ${item.brief}`)}</li>`;
+  const sortedViolations = courseCheckSortItems(violations);
+  const sortedUnknowns = courseCheckSortItems(unknowns);
+  const count = (items) => new Set(items.map((item) => item.student)).size;
+  return `<p class="prereq-dialog-scope">${esc(title)}</p>
+    <h3 class="prereq-dialog-heading">위계 경고 ${count(sortedViolations)}명</h3>
+    ${sortedViolations.length ? `<ul class="prereq-student-list">${sortedViolations.slice(0, limit).map(line).join("")}</ul>${sortedViolations.length > limit ? `<p class="note">앞 ${limit}건만 표시했습니다.</p>` : ""}`
+      : '<p class="note">위계(선이수) 경고 학생이 없습니다.</p>'}
+    <p class="note">위계는 경고만 합니다(신청은 그대로 유지됩니다). 학생과 상담해 과목을 바꿀지 정하세요.</p>
+    ${sortedUnknowns.length ? `<details class="prereq-unknown-details"><summary>확인 불가 ${count(sortedUnknowns)}명 — 위반이 아니라 판단할 근거가 없는 학생</summary>
+      <p class="note">이전 학년 이수 결과가 없어 판단하지 않았습니다. 2단계 '위계·학점 점검'에서 이전 학년 이수 결과를 올리면 판단합니다.</p>
+      <ul class="prereq-student-list is-unknown">${sortedUnknowns.slice(0, limit).map(line).join("")}</ul>${sortedUnknowns.length > limit ? `<p class="note">앞 ${limit}건만 표시했습니다.</p>` : ""}</details>` : ""}`;
+}
+
+function courseCheckOpenStudentsDialog(opener) {
+  const body = document.getElementById("prereqStudentsBody");
+  if (!body || typeof state === "undefined") return;
+  const flags = courseCheckFlags(state.students);
+  const courseKey = opener.dataset.prereqCourse;
+  if (courseKey) {
+    const flag = flags.courses.get(courseKey) || { violations: [], unknowns: [] };
+    const grade = courseKey.slice(0, courseKey.indexOf(":"));
+    body.innerHTML = courseCheckStudentsDialogHtml(flag.violations, flag.unknowns,
+      { title: `현 ${grade}학년 → ${Number(grade) + 1}학년 과목 · ${opener.dataset.prereqLabel || ""} 신청 학생` });
+  } else {
+    const grade = String(opener.dataset.prereqGrade || "");
+    const gradeFlags = flags.grades.get(grade) || { violators: [], unknowns: [] };
+    body.innerHTML = courseCheckStudentsDialogHtml(gradeFlags.violators.flatMap((entry) => entry.violations.map((item) => ({ student: entry.student, ...item }))),
+      gradeFlags.unknowns.flatMap((entry) => entry.unknowns.map((item) => ({ student: entry.student, ...item }))),
+      { title: `현 ${grade}학년 → ${Number(grade) + 1}학년 과목 · 학년 전체` });
+  }
+  if (opener.dataset.prereqUnknown !== undefined || opener.classList.contains("prereq-unknown-badge")) {
+    body.querySelector(".prereq-unknown-details")?.setAttribute("open", "");
+  }
+}
+
+// 4단계 학년 머리줄 요약: 위계 경고·확인 불가(따로, 흐리게)는 학생 목록 팝업, 학점은 점검 팝업을 연다.
+function courseCheckAggregateNote(grade, flags = null) {
   if (typeof state === "undefined") return "";
   const students = (state.students || []).filter((student) => String(student.grade) === String(grade));
   if (!students.length || !courseCheckModel(courseCheckCohortYear(grade))) return "";
   const summary = courseCheckSummary(students);
   if (!summary.checked) return "";
-  const parts = [`위계 미충족 ${summary.violators.length}명`, `학기 학점 부족 ${summary.short.length}명`];
-  if (summary.unknowns.length) parts.push(`위계 확인 불가 ${summary.unknowns.length}명`);
-  return `<button type="button" class="aggregate-check-note${summary.violators.length || summary.short.length ? " has-issue" : ""}" data-open-dialog="courseCheckDialog" title="위계·이수학점 점검 결과 보기">${courseCheckEscape(parts.join(" · "))}</button>`;
+  const gradeFlags = (flags || courseCheckFlags(state.students)).grades.get(String(grade)) || { violators: [], unknowns: [] };
+  const esc = courseCheckEscape;
+  const violators = gradeFlags.violators.length;
+  const unknowns = gradeFlags.unknowns.length;
+  return `<span class="aggregate-check-notes">
+    <button type="button" class="aggregate-check-note${violators ? " has-issue" : ""}" data-open-dialog="prereqStudentsDialog" data-prereq-grade="${esc(grade)}" title="위계(선이수) 경고 학생 보기">위계 경고 ${violators}명</button>
+    ${unknowns ? `<button type="button" class="aggregate-check-note is-muted" data-open-dialog="prereqStudentsDialog" data-prereq-grade="${esc(grade)}" data-prereq-unknown title="이전 학년 이수 결과가 없어 판단하지 못한 학생(위반 아님)">확인 불가 ${unknowns}명</button>` : ""}
+    <button type="button" class="aggregate-check-note${summary.short.length ? " has-issue" : ""}" data-open-dialog="courseCheckDialog" title="위계·이수학점 점검 결과 보기">학기 학점 부족 ${summary.short.length}명</button>
+  </span>`;
+}
+
+// 4단계 집계표 엑셀의 '위계 경고 학생' 시트 행. grade를 주면 그 학년만. 점검할 수 없으면 null(시트를 만들지 않는다).
+function courseCheckAggregateSheetRows(students, grade = "") {
+  const flags = courseCheckFlags(students);
+  const grades = [...flags.grades].filter(([value]) => !grade || value === String(grade));
+  if (!grades.some(([, item]) => item.checked)) return null;
+  const header = ["현 학년", "반", "번호", "이름", "신청 학년", "과목", "필요한 선이수", "근거"];
+  const items = courseCheckSortItems(grades.flatMap(([, item]) => item.violators.flatMap((entry) =>
+    entry.violations.map((issue) => ({ student: entry.student, ...issue })))));
+  const rows = [header, ...items.map(({ student, issue, brief }) => [`현 ${student.grade}학년`, student.classroom, student.number, student.name,
+    `${Number(student.grade) + 1}학년`, issue.course, issue.requires, brief])];
+  if (!items.length) rows.push(["위계 경고 학생 없음"]);
+  const unknowns = grades.reduce((sum, [, item]) => sum + item.unknowns.length, 0);
+  if (unknowns) rows.push([], [`확인 불가 ${unknowns}명(이전 학년 이수 결과가 없어 판단하지 않음)은 이 시트에 넣지 않았습니다.`]);
+  return rows;
+}
+
+// 재신청 명단: 학생 한 명의 위계 경고 과목. exclude(폐강 과목)를 주면 그 과목을 뺀 뒤 다시 점검한다.
+function courseCheckPrereqText(student, { exclude = null } = {}) {
+  const report = courseCheckStudentReport(student, courseCheckContext(), exclude ? { exclude } : {});
+  if (!report) return "";
+  return report.prerequisites.violations.map((issue) => `${issue.course}: ${courseCheckIssueBrief(issue,
+    { grade: report.targetGrade, offered: courseCheckOfferedLabels(report.model, issue.requires, report.targetGrade) })}`).join(" / ");
 }
 
 // ---- 웹 수강신청 연결
@@ -1044,6 +1235,8 @@ function initCourseChecks() {
   if (!dialog || !body) return;
   document.addEventListener("click", (event) => {
     if (event.target.closest?.('[data-open-dialog="courseCheckDialog"]')) courseCheckRenderDialog();
+    const prereq = event.target.closest?.('[data-open-dialog="prereqStudentsDialog"]');
+    if (prereq) courseCheckOpenStudentsDialog(prereq);
   });
   body.addEventListener("click", (event) => {
     const remove = event.target.closest("[data-cc-rule-delete]");

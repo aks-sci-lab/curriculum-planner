@@ -3092,6 +3092,9 @@
       // 검색어는 띄어쓰기로 나눠 모두 맞아야 한다. 이름은 일부만 맞아도 되고, 학년·반·번호는
       // "2학년"·"3반"·"5번"·"1-3"·"1-3-5"·숫자처럼 정확히 맞아야 한다(3반이 13반에 걸리지 않게).
       const terms = query.split(/\s+/).filter(Boolean);
+      // '위계 경고만': 위계(선이수) 경고 학생만 남긴다(학생 전체를 한 번 계산한 결과를 쓴다).
+      const prereqOnly = !!$("#prereqFilter")?.checked;
+      const flagged = prereqOnly && typeof courseCheckFlags === "function" ? courseCheckFlags(state.students).students : null;
       return state.students.filter((student) => {
         const { grade, classroom, number } = student;
         const name = String(student.name || "").toLocaleLowerCase();
@@ -3099,18 +3102,26 @@
           `${classroom}반`, `${number}번`, `${grade}-${classroom}`, `${grade}-${classroom}-${number}`]);
         return terms.every((term) => name.includes(term) || tokens.has(term)) &&
           (!gradeValue || String(student.grade) === gradeValue) &&
-          (!classValue || student.classroom === classValue);
+          (!classValue || student.classroom === classValue) &&
+          (!prereqOnly || !!flagged?.get(student)?.violations.length);
       });
     }
 
     function renderRoster() {
       const students = visibleStudents();
       $("#studentCount").textContent = `${students.length} / ${state.students.length}명`;
+      const prereq = typeof courseCheckFlags === "function" ? courseCheckFlags(state.students) : null;
+      const prereqCount = $("#prereqFilterCount");
+      if (prereqCount) {
+        const gradeValue = $("#gradeFilter")?.value || "";
+        prereqCount.textContent = String([...(prereq?.students.values() || [])]
+          .filter((entry) => entry.violations.length && (!gradeValue || String(entry.student.grade) === gradeValue)).length);
+      }
       const list = $("#studentList");
       if (!students.length) {
         const empty = document.createElement("div");
         empty.className = "empty-roster";
-        empty.textContent = "검색 결과가 없습니다.";
+        empty.textContent = $("#prereqFilter")?.checked ? "위계 경고 학생이 없습니다." : "검색 결과가 없습니다.";
         list.replaceChildren(empty);
         return;
       }
@@ -3129,6 +3140,14 @@
         item.setAttribute("aria-pressed", String(selected));
         item.querySelector(".student-avatar").textContent = student.number;
         item.querySelector(".student-name").textContent = student.name;
+        const warning = prereq?.students.get(student);
+        if (warning?.violations.length) {
+          const flag = document.createElement("span");
+          flag.className = "student-prereq-flag";
+          flag.textContent = "⚠ 위계";
+          flag.title = `위계(선이수) 경고: ${warning.violations.map((item) => `${item.issue.course} — ${item.brief}`).join(" / ")}`;
+          item.querySelector(".student-name").append(" ", flag);
+        }
         item.querySelector(".student-meta").textContent = studentGradeLabel(student);
         item.querySelector(".student-courses").textContent = `${student.selections.length}과목`;
         fragment.appendChild(item);
@@ -3232,7 +3251,7 @@
       button.disabled = count === 0;
       const classroom = $("#classFilter")?.value;
       const grade = $("#gradeFilter")?.value;
-      const scope = `${grade ? `현 ${grade}학년 ` : classroom ? "전 학년 " : ""}${classroom ? `${classroom}반 ` : ""}`;
+      const scope = `${grade ? `현 ${grade}학년 ` : classroom ? "전 학년 " : ""}${classroom ? `${classroom}반 ` : ""}${$("#prereqFilter")?.checked ? "위계 경고 " : ""}`;
       button.textContent = count === 0 ? "검색 결과 전체 인쇄"
         : `${scope || "검색 결과 "}전체 인쇄 (${count}명)`;
     }
@@ -3424,8 +3443,9 @@
       };
     }
 
-    // '처리할 것만' 보기: 결정이 미정인 기준 미달 과목, 학급당 인원 경고가 있는 과목, 목표 학급수와 맞지 않는 그룹.
-    function aggregateAttention(report, closures, maxClassSize) {
+    // '처리할 것만' 보기: 결정이 미정인 기준 미달 과목, 학급당 인원 경고가 있는 과목, 위계(선이수) 경고 학생이 있는 과목,
+    // 목표 학급수와 맞지 않는 그룹. prereq: courseCheckFlags 결과(없으면 위계는 보지 않는다).
+    function aggregateAttention(report, closures, maxClassSize, prereq = null) {
       const grade = String(report.summary.grade);
       const courses = new Set();
       const groups = new Set();
@@ -3437,14 +3457,15 @@
             const key = `${grade}:${course.column}`;
             const warnings = aggregateCourseWarnings(course, report.summary, maxClassSize);
             const undecided = course.atRisk && aggregateClosureDecision(closures, key, course.atRisk) === "";
-            if (undecided || warnings.over || warnings.overDivision) courses.add(key);
+            const prereqWarning = !!prereq?.courses?.get(key)?.violators?.size;
+            if (undecided || warnings.over || warnings.overDivision || prereqWarning) courses.add(key);
           }
         }
       }
       return { courses, groups, count: courses.size + groups.size };
     }
 
-    function aggregateCourseRowMarkup({ report, semester, course, closures, round, locked, maxClassSize }) {
+    function aggregateCourseRowMarkup({ report, semester, course, closures, round, locked, maxClassSize, prereq = null }) {
       const { summary } = report;
       const key = `${summary.grade}:${course.column}`;
       const name = course.displayName || course.name;
@@ -3459,6 +3480,8 @@
         over ? `<span class="at-risk-badge over-badge" title="학급당 ${course.averageClassSize.toFixed(1)}명이 최대 인원 ${maxClassSize}명을 넘습니다.">${maxClassSize}명 초과</span>` : "",
         overDivision ? `<span class="at-risk-badge over-badge" title="학급당 ${course.averageClassSize.toFixed(1)}명이 분반 기준 ${summary.divisionLimit.toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.">분반기준 초과</span>` : ""
       ].join("") || '<span class="aggregate-ok">충족</span>';
+      // 위계(선이수) 경고 학생 수 배지(누르면 학생 목록 팝업). 확인 불가는 따로 흐리게 둔다.
+      const prereqBadges = prereq && typeof courseCheckCourseBadges === "function" ? courseCheckCourseBadges(prereq, key, name) : "";
       const inputLock = locked ? ' disabled title="확정된 차수입니다. 확정 해제 후 수정하세요."'
         : course.closed ? ' disabled title="폐강으로 정한 과목은 0학급입니다. 교사 결정을 바꾸면 수정할 수 있습니다."' : "";
       return `<tr class="aggregate-course-row${risk ? " at-risk" : ""}${course.closed ? " is-closed" : ""}${over || overDivision ? " is-over" : ""}" data-course-key="${escapeHtml(key)}">
@@ -3467,7 +3490,7 @@
         <td>${course.enrollmentPerDivision.toFixed(2)}</td>
         <td><input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(name)} 개설 학급수${course.closed ? " (폐강)" : ""}" data-grade="${escapeHtml(summary.grade)}" data-course-column="${escapeHtml(course.column)}"${inputLock}></td>
         <td class="aggregate-average${over || overDivision ? " is-over" : ""}">${course.averageClassSize.toFixed(2)}</td>
-        <td class="aggregate-status">${badges}</td>
+        <td class="aggregate-status">${badges}${prereqBadges}</td>
         <td><select class="closure-select" data-closure-round="${escapeHtml(round)}" data-closure-key="${escapeHtml(key)}" aria-label="${escapeHtml(name)} 교사 결정"${locked ? " disabled" : ""}>
           <option value=""${decision === "" ? " selected" : ""}>미정</option>
           <option value="open"${decision === "open" ? " selected" : ""}>개설</option>
@@ -3476,15 +3499,15 @@
       </tr>`;
     }
 
-    function aggregateGradeSectionMarkup(report, { closures, round, locked, maxClassSize, attentionOnly, canUndo }) {
+    function aggregateGradeSectionMarkup(report, { closures, round, locked, maxClassSize, attentionOnly, canUndo, prereq = null }) {
       const { summary, semesters } = report;
       const grade = String(summary.grade);
       const displayGrade = Number(grade) + 1;
-      const attention = attentionOnly ? aggregateAttention(report, closures, maxClassSize) : null;
+      const attention = attentionOnly ? aggregateAttention(report, closures, maxClassSize, prereq) : null;
       let shownRows = 0;
       const body = semesters.map((semester) => semester.groups.map((group) => {
         const rows = group.courses.filter((course) => !attention || attention.courses.has(`${grade}:${course.column}`))
-          .map((course) => aggregateCourseRowMarkup({ report, semester, course, closures, round, locked, maxClassSize }));
+          .map((course) => aggregateCourseRowMarkup({ report, semester, course, closures, round, locked, maxClassSize, prereq }));
         if (attention && !rows.length && !attention.groups.has(`${semester.name}\u0000${group.category}`)) return "";
         shownRows += rows.length;
         const target = aggregateGroupTarget(group, summary.classes);
@@ -3506,7 +3529,7 @@
       return `<section class="aggregate-grade" data-aggregate-grade-section="${escapeHtml(grade)}">
         <div class="aggregate-grade-head">
           <h3 class="aggregate-grade-heading"><strong>${displayGrade}학년(현${escapeHtml(grade)}학년)</strong> · ${summary.students}명 · <span title="${summary.classSource === "planned" ? "내년도 편성 입력값" : "명단의 반 수"}">${summary.classes}학급</span> · 학급당 ${summary.averageClassSize.toFixed(2)} · 개설기준 ${summary.openingLimit.toFixed(2)} · 분반기준 ${summary.divisionLimit.toFixed(2)}</h3>
-          ${typeof courseCheckAggregateNote === "function" ? courseCheckAggregateNote(grade) : ""}
+          ${typeof courseCheckAggregateNote === "function" ? courseCheckAggregateNote(grade, prereq) : ""}
           <div class="aggregate-grade-actions">
             <button class="button" type="button" data-aggregate-adjust="grade" data-grade="${escapeHtml(grade)}"${lockTitle}>학급수 자동 조정(학년 전체)</button>
             ${canUndo ? `<button class="button" type="button" data-aggregate-undo="${escapeHtml(grade)}"${lockTitle}>조정 취소</button>` : ""}
@@ -3514,7 +3537,7 @@
         </div>
         <div class="aggregate-sheet-wrap"><table class="aggregate-course-table">
           <thead><tr><th scope="col">과목</th><th scope="col">신청 인원</th><th scope="col">인원/분반기준</th><th scope="col">개설 학급수</th><th scope="col">학급당</th><th scope="col">상태</th><th scope="col">교사 결정</th></tr></thead>
-          <tbody>${body || `<tr><td colspan="7" class="aggregate-empty">${attentionOnly ? "처리할 과목이 없습니다. 미정인 기준 미달 과목, 학급당 인원 초과, 목표 학급수 불일치가 모두 해결되었습니다." : "집계할 과목이 없습니다."}</td></tr>`}</tbody>
+          <tbody>${body || `<tr><td colspan="7" class="aggregate-empty">${attentionOnly ? "처리할 과목이 없습니다. 미정인 기준 미달 과목, 학급당 인원 초과, 위계 경고, 목표 학급수 불일치가 모두 없습니다." : "집계할 과목이 없습니다."}</td></tr>`}</tbody>
         </table></div>
       </section>`;
     }
@@ -3552,6 +3575,8 @@
         state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases, closures
       );
       if (settingsSummary) settingsSummary.textContent = aggregateSettingsSummaryText(aggregate, maxClassSize);
+      // 위계(선이수) 경고는 학생 전체를 한 번만 계산해(같은 자료면 캐시) 배지·팝업·처리할 것만에 함께 쓴다.
+      const prereq = typeof courseCheckFlags === "function" ? courseCheckFlags(state.students) : null;
       // 학년 탭이 요약을 겸한다: 학년마다 신청 학생·개설 학급·기준 미달 수를 라벨에 보여 준다.
       const gradeStats = aggregate.reports.map((report) => {
         const groups = report.semesters.flatMap((semester) => semester.groups);
@@ -3560,6 +3585,7 @@
           grade: String(report.summary.grade), students: report.summary.students, courses: courses.length,
           classes: groups.reduce((sum, group) => sum + group.totalClasses, 0),
           risk: courses.filter((course) => course.atRisk).length,
+          prereq: prereq?.grades.get(String(report.summary.grade))?.violators.length || 0,
           mismatch: groups.filter((group) => {
             const target = aggregateGroupTarget(group, report.summary.classes);
             return target !== null && target !== group.totalClasses;
@@ -3571,10 +3597,10 @@
         .sort((a, b) => Number(a.summary.grade) - Number(b.summary.grade));
       const shownStats = gradeStats.filter((stat) => !scope || stat.grade === scope);
       const atRiskCount = shownStats.reduce((sum, stat) => sum + stat.risk, 0);
-      const attentionCount = shownReports.reduce((sum, report) => sum + aggregateAttention(report, closures, maxClassSize).count, 0);
+      const attentionCount = shownReports.reduce((sum, report) => sum + aggregateAttention(report, closures, maxClassSize, prereq).count, 0);
       const gradeLabel = (grade) => `현 ${grade}학년 → ${Number(grade) + 1}학년`;
       const tabs = [["", "전체", ""], ...gradeStats.map((stat) => [stat.grade, gradeLabel(stat.grade),
-        ` · ${stat.students}명 · 개설 ${stat.classes}학급 · 미달 ${stat.risk}${stat.mismatch ? ` · 목표 불일치 ${stat.mismatch}` : ""}`])]
+        ` · ${stat.students}명 · 개설 ${stat.classes}학급 · 미달 ${stat.risk}${stat.mismatch ? ` · 목표 불일치 ${stat.mismatch}` : ""}${stat.prereq ? ` · 위계 경고 ${stat.prereq}명` : ""}`])]
         .map(([value, label, detail]) => `<button type="button" class="aggregate-grade-tab" data-aggregate-grade="${value}" aria-pressed="${value === scope}"><strong>${label}</strong>${detail}</button>`).join("");
       const missingGrades = ["1", "2"].filter((grade) => !gradeStats.some((stat) => stat.grade === grade));
       const missingNote = missingGrades.length
@@ -3583,11 +3609,11 @@
         ? `<span class="aggregate-total-line">합계 ${shownStats.reduce((sum, stat) => sum + stat.students, 0)}명 · ${shownStats.reduce((sum, stat) => sum + stat.courses, 0)}과목 · 개설 ${shownStats.reduce((sum, stat) => sum + stat.classes, 0)}학급 · 기준 미달 ${atRiskCount}과목</span>` : "";
       if (gradeBar) {
         gradeBar.innerHTML = `<div class="aggregate-grade-tabs" role="group" aria-label="학년 선택">${tabs}</div>${missingNote}${totalLine}
-          <button type="button" class="button aggregate-risk-filter" data-aggregate-risk-filter aria-pressed="${aggregateAttentionOnly}" title="결정이 미정인 기준 미달 과목, 학급당 인원이 최대 인원·분반 기준을 넘는 과목, 목표 학급수와 맞지 않는 그룹만 봅니다.">처리할 것만(${attentionCount})</button>`;
+          <button type="button" class="button aggregate-risk-filter" data-aggregate-risk-filter aria-pressed="${aggregateAttentionOnly}" title="결정이 미정인 기준 미달 과목, 학급당 인원이 최대 인원·분반 기준을 넘는 과목, 위계(선이수) 경고 학생이 있는 과목, 목표 학급수와 맞지 않는 그룹만 봅니다.">처리할 것만(${attentionCount})</button>`;
       }
       const canUndo = !!aggregateAdjustUndo && aggregateAdjustUndo.round === round;
       $("#aggregateContent").innerHTML = shownReports.map((report) => aggregateGradeSectionMarkup(report, {
-        closures, round, locked, maxClassSize, attentionOnly: aggregateAttentionOnly,
+        closures, round, locked, maxClassSize, attentionOnly: aggregateAttentionOnly, prereq,
         canUndo: canUndo && (!aggregateAdjustUndo.grade || aggregateAdjustUndo.grade === String(report.summary.grade))
       })).join("");
       $("#aggregateDescription").textContent =
@@ -3764,9 +3790,13 @@
         return;
       }
       description.textContent = `${scopeLabel}${sourceRound}차 결과 기준 · 폐강 확정 과목을 신청한 학생 ${rows.length}명`;
-      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th></tr></thead><tbody>${
-        rows.map(({ student, courses }) =>
-          `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td></tr>`).join("")
+      // 위계 경고(폐강 후): 폐강 과목을 뺀 나머지 신청으로 다시 점검한다(폐강된 선이수 과목 때문에 새로 생긴 경고도 보인다).
+      const prereqText = (student, courses) => typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : "";
+      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th><th>위계 경고(폐강 후)</th></tr></thead><tbody>${
+        rows.map(({ student, courses }) => {
+          const warning = prereqText(student, courses);
+          return `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td><td class="retake-prereq${warning ? " has-issue" : ""}">${warning ? `⚠ ${escapeHtml(warning)}` : ""}</td></tr>`;
+        }).join("")
       }</tbody></table>`;
     }
 
@@ -3778,14 +3808,15 @@
       const nextRound = String(Number(sourceRound) + 1);
       const gradeSuffix = grade ? `현${grade}학년` : "";
       const sheetRows = [
-        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점"],
+        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점", "위계 경고(폐강 후)"],
         ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", "),
-          typeof courseCheckRetakeShortfall === "function" ? courseCheckRetakeShortfall(student, courses) : ""])
+          typeof courseCheckRetakeShortfall === "function" ? courseCheckRetakeShortfall(student, courses) : "",
+          typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : ""])
       ];
       const rowsXml = sheetRows.map((cells, rowIndex) =>
         `<row r="${rowIndex + 1}">${cells.map((value, column) =>
           `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`).join("")}</row>`).join("");
-      const columns = [8, 8, 8, 12, 10, 40, 28].map((width, index) =>
+      const columns = [8, 8, 8, 12, 10, 40, 28, 44].map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
       const workbook = createXlsxBlob({
@@ -5343,6 +5374,16 @@
       });
     }
 
+    // 집계표 엑셀 뒤에 붙이는 '위계 경고 학생' 시트(학교 서식 시트는 그대로 둔다). 첫 행은 머리글.
+    function aggregatePrereqSheetXml(rows) {
+      const widths = [10, 6, 6, 10, 10, 22, 16, 44];
+      const rowsXml = rows.map((cells, rowIndex) =>
+        `<row r="${rowIndex + 1}">${cells.map((value, column) =>
+          `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : cells.length === 1 ? 0 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value ?? "")}</t></is></c>`).join("")}</row>`).join("");
+      const columns = widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
+    }
+
     function buildAggregateXlsxFiles() {
       const { openingPercent, divisionPercent } = aggregateThresholds();
       const aggregate = aggregateRecords(
@@ -5357,6 +5398,9 @@
         name: `${Number(report.summary.grade) + 1}학년(현${report.summary.grade}학년)`,
         xml: createWorksheetXml(report, openingPercent, divisionPercent)
       }));
+      // 위계(선이수) 경고 학생 시트: 학년 탭을 고르면 그 학년만. 점검할 편제표가 없으면 만들지 않는다.
+      const prereqRows = typeof courseCheckAggregateSheetRows === "function" ? courseCheckAggregateSheetRows(state.students, grade) : null;
+      if (prereqRows) sheets.push({ name: "위계 경고 학생", xml: aggregatePrereqSheetXml(prereqRows) });
       const sheetOverrides = sheets.map((sheet, index) =>
         `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
       const sheetEntries = sheets.map((sheet, index) =>
@@ -6441,6 +6485,7 @@
       showFirstVisibleStudent();
     });
     $("#classFilter").addEventListener("change", showFirstVisibleStudent);
+    $("#prereqFilter")?.addEventListener("change", showFirstVisibleStudent);
     $("#studentList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-student-id]");
       if (!button) return;
