@@ -148,7 +148,7 @@ test("opening step 3 selects the first student in the list", () => {
   layout.renderWorkflowLayout();
   assert.equal(shown, 1);
   layout.state.workflowStep = 4;
-  layout.renderClosurePanel = () => {}; layout.renderRetakePanel = () => {};
+  layout.renderClosurePanel = () => {}; layout.renderRetakePanel = () => {}; layout.renderAggregate = () => {};
   layout.renderWorkflowLayout();
   assert.equal(shown, 1, "other steps leave the selection alone");
   assert.match(app, /state\.selectedId = state\.students\[0\]\?\.id \|\| nextStudents\[0\]\.id;/,
