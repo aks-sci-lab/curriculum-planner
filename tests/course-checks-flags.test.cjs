@@ -170,12 +170,13 @@ test("aggregate workbook: the school sheets stay as they are and a '위계 경�
     aggregateRecords: () => ({ reports: [{ summary: { grade: "1" } }, { summary: { grade: "2" } }] }),
     nextYearClassBases: () => ({}), activeAggregateGrade: () => grade,
     createWorksheetXml: (report) => `<worksheet school="${report.summary.grade}"/>`, createStylesXml: () => "<styleSheet/>",
-    courseCheckAggregateSheetRows: checks.courseCheckAggregateSheetRows
+    courseCheckAggregateSheetRows: checks.courseCheckAggregateSheetRows,
+    aggregateSheetName: (report) => `${Number(report.summary.grade) + 1}학년`, aggregateWorkbookExtrasXml: () => ""
   });
   vm.runInContext(functionSource(app, "function xmlEscape(", "function createWorksheetXml("), ctx);
   vm.runInContext(functionSource(app, "function aggregatePrereqSheetXml(", "function downloadAggregate("), ctx);
   const files = ctx.buildAggregateXlsxFiles();
-  assert.match(files["xl/workbook.xml"], /<sheet name="2학년\(현1학년\)" sheetId="1" r:id="rId1"\/><sheet name="위계 경고 학생" sheetId="2" r:id="rId2"\/>/);
+  assert.match(files["xl/workbook.xml"], /<sheet name="2학년" sheetId="1" r:id="rId1"\/><sheet name="위계 경고 학생" sheetId="2" r:id="rId2"\/>/);
   assert.equal(files["xl/worksheets/sheet1.xml"], '<worksheet school="1"/>', "학교 서식 시트는 그대로");
   const sheet = files["xl/worksheets/sheet2.xml"];
   assert.match(sheet, /필요한 선이수/);
