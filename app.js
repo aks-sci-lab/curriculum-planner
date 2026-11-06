@@ -733,6 +733,8 @@
             ? `${Number($("#schoolYear").value) + 1}학년도 교과별 시수 통계`
             : `현재 1·2학년 결과 · ${state.currentRound}차`;
       summary.textContent = `${$("#schoolYear").value}학년도 · ${scope}`;
+      const dropHint = document.getElementById("resultDropHint");
+      if (dropHint) dropHint.textContent = `현 ${grade}학년(${Number(grade) + 1}학년 신청) ${state.currentRound}차 수강신청 결과 엑셀을 여기에 놓으세요`;
       const selector = $("#workspaceRound");
       const options = applicationRoundNumbers().map((round) =>
         `<option value="${round}">${round}차</option>`).join("");
@@ -3343,9 +3345,9 @@
         return;
       }
       description.textContent = `${sourceRound}차 결과 기준 · 폐강 확정 과목을 신청한 학생 ${rows.length}명`;
-      content.innerHTML = `<table class="closure-table"><thead><tr><th>학년</th><th>반</th><th>번호</th><th>이름</th><th>폐강 과목</th></tr></thead><tbody>${
+      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th></tr></thead><tbody>${
         rows.map(({ student, courses }) =>
-          `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td></tr>`).join("")
+          `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td></tr>`).join("")
       }</tbody></table>`;
     }
 
@@ -3353,13 +3355,13 @@
       const { sourceRound, rows } = retakeTargets();
       if (!rows.length) return;
       const sheetRows = [
-        ["학년", "반", "번호", "이름", "폐강 과목"],
-        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, courses.join(", ")])
+        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목"],
+        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", ")])
       ];
       const rowsXml = sheetRows.map((cells, rowIndex) =>
         `<row r="${rowIndex + 1}">${cells.map((value, column) =>
           `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`).join("")}</row>`).join("");
-      const columns = [8, 8, 8, 12, 40].map((width, index) =>
+      const columns = [8, 8, 8, 12, 10, 40].map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
       const workbook = createXlsxBlob({
