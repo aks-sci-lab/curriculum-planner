@@ -621,13 +621,20 @@
         preparation.invalidGroups || !preparation.hasSelections;
       const round = state.currentRound;
       const roundState = typeof roundStatus === "function" ? roundStatus(round) : "draft";
+      // 시수 통계는 내년도·올해·전년도 입학생 편제표가 모두 있어야 계산할 수 있다.
+      let missingCohorts = 0;
+      if (typeof annualSourceCohorts === "function" && typeof $ === "function") {
+        const schoolYear = Number($("#schoolYear")?.value);
+        const cohorts = annualSourceCohorts();
+        missingCohorts = [0, 1, 2].filter((grade) => !cohorts[String(schoolYear - grade + 1)]?.plan?.length).length;
+      }
       return {
         1: hasPlan ? ["done", "완료"] : ["todo", "필요"],
         2: hasResult ? ["done", "반영됨"] : hasPlan && prepIssue ? ["todo", "확인"] : ["wait", "대기"],
         3: hasResult ? ["done", "가능"] : ["wait", "대기"],
         4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
           : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
-        7: roundState === "confirmed" ? ["done", "가능"] : ["wait", "대기"]
+        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts ? ["todo", "편제표 필요"] : ["done", "가능"]
       };
     }
 

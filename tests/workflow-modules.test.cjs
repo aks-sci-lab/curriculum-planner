@@ -512,3 +512,18 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
   assert.equal(reloaded, 1);
   assert.ok(backups >= 1, "a backup is offered first when there is unsaved work");
 });
+
+test("the statistics badge waits for the three cohort plans even after the round is confirmed", () => {
+  const cohorts = { "2027": { plan: [{}] }, "2026": { plan: [{}] } };
+  const ctx = vm.createContext({
+    state: { curriculumImportedLayout: {}, curriculumPlan: [{}], students: [{ id: "s" }], currentRound: "1" },
+    getApplicationPreparationStatus: () => ({ subjects: 1, unassigned: 0, invalidGroups: 0, hasSelections: true }),
+    roundStatus: () => "confirmed",
+    annualSourceCohorts: () => cohorts,
+    $: () => ({ value: "2026" })
+  });
+  vm.runInContext(functionSource(app, "function workflowStepStates(", "function renderWorkflowStepStates("), ctx);
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "2025 입학생 편제표가 없다");
+  cohorts["2025"] = { plan: [{}] };
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["done", "가능"]);
+});
