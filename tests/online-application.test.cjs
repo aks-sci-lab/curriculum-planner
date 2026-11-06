@@ -456,7 +456,7 @@ test("merged subject header uses actual course names and splits course lists by 
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "curriculum-choice-blocks.js"), "utf8"), ctx);
   for (const name of ["columnIndex", "expandCurriculumLayoutRows", "importedPlanColumnMap",
-    "importedPlanCoveredCells", "curriculumSelectionType", "importedPlanCourseContexts", "curriculumSubjectNames", "curriculumCellFill", "collectApplicationSubjects"]) {
+    "sheetMergeReferenceSet", "importedPlanCoveredCells", "curriculumSelectionType", "importedPlanCourseContexts", "curriculumSubjectNames", "curriculumCellFill", "collectApplicationSubjects"]) {
     if (name === "collectApplicationSubjects") {
       vm.runInContext(functionSource("function curriculumPlanGroupAssignments(", "if (typeof window !== \"undefined\") window.updateCurriculumSelectionGroup ="), ctx);
     }

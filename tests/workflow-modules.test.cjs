@@ -185,7 +185,7 @@ test("curriculum plan parser reads merged-row credits and crossed subjects from 
     curriculumSelectionType: (value) => /공통/.test(String(value)) ? "공통" : ""
   });
   vm.runInContext(functionSource(app, "function columnIndex(", "function curriculumCellFill("), ctx);
-  vm.runInContext(functionSource(app, "function importedPlanCoveredCells(", "function importedPlanCourseContexts("), ctx);
+  vm.runInContext(functionSource(app, "function sheetMergeReferenceSet(", "function importedPlanCourseContexts("), ctx);
   vm.runInContext(functionSource(app, "function importedPlanCourseContexts(", "function importedPlanColumnMap("), ctx);
   vm.runInContext(functionSource(app, "function importedPlanColumnMap(", "function planRowsFromImportedLayout("), ctx);
   vm.runInContext(functionSource(app, "function expandCurriculumLayoutRows(", "function handleCurriculumPlanWorkbook("), ctx);

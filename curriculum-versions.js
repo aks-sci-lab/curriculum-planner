@@ -57,6 +57,8 @@ function curriculumPlanEntries(layout) {
   const compact = (value) => String(value ?? "").replace(/\s+/g, "");
   const creditOf = (row, column) => column >= 0 ? curriculumCellNumber(row[column]) : 0;
   const contexts = importedPlanCourseContexts(layout, columns);
+  const choiceSheetMerges = typeof curriculumSheetMerges === "function"
+    ? curriculumSheetMerges(layout).filter((merge) => merge.kind !== "plain") : [];
   const contextRows = new Set(contexts.map((context) => context.rowIndex));
   const firstSemesterColumn = Math.min(...columns.semesters.filter((column) => column >= 0));
   // 과목명 칸이 비어 있고 앞쪽 열에 자기 값이 없는 바로 아래 행(택n·교차집중 아래 숫자 행)은 같은 과목으로 본다.
@@ -107,9 +109,9 @@ function curriculumPlanEntries(layout) {
     }
     columns.semesters.forEach((column, index) => {
       const values = valuesAt(column);
-      const sheetMerge = typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout).find((merge) =>
-        merge.kind !== "plain" && column >= merge.startColumn && column <= merge.endColumn &&
-        context.rowIndex >= merge.startRow && context.rowIndex <= merge.endRow) : null;
+      const sheetMerge = choiceSheetMerges.find((merge) =>
+        column >= merge.startColumn && column <= merge.endColumn &&
+        context.rowIndex >= merge.startRow && context.rowIndex <= merge.endRow);
       if (!sheetMerge && (!values.length || values.every((value) => /^[-–—]+$/.test(value) || /^0(?:\.0+)?$/.test(value)))) return;
       const numeric = values.map(curriculumCellNumber).find((value) => value > 0);
       const readable = values.every((value) => curriculumCellNumber(value) > 0 || /택\s*\d+|교차|[-–—]/.test(value));

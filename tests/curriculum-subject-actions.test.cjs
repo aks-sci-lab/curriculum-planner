@@ -14,7 +14,7 @@ function context() {
   });
   for (const name of ["columnIndex", "columnName", "curriculumCellFill", "normalizeCurriculumDetail",
     "curriculumSelectionType", "normalizeCurriculumDivision", "normalizeCurriculumAreaName",
-    "normalizeCurriculumPlanRow", "importedPlanCoveredCells", "importedPlanCourseContexts",
+    "normalizeCurriculumPlanRow", "sheetMergeReferenceSet", "importedPlanCoveredCells", "importedPlanCourseContexts",
     "curriculumSubjectNames", "importedPlanColumnMap", "expandCurriculumLayoutRows", "insertImportedPlanLayoutRow"]) {
     const start = app.indexOf(`function ${name}(`);
     const end = app.indexOf("\n    function ", start + 1);

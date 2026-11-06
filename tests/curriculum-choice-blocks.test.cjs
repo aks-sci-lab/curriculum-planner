@@ -22,7 +22,7 @@ function context() {
   });
   for (const name of ["columnIndex", "columnName", "curriculumCellFill", "normalizeCurriculumDetail",
     "curriculumSelectionType", "normalizeCurriculumDivision", "normalizeCurriculumAreaName",
-    "normalizeCurriculumPlanRow", "importedPlanCoveredCells", "importedPlanCourseContexts",
+    "normalizeCurriculumPlanRow", "sheetMergeReferenceSet", "importedPlanCoveredCells", "importedPlanCourseContexts",
     "curriculumSubjectNames", "importedPlanColumnMap", "expandCurriculumLayoutRows", "insertImportedPlanLayoutRow",
     "curriculumSemesterHoursSummaryHtml", "curriculumSubjectSignatures", "curriculumTableChanges", "curriculumChangeAttributes"]) {
     vm.runInContext(appFunction(name), ctx);
@@ -379,10 +379,12 @@ function selectionContext() {
     window: { addEventListener(name, handler) { listeners[name] = handler; } },
     curriculumChoiceBlocks: () => [],
     importedPlanColumnMap: () => ({ semesters: [6, 7, 8, 9, 10, 11] }),
+    curriculumFirstCourseRow: () => 0,
     curriculumChoiceRange: () => null,
     columnName: () => "I"
   });
   vm.runInContext(`
+    let curriculumFirstRowCache = null;
     let curriculumCellSelectionMode = false, curriculumCellSelection = null;
     let curriculumSelectionAnchor = null, curriculumSelectionDragging = false, curriculumSelectionGesture = null;
     function renderCurriculumStep() {
@@ -685,4 +687,15 @@ test("missing archived workbooks surface a comparison error without inventing a 
   assert.equal(layout.changeBaseline, undefined);
   assert.match(status.textContent, /변경 비교 실패/);
   assert.match(toast, /원본 편제표 파일/);
+});
+
+test("merging header cells keeps them as a plain merge instead of a choice group", () => {
+  const ctx = context();
+  const merged = plain(ctx.mergeCurriculumSheetCells(fixture(), { startRow: 2, endRow: 2, column: 8, endColumn: 9 }, { pick: 1, credit: 4 }));
+  const added = merged.sheetMerges.find((merge) => merge.reference === "I3:J3");
+  assert.equal(added.kind, "plain");
+  assert.equal(added.pick, undefined);
+  assert.equal(merged.rows[2][8], "1학기", "header text is not replaced by a credit value");
+  const body = plain(ctx.mergeCurriculumSheetCells(fixture(), { startRow: 4, endRow: 5, column: 10, endColumn: 10 }, { pick: 1, credit: 4 }));
+  assert.equal(body.sheetMerges.at(-1).kind, "choice", "merges in the subject area still become choice groups");
 });

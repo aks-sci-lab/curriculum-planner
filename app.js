@@ -6,6 +6,7 @@
     let curriculumSelectionAnchor = null;
     let curriculumSelectionDragging = false;
     let curriculumSelectionGesture = null;
+    let curriculumFirstRowCache = null;
     const curriculumBaselineLoads = new WeakSet();
     let curriculumTableSizeFrame = null;
     const rawState = {
@@ -1717,10 +1718,16 @@
       return `<div class="curriculum-hours-summary"><span class="curriculum-hours-title">${escapeHtml(grade)}학년 시수</span>${chips}</div>`;
     }
 
+    function sheetMergeReferenceSet(layout) {
+      return new Set(typeof curriculumSheetMerges === "function" && layout
+        ? curriculumSheetMerges(layout).map((merge) => merge.reference) : []);
+    }
+
     function importedPlanCoveredCells(layout) {
       const covered = new Set();
+      const sheetMergeReferences = sheetMergeReferenceSet(layout);
       for (const reference of layout?.mergedRanges || []) {
-        if (typeof curriculumSheetMerges === "function" && curriculumSheetMerges(layout).some((merge) => merge.reference === reference)) continue;
+        if (sheetMergeReferences.has(reference)) continue;
         const [startRef, endRef = startRef] = String(reference).split(":");
         const startColumn = columnIndex(startRef);
         const endColumn = columnIndex(endRef);
@@ -1988,6 +1995,8 @@
         layout.columnWidths?.length || 0
       );
       if (!rowCount || !columnCount) return "";
+      const sheetMergeByReference = new Map((typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout) : [])
+        .map((item) => [item.reference, item]));
       const emptySubjectRows = new Set(typeof curriculumEmptySubjectRows === "function" ? curriculumEmptySubjectRows(layout) : []);
       const isHiddenRow = (rowIndex) => (!layout.showEmptySubjectRows && emptySubjectRows.has(rowIndex)) ||
         (hasActiveFilter && courseRows.has(rowIndex) && !matchingRows.has(rowIndex));
@@ -2065,8 +2074,7 @@
           const fill = curriculumCellFill(layout, sourceRow, column);
           const fillStyle = /^#[0-9A-F]{6}$/i.test(fill) ? ` style="background-color:${fill}"` : "";
           const value = String((merge ? rows[merge.startRow] : row)?.[column] ?? "");
-          const sheetMerge = merge && typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout)
-            .find((item) => item.reference === `${columnName(merge.startColumn)}${merge.startRow + 1}:${columnName(merge.endColumn)}${merge.endRow + 1}`) : null;
+          const sheetMerge = merge ? sheetMergeByReference.get(`${columnName(merge.startColumn)}${merge.startRow + 1}:${columnName(merge.endColumn)}${merge.endRow + 1}`) : null;
           if (sheetMerge && sheetMerge.kind !== "plain") {
             const block = choiceBlocks.find((block) => block.sheetMerge === sheetMerge.reference && block.column === column);
             const label = curriculumSheetMergeLabel(sheetMerge);
@@ -5035,8 +5043,9 @@
 
     function expandCurriculumLayoutRows(layout) {
       const rows = layout.rows.map((row) => [...row]);
+      const sheetMergeReferences = sheetMergeReferenceSet(layout);
       for (const reference of layout.mergedRanges || []) {
-        if (typeof curriculumSheetMerges === "function" && curriculumSheetMerges(layout).some((merge) => merge.reference === reference)) continue;
+        if (sheetMergeReferences.has(reference)) continue;
         const [startRef, endRef = startRef] = String(reference).split(":");
         const startColumn = columnIndex(startRef);
         const startRow = Number(startRef.match(/\d+/)?.[0]) - 1;
@@ -5422,8 +5431,13 @@
         item.setAttribute("aria-pressed", String(selected));
       });
       const horizontal = endColumn > startColumn;
-      const semesterColumns = importedPlanColumnMap(state.curriculumImportedLayout).semesters;
-      const academic = semesterColumns.includes(startColumn) && semesterColumns.includes(endColumn);
+      const selectionLayout = state.curriculumImportedLayout;
+      const selectionColumns = importedPlanColumnMap(selectionLayout);
+      if (!curriculumFirstRowCache || curriculumFirstRowCache.revision !== state.curriculumMutationRevision) {
+        curriculumFirstRowCache = { revision: state.curriculumMutationRevision, row: curriculumFirstCourseRow(selectionLayout, selectionColumns) };
+      }
+      const semesterColumns = selectionColumns.semesters;
+      const academic = startRow >= curriculumFirstRowCache.row && semesterColumns.includes(startColumn) && semesterColumns.includes(endColumn);
       $("#curriculumMergeSelection").textContent = `${columnName(startColumn)}${startRow + 1}:${columnName(endColumn)}${endRow + 1} · ${academic ? horizontal ? "교차집중 선택과목군" : "선택과목군" : "일반 셀 병합"}`;
       $("#curriculumMergeApply").disabled = !horizontal && endRow <= startRow;
       $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic);
