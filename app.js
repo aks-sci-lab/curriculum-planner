@@ -3991,30 +3991,39 @@
       }
       const courses = [];
       const courseByGradeName = new Map();
+      let nextCourseColumn = 0;
       for (const grade of ["1", "2", "3"]) {
         for (const item of subjects[grade] || []) {
           // 학년이 다른 동일 이름 과목은 표기에 학년을 붙여 구분한다.
           const displayName = nameCount.get(item.subject) > 1 ? `${item.subject}(${grade}학년)` : item.subject;
           const course = {
-            column: `app${courses.length}`,
+            column: `app${nextCourseColumn++}`,
             applicationCurrentGrade: String(Number(grade) - 1),
             name: displayName,
             credits: item.credit || 0,
-            semesterKey: String(item.semester || "").match(/[12]/)?.[0] || "",
+            // 1·2학기에 모두 편성된 과목을 학기 없이 고른 경우는 학기를 비워 두고, 학생들의 그룹 선택 수로 학기를 정한다.
+            semesterKey: String(item.semester || "").includes("·") ? "" : String(item.semester || "").match(/[12]/)?.[0] || "",
             applicationSubject: { ...item },
             category: item.area || "선택과목"
           };
           courses.push(course);
           courseByGradeName.set(`${grade}:${item.subject}`, course);
           const semesters = String(item.semester || "").split("·");
+          let semesterVariants = 0;
           if (semesters.length > 1) for (const semester of semesters) {
             const subject = `${item.subject} (${semester}학기)`;
             if (!entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(subject))) continue;
-            const semesterCourse = { ...course, column:`app${courses.length}`,
+            const semesterCourse = { ...course, column:`app${nextCourseColumn++}`,
               name: nameCount.get(item.subject)>1 ? `${subject}(${grade}학년)` : subject, semesterKey:semester,
               applicationSubject: { ...item, subject, semester } };
             courses.push(semesterCourse);
             courseByGradeName.set(`${grade}:${subject}`,semesterCourse);
+            semesterVariants++;
+          }
+          // 학기별로 나눠 신청받았고 학기 없이 고른 학생이 없으면, 학기 없는 0명 과목을 집계에 남기지 않는다.
+          if (semesterVariants && !entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(item.subject))) {
+            courses.splice(courses.indexOf(course), 1);
+            courseByGradeName.delete(`${grade}:${item.subject}`);
           }
         }
       }
@@ -4652,17 +4661,33 @@
     }
 
     // 구글폼 체크박스 응답("과목1, 과목2")을 알려진 과목명 목록으로 분할한다. 과목명에 쉼표가 있어도 동작한다.
+    // 과목명 글자를 하나씩 대응시켜 맞춘다: 로마 숫자와 아라비아 숫자(Ⅰ↔1, Ⅱ↔2 …)는 같은 글자로, 띄어쓰기는 있어도 없어도 된다.
+    // 숫자 자체는 지우지 않으므로 미적분1과 미적분2는 서로 다른 과목이다.
+    const COURSE_NAME_EQUIVALENTS = [["Ⅰ", "ⅰ", "1"], ["Ⅱ", "ⅱ", "2"], ["Ⅲ", "ⅲ", "3"], ["Ⅳ", "ⅳ", "4"], ["Ⅴ", "ⅴ", "5"]];
+    function courseNamePattern(name) {
+      const characters = [...String(name ?? "").replace(/\s+/g, "")].map((character) => {
+        const same = COURSE_NAME_EQUIVALENTS.find((group) => group.includes(character));
+        return same ? `[${same.join("")}]` : character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      });
+      return new RegExp(`^${characters.join("\\s*")}`);
+    }
+
     function splitGoogleFormSelections(text, knownNames, strict = false) {
       const found = [];
       let rest = String(text ?? "");
-      const names = [...knownNames].sort((a, b) => b.length - a.length);
+      const names = [...knownNames].map((name) => ({ name, pattern: courseNamePattern(name), length: String(name).replace(/\s+/g, "").length }))
+        .sort((a, b) => b.length - a.length);
       while (rest.trim()) {
         const trimmed = rest.replace(/^[,\s]+/, "");
         if (!trimmed) break;
-        const hit = names.find((name) => trimmed.startsWith(name));
+        let hit = null, matchedLength = 0;
+        for (const candidate of names) {
+          const match = trimmed.match(candidate.pattern);
+          if (match) { hit = candidate.name; matchedLength = match[0].length; break; }
+        }
         if (hit) {
           found.push(hit);
-          rest = trimmed.slice(hit.length);
+          rest = trimmed.slice(matchedLength);
         } else {
           if (strict) throw new Error(`편제표에 없는 선택과목입니다: ${trimmed}`);
           const comma = trimmed.indexOf(",");

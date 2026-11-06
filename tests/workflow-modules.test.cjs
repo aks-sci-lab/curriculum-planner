@@ -627,3 +627,22 @@ test("when a result sheet lists the same subject twice, the left column is the 1
   assert.equal(by(5).semesterKey, "", "a subject listed once is left alone");
   assert.equal(by(20).semesterKey, "1", "the unlabeled partner gets the other semester");
 });
+
+test("Roman numerals are mapped to digits, so 미적분Ⅱ matches 미적분2 but never 미적분1", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functionSource(app, "const COURSE_NAME_EQUIVALENTS", "function parseGoogleFormsRows("), ctx);
+  vm.runInContext(functionSource(app, "function normalizeRomanNumerals(", "function classifyApplicationRecords("), ctx);
+  const known = ["미적분Ⅰ", "미적분Ⅱ", "수학과제 탐구"];
+  assert.deepEqual(plain(ctx.splitGoogleFormSelections("미적분2, 수학과제탐구", known, true)), ["미적분Ⅱ", "수학과제 탐구"]);
+  assert.deepEqual(plain(ctx.splitGoogleFormSelections("미적분1", known, true)), ["미적분Ⅰ"]);
+  assert.throws(() => ctx.splitGoogleFormSelections("미적분3", known, true), /편제표에 없는/);
+  const results = vm.createContext({ normalizeRomanNumerals: ctx.normalizeRomanNumerals, document: { getElementById: () => null } });
+  vm.runInContext(resultImport, results);
+  assert.equal(results.normalizeResultCourseName("미적분Ⅱ"), results.normalizeResultCourseName("미적분2"));
+  assert.notEqual(results.normalizeResultCourseName("미적분Ⅰ"), results.normalizeResultCourseName("미적분2"));
+  const columns = vm.createContext({ normalizeRomanNumerals: ctx.normalizeRomanNumerals });
+  vm.runInContext(functionSource(app, "function labelRepeatedCourseColumns(", "function createRecords("), columns);
+  const courses = [{ column: 1, name: "미적분1", semesterKey: "" }, { column: 2, name: "미적분2", semesterKey: "" }];
+  columns.labelRepeatedCourseColumns(courses);
+  assert.deepEqual(plain(courses.map((course) => course.semesterKey)), ["", ""], "미적분1 and 미적분2 are different subjects, not a 1st/2nd-semester pair");
+});

@@ -567,7 +567,7 @@ test("Google Form classified labels map back to original course names and accept
   const ctx=vm.createContext({});
   vm.runInContext(functionSource("function curriculumSelectionType(", "function importedPlanCourseContexts("),ctx);
   vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
-  vm.runInContext(functionSource("function splitGoogleFormSelections(", "async function handleGoogleFormsFile("),ctx);
+  vm.runInContext(functionSource("const COURSE_NAME_EQUIVALENTS", "async function handleGoogleFormsFile("),ctx);
   const subjects={"2":[{subject:"물리학 실험",type:"융합선택"},{subject:"경제",type:"진로선택"}]};
   const result=ctx.parseGoogleFormsRows([
     ["현재 학년","반","번호","이름","2학년 1학기 선택과목"],
