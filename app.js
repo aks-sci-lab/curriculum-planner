@@ -1798,6 +1798,14 @@
 
     // 과목 데이터는 편제표 레이아웃에서 파생되므로, 불러온 뒤 최신 해석 규칙(택n 묶음 연동 포함)으로 다시 만든다.
     function refreshCurriculumDerivedPlans() {
+      // 예전에 저장한 표 기반 편제표는 열 때 데이터로 바꾼다.
+      if (typeof ensureCurriculumPlanData === "function") {
+        for (const layout of [state.curriculumImportedLayout,
+          ...Object.values(state.curriculumCohorts || {}).map((item) => item?.importedLayout),
+          ...Object.values(state.curriculumAnnualPlans || {}).map((item) => item?.importedLayout)]) {
+          if (layout && !layout.planData) ensureCurriculumPlanData(layout);
+        }
+      }
       const rebuild = (layout, previous, label) => {
         if (!layout) return null;
         try {
@@ -2015,8 +2023,11 @@
     function curriculumTableChanges(layout) {
       const changes = new Map();
       if (layout?.changeBaseline?.version !== 2 || typeof curriculumPlanEntries !== "function") return changes;
-      const before = curriculumSubjectSignatures(layout.changeBaseline, layout.changeBaseline.plan || null);
-      const after = curriculumSubjectSignatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null);
+      // 데이터로 바꾼 편제표는 비교 기준도 데이터로 읽어 같은 규칙으로 비교한다.
+      const signatures = layout.planData && typeof curriculumDataSignatures === "function"
+        ? curriculumDataSignatures : curriculumSubjectSignatures;
+      const before = signatures(layout.changeBaseline, layout.changeBaseline.plan || null);
+      const after = signatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null);
       for (const [key, subject] of after) {
         const previous = before.get(key);
         if (previous?.signature === subject.signature) continue;
@@ -2101,6 +2112,9 @@
 
     function curriculumImportedSheetHtml(layout, filters = {}, selectionMode = false, compactView = false) {
       if (!layout || !Array.isArray(layout.rows) || !layout.rows.length) return "";
+      if (layout.planData && typeof curriculumDataSheetHtml === "function") {
+        return curriculumDataSheetHtml(layout, filters, selectionMode, compactView, curriculumTableChanges(layout));
+      }
       const rows = layout.rows;
       const changes = curriculumTableChanges(layout);
       const columns = importedPlanColumnMap(layout);
@@ -3610,7 +3624,20 @@
       const cached = annualResolvedCache.get(year);
       if (cached && cached.plan === plan && cached.layout === layout) return cached.rows;
       let rows = [];
-      if (plan.length) {
+      if (plan.length && layout?.planData && typeof curriculumDataSubjectCredits === "function") {
+        // 데이터로 바꾼 편제표는 과목·선택과목군 데이터의 학기 학점을 그대로 쓴다.
+        const credits = curriculumDataSubjectCredits(layout);
+        rows = plan.map((row) => {
+          const resolved = { ...row };
+          const own = credits.get(String(row.subject ?? "").replace(/\s+/g, "").toLowerCase()) || {};
+          CURRICULUM_SEMESTER_FIELDS.forEach((field) => {
+            if (!String(row[field] ?? "").trim()) { resolved[field] = ""; return; }
+            const credit = own[field] || Number(row.opCredit) || Number(row.baseCredit) || 0;
+            resolved[field] = credit > 0 ? String(credit) : "";
+          });
+          return resolved;
+        });
+      } else if (plan.length) {
         const columns = layout ? importedPlanColumnMap(layout) : null;
         const sheetRows = layout ? expandCurriculumLayoutRows(layout) : [];
         const contexts = new Map();
@@ -3673,6 +3700,7 @@
       if (existing?.importedLayout && !existing.importedLayout.derived &&
           !window.confirm("이전에 업로드한 전학년 편제표가 있습니다. 3개년 편제표로 만든 편제표로 바꿀까요?")) return false;
       const layout = buildAnnualCurriculumLayout(cohorts, normalized);
+      if (typeof ensureCurriculumPlanData === "function") ensureCurriculumPlanData(layout);
       const plan = curriculumPlanFromLayout(layout, `${normalized} 전학년 편제표`, []);
       state.curriculumAnnualPlans ||= {};
       state.curriculumAnnualPlans[normalized] = {
@@ -5161,9 +5189,12 @@
         )
           ? genericDivision
           : -1;
+      // '교과 영역'(기초·탐구 등)과 '교과(군)'이 함께 있으면 교과(군)을 교과로 보고 교과 영역은 따로 둔다.
+      const areaGroup = find([/교과군/]);
       return {
         subject: subject >= 0 ? subject : (baseCredit > 0 ? baseCredit - 1 : -1),
-        area: find([/교과군/, /교과영역/]),
+        area: areaGroup >= 0 ? areaGroup : find([/교과영역/]),
+        domain: areaGroup >= 0 ? find([/교과영역/]) : -1,
         detail: find([/과목유형/, /세부선택/, /세부지정/, /세부유형/, /이수구분/]),
         grade: gradeColumn,
         division,
@@ -5449,6 +5480,8 @@
               parseError = error;
               continue;
             }
+            // 업로드한 표를 과목·선택과목군 데이터로 바꾼다. 원본 칸·병합은 내보내기 양식으로만 남는다.
+            if (typeof ensureCurriculumPlanData === "function") ensureCurriculumPlanData(layout);
             let sheetPlan = [];
             try {
               sheetPlan = curriculumPlanFromLayout(layout, `${file.name} ${sheet.name}`);
