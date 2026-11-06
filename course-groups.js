@@ -482,9 +482,11 @@ function validateApplicationGroupData(groups, seeded) {
         if (group.linked) {
           input.disabled = true;
           count.disabled = true;
+          // 긴 안내 문장은 카드마다 반복하지 않고 마우스를 올리면 보이게 한다(전체 설명은 '그룹 설정 방법' 팝업).
           const linkedNote = document.createElement("p");
           linkedNote.className = "note course-group-linked-note";
-          linkedNote.textContent = `편제표 택${group.count} 묶음과 연결된 그룹입니다. 과목·선택 수는 1단계 편제표 묶음 칸에서 수정하세요.`;
+          linkedNote.textContent = "과목·선택 수는 1단계 편제표에서 수정";
+          linkedNote.title = `편제표 택${group.count} 묶음과 연결된 그룹입니다. 과목·선택 수는 1단계 편제표 묶음 칸에서 수정하세요.`;
           panel.appendChild(linkedNote);
         }
         const subjectList = document.createElement("p");

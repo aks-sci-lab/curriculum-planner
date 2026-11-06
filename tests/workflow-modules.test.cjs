@@ -958,3 +958,47 @@ test("result file line lists each current grade's file and says when a grade has
   assert.match(html, /id="resultGradeNote">파일의 학년은 현재 학년입니다\(현 1학년 → 2학년 과목 신청\)/);
   assert.match(app, /gradeNote\.textContent = `파일의 학년은 현재 학년입니다\(현 \$\{grade\}학년/);
 });
+
+test("long help text and settings live in dialogs, leaving a one-line summary and a button on screen", () => {
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const dialogIds = new Set([...html.matchAll(/<dialog[^>]*\sid="([^"]+)"/g)].map((match) => match[1]));
+  const openers = [...(html + hoursStats).matchAll(/data-open-dialog="([^"$]+)"/g)].map((match) => match[1]);
+  assert.ok(openers.length >= 5);
+  for (const id of openers) assert.ok(dialogIds.has(id), `${id} dialog exists`);
+  const dialogBody = (id) => html.slice(html.indexOf(`id="${id}"`), html.indexOf("</dialog>", html.indexOf(`id="${id}"`)));
+  // 상단 학교·학년도 설정, 2단계 결과·그룹 안내, 5단계 시수 설정은 팝업 안에 있다.
+  assert.match(dialogBody("workspaceSettingsDialog"), /id="schoolYear"[\s\S]*id="schoolName"/);
+  assert.doesNotMatch(html, /<details class="workspace-settings">/);
+  assert.match(dialogBody("resultUploadHelpDialog"), /차수별로 올립니다[\s\S]*서버로 전송되지 않습니다/);
+  assert.match(dialogBody("groupHelpDialog"), /그룹 카드로 끌어 놓아/);
+  assert.match(dialogBody("hoursSettingsDialog"), /id="hoursSettingsBody"/);
+  // 자주 쓰는 업로드 버튼과 탭은 화면에 그대로 둔다.
+  for (const id of ["rosterInput", "addApplicationRound", "applicationGroupsTab", "applicationResultsTab", "downloadHoursStats"]) {
+    assert.doesNotMatch(Object.values(Object.fromEntries([...dialogIds].map((dialog) => [dialog, dialogBody(dialog)]))).join(""), new RegExp(`id="${id}"`));
+  }
+  // 입력 칸이 팝업 안에 있으면 '다음 작업' 버튼이 팝업을 먼저 연다.
+  assert.match(app, /const dialog = target\?\.closest\?\.\("dialog"\);\s*if \(dialog && !dialog\.open\)/);
+
+  const ctx = vm.createContext({ escapeHtml: (value) => String(value) });
+  vm.runInContext(functionSource(hoursStats, "function hoursFormat(", "function hoursStatsReadiness("), ctx);
+  vm.runInContext(functionSource(hoursStats, "const HOURS_ISSUE_LABELS", "function renderHoursStats("), ctx);
+  const issues = [
+    { level: "info", text: "참고 문장" },
+    { level: "warning", text: "확인 문장" },
+    { level: "error", text: "2학년 학급 수를 입력하세요." }
+  ];
+  const summary = ctx.hoursIssueSummary(issues);
+  assert.match(summary, /필수 1<\/span>[\s\S]*확인 1<\/span>[\s\S]*참고 1<\/span>/);
+  assert.match(summary, /2학년 학급 수를 입력하세요\./, "the most urgent item is shown on the line");
+  assert.match(summary, /data-open-dialog="hoursIssuesDialog"[^>]*>확인 항목 보기 \(3\)/);
+  assert.match(ctx.hoursIssueSummary([]), /확인할 문제가 없습니다/);
+  const settings = ctx.hoursSettingsSummary({ creativeHours: 2, grades: [
+    { grade: "1", cohortYear: "2027", hasLayout: false, classes: null },
+    { grade: "2", cohortYear: "2026", hasLayout: true, classes: 10, source: { round: "1", confirmed: true } },
+    { grade: "3", cohortYear: "2025", hasLayout: true, classes: 11, source: null }
+  ] });
+  assert.match(settings, /<b>1학년<\/b> <span class="is-missing">학급 수 미입력<\/span>[\s\S]*data-hours-cohort="2027"/);
+  assert.match(settings, /<b>2학년<\/b> 10학급 \(현1 1차 확정\)/);
+  assert.match(settings, /<b>3학년<\/b> 11학급 \(현2 결과 없음\)/);
+  assert.match(settings, /창체 2시간[\s\S]*data-open-dialog="hoursSettingsDialog"[^>]*>시수 설정</);
+});

@@ -567,6 +567,8 @@
     .course-group-card.is-linked { border-color: #9fb3ea; background: #f7f9ff; }
     .course-group-course-chip.is-linked { cursor: default; opacity: .9; border-style: dashed; }
     .course-group-linked-note { margin: 4px 0 6px; color: #3c568f; font-size: 12px; }
+    /* 연동 그룹에는 버튼이 없어 안내 문장이 이름 칸 줄로 끼어들며 이름 칸을 0px로 줄이던 문제: 안내는 이름·선택 수 줄 끝에 둔다. */
+    .course-group-grid .course-group-linked-note { align-self: center; margin: 0; white-space: nowrap; }
     .curriculum-sem-button {
       width: 100%;
       min-height: 30px;
@@ -1737,3 +1739,34 @@
   .aggregate-settings-summary { flex-basis: 100%; }
   #aggregatePanel .aggregate-risk-filter { margin-left: 0; }
 }
+/* 설명·설정 팝업으로 옮긴 뒤 화면에 남는 한 줄 요약과 버튼 */
+.workspace-settings-button { padding: 2px 0; border: 0; background: none; color: #2852ce; font: inherit; font-weight: 700; cursor: pointer; }
+.workspace-settings-button::before { content: "⚙ "; }
+.workspace-settings-dialog .settings-grid { margin: 12px 0; }
+.round-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.round-toolbar .round-selector { margin: 0; }
+.panel-help-button { min-height: 30px; padding: 3px 10px; font-size: 12px; }
+.round-toolbar .panel-help-button { margin-left: auto; }
+.panel-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 6px 0; }
+.panel-title-row h3 { margin: 0 !important; }
+.panel-title-row .panel-help-button { margin-left: auto; }
+.hours-summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 6px 0; padding: 7px 10px; border: 1px solid #dce4ef; border-radius: 8px; background: #fff; font-size: 13px; }
+.hours-summary-line .button { min-height: 30px; padding: 3px 10px; font-size: 12px; }
+.hours-summary-line > .button:last-child { margin-left: auto; }
+.hours-summary-label { color: var(--muted); font-weight: 700; }
+.hours-summary-item .is-missing { color: #a3261c; font-weight: 700; }
+.hours-summary-text { flex: 1 1 260px; min-width: 0; overflow: hidden; color: #4b5872; text-overflow: ellipsis; white-space: nowrap; }
+.hours-issue-count { padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.hours-issue-count.is-error { background: #fdecea; color: #a3261c; }
+.hours-issue-count.is-warning { background: #fff4dc; color: #8a5a00; }
+.hours-issue-count.is-info { background: #e9f1ff; color: #2852ce; }
+.hours-summary-line.hours-ok { border-color: #cfe8da; background: #eaf6ef; }
+.hours-settings-dialog, .hours-issues-dialog { width: min(980px, calc(100vw - 24px)); }
+.hours-issues-dialog .hours-issues { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 8px 0 12px; font-size: 12px; }
+@media (max-width: 720px) {
+  .hours-issues-dialog .hours-issues { grid-template-columns: 1fr; }
+  .hours-summary-text { flex-basis: 100%; white-space: normal; }
+}
+.hours-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.hours-heading h3 { margin: 0; }
+.hours-heading .hours-toolbar { margin: 0; }

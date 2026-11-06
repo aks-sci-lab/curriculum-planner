@@ -6396,6 +6396,15 @@
       $(firstEmpty).focus();
     }
     $("#openCertificateInfo").addEventListener("click", openCertificateInfoDialog);
+    // 설명·설정 팝업 공통: data-open-dialog="팝업 id" 버튼을 누르면 그 팝업을 연다(화면에는 요약과 버튼만 둔다).
+    document.addEventListener("click", (event) => {
+      const opener = event.target.closest?.("[data-open-dialog]");
+      if (!opener) return;
+      const dialog = document.getElementById(opener.dataset.openDialog);
+      if (!dialog || dialog.open) return;
+      if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+      dialog.querySelector("input:not([readonly]), select")?.focus();
+    });
     // 팝업의 학교명은 상단 '학교·학년도 설정'의 학교명과 같은 값이다.
     $("#certificateSchoolName").addEventListener("input", (event) => {
       $("#schoolName").value = event.target.value;
@@ -6671,6 +6680,9 @@
       else if (next === "groups" || next === "online" || next === "results") openApplicationWorkspaceTab(next, true);
       else if (next.startsWith("focus:")) {
         const target = document.getElementById(next.slice(6));
+        // 입력 칸이 팝업(예: 시수 설정) 안에 있으면 팝업을 먼저 연다.
+        const dialog = target?.closest?.("dialog");
+        if (dialog && !dialog.open) { if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", ""); }
         target?.scrollIntoView?.({ block: "center" });
         target?.focus?.();
       } else if (next.startsWith("cohort:")) {
