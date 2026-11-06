@@ -195,6 +195,7 @@ function fixture({ href = "https://school.example/app/", storage = new Map(), re
     return qr;
   };
   if (menus) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "course-groups.js"), "utf8"), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "supabase-config.js"), "utf8"), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "supabase-client.js"), "utf8"), context);
   fixtureData.unlinkRound=(round)=>context.unlinkApplicationRound(round);
   fixtureData.setGrade=(grade)=>{

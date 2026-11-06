@@ -7,12 +7,20 @@ const path = require("node:path");
 const root = path.join(__dirname, "..");
 const out = path.join(root, "dist");
 
+// index.html이 불러오는 파일과, 거기서 링크한 다른 화면(예: test-bot.html)이 불러오는 파일까지 모은다.
 function referencedFiles(html) {
   const files = new Set(["index.html"]);
-  for (const match of html.matchAll(/\b(?:src|href)="([^"#]+)"/g)) {
-    const target = match[1].split("?")[0];
-    if (/^(?:[a-z]+:)?\/\//i.test(target) || target.startsWith("data:") || target.startsWith("#") || target.startsWith("mailto:")) continue;
-    if (fs.existsSync(path.join(root, target)) && fs.statSync(path.join(root, target)).isFile()) files.add(target);
+  const pending = [html];
+  while (pending.length) {
+    const page = pending.shift();
+    for (const match of page.matchAll(/\b(?:src|href)="([^"#]+)"/g)) {
+      const target = match[1].split("?")[0];
+      if (/^(?:[a-z]+:)?\/\//i.test(target) || target.startsWith("data:") || target.startsWith("#") || target.startsWith("mailto:")) continue;
+      const file = path.join(root, target);
+      if (files.has(target) || !fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
+      files.add(target);
+      if (/\.html$/i.test(target)) pending.push(fs.readFileSync(file, "utf8"));
+    }
   }
   return [...files];
 }

@@ -27,6 +27,7 @@ npm run build:deploy               # 배포용 파일만 dist/ 에 모음
 | 4단계 집계·개설/폐강·재신청·차수 확정 | `app.js`(`aggregateRecords`, 폐강·재신청 패널), `round-status.js`(확정·스냅샷·차수 비교) |
 | 5단계 시수 통계 | `hours-stats.js` |
 | 웹 수강신청·서버 | `supabase-client.js`, `supabase/*.sql` |
+| 수강신청 테스트봇(가상 학생 웹 신청·자동 테스트·가상 결과 엑셀) | `test-bot.html`, `test-bot.js`(화면), `test-bot-core.js`(선택 생성기·서버 호출, 순수 함수), `test-bot-bridge.js`(앱↔봇 postMessage), `supabase-config.js`(서버 주소 공유) |
 | 저장·백업·배포 | `app.js`(저장·백업·전체 초기화), `workspace-file.js`(PC 파일 자동 저장), `app-version.js`, `scripts/build-deploy.js` |
 `app.js`(약 6,300줄)는 상태·저장·단계 전환·확인서·집계가 모두 들어 있는 중심 파일이므로 `grep -n "function 이름"`으로 필요한 함수만 읽으세요. 스타일은 `src/legacy.css` → `styles.css`(생성물).
 
