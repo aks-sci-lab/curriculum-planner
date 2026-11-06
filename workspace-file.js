@@ -6,6 +6,10 @@ var workspaceFileState = { status: "none", name: "", savedAt: 0, message: "" };
 var workspaceFileLastText = "";
 var workspaceFileTimer = null;
 var workspaceFileBusy = false;
+// 시작 확인 중이거나 파일이 브라우저 자료보다 최신이라 저장을 멈춘 동안 true. 이때는 어떤 경로로도 파일에 쓰지 않는다.
+var workspaceFileHold = false;
+// 이 브라우저가 마지막으로 파일에 쓴 내용의 지문. 파일이 그 뒤 다른 곳에서 바뀌었는지 알아보는 데 쓴다(전체 초기화 때 함께 지워진다).
+var WORKSPACE_FILE_SYNC_KEY = "course-certificate-studio-file-sync";
 
 function workspaceFileSupported() {
   return typeof window !== "undefined" && typeof window.showSaveFilePicker === "function" &&
@@ -53,13 +57,16 @@ function renderWorkspaceFileStatus() {
   const { status, name, savedAt, message } = workspaceFileState;
   const linked = status !== "none";
   connect.textContent = linked ? "저장 파일 바꾸기" : "자동 저장 파일 연결";
-  allow.classList.toggle("hidden", status !== "needs-permission");
   disconnect.classList.toggle("hidden", !linked);
-  label.classList.toggle("is-warning", status === "needs-permission" || status === "error");
+  allow.textContent = status === "stale" ? "브라우저 자료로 덮어쓰기" : "저장 허용";
+  allow.classList.toggle("hidden", status !== "needs-permission" && status !== "stale");
+  label.classList.toggle("is-warning", ["needs-permission", "error", "stale"].includes(status));
   label.textContent = status === "none" ? "PC 파일 자동 저장 안 함"
     : status === "needs-permission" ? `${name} · 저장하려면 '저장 허용'을 누르세요`
-      : status === "error" ? `${name} · ${message}`
-        : `${name} · ${workspaceFileAgeLabel(savedAt) || "연결됨"}`;
+      : status === "checking" ? `${name} · 파일 확인 중`
+        : status === "stale" ? `${name} · ${message || "PC 파일 저장 중지 — 파일이 더 최신"}`
+          : status === "error" ? `${name} · ${message}`
+            : `${name} · ${workspaceFileAgeLabel(savedAt) || "연결됨"}`;
 }
 
 async function workspaceFilePermission(handle, request = false) {
@@ -75,8 +82,102 @@ function workspaceFileText() {
   return { comparable, text: JSON.stringify(backup, null, 2) };
 }
 
+// 내용 비교용 짧은 지문(FNV-1a). 큰 자료를 localStorage에 두 번 저장하지 않으려고 쓴다.
+function workspaceTextHash(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${text.length}:${hash.toString(16)}`;
+}
+
+function readWorkspaceFileSync() {
+  try { return JSON.parse(localStorage.getItem(WORKSPACE_FILE_SYNC_KEY) || "{}") || {}; } catch { return {}; }
+}
+
+function rememberWorkspaceFileSync(comparable) {
+  try {
+    localStorage.setItem(WORKSPACE_FILE_SYNC_KEY, JSON.stringify({ hash: workspaceTextHash(comparable), at: Date.now() }));
+  } catch { /* 기록하지 못하면 다음 시작 때 저장 시각으로 비교한다. */ }
+}
+
+function workspaceFileTimeLabel(time) {
+  if (!time) return "기록 없음";
+  const date = new Date(time);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// 연결된 파일과 지금 브라우저 자료 중 어느 쪽이 최신인지 판단한다.
+// same: 내용이 같음 · browser: 브라우저가 최신(파일에 써도 됨) · file: 파일이 최신(묻기 전에는 쓰지 않음) · invalid: 작업 자료 파일이 아님
+function compareWorkspaceFile({ fileText, fileModified = 0, browserComparable, browserSavedAt = 0, browserHasWork = true, syncHash = "" }) {
+  if (!String(fileText || "").trim()) return { newer: "browser", fileTime: 0, browserTime: browserSavedAt };
+  let backup;
+  try { backup = JSON.parse(fileText); } catch { return { newer: "invalid" }; }
+  if (backup?.type !== "curriculum-workspace-backup") return { newer: "invalid" };
+  const fileComparable = JSON.stringify({ ...backup, createdAt: "" });
+  const created = Date.parse(backup.createdAt);
+  const fileTime = Number.isFinite(created) ? created : Number(fileModified) || 0;
+  const result = { fileComparable, fileTime, browserTime: browserSavedAt };
+  if (fileComparable === browserComparable) return { ...result, newer: "same" };
+  // 파일이 이 브라우저가 마지막으로 쓴 그대로라면 바뀐 쪽은 브라우저뿐이다.
+  if (syncHash && workspaceTextHash(fileComparable) === syncHash) return { ...result, newer: "browser" };
+  if (!browserHasWork || fileTime > browserSavedAt) return { ...result, newer: "file" };
+  return { ...result, newer: "browser" };
+}
+
+// 시작할 때(또는 권한을 다시 받았을 때) 파일을 먼저 읽어 보고, 파일이 더 최신이면 덮어쓰지 않고 불러올지 묻는다.
+async function verifyWorkspaceFile(handle) {
+  workspaceFileHold = true;
+  setWorkspaceFileState({ status: "checking", name: handle.name, message: "" });
+  let file;
+  let fileText;
+  try {
+    file = await handle.getFile();
+    fileText = await file.text();
+  } catch (error) {
+    setWorkspaceFileState({ status: "stale", message: `PC 파일 저장 중지 — 파일을 읽지 못했습니다(${error?.message || "알 수 없는 오류"})` });
+    return false;
+  }
+  const { comparable } = workspaceFileText();
+  const browserSavedAt = typeof workspaceBrowserSavedAt === "function" ? workspaceBrowserSavedAt() : 0;
+  const browserHasWork = typeof workspaceHasWork === "function" ? workspaceHasWork() : true;
+  const result = compareWorkspaceFile({
+    fileText, fileModified: file?.lastModified, browserComparable: comparable, browserSavedAt, browserHasWork,
+    syncHash: readWorkspaceFileSync().hash || ""
+  });
+  if (result.newer === "same") {
+    workspaceFileHold = false;
+    workspaceFileLastText = comparable;
+    rememberWorkspaceFileSync(comparable);
+    setWorkspaceFileState({ status: "saved", savedAt: result.fileTime, message: "" });
+    return true;
+  }
+  if (result.newer === "browser") {
+    workspaceFileHold = false;
+    return saveWorkspaceFileNow({ force: true });
+  }
+  if (result.newer === "invalid") {
+    setWorkspaceFileState({ status: "stale", message: "PC 파일 저장 중지 — 교육과정 작업 자료 파일이 아닙니다" });
+    return false;
+  }
+  const load = window.confirm(
+    `PC 파일이 더 최신입니다(파일: ${workspaceFileTimeLabel(result.fileTime)}, 브라우저: ${workspaceFileTimeLabel(result.browserTime)}). 파일 내용을 불러올까요?\n\n` +
+    `· 확인: 이 브라우저의 자료를 '${handle.name}' 내용으로 바꿉니다.\n` +
+    "· 취소: 브라우저 자료는 그대로 두고, 덮어쓰지 않도록 이 파일에는 저장하지 않습니다."
+  );
+  if (load && typeof restoreWorkspaceBackup === "function") {
+    const restored = await restoreWorkspaceBackup({ name: handle.name, text: async () => fileText },
+      async () => rememberWorkspaceFileSync(result.fileComparable), { confirmed: true });
+    if (restored) return true;
+  }
+  setWorkspaceFileState({ status: "stale", message: "PC 파일 저장 중지 — 파일이 더 최신" });
+  return false;
+}
+
 async function saveWorkspaceFileNow({ force = false } = {}) {
-  if (!workspaceFileHandle || workspaceFileBusy) return false;
+  if (!workspaceFileHandle || workspaceFileBusy || workspaceFileHold) return false;
   if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) return false;
   workspaceFileBusy = true;
   try {
@@ -90,25 +191,31 @@ async function saveWorkspaceFileNow({ force = false } = {}) {
     await writable.write(text);
     await writable.close();
     workspaceFileLastText = comparable;
+    rememberWorkspaceFileSync(comparable);
     if (typeof markWorkspaceBackup === "function") markWorkspaceBackup();
     setWorkspaceFileState({ status: "saved", savedAt: Date.now(), message: "" });
     return true;
   } catch (error) {
-    setWorkspaceFileState({ status: "error", message: `파일 저장 실패: ${error?.message || "알 수 없는 오류"}` });
+    const message = `파일 저장 실패: ${error?.message || "알 수 없는 오류"}`;
+    if (workspaceFileState.status !== "error" && typeof showAppToast === "function") showAppToast(`PC ${message}`, "error");
+    setWorkspaceFileState({ status: "error", message });
     return false;
   } finally {
     workspaceFileBusy = false;
   }
 }
 
+// 파일 저장을 예약하고, 예약했으면 파일 이름을 돌려준다(브라우저 저장이 실패했을 때 안내에 쓴다).
 function scheduleWorkspaceFileSave() {
-  if (!workspaceFileHandle) return;
+  if (!workspaceFileHandle || workspaceFileHold) return "";
   if (workspaceFileTimer !== null) clearTimeout(workspaceFileTimer);
   workspaceFileTimer = setTimeout(() => { workspaceFileTimer = null; saveWorkspaceFileNow(); }, 1500);
+  return workspaceFileHandle.name || "PC 파일";
 }
 
 async function linkWorkspaceFile(handle, { writeNow }) {
   workspaceFileHandle = handle;
+  workspaceFileHold = false;
   workspaceFileLastText = "";
   await workspaceFileStore("put", handle);
   setWorkspaceFileState({ status: "saved", name: handle.name, savedAt: 0, message: "" });
@@ -136,8 +243,12 @@ async function connectWorkspaceFile() {
 async function openWorkspaceFile() {
   try {
     const [handle] = await window.showOpenFilePicker({ types: WORKSPACE_FILE_TYPES, multiple: false });
-    await restoreWorkspaceBackup(await handle.getFile(), async () => {
+    const file = await handle.getFile();
+    const text = await file.text();
+    await restoreWorkspaceBackup({ name: file.name || handle.name, text: async () => text }, async () => {
       await workspaceFileStore("put", handle);
+      const opened = compareWorkspaceFile({ fileText: text, browserComparable: "" });
+      if (opened.fileComparable) rememberWorkspaceFileSync(opened.fileComparable);
     });
   } catch (error) {
     if (error?.name === "AbortError") return;
@@ -145,19 +256,32 @@ async function openWorkspaceFile() {
   }
 }
 
+// 권한을 다시 받으면 바로 쓰지 않고 파일이 더 최신인지 먼저 확인한다.
+// 파일이 더 최신이라 저장을 멈춘 상태에서는 확인을 받은 뒤에만 브라우저 자료로 덮어쓴다.
 async function allowWorkspaceFile() {
-  if (!workspaceFileHandle) return;
-  if (await workspaceFilePermission(workspaceFileHandle, true)) await saveWorkspaceFileNow({ force: true });
+  if (!workspaceFileHandle) return false;
+  const handle = workspaceFileHandle;
+  if (workspaceFileState.status === "stale") {
+    if (!window.confirm(`'${handle.name}' 파일을 이 브라우저의 자료로 덮어씁니다. 파일에만 있는 자료는 사라집니다. 계속할까요?`)) return false;
+    if (!(await workspaceFilePermission(handle, true))) return false;
+    workspaceFileHold = false;
+    return saveWorkspaceFileNow({ force: true });
+  }
+  if (!(await workspaceFilePermission(handle, true))) return false;
+  return verifyWorkspaceFile(handle);
 }
 
 async function disconnectWorkspaceFile() {
   workspaceFileHandle = null;
+  workspaceFileHold = false;
   workspaceFileLastText = "";
+  if (workspaceFileTimer !== null) { clearTimeout(workspaceFileTimer); workspaceFileTimer = null; }
+  try { localStorage.removeItem(WORKSPACE_FILE_SYNC_KEY); } catch { /* 지문이 남아도 다른 파일 내용과는 맞지 않는다. */ }
   try { await workspaceFileStore("delete"); } catch { /* 연결 정보만 남을 뿐 저장은 이미 멈췄다. */ }
   setWorkspaceFileState({ status: "none", name: "", savedAt: 0, message: "" });
 }
 
-// 시작할 때 연결된 파일이 있으면 이어서 쓴다. 권한이 풀렸으면 버튼으로 다시 허용받는다.
+// 시작할 때 연결된 파일이 있으면 파일이 더 최신인지 확인한 뒤 이어서 쓴다. 권한이 풀렸으면 버튼으로 다시 허용받는다.
 async function initWorkspaceFile() {
   renderWorkspaceFileStatus();
   if (!workspaceFileSupported()) return;
@@ -165,10 +289,13 @@ async function initWorkspaceFile() {
     const handle = await workspaceFileStore("get");
     if (!handle) return;
     workspaceFileHandle = handle;
-    setWorkspaceFileState({ status: "saved", name: handle.name });
-    if (await workspaceFilePermission(handle)) saveWorkspaceFileNow({ force: true });
+    workspaceFileHold = true;
+    setWorkspaceFileState({ status: "checking", name: handle.name });
+    if (await workspaceFilePermission(handle)) await verifyWorkspaceFile(handle);
     else setWorkspaceFileState({ status: "needs-permission" });
   } catch {
+    workspaceFileHandle = null;
+    workspaceFileHold = false;
     setWorkspaceFileState({ status: "none" });
   }
 }

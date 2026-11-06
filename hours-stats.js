@@ -123,6 +123,16 @@ function hoursSourceResult(currentGrade, settings) {
   return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows };
 }
 
+// 내년도 G학년 한 줄 설명: 입학연도 편제표와 선택과목 근거(현 G−1학년 결과)를 함께 보여 준다.
+function hoursGradeLabel(info) {
+  const head = `${info.grade}학년(${info.cohortYear} 입학`;
+  if (info.grade === "1") return `${head} · 신입생)`;
+  const current = `현 ${Number(info.grade) - 1}학년`;
+  return info.source
+    ? `${head} · ${current} ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"})`
+    : `${head} · ${current} 결과 없음)`;
+}
+
 function hoursItemKey(item) {
   return `${item.grade}|${item.semester}|${normalizeResultCourseName(item.subject)}`;
 }
@@ -166,6 +176,12 @@ function computeHoursStats(year = hoursTargetYear()) {
       info.source = hoursSourceResult(currentGrade, settings);
       if (!info.source) {
         issues.push({ level: "error", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
+      } else if (info.source.confirmed && typeof roundSnapshotDrift === "function") {
+        // 확정 뒤 학급 수·기준 비율이 바뀌면 선택과목은 확정 시점 값, 지정 과목은 현재 학급 수로 계산돼 서로 어긋난다.
+        const drift = roundSnapshotDrift(info.source.round);
+        if (drift.length && !issues.some((issue) => issue.drift === info.source.round)) {
+          issues.push({ level: "warning", drift: info.source.round, text: `${info.source.round}차 확정 이후 ${drift.join(", ")}이(가) 바뀌었습니다. 선택과목 개설반은 확정 시점 결과이고 학교 지정 과목은 현재 학급 수로 계산해 서로 맞지 않을 수 있습니다. 4단계에서 확정을 해제하고 다시 확정하세요.`, action: "4" });
+        }
       } else if (!info.source.confirmed) {
         issues.push({ level: "warning", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 ${info.source.round}차 결과가 확정되지 않아 현재 집계로 임시 계산했습니다. 4단계에서 확정하면 그 시점 결과로 고정됩니다.`, action: "4" });
       }
@@ -185,7 +201,10 @@ function computeHoursStats(year = hoursTargetYear()) {
       }
       const item = {
         grade, semester: entry.semester, subject: entry.subject, area: entry.area, credit: entry.credit,
-        kind: entry.kind, creditSource: entry.creditSource, cohortYear, enrollment: null, basis: ""
+        kind: entry.kind, creditSource: entry.creditSource, cohortYear, enrollment: null, basis: "",
+        currentGrade: grade === "1" ? "" : currentGrade,
+        sourceRound: needsResults && grade !== "1" && entry.kind !== "지정" && info.source
+          ? `${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : ""
       };
       item.key = hoursItemKey(item);
       if (seen.has(item.key)) {
@@ -246,6 +265,7 @@ function computeHoursStats(year = hoursTargetYear()) {
       issues.push({ level: "warning", text: `현 ${currentGrade}학년 ${info.source.round}차 결과 중 ${cohortYear}학년도 입학생 편제표의 ${grade}학년 과목과 맞지 않는 과목이 있습니다(시수 미반영): ${resultExampleList(unused.map((row) => `${row.displayName || row.name}${row.semester ? `(${row.semester}학기)` : ""}`))}` });
     }
   }
+  for (const info of grades) info.label = hoursGradeLabel(info);
   for (const item of items) {
     if (item.department === "기타") issues.push({ level: "warning", text: `${item.grade}학년 ${item.semester}학기 ${item.subject}의 담당 교과를 정하지 못했습니다. 상세 표에서 교과를 고르세요.` });
   }
@@ -426,6 +446,7 @@ function renderHoursStats() {
       <td class="${delta > 0 ? "hours-up" : delta < 0 ? "hours-down" : ""}">${delta === null ? "" : `${delta > 0 ? "+" : ""}${hoursFormat(delta)}`}</td>
     </tr>`;
   }).join("");
+  const gradeMap = `<p class="note hours-grade-map">${stats.grades.map((info) => `내년도 ${escapeHtml(info.label)}`).join(" · ")}</p>`;
   const summaryTable = `<div class="aggregate-sheet-wrap"><table class="closure-table hours-summary-table">
     <thead><tr><th scope="col">교과</th><th scope="col">1학기 시수</th><th scope="col">2학기 시수</th><th scope="col">공통 과목 배분<br>(1학기 / 2학기)</th><th scope="col">교사 수</th><th scope="col">평균<br>1학기</th><th scope="col">평균<br>2학기</th><th scope="col">평균<br>1년</th><th scope="col">전년도<br>평균</th><th scope="col">증감</th></tr></thead>
     <tbody>${departmentRows}</tbody>
@@ -439,19 +460,20 @@ function renderHoursStats() {
   const detailRows = stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) ||
     HOURS_DEPARTMENTS.findIndex((item) => item.id === a.department) - HOURS_DEPARTMENTS.findIndex((item) => item.id === b.department) ||
     a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}">
-      <td>${item.grade}</td><td>${item.semester}</td><th scope="row" class="closure-subject">${escapeHtml(item.subject)}</th>
+      <td>${item.grade}</td><td>${item.cohortYear}</td><td>${item.currentGrade ? `현 ${item.currentGrade}` : "신입"}</td><td>${item.semester}</td><th scope="row" class="closure-subject">${escapeHtml(item.subject)}</th>
       <td>${item.kind}</td>
       <td><select data-hours-department="${escapeHtml(normalizeResultCourseName(item.subject))}" data-default-department="${item.defaultDepartment}" data-focus-key="dept-${escapeHtml(item.key)}" aria-label="${escapeHtml(item.subject)} 담당 교과">${departmentOptions(item.department)}</select></td>
       <td>${hoursFormat(item.credit)}</td>
       <td>${item.enrollment ?? ""}</td>
       <td><input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-focus-key="item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반"></td>
       <td>${item.hours}</td>
+      <td>${escapeHtml(item.sourceRound)}</td>
       <td class="closure-subject hours-note">${escapeHtml(item.basis)}</td>
     </tr>`).join("");
   const detail = `<details class="hours-detail"${stats.items.some((item) => item.department === "기타") ? " open" : ""}>
     <summary>과목별 상세 (${stats.items.length}개 항목) · 담당 교과와 개설반 수정</summary>
     <p class="note">개설반 칸을 비워 두면 자동 값(흐린 숫자)을 씁니다. 담당 교과를 바꾸면 같은 이름의 과목 전체에 적용됩니다.</p>
-    <div class="aggregate-sheet-wrap"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">시수</th><th scope="col">근거</th></tr></thead>
+    <div class="aggregate-sheet-wrap"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">내년도<br>학년</th><th scope="col">입학<br>연도</th><th scope="col">신청<br>학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">시수</th><th scope="col">근거 차수</th><th scope="col">근거</th></tr></thead>
     <tbody>${detailRows}</tbody></table></div>
   </details>`;
   content.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
@@ -461,6 +483,7 @@ function renderHoursStats() {
     </div>
     ${hoursIssueList(stats.issues)}
     ${overview}
+    ${gradeMap}
     ${summaryTable}
     ${detail}`;
 }
@@ -544,7 +567,7 @@ function buildHoursWorkbookSheets(stats) {
   rows.push([{ v: `${schoolName} (${String(now.getFullYear()).slice(2)}.${String(now.getMonth() + 1).padStart(2, "0")}.)`, s: 0 }]);
   merges.push("A1:X1", "A2:X2");
   const header = (value) => ({ v: value, s: 2 });
-  rows.push([header("교과군"), header(""), header("학기"), header("1학년"), header(""), header(""), header(""), header("2학년"), header(""), header(""), header(""), header("3학년"), header(""), header(""), header(""),
+  rows.push([header("교과군"), header(""), header("학기"), ...stats.grades.flatMap((info) => [header(`${info.grade}학년\n(${info.cohortYear} 입학${info.grade === "1" ? " · 신입생" : ` · 현 ${Number(info.grade) - 1}학년${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : " 결과 없음"}`})`), header(""), header(""), header("")]),
     header("총시수"), header(""), header(""), header("교사 수"), header(`평균시수(${stats.year})`), header(""), header("비고"), header(`${Number(stats.year) - 1}\n평균시수(1년)`), header("공통 배분")]);
   rows.push([header(""), header(""), header(""), ...["세부과목", "학점", "개설반", "시수", "세부과목", "학점", "개설반", "시수", "세부과목", "학점", "개설반", "시수"].map(header),
     header("1학기"), header("2학기"), header("합계"), header(""), header("학기별"), header("1년"), header(""), header(""), header("")]);
@@ -645,19 +668,20 @@ function buildHoursWorkbookSheets(stats) {
     merges,
     freeze: "A5",
     widths: [8, 9, 5, 16, 5, 6, 6, 16, 5, 6, 6, 16, 5, 6, 6, 7, 7, 7, 6, 7, 7, 16, 9, 8],
-    heights: { 2: 30 }
+    heights: { 2: 30, 3: 44 }
   };
   const detail = {
     name: "과목별 상세",
     freeze: "A2",
-    widths: [6, 6, 26, 8, 14, 6, 8, 8, 8, 40],
+    widths: [8, 8, 8, 6, 26, 8, 14, 6, 8, 8, 8, 12, 40],
     rows: [
-      ["학년", "학기", "과목", "구분", "담당 교과", "학점", "신청 인원", "개설반", "시수", "근거"].map((value) => ({ v: value, s: 2 })),
+      ["내년도 학년", "입학연도", "신청 학년", "학기", "과목", "구분", "담당 교과", "학점", "신청 인원", "개설반", "시수", "근거 차수", "근거"].map((value) => ({ v: value, s: 2 })),
       ...stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) || a.subject.localeCompare(b.subject, "ko"))
         .map((item, index) => [
-          { v: Number(item.grade), s: 4 }, { v: Number(item.semester), s: 4 }, { v: item.subject, s: 3 }, { v: item.kind, s: 4 },
+          { v: Number(item.grade), s: 4 }, { v: Number(item.cohortYear), s: 4 }, { v: item.currentGrade ? `현 ${item.currentGrade}학년` : "신입생", s: 4 },
+          { v: Number(item.semester), s: 4 }, { v: item.subject, s: 3 }, { v: item.kind, s: 4 },
           { v: hoursDepartmentName(item.department), s: 4 }, { v: item.credit, s: 4 }, { v: item.enrollment ?? "", s: 4 },
-          { v: item.classes, s: 4 }, { f: `F${index + 2}*H${index + 2}`, v: item.hours, s: 4 }, { v: item.basis, s: 3 }
+          { v: item.classes, s: 4 }, { f: `H${index + 2}*J${index + 2}`, v: item.hours, s: 4 }, { v: item.sourceRound, s: 4 }, { v: item.basis, s: 3 }
         ])
     ]
   };
@@ -707,7 +731,6 @@ function initHoursStats() {
     if (changed === "classes") {
       syncNextYearClassInputs();
       renderAggregate();
-      if (Number(state.workflowStep) === 4) renderClosurePanel(state.currentRound);
       renderRoundStatusControls();
     }
     if (Number(state.workflowStep) === 7) scheduleHoursRerender();

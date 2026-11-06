@@ -476,6 +476,7 @@ function initCurriculumVersions() {
     }
     reasonInput.value = "";
     basisInput.value = "";
+    document.getElementById("curriculumVersionDialog")?.close?.();
     renderCurriculumStep();
     status.style.color = "#287956";
     status.textContent = `${scopeLabel}의 새 시점을 저장했습니다. 이전 확정본은 보존되며 비교 기준이 마지막 저장본으로 바뀌었습니다.`;
@@ -506,12 +507,19 @@ function initCurriculumVersions() {
       }
     }
   });
-  document.getElementById("openCurriculumVersionSave").addEventListener("click", () => {
-    state.curriculumTopCollapsed = false;
-    renderCurriculumStep();
-    panel.open = true;
+  // 새 시점 저장은 팝업으로 연다. 화면 위쪽을 펼치지 않아도 되고 이력 영역이 공간을 차지하지 않는다.
+  const dialog = document.getElementById("curriculumVersionDialog");
+  const openDialog = () => {
+    if (!state.curriculumImportedLayout || !dialog) return;
+    document.getElementById("curriculumVersionDialogScope").textContent = `${curriculumVersionScopeLabel(activeCurriculumVersionKey())}에 저장합니다.`;
+    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
     document.getElementById("curriculumVersionReason").focus();
-    scheduleCurriculumTableSize();
+  };
+  document.getElementById("openCurriculumVersionSave").addEventListener("click", openDialog);
+  document.getElementById("openCurriculumVersionDialog")?.addEventListener("click", openDialog);
+  document.getElementById("cancelCurriculumVersion")?.addEventListener("click", () => dialog.close());
+  document.getElementById("curriculumVersionReason")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); document.getElementById("saveCurriculumVersion").click(); }
   });
   renderCurriculumVersions();
 }
