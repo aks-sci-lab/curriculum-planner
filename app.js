@@ -701,6 +701,8 @@
         if (typeof renderRoundCompare === "function") renderRoundCompare();
       }
       if (step === 7 && typeof renderHoursStats === "function") renderHoursStats();
+      // 3단계에 들어오면 목록의 첫 학생 확인서를 바로 보여 준다(이미 고른 학생이 목록에 있으면 그대로).
+      if (step === 3 && typeof showFirstVisibleStudent === "function") showFirstVisibleStudent();
       if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
       if (typeof syncNextYearClassInputs === "function") syncNextYearClassInputs();
       renderWorkspaceContext();
@@ -2997,9 +2999,15 @@
       const query = $("#searchInput").value.trim().toLocaleLowerCase();
       const classValue = $("#classFilter").value;
       const gradeValue = $("#gradeFilter")?.value || "";
+      // 검색어는 띄어쓰기로 나눠 모두 맞아야 한다. 이름은 일부만 맞아도 되고, 학년·반·번호는
+      // "2학년"·"3반"·"5번"·"1-3"·"1-3-5"·숫자처럼 정확히 맞아야 한다(3반이 13반에 걸리지 않게).
+      const terms = query.split(/\s+/).filter(Boolean);
       return state.students.filter((student) => {
-        const searchable = `${student.name} ${student.grade} ${student.classroom} ${student.number}`.toLocaleLowerCase();
-        return (!query || searchable.includes(query)) &&
+        const { grade, classroom, number } = student;
+        const name = String(student.name || "").toLocaleLowerCase();
+        const tokens = new Set([String(grade), String(classroom), String(number), `${grade}학년`, `현${grade}학년`,
+          `${classroom}반`, `${number}번`, `${grade}-${classroom}`, `${grade}-${classroom}-${number}`]);
+        return terms.every((term) => name.includes(term) || tokens.has(term)) &&
           (!gradeValue || String(student.grade) === gradeValue) &&
           (!classValue || student.classroom === classValue);
       });
@@ -3064,7 +3072,9 @@
         <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
       </div>` : "";
-      return `<article class="${printMode ? "print-page" : "preview-paper"}">
+      // 과목이 많은 학생은 인쇄용 행 높이를 더 줄여 한 장에 담는다(학교명·서명 줄이 다음 장으로 넘어가지 않게).
+      const density = student.selections.length >= 22 ? " paper-dense" : student.selections.length >= 15 ? " paper-compact" : "";
+      return `<article class="${printMode ? "print-page" : "preview-paper"}${density}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
           <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span><span>${escapeHtml(Number(student.grade) + 1)}학년 선택과목 신청</span></div>
@@ -3074,18 +3084,21 @@
             <tbody>${body}</tbody>
           </table>
           ${gauge}
+          <div class="paper-closing">
           <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
           <div class="paper-signature">
-            <div>${escapeHtml($("#confirmDate").value || "　　　년　　월　　일")}</div>
+            <div>${escapeHtml(String($("#confirmDate").value || "").trim() || "　　　년　　월　　일")}</div>
             <div>학생: ${escapeHtml(student.name)}&nbsp;&nbsp;&nbsp; (인)</div>
             <div>학부형:　　　　　　　　　(인)</div>
           </div>
-          <p class="paper-school">${escapeHtml($("#schoolName").value || "학교명")}&nbsp; 귀하</p>
+          <p class="paper-school">${escapeHtml(String($("#schoolName").value || "").trim() || "　　　　　　　　　　")}&nbsp; 귀하</p>
+          </div>
         </div>
       </article>`;
     }
 
     function renderPreview() {
+      renderCertificateInfoSummary();
       const student = currentStudent();
       const preview = $("#preview");
       if (!student) {
@@ -3101,6 +3114,21 @@
       $("#previewSubheading").textContent = `${student.grade}학년 ${student.classroom}반 ${student.number}번 · ${student.selections.length}과목 · ${student.totalCredits}학점`;
       $("#printSelected").disabled = false;
       syncPrintAllButton();
+    }
+
+    // 확인서 기본 정보는 팝업에서 고치고, 화면에는 현재 값만 한 줄로 보여 준다.
+    function renderCertificateInfoSummary() {
+      const summary = typeof document !== "undefined" ? document.getElementById("certificateInfoSummary") : null;
+      if (!summary) return;
+      const date = String($("#confirmDate").value || "").trim();
+      const school = String($("#schoolName").value || "").trim();
+      const part = (label, value) => {
+        const item = document.createElement("span");
+        item.className = value ? "certificate-info-value" : "certificate-info-value is-missing";
+        item.textContent = `${label} ${value || "미입력"}`;
+        return item;
+      };
+      summary.replaceChildren(part("확인 날짜", date), " · ", part("학교명", school));
     }
 
     function syncPrintAllButton() {
@@ -4553,7 +4581,8 @@
       const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
       state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
       state.fileName = Object.entries(gradeFiles).map(([g,name]) => `${g}학년: ${name}`).join(" / ");
-      state.selectedId = nextStudents[0].id;
+      // 3단계 확인서는 목록(학년·반·번호 순)의 첫 학생부터 보여 준다.
+      state.selectedId = state.students[0]?.id || nextStudents[0].id;
       state.selectedCourseColumns = [];
       state.lastSelectedCourseColumn = null;
       $("#fileName").textContent = state.fileName;
@@ -5492,8 +5521,26 @@
     }
 
 
+    // 오늘 날짜를 확인서 표기(2026. 9. 28.)로 만든다.
+    function certificateTodayLabel(date = new Date()) {
+      return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}.`;
+    }
+
+    // 인쇄 전에 비어 있는 확인서 기본 정보를 알려 준다. 비어 있으면 확인서에 빈칸으로 인쇄된다.
+    function certificateMissingInfo(schoolName, confirmDate) {
+      const missing = [];
+      if (!String(schoolName || "").trim()) missing.push("학교명");
+      if (!String(confirmDate || "").trim()) missing.push("확인 날짜");
+      return missing;
+    }
+
     function printStudents(students) {
       if (!students.length) return;
+      const missing = certificateMissingInfo($("#schoolName").value, $("#confirmDate").value);
+      if (missing.length && !window.confirm(`확인서의 ${missing.join("과 ")}${missing.length > 1 || missing[0] === "확인 날짜" ? "가" : "이"} 비어 있습니다. 빈칸으로 인쇄됩니다.\n\n그대로 인쇄할까요? (취소하면 기본 정보 창을 엽니다)`)) {
+        if (typeof openCertificateInfoDialog === "function") openCertificateInfoDialog();
+        return;
+      }
       const groupSettings = certificateGroupSettings();
       $("#printBatch").innerHTML = students.map((student) => certificateMarkup(student, true, groupSettings)).join("");
       window.print();
@@ -6054,6 +6101,26 @@
       renderPreview();
       persistState();
     });
+    function openCertificateInfoDialog() {
+      const dialog = document.getElementById("certificateInfoDialog");
+      if (!dialog) return;
+      $("#certificateSchoolName").value = $("#schoolName").value;
+      if (typeof dialog.showModal === "function") { if (!dialog.open) dialog.showModal(); } else dialog.setAttribute("open", "");
+      const firstEmpty = !String($("#schoolName").value || "").trim() ? "#certificateSchoolName"
+        : !String($("#confirmDate").value || "").trim() ? "#confirmDate" : "#certificateSchoolName";
+      $(firstEmpty).focus();
+    }
+    $("#openCertificateInfo").addEventListener("click", openCertificateInfoDialog);
+    // 팝업의 학교명은 상단 '학교·학년도 설정'의 학교명과 같은 값이다.
+    $("#certificateSchoolName").addEventListener("input", (event) => {
+      $("#schoolName").value = event.target.value;
+      updateCertificateText();
+    });
+    $("#schoolName").addEventListener("input", () => { $("#certificateSchoolName").value = $("#schoolName").value; });
+    $("#certificateDateToday").addEventListener("click", () => {
+      $("#confirmDate").value = certificateTodayLabel();
+      updateCertificateText();
+    });
     $("#printSelected").addEventListener("click", () => {
       const student = currentStudent();
       if (student) printStudents([student]);
@@ -6401,7 +6468,10 @@
     const studentApplicationRoute = showStudentApplicationEntry();
     if (!studentApplicationRoute) {
       $("#teacherWorkspace").classList.remove("hidden");
+      // 확인 날짜는 저장된 값이 없으면 오늘 날짜로 채운다(저장된 값이 있으면 복원이 덮어쓴다).
+      if (!String($("#confirmDate").value || "").trim()) $("#confirmDate").value = certificateTodayLabel();
       restorePersistedState();
+      $("#certificateSchoolName").value = $("#schoolName").value;
       // 결과 검증·차수 확정·시수 통계 모듈은 app.js 다음에 로드되므로 모두 로드된 뒤 한 번 더 그린다.
       document.addEventListener("DOMContentLoaded", () => {
         refreshCurriculumDerivedPlans();
