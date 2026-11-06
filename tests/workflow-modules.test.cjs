@@ -512,3 +512,17 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
   assert.equal(reloaded, 1);
   assert.ok(backups >= 1, "a backup is offered first when there is unsaved work");
 });
+
+test("plan and result names match across Roman numerals and spacing", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functionSource(app, "function normalizeRomanNumerals(", "function classifyApplicationRecords("), ctx);
+  assert.equal(ctx.normalizeRomanNumerals("미적분Ⅱ"), "미적분2");
+  assert.equal(ctx.normalizeRomanNumerals("물리학ⅰ"), "물리학1");
+  const results = vm.createContext({ normalizeRomanNumerals: ctx.normalizeRomanNumerals });
+  vm.runInContext(resultImport, results);
+  assert.equal(results.normalizeResultCourseName("미적분Ⅱ"), results.normalizeResultCourseName("미적분 2"));
+  assert.equal(results.normalizeResultCourseName("수학과제 탐구"), results.normalizeResultCourseName("수학과제탐구"));
+  const bare = vm.createContext({ document: { getElementById: () => null } });
+  vm.runInContext(resultImport, bare);
+  assert.equal(bare.normalizeResultCourseName("미적분 2"), "미적분2", "works without the app helper too");
+});

@@ -2,7 +2,8 @@
 var resultImportPending = null;
 
 function normalizeResultCourseName(name) {
-  return String(name ?? "")
+  const text = typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(name) : String(name ?? "");
+  return text
     .replace(/[*＊★☆■↔]/g, "")
     .replace(/[（(]\s*[12]\s*학기\s*[)）]/g, "")
     .replace(/[（(]\s*[123]\s*학년\s*[)）]/g, "")

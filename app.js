@@ -1304,9 +1304,9 @@
         return course.applicationGroups?.[String(currentGrade)] || null;
       }
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
-      const normalize = (name) => String(name ?? "").trim()
+      const normalize = (name) => normalizeRomanNumerals(String(name ?? "").trim()
         .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
-        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, " ").trim();
+        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "")).replace(/\s+/g, "");
       const hint = course.semesterKey || parseSemesterFromCourseName(course.name) ||
         (String(semesterOverride).split("·").length === 1 ? String(semesterOverride) : "");
       const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
@@ -1315,6 +1315,12 @@
       if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
       if (!matches.length) return course.applicationGroups?.[String(currentGrade)] || null;
       return null;
+    }
+
+    // 편제표에는 "미적분Ⅱ"처럼, 결과 파일에는 "미적분2"처럼 적는 로마 숫자 표기를 같은 과목으로 맞춘다.
+    function normalizeRomanNumerals(text) {
+      const digits = { "Ⅰ": "1", "Ⅱ": "2", "Ⅲ": "3", "Ⅳ": "4", "Ⅴ": "5", "ⅰ": "1", "ⅱ": "2", "ⅲ": "3", "ⅳ": "4", "ⅴ": "5" };
+      return String(text ?? "").replace(/[ⅠⅡⅢⅣⅤⅰⅱⅲⅳⅴ]/g, (char) => digits[char]);
     }
 
     function classifyApplicationRecords(data) {
