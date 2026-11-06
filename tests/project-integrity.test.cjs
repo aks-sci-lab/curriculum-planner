@@ -35,7 +35,7 @@ test("static UI bindings refer to unique shipped or dynamically generated IDs", 
   assert.equal(new Set(ids).size, ids.length, "HTML IDs must be unique");
   const filenames = ["app.js", "course-groups.js", "supabase-client.js", "result-import.js", "round-status.js",
     "curriculum-versions.js", "hours-stats.js", "curriculum-subject-actions.js", "curriculum-choice-blocks.js",
-    "curriculum-subject-list.js"];
+    "curriculum-subject-list.js", "curriculum-annual.js", "workspace-file.js", "app-version.js"];
   const sources = filenames.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
   const declared = new Set([...ids, ...sources.flatMap((source) =>
     [...source.matchAll(/\bid="([^"$]+)"/g)].map((match) => match[1]))]);

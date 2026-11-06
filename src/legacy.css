@@ -1762,3 +1762,7 @@
 .retake-progress li[data-state="done"] { border-color: #9ccbb2; background: #eef8f2; }
 .retake-progress li[data-state="current"] { border-color: #e0a699; background: #fdf3f0; }
 @media (max-width: 720px) { .retake-progress { grid-template-columns: 1fr; } }
+
+.app-version { margin-left: 6px; font-size: 11px; color: #596780; }
+.workspace-file-status { font-size: 12px; color: #596780; }
+.workspace-file-status.is-warning { color: #a44939; font-weight: 700; }

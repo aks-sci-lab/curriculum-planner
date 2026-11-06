@@ -2,7 +2,8 @@
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i ./src/styles.css -o ./styles.css --minify",
-    "test": "node --test tests\\*.test.cjs"
+    "test": "node --test tests\\*.test.cjs",
+    "build:deploy": "node scripts/build-deploy.js"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

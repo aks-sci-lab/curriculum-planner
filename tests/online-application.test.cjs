@@ -205,27 +205,34 @@ test("curriculum management shows three cohort plans and a separate annual whole
   };
   const ctx = vm.createContext({
     $: (id) => elements[id], escapeHtml: String,
+    CURRICULUM_COHORT_GRADES: ["0", "1", "2", "3"],
     state: { curriculumCohortYear: "2026", curriculumPlanType: "cohort", curriculumPlanFileName: "2026.xlsx",
+      curriculumPlan: [],
       curriculumCohorts: { "2025": { fileName: "2025.xlsx" } },
       curriculumAnnualPlans: { "2026": { fileName: "전학년.xlsx" } } },
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "curriculum-annual.js"), "utf8"), ctx);
+  vm.runInContext(functionSource("const annualResolvedCache", "function isDerivedAnnualPlan("), ctx);
   vm.runInContext(functionSource("function renderCurriculumCohortUploads(", "function syncActiveCurriculumCohort("), ctx);
   ctx.renderCurriculumCohortUploads();
   const markup = elements["#curriculumCohortUploads"].innerHTML;
-  assert.deepEqual([...markup.matchAll(/data-cohort-upload="(\d+)"/g)].map((match) => match[1]), ["2027", "2026", "2025"]);
-  assert.deepEqual([...markup.matchAll(/data-annual-upload="(\d+)"/g)].map((match) => match[1]), ["2026"]);
+  assert.deepEqual([...markup.matchAll(/data-cohort-upload="(\d+)"/g)].map((match) => match[1]), ["2027", "2026", "2025", "2024"]);
+  assert.deepEqual([...markup.matchAll(/data-annual-build="(\d+)"/g)].map((match) => match[1]), ["2026"]);
+  assert.doesNotMatch(markup, /data-annual-upload/, "the annual plan is built, never uploaded");
+  assert.match(markup, /2024학년도 입학생 · 현 3학년/);
+  assert.match(markup, /3개년 편제표에서 자동 생성/);
   assert.match(markup, /2027학년도 입학생 · 내년도 신입생/);
   assert.match(markup, /내년도 1학년 시수 통계용/);
   assert.match(markup, /현 1학년은 이 편제표의 2학년 과목으로 신청/);
   assert.match(markup, /현 2학년은 이 편제표의 3학년 과목으로 신청/);
   assert.match(markup, /2026.xlsx/);
   assert.match(markup, /2025.xlsx/);
-  assert.match(markup, /전학년.xlsx/);
-  assert.match(markup, /수강신청 과목·그룹의 기준으로 사용하지 않습니다/);
+  assert.match(markup, /3학년 2024 미업로드/);
+  assert.match(markup, /data-annual-build="2026" disabled/, "building needs all three cohort plans");
   elements["#schoolYear"].value = "2027";
   ctx.renderCurriculumCohortUploads();
   assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]
-    .map((match) => match[1]), ["2028", "2027", "2026"]);
+    .map((match) => match[1]), ["2028", "2027", "2026", "2025"]);
   assert.match(elements["#curriculumCohortUploads"].innerHTML, /2027학년도 전학년 편제표/);
 });
 
@@ -267,6 +274,7 @@ test("switching cohort and annual plans keeps their records separate", () => {
   };
   const ctx = vm.createContext({
     state, status: { style: {} }, $: (selector) => selector === "#schoolYear" ? { value: schoolYear } : {},
+    CURRICULUM_COHORT_GRADES: ["0", "1", "2", "3"],
     renderCurriculumStep() {}, renderApplicationSubjects() {}, renderWorkspaceContext() {}, persistState() {}, curriculumSearchTimer: null,
   });
   vm.runInContext(functionSource("function syncActiveCurriculumCohort(", "function collectApplicationSubjects("), ctx);
@@ -279,9 +287,12 @@ test("switching cohort and annual plans keeps their records separate", () => {
   }
   ctx.switchCurriculumCohort("2026");
   ctx.switchCurriculumAnnualPlan("2026");
-  state.curriculumPlanFileName = "2026 전학년.xlsx";
-  state.curriculumImportedLayout = { year: "2026", scope: "annual" };
-  state.curriculumPlan = [{ subject: "전학년 과목" }];
+  assert.equal(state.curriculumPlanType, "cohort", "an annual plan that was never built cannot be opened");
+  assert.match(ctx.status.textContent, /먼저 만드세요/);
+  state.curriculumAnnualPlans["2026"] = { fileName: "2026 전학년.xlsx", importedLayout: { year: "2026", scope: "annual" },
+    templateRows: [], plan: [{ subject: "전학년 과목" }] };
+  ctx.switchCurriculumAnnualPlan("2026");
+  assert.equal(state.curriculumPlanType, "annual");
   ctx.switchCurriculumCohort("2025");
   assert.deepEqual(Object.keys(state.curriculumCohorts).sort(), ["2025", "2026", "2027"]);
   assert.equal(state.curriculumAnnualPlans["2026"].fileName, "2026 전학년.xlsx");
@@ -297,10 +308,8 @@ test("switching cohort and annual plans keeps their records separate", () => {
   assert.equal(state.curriculumPlan[0].subject, "전학년 과목");
   schoolYear = "2027";
   ctx.switchCurriculumAnnualPlan("2027");
-  assert.equal(state.curriculumCohortYear, "2027");
-  assert.equal(state.curriculumPlanType, "annual");
   assert.equal(state.curriculumAnnualPlans["2026"].plan[0].subject, "전학년 과목");
-  assert.equal(state.curriculumAnnualPlans["2027"], undefined);
+  assert.equal(state.curriculumAnnualPlans["2027"], undefined, "a new school year starts without a built annual plan");
 });
 
 test("application subjects include student-choice courses in promoted grades and color-tagged courses without hours", () => {

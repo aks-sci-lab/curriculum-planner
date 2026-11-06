@@ -526,6 +526,7 @@ function initCurriculumSubjectActions() {
   });
   document.getElementById("curriculumPlanWrap").addEventListener("click", (event) => {
     const button = event.target.closest("[data-curriculum-subject]");
+    if (button && state.curriculumImportedLayout?.derived) return;
     if (!button) return;
     setTimeout(() => {
       try {
