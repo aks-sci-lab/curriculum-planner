@@ -20,25 +20,38 @@ test("closure defaults open eligible courses and leave at-risk courses undecided
   // 개설/폐강 결정은 집계표의 과목 행 안에 있다(별도 개설/폐강 검토 표 없음).
   const ctx = vm.createContext({ $: () => ({ value: "" }), state: {}, escapeHtml: String });
   vm.runInContext(functionSource("function aggregateThresholds(", "function renderAggregate("), ctx);
-  const course = (column, name, enrollment, atRisk) => ({ column, name, enrollment, atRisk, closed: false, classCount: 1,
-    enrollmentPerDivision: 1, averageClassSize: enrollment });
+  const course = (column, name, enrollment, atRisk, classCount = 1) => ({ column, name, enrollment, atRisk, closed: false, classCount,
+    enrollmentPerDivision: 1, averageClassSize: classCount ? enrollment / classCount : 0 });
   const report = { summary: { grade: "1", students: 350, classes: 10, classSource: "roster", averageClassSize: 35, openingLimit: 31.5, divisionLimit: 38.5 },
     semesters: [{ name: "2학년 1학기", groups: [{ category: "2-1 택1", choiceCount: 1, totalClasses: 5, courses: [
       course(1, "개설기준 일치", 31.5, false),
       course(2, "미달", 5, true),
-      course(3, "수동 미정", 100, false),
-      course(4, "수동 폐강", 100, false),
+      course(3, "수동 미정", 100, false, 3),
+      course(4, "수동 폐강", 100, false, 3),
       course(5, "수동 개설", 5, true)
     ] }] }] };
   const closures = { "1:3": "", "1:4": "closed", "1:5": "open" };
-  const options = { closures, round: "1", locked: false, maxClassSize: 34, riskOnly: false, canUndo: false };
+  const options = { closures, round: "1", locked: false, maxClassSize: 34, attentionOnly: false, canUndo: false };
   const decisions = (markup) => [...markup.matchAll(/data-closure-key="([^"]+)"[\s\S]*?<option value="([^"]*)" selected/g)]
     .map((match) => [match[1], match[2]]);
   const markup = ctx.aggregateGradeSectionMarkup(report, options);
   assert.deepEqual(decisions(markup), [["1:1", "open"], ["1:2", ""], ["1:3", ""], ["1:4", "closed"], ["1:5", "open"]]);
   assert.match(markup, /data-closure-round="1"/);
-  // 기준 미달·미정만 보기: 기준 미달이거나 결정이 미정인 과목만 남는다.
-  assert.deepEqual(decisions(ctx.aggregateGradeSectionMarkup(report, { ...options, riskOnly: true })).map(([key]) => key), ["1:2", "1:3", "1:5"]);
+  // 처리할 것만 보기: 결정이 미정인 기준 미달 과목만 남고, 이미 개설/폐강을 정한 과목과 기준을 충족한 과목은 빠진다.
+  // 목표(택1 × 10학급 = 10)와 맞지 않는 그룹의 소제목은 남는다.
+  const attention = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
+  assert.deepEqual(decisions(attention).map(([key]) => key), ["1:2"]);
+  assert.match(attention, /data-group-status="mismatch"[\s\S]*2-1 택1[\s\S]*총 5학급 \/ 목표 10 \(-5\)/);
+  assert.equal(ctx.aggregateAttention(report, closures, 34).count, 2, "one undecided at-risk course and one group off target");
+  // 학급수를 직접 줄여 학급당 인원이 최대 인원·분반 기준을 넘으면 그 과목도 처리할 것에 들어가고 행에 경고 배지가 붙는다.
+  report.semesters[0].groups[0].courses[2] = course(3, "수동 미정", 100, false, 2);
+  const crowded = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
+  assert.deepEqual(decisions(crowded).map(([key]) => key), ["1:2", "1:3"]);
+  assert.match(crowded, /data-course-key="1:3"[\s\S]*?34명 초과[\s\S]*?분반기준 초과/);
+  // 목표와 맞고 처리할 과목이 없는 그룹은 통째로 사라지고 빈 안내가 나온다.
+  const settled = { summary: report.summary, semesters: [{ name: "2학년 1학기", groups: [{ category: "2-1 택1", choiceCount: 1, totalClasses: 10, courses: [
+    course(1, "충족", 40, false, 10)] }] }] };
+  assert.match(ctx.aggregateGradeSectionMarkup(settled, { ...options, attentionOnly: true }), /처리할 과목이 없습니다/);
   // 확정된 차수는 결정 칸이 잠긴다.
   assert.equal(ctx.aggregateGradeSectionMarkup(report, { ...options, locked: true }).match(/<select class="closure-select"[^>]* disabled/g).length, 5);
   assert.match(frontend, /state\.roundClosures\[round\]\[key\] = select\.value/);
