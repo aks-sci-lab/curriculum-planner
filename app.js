@@ -1858,6 +1858,14 @@
 
     // 과목 데이터는 편제표 레이아웃에서 파생되므로, 불러온 뒤 최신 해석 규칙(택n 묶음 연동 포함)으로 다시 만든다.
     function refreshCurriculumDerivedPlans() {
+      // 예전에 저장한 표 기반 편제표는 열 때 데이터로 바꾼다.
+      if (typeof ensureCurriculumPlanData === "function") {
+        for (const layout of [state.curriculumImportedLayout,
+          ...Object.values(state.curriculumCohorts || {}).map((item) => item?.importedLayout),
+          ...Object.values(state.curriculumAnnualPlans || {}).map((item) => item?.importedLayout)]) {
+          if (layout && !layout.planData) ensureCurriculumPlanData(layout);
+        }
+      }
       const rebuild = (layout, previous, label) => {
         if (!layout) return null;
         try {
@@ -2075,8 +2083,11 @@
     function curriculumTableChanges(layout) {
       const changes = new Map();
       if (layout?.changeBaseline?.version !== 2 || typeof curriculumPlanEntries !== "function") return changes;
-      const before = curriculumSubjectSignatures(layout.changeBaseline, layout.changeBaseline.plan || null);
-      const after = curriculumSubjectSignatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null);
+      // 데이터로 바꾼 편제표는 비교 기준도 데이터로 읽어 같은 규칙으로 비교한다.
+      const signatures = layout.planData && typeof curriculumDataSignatures === "function"
+        ? curriculumDataSignatures : curriculumSubjectSignatures;
+      const before = signatures(layout.changeBaseline, layout.changeBaseline.plan || null);
+      const after = signatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null);
       for (const [key, subject] of after) {
         const previous = before.get(key);
         if (previous?.signature === subject.signature) continue;
@@ -2161,6 +2172,9 @@
 
     function curriculumImportedSheetHtml(layout, filters = {}, selectionMode = false, compactView = false) {
       if (!layout || !Array.isArray(layout.rows) || !layout.rows.length) return "";
+      if (layout.planData && typeof curriculumDataSheetHtml === "function") {
+        return curriculumDataSheetHtml(layout, filters, selectionMode, compactView, curriculumTableChanges(layout));
+      }
       const rows = layout.rows;
       const changes = curriculumTableChanges(layout);
       const columns = importedPlanColumnMap(layout);
@@ -2850,6 +2864,7 @@
           "openCurriculumVersionSave", "openCurriculumVersionDialog", "clearCurriculumPlan"]) $(`#${id}`).disabled = true;
         $("#curriculumMergeControls").classList.add("hidden");
       }
+      if (typeof syncCurriculumDataControls === "function") syncCurriculumDataControls(state.curriculumImportedLayout);
       renderCurriculumCohortUploads();
       if (typeof renderCurriculumVersions === "function") renderCurriculumVersions();
       if (typeof ensureCurriculumHiddenRows === "function") ensureCurriculumHiddenRows();
@@ -3907,7 +3922,20 @@
       const cached = annualResolvedCache.get(year);
       if (cached && cached.plan === plan && cached.layout === layout) return cached.rows;
       let rows = [];
-      if (plan.length) {
+      if (plan.length && layout?.planData && typeof curriculumDataSubjectCredits === "function") {
+        // 데이터로 바꾼 편제표는 과목·선택과목군 데이터의 학기 학점을 그대로 쓴다.
+        const credits = curriculumDataSubjectCredits(layout);
+        rows = plan.map((row) => {
+          const resolved = { ...row };
+          const own = credits.get(String(row.subject ?? "").replace(/\s+/g, "").toLowerCase()) || {};
+          CURRICULUM_SEMESTER_FIELDS.forEach((field) => {
+            if (!String(row[field] ?? "").trim()) { resolved[field] = ""; return; }
+            const credit = own[field] || Number(row.opCredit) || Number(row.baseCredit) || 0;
+            resolved[field] = credit > 0 ? String(credit) : "";
+          });
+          return resolved;
+        });
+      } else if (plan.length) {
         const columns = layout ? importedPlanColumnMap(layout) : null;
         const sheetRows = layout ? expandCurriculumLayoutRows(layout) : [];
         const contexts = new Map();
@@ -3970,6 +3998,7 @@
       if (existing?.importedLayout && !existing.importedLayout.derived &&
           !window.confirm("이전에 업로드한 전학년 편제표가 있습니다. 3개년 편제표로 만든 편제표로 바꿀까요?")) return false;
       const layout = buildAnnualCurriculumLayout(cohorts, normalized);
+      if (typeof ensureCurriculumPlanData === "function") ensureCurriculumPlanData(layout);
       const plan = curriculumPlanFromLayout(layout, `${normalized} 전학년 편제표`, []);
       state.curriculumAnnualPlans ||= {};
       state.curriculumAnnualPlans[normalized] = {
@@ -5475,9 +5504,12 @@
         )
           ? genericDivision
           : -1;
+      // '교과 영역'(기초·탐구 등)과 '교과(군)'이 함께 있으면 교과(군)을 교과로 보고 교과 영역은 따로 둔다.
+      const areaGroup = find([/교과군/]);
       return {
         subject: subject >= 0 ? subject : (baseCredit > 0 ? baseCredit - 1 : -1),
-        area: find([/교과군/, /교과영역/]),
+        area: areaGroup >= 0 ? areaGroup : find([/교과영역/]),
+        domain: areaGroup >= 0 ? find([/교과영역/]) : -1,
         detail: find([/과목유형/, /세부선택/, /세부지정/, /세부유형/, /이수구분/]),
         grade: gradeColumn,
         division,
@@ -5763,6 +5795,8 @@
               parseError = error;
               continue;
             }
+            // 업로드한 표를 과목·선택과목군 데이터로 바꾼다. 원본 칸·병합은 내보내기 양식으로만 남는다.
+            if (typeof ensureCurriculumPlanData === "function") ensureCurriculumPlanData(layout);
             let sheetPlan = [];
             try {
               sheetPlan = curriculumPlanFromLayout(layout, `${file.name} ${sheet.name}`);
@@ -6019,10 +6053,12 @@
         recordCurriculumUndo(state.curriculumEditBefore);
         state.curriculumEditUndoRecorded = true;
       }
+      // 데이터 편제표는 칸을 벗어날 때(focusout) 데이터로 한 번에 반영한다.
+      if (state.curriculumImportedLayout.planData) return;
       const rowIndex = Number(cell.dataset.sourceRow);
       const columnIndexValue = Number(cell.dataset.sourceColumn);
       if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndexValue)) return;
-      state.curriculumImportedLayout.rows[rowIndex] = state.curriculumImportedLayout.rows[rowIndex] || [];
+      state.curriculumImportedLayout.rows[rowIndex] =state.curriculumImportedLayout.rows[rowIndex] || [];
       state.curriculumImportedLayout.rows[rowIndex][columnIndexValue] = cell.innerText.replace(/\r\n?/g, "\n");
       if (state.curriculumImportedLayout.formulas) delete state.curriculumImportedLayout.formulas[`${rowIndex}:${columnIndexValue}`];
       try {
@@ -6043,6 +6079,15 @@
       state.curriculumEditBefore = null;
       state.curriculumEditUndoRecorded = false;
       if (!edited) return;
+      if (state.curriculumImportedLayout.planData && typeof applyCurriculumDataCellEdit === "function") {
+        // 입력을 시작할 때 실행취소 기록은 이미 남겼다(input 처리). 다음 칸으로 옮겨 간 초점은 다시 그린 뒤 되살린다.
+        const mutation = state.curriculumMutationRevision;
+        setTimeout(() => {
+          if (mutation !== state.curriculumMutationRevision) return;
+          applyCurriculumDataCellEdit(cell, document.activeElement?.closest?.("[contenteditable='true'][data-source-row]"));
+        }, 0);
+        return;
+      }
       const mutationRevision = state.curriculumMutationRevision;
       setTimeout(() => {
         if (mutationRevision !== state.curriculumMutationRevision) return;
@@ -6114,9 +6159,12 @@
       const semesterColumns = selectionColumns.semesters;
       const academic = startRow >= curriculumFirstRowCache.row && semesterColumns.includes(startColumn) && semesterColumns.includes(endColumn);
       $("#curriculumMergeSelection").textContent = `${columnName(startColumn)}${startRow + 1}:${columnName(endColumn)}${endRow + 1} · ${academic ? horizontal ? "교차집중 선택과목군" : "선택과목군" : "일반 셀 병합"}`;
+      if (selectionLayout.planData && typeof curriculumDataSelectionLabel === "function") {
+        $("#curriculumMergeSelection").textContent = curriculumDataSelectionLabel(selectionLayout, curriculumCellSelection);
+      }
       $("#curriculumMergeApply").disabled = !horizontal && endRow <= startRow;
-      $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic);
-      $("#curriculumMergeCredit").closest?.("label")?.classList.toggle("hidden", !academic);
+      $("#curriculumMergePick").closest?.("label")?.classList.toggle("hidden", !academic || Boolean(selectionLayout.planData));
+      $("#curriculumMergeCredit").closest?.("label")?.classList.toggle("hidden", !academic || Boolean(selectionLayout.planData));
       $("#curriculumMergeRelease").disabled = !curriculumChoiceBlocks(state.curriculumImportedLayout).some((block) =>
         block.column === column && startRow <= block.endRow && endRow >= block.startRow);
       const block = curriculumChoiceBlocks(state.curriculumImportedLayout).find((item) =>
@@ -6125,7 +6173,7 @@
         $("#curriculumMergePick").value = String(block.pick);
         $("#curriculumMergeCredit").value = String(block.credit || 4);
       }
-      if ((state.curriculumImportedLayout.mergedRanges || []).some((reference) => {
+      if (!selectionLayout.planData && (state.curriculumImportedLayout.mergedRanges || []).some((reference) => {
         const range = curriculumChoiceRange(reference);
         return range && range.startColumn <= endColumn && range.endColumn >= startColumn &&
           range.startRow <= endRow && range.endRow >= startRow;
@@ -6228,6 +6276,12 @@
       try {
         if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) throw new Error("저장 원본을 먼저 복원하세요.");
         if (!curriculumCellSelection) throw new Error("병합할 셀을 먼저 선택하세요.");
+        // 데이터 편제표: 학기 칸 선택은 선택과목군 묶기(팝업)·풀기로 처리한다.
+        if (state.curriculumImportedLayout?.planData && typeof applyCurriculumDataSelection === "function") {
+          if (insertion) throw new Error("행은 과목 행 끝의 ⋯ 메뉴에서 추가·삭제·이동하세요.");
+          applyCurriculumDataSelection(curriculumCellSelection, release);
+          return;
+        }
         let layout = JSON.parse(JSON.stringify(state.curriculumImportedLayout));
         if (insertion === "row") {
           layout = insertImportedPlanLayoutRow(layout, curriculumCellSelection.startRow, []);

@@ -13,6 +13,8 @@ function curriculumOfficialDetail(subject) {
 }
 
 function curriculumSubjectCatalog(layout) {
+  // 데이터로 바꾼 편제표는 과목 데이터에서 목록을 만든다.
+  if (layout?.planData && typeof curriculumDataCatalog === "function") return curriculumDataCatalog(layout);
   const columns = importedPlanColumnMap(layout);
   if (columns.subject < 0) throw new Error("과목명 열을 찾지 못했습니다.");
   const contexts = importedPlanCourseContexts(layout, columns);
@@ -250,6 +252,7 @@ function buildCurriculumCrossIntensiveChange(layout, plan, options) {
 
 function buildCurriculumSubjectChange(layout, plan, options) {
   if (!layout?.rows?.length) throw new Error("편제표를 먼저 업로드하세요.");
+  if (layout.planData && typeof buildCurriculumDataSubjectChange === "function") return buildCurriculumDataSubjectChange(layout, plan, options);
   if (["cross-add", "cross-remove"].includes(options.action)) return buildCurriculumCrossIntensiveChange(layout, plan, options);
   if (!["add", "move", "swap", "delete", "division"].includes(options.action)) throw new Error("추가·이동·맞교체·삭제·구분 변경 중 작업을 선택하세요.");
   const catalog = curriculumSubjectCatalog(layout);
@@ -442,14 +445,14 @@ function initCurriculumSubjectActions() {
   const dialog = document.getElementById("curriculumSubjectDialog");
   const form = document.getElementById("curriculumSubjectForm");
   const field = (name) => document.getElementById(`curriculumSubject${name}`);
-  let selected = null, catalog = [], revision = 0;
+  let selected = null, catalog = [], revision = 0, insertBefore = null;
   const placementLabel = (item) => item.placements.map((p) => `${p.grade}학년 ${p.semester}학기 ${p.credit}학점`).join(", ") || "학기 미정";
   const total = (item) => item.placements.reduce((sum, p) => sum + p.credit, 0);
   function options() {
     return { subject: field("Action").value === "add" ? field("Name").value : selected.subject, action: field("Action").value, grade: field("Grade").value,
       semester: field("Semester").value, credit: Number(field("Credit").value), detail: field("Detail").value,
       division: field("Division").value,
-      targetSubject: field("Target").value };
+      targetSubject: field("Target").value, before: field("Action").value === "add" ? insertBefore : null };
   }
   function refresh() {
     const action = field("Action").value;
@@ -496,15 +499,20 @@ function initCurriculumSubjectActions() {
           : "맞교체할 과목명을 입력하고 자동완성 목록에서 선택하세요.";
     field("Error").textContent = "";
   }
-  document.getElementById("curriculumAddSubject").addEventListener("click", () => {
+  // '과목 추가' 단추와 행 메뉴의 '위에 과목 추가'가 함께 쓴다. before가 있으면 그 행 바로 위에 넣는다.
+  window.openCurriculumAddSubjectDialog = (request = {}) => {
     try {
       if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) throw new Error("저장 원본을 먼저 복원하세요.");
       if (!state.curriculumImportedLayout) throw new Error("편제표를 먼저 업로드하세요.");
       catalog = curriculumSubjectCatalog(state.curriculumImportedLayout);
       selected = null;
       revision = state.curriculumMutationRevision;
-      field("Title").textContent = "과목 추가";
-      field("Current").textContent = "2022 개정 교육과정 과목 목록에서 선택하세요. 과목 종류와 교과군은 자동 지정됩니다.";
+      insertBefore = request.before || null;
+      const beforeName = insertBefore ? state.curriculumImportedLayout.planData?.subjects.find((item) => item.id === insertBefore)?.name : "";
+      field("Title").textContent = beforeName ? `'${beforeName}' 위에 과목 추가` : "과목 추가";
+      field("Current").textContent = beforeName
+        ? "2022 개정 교육과정 과목 목록에서 선택하세요. 선택한 행 바로 위에 새 행을 넣습니다."
+        : "2022 개정 교육과정 과목 목록에서 선택하세요. 과목 종류와 교과군은 자동 지정되고, 같은 구분·교과(군)의 끝에 넣습니다.";
       field("Action").querySelector('[value="add"]').disabled = false;
       field("Action").value = "add";
       field("Action").disabled = true;
@@ -512,7 +520,7 @@ function initCurriculumSubjectActions() {
       field("Grade").value = state.curriculumTargetGrade || "1";
       field("Semester").value = "1";
       field("Credit").value = "4";
-      field("Division").value = "학생 선택 교육과정";
+      field("Division").value = request.division || "학생 선택 교육과정";
       field("OfficialSuggestions").replaceChildren(...[...curriculumOfficialSubjects().values()].map((item) => {
         const option = document.createElement("option");
         option.value = item.name;
@@ -523,7 +531,8 @@ function initCurriculumSubjectActions() {
       dialog.showModal();
       field("Name").focus();
     } catch (error) { showAppToast(`과목 추가 열기 실패: ${error.message}`, "error"); }
-  });
+  };
+  document.getElementById("curriculumAddSubject").addEventListener("click", () => window.openCurriculumAddSubjectDialog());
   document.getElementById("curriculumPlanWrap").addEventListener("click", (event) => {
     const button = event.target.closest("[data-curriculum-subject]");
     if (button && state.curriculumImportedLayout?.derived) return;
@@ -538,6 +547,7 @@ function initCurriculumSubjectActions() {
         revision = state.curriculumMutationRevision;
         field("Title").textContent = `${selected.subject} 편성 변경`;
         field("Current").textContent = `현재: ${placementLabel(selected)} · ${selected.division} · ${selected.detail || "종류 미확인"}`;
+        insertBefore = null;
         field("Action").value = "move";
         field("Action").disabled = false;
         field("Action").querySelector('[value="add"]').disabled = true;

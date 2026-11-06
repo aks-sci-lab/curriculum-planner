@@ -183,7 +183,7 @@ function curriculumCompletionColumn(layout) {
 
 // 원본 행 번호는 수식·엑셀 복원을 위해 유지하고, 과목 삭제로 비워진 행만 접는다.
 function curriculumEmptySubjectRows(layout) {
-  if (!layout?.rows?.length) return [];
+  if (!layout?.rows?.length || layout.planData) return [];
   const columns = importedPlanColumnMap(layout);
   if (columns.subject < 0) return [];
   const covered = importedPlanCoveredCells(layout);
@@ -217,7 +217,10 @@ function curriculumChoiceTag(value) {
   return match ? Number(match[1]) : 0;
 }
 
-function curriculumChoiceBlocks(layout, columns = importedPlanColumnMap(layout)) {
+function curriculumChoiceBlocks(layout, columns) {
+  // 데이터로 바꾼 편제표는 선택과목군 데이터에서 묶음을 만든다.
+  if (layout?.planData && typeof curriculumDataChoiceBlocks === "function") return curriculumDataChoiceBlocks(layout);
+  columns ||= importedPlanColumnMap(layout);
   if (!layout?.rows?.length || columns.subject < 0) return [];
   const rows = layout.rows;
   const ranges = (layout.mergedRanges || []).map(curriculumChoiceRange).filter(Boolean);
