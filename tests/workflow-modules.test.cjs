@@ -611,3 +611,19 @@ test("a subject offered in both semesters is placed in the semester where its ch
   const unclear = { courses: courses.map((c) => ({ ...c })), students: [student(["a", "c", "e"]), student(["a", "b", "c", "d"])] };
   assert.deepEqual(plain(ctx.classifyApplicationRecords(unclear)), ["3학년 기후"]);
 });
+
+test("when a result sheet lists the same subject twice, the left column is the 1st semester", () => {
+  const ctx = vm.createContext({ normalizeRomanNumerals: (text) => String(text ?? "").replace(/Ⅱ/g, "2") });
+  vm.runInContext(functionSource(app, "function labelRepeatedCourseColumns(", "function createRecords("), ctx);
+  const courses = [
+    { column: 30, name: "융합과학 탐구", semesterKey: "" }, { column: 5, name: "화법과 언어", semesterKey: "" },
+    { column: 12, name: "융합과학 탐구", semesterKey: "" },
+    { column: 20, name: "미적분Ⅱ", semesterKey: "" }, { column: 22, name: "미적분 2", semesterKey: "2" }
+  ];
+  ctx.labelRepeatedCourseColumns(courses);
+  const by = (column) => courses.find((course) => course.column === column);
+  assert.deepEqual([by(12).semesterKey, by(12).name], ["1", "융합과학 탐구(1학기)"]);
+  assert.deepEqual([by(30).semesterKey, by(30).name], ["2", "융합과학 탐구(2학기)"]);
+  assert.equal(by(5).semesterKey, "", "a subject listed once is left alone");
+  assert.equal(by(20).semesterKey, "1", "the unlabeled partner gets the other semester");
+});

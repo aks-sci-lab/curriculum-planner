@@ -1473,6 +1473,28 @@
       });
     }
 
+    // 결과표에 같은 과목이 두 열로 나오면 앞쪽(왼쪽) 열이 1학기, 뒤쪽 열이 2학기다. 학기 표시가 없을 때만 채운다.
+    function labelRepeatedCourseColumns(courses) {
+      const key = (name) => normalizeRomanNumerals(String(name ?? "").replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, "")).replace(/\s+/g, "");
+      const byName = new Map();
+      for (const course of courses) {
+        if (!byName.has(key(course.name))) byName.set(key(course.name), []);
+        byName.get(key(course.name)).push(course);
+      }
+      for (const same of byName.values()) {
+        if (same.length !== 2) continue;
+        const [first, second] = same.sort((a, b) => a.column - b.column);
+        if (!first.semesterKey && !second.semesterKey) { first.semesterKey = "1"; second.semesterKey = "2"; }
+        else if (!first.semesterKey && second.semesterKey) first.semesterKey = second.semesterKey === "1" ? "2" : "1";
+        else if (first.semesterKey && !second.semesterKey) second.semesterKey = first.semesterKey === "1" ? "2" : "1";
+        else continue;
+        for (const course of same) {
+          if (!/[12]\s*학기/.test(course.name)) course.name = `${course.name.trim()}(${course.semesterKey}학기)`;
+        }
+      }
+      return courses;
+    }
+
     function createRecords(rows) {
       const headerIndex = rows.findIndex((row) =>
         row?.some((value) => String(value).trim() === "학년") &&
@@ -1520,6 +1542,7 @@
         });
       }
       if (!courses.length) throw new Error("과목명과 학점이 있는 열을 찾지 못했습니다.");
+      labelRepeatedCourseColumns(courses);
 
       const students = [];
       const skippedRows = [];
