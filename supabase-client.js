@@ -1876,7 +1876,9 @@ var updateRetakeReadiness;
     const grade = String(state.applicationMenuGrade || "1");
     byId("testBotAutoMessage").textContent = "";
     updateAutoRepeatNote();
-    byId("testBotAutoSummary").textContent = `${byId("schoolYear").value}학년도 ${state.currentRound}차 · 현 ${grade}학년 → ${Number(grade) + 1}학년 과목 · 학교명 '[테스트] ${byId("schoolName").value.trim().replace(/^\[테스트\]\s*/, "") || "학교"}'`;
+    // 2차 이상 차수도 자동 테스트를 허용한다([테스트] 신청이라 실제 차수 자료와 무관). 확인 창에 몇 차 테스트인지 드러낸다.
+    byId("testBotAutoSummary").textContent = `${state.currentRound}차 테스트 · ${byId("schoolYear").value}학년도 · 현 ${grade}학년 → ${Number(grade) + 1}학년 과목 · 학교명 '[테스트] ${byId("schoolName").value.trim().replace(/^\[테스트\]\s*/, "") || "학교"}'` +
+      (Number(state.currentRound) > 1 ? ` · [테스트] 신청이라 실제 ${state.currentRound}차 결과와 무관합니다.` : "");
     byId("testBotAutoDialog").showModal();
   });
   byId("testBotAutoCancel").addEventListener("click", () => byId("testBotAutoDialog").close());

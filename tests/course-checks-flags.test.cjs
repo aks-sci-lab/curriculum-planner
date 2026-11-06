@@ -99,11 +99,13 @@ test("prereq flags: per-course warning counts, unknowns kept apart, one pass reu
   assert.match(html, /현 1학년 2반 34번 진가람 · 미적분Ⅱ: 미적분Ⅰ 미이수\(2-1에 미적분Ⅰ 없음\)/);
   assert.match(html, /위계 경고 2명/);
   assert.doesNotMatch(html, /확인 불가/);
-  // 배지: 경고 수는 눈에 띄게, 확인 불가는 따로 흐리게(누르면 같은 팝업).
+  // 배지: 경고 수만 과목 행에 둔다. 확인 불가는 과목 행에 두지 않는다(학년 머리줄·팝업에만).
   assert.match(ctx.courseCheckCourseBadges(flags, "1:c3", "미적분Ⅱ"), /class="at-risk-badge prereq-badge"[^>]*data-prereq-course="1:c3"[^>]*>위계 경고 2</);
   const unknownBadge = ctx.courseCheckCourseBadges(flags, "2:d2", "화학 반응의 세계");
-  assert.doesNotMatch(unknownBadge, /위계 경고/);
-  assert.match(unknownBadge, /class="prereq-unknown-badge"[^>]*>확인 불가 1</);
+  assert.equal(unknownBadge, "", "확인 불가만 있는 과목 행에는 배지가 없다");
+  // 확인 불가 학생은 그 과목 팝업 안 접힌 칸에는 남는다.
+  const unknownHtml = ctx.courseCheckStudentsDialogHtml(flags.courses.get("2:d2").violations, flags.courses.get("2:d2").unknowns, { title: "화학 반응의 세계" });
+  assert.match(unknownHtml, /<details class="prereq-unknown-details"><summary>확인 불가 1명/);
   assert.equal(ctx.courseCheckCourseBadges(flags, "1:c5", "물리학"), "");
   // 학년 머리줄: 위계 경고·확인 불가(따로)는 학생 팝업, 학점은 점검 팝업.
   const note1 = ctx.courseCheckAggregateNote("1", flags);
@@ -215,7 +217,14 @@ test("retake list: a prerequisite warning column after closures (a closed prereq
   const warned = checks.state.students[1];
   // 가나다: 미적분Ⅰ이 폐강되면 미적분Ⅱ가 선이수 없이 남는다.
   assert.equal(checks.courseCheckPrereqText(warned), "");
-  assert.equal(checks.courseCheckPrereqText(warned, { exclude: ["미적분Ⅰ"] }), "미적분Ⅱ: 미적분Ⅰ 미이수(2-1에 미적분Ⅰ 없음)");
+  assert.equal(checks.courseCheckPrereqText(warned, { exclude: ["미적분Ⅰ"] }), "미적분Ⅱ: 선이수 과목(미적분Ⅰ) 폐강");
+  // 원래부터 이수하지 않은 경고는 폐강과 섞지 않는다: 진가람(미적분Ⅰ 없이 미적분Ⅱ)은 화학이 폐강되면
+  // 물질과 에너지는 '선이수 과목(화학) 폐강', 미적분Ⅱ는 그대로 '미적분Ⅰ 미이수'.
+  const jin = checks.state.students[0];
+  assert.equal(checks.courseCheckPrereqText(jin, { exclude: ["화학"] }),
+    "미적분Ⅱ: 미적분Ⅰ 미이수(2-1에 미적분Ⅰ 없음) / 물질과 에너지: 선이수 과목(화학) 폐강");
+  // 학생이 고르지 않은 선이수 과목이 폐강 목록에 있어도 '폐강'으로 쓰지 않는다.
+  assert.equal(checks.courseCheckPrereqText(jin, { exclude: ["미적분Ⅰ"] }), "미적분Ⅱ: 미적분Ⅰ 미이수(2-1에 미적분Ⅰ 없음)");
   let files = null;
   const ctx = vm.createContext({
     retakeTargets: () => ({ sourceRound: "1", rows: [{ student: warned, courses: ["미적분Ⅰ"] }] }),
@@ -228,7 +237,7 @@ test("retake list: a prerequisite warning column after closures (a closed prereq
   vm.runInContext(functionSource(app, "function downloadRetakeList(", "function applicationCohortYear("), ctx);
   ctx.downloadRetakeList();
   assert.match(files["xl/worksheets/sheet1.xml"], /위계 경고\(폐강 후\)/);
-  assert.match(files["xl/worksheets/sheet1.xml"], /미적분Ⅱ: 미적분Ⅰ 미이수/);
+  assert.match(files["xl/worksheets/sheet1.xml"], /미적분Ⅱ: 선이수 과목\(미적분Ⅰ\) 폐강/);
   assert.match(functionSource(app, "function renderRetakePanel(", "function downloadRetakeList("), /<th>위계 경고\(폐강 후\)<\/th>/);
 });
 
