@@ -16,8 +16,12 @@ function recalculatePlanFormulas(layout) {
   const formulas = layout.formulas || {};
   const covered = typeof importedPlanCoveredCells === "function" ? importedPlanCoveredCells(layout) : new Set();
   const computed = new Map(), visiting = new Set();
+  const sheetMerges = typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout).filter((merge) => merge.kind !== "plain") : [];
   function cellValue(row, column) {
     const key = `${row}:${column}`;
+    const merge = sheetMerges.find((merge) => row >= merge.startRow && row <= merge.endRow &&
+      column >= merge.startColumn && column <= merge.endColumn);
+    if (merge) return row === merge.startRow ? merge.pick * merge.credit : 0;
     if (covered.has(key)) return 0;
     if (computed.has(key)) return computed.get(key);
     if (visiting.has(key)) throw new Error("순환 참조 수식이 있습니다.");
@@ -39,7 +43,17 @@ function recalculatePlanFormulas(layout) {
       const r1 = Number(a.match(/\d+/)[0])-1, r2 = Number(b.match(/\d+/)[0])-1;
       const c1 = columnIndex(a.replace(/\$/g, "")), c2 = columnIndex(b.replace(/\$/g, ""));
       let total = 0;
-      for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) total += cellValue(r,c);
+      for (const merge of sheetMerges) {
+        if (merge.startRow <= r2 && merge.endRow >= r1) {
+          const columns = Math.max(0, Math.min(c2, merge.endColumn) - Math.max(c1, merge.startColumn) + 1);
+          total += columns * merge.pick * merge.credit;
+        }
+      }
+      for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) {
+        if (sheetMerges.some((merge) => r >= merge.startRow && r <= merge.endRow &&
+          c >= merge.startColumn && c <= merge.endColumn)) continue;
+        total += cellValue(r,c);
+      }
       return total;
     };
     expression = expression.replace(/SUM\(([^()]*)\)/g, (_, args) =>
@@ -67,7 +81,23 @@ function recalculatePlanFormulas(layout) {
 }
 
 function insertPlanFormulaRow(previous, next, row) {
+  if (previous.sheetMerges) next.sheetMerges = previous.sheetMerges.map((merge) =>
+    ({ ...merge, reference: shiftPlanFormula(merge.reference, 1, 0, row) }));
+  if (previous.sheetCellEdits) next.sheetCellEdits = Object.fromEntries(Object.entries(previous.sheetCellEdits).map(([key, value]) => {
+    const [r, c] = key.split(":").map(Number);
+    return [`${r >= row ? r + 1 : r}:${c}`, value];
+  }));
+  if (previous.retiredSubjectRows) next.retiredSubjectRows = previous.retiredSubjectRows.map((index) => index >= row ? index + 1 : index);
+  if (previous.choiceBlockRanges) next.choiceBlockRanges = previous.choiceBlockRanges.map((range) => ({
+    ...range,
+    startRow: range.startRow >= row ? range.startRow + 1 : range.startRow,
+    endRow: range.endRow >= row ? range.endRow + 1 : range.endRow
+  }));
   next.rowInsertions = [...(previous.rowInsertions || []), row];
+  if (previous.formulaEdits) next.formulaEdits = Object.fromEntries(Object.entries(previous.formulaEdits).map(([key, value]) => {
+    const [r, c] = key.split(":").map(Number);
+    return [`${r >= row ? r + 1 : r}:${c}`, value];
+  }));
   next.formulas = Object.fromEntries(Object.entries(previous.formulas || {}).map(([key, formula]) => {
     const [r,c]=key.split(":").map(Number);
     return [`${r>=row?r+1:r}:${c}`, shiftPlanFormula(formula, 1, 0, row)];
@@ -140,6 +170,36 @@ async function buildOriginalCurriculumWorkbook(layout) {
   }
   for(const row of layout.rowInsertions || [])shiftSheetRow(row+offsetRow);
   const covered=importedPlanCoveredCells(layout);
+  const sheetMerges = typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout) : [];
+  const exportFormula = (formula) => {
+    const valueAt = (ref) => {
+      const row = Number(ref.match(/\d+/)[0]) - 1, column = columnIndex(ref.replace(/\$/g, ""));
+      const merge = sheetMerges.find((merge) => merge.kind !== "plain" && row >= merge.startRow &&
+        row <= merge.endRow && column >= merge.startColumn && column <= merge.endColumn);
+      return merge ? String(row === merge.startRow ? merge.pick * merge.credit : 0) : ref;
+    };
+    return formula.split(/("(?:[^"]|"")*")/).map((part) => part.startsWith('"') ? part :
+      part.replace(/SUM\(([^()]*)\)/gi, (_, args) => `SUM(${args.split(/[,;]/).flatMap((term) => {
+        const range = term.trim().match(/^(\$?[A-Z]+\$?\d+):(\$?[A-Z]+\$?\d+)$/);
+        if (!range) return [term];
+        const bounds = curriculumChoiceRange(`${range[1].replace(/\$/g, "")}:${range[2].replace(/\$/g, "")}`);
+        if (!sheetMerges.some((merge) => merge.kind !== "plain" && merge.startRow <= bounds.endRow &&
+          merge.endRow >= bounds.startRow && merge.startColumn <= bounds.endColumn && merge.endColumn >= bounds.startColumn)) return [term];
+        const refs = [];
+        for (const merge of sheetMerges.filter((merge) => merge.kind !== "plain")) {
+          if (merge.startRow <= bounds.endRow && merge.endRow >= bounds.startRow) {
+            const count = Math.max(0, Math.min(bounds.endColumn, merge.endColumn) - Math.max(bounds.startColumn, merge.startColumn) + 1);
+            if (count) refs.push(String(count * merge.pick * merge.credit));
+          }
+        }
+        for (let r = bounds.startRow; r <= bounds.endRow; r++) for (let c = bounds.startColumn; c <= bounds.endColumn; c++) {
+          if (sheetMerges.some((merge) => merge.kind !== "plain" && r >= merge.startRow && r <= merge.endRow &&
+            c >= merge.startColumn && c <= merge.endColumn)) continue;
+          refs.push(`${columnName(c)}${r + 1}`);
+        }
+        return refs;
+      }).join(",")})`).replace(/\$?[A-Z]+\$?\d+/g, valueAt)).join("");
+  };
   const sourceValues=new Map();
   // Unchanged cells keep their original XML, including rich text and formula caches.
   const parsed=await parseWorkbook(buffer,{includeLayout:true});
@@ -151,16 +211,25 @@ async function buildOriginalCurriculumWorkbook(layout) {
     const value=String(layout.rows[r][c] ?? ""), sourceRow=rowSources[r];
     const old=sourceRow===null?"":String(original.rows[sourceRow]?.[c+offsetColumn] ?? "");
     const originalFormula = sourceRow === null ? null : original.layout.formulas?.[`${sourceRow}:${c+offsetColumn}`];
-    if(value===old && !Object.hasOwn(layout.formulas || {}, `${r}:${c}`) && !originalFormula)continue;
+    const merge = sheetMerges.find((merge) => r >= merge.startRow && r <= merge.endRow &&
+      c >= merge.startColumn && c <= merge.endColumn);
+    if(value===old && !merge && !layout.sheetCellEdits?.[`${r}:${c}`] &&
+        !Object.hasOwn(layout.formulas || {}, `${r}:${c}`) && !originalFormula)continue;
     const ref=`${columnName(c+offsetColumn)}${r+offsetRow+1}`;
     let formula=layout.formulas?.[`${r}:${c}`];
     if(formula !== undefined) {
-      if(originalFormula !== undefined) {
+      if(originalFormula !== undefined && !layout.formulaEdits?.[`${r}:${c}`]) {
         formula=originalFormula;
         for(const insertedRow of layout.rowInsertions || [])formula=shiftPlanFormula(formula,1,0,insertedRow+offsetRow);
       } else formula=shiftPlanFormula(formula,offsetRow,offsetColumn);
+      if (sheetMerges.some((merge) => merge.kind !== "plain")) {
+        formula = shiftPlanFormula(exportFormula(shiftPlanFormula(formula, -offsetRow, -offsetColumn)), offsetRow, offsetColumn);
+      }
     }
-    sourceValues.set(ref,{value,formula});
+    if (merge && merge.kind !== "plain") {
+      if (r === merge.startRow && c === merge.startColumn) sourceValues.set(ref, { value: curriculumSheetMergeLabel(merge), formula: undefined });
+      else sourceValues.set(ref, { value: "", formula: undefined });
+    } else sourceValues.set(ref,{value,formula});
   }
   for(const [ref,{value,formula}] of sourceValues){
     const rowNumber=Number(ref.match(/\d+/)[0]);
@@ -178,7 +247,30 @@ async function buildOriginalCurriculumWorkbook(layout) {
       text.setAttribute("xml:space","preserve");text.textContent=value;is.appendChild(text);cell.appendChild(is);
     }
   }
-  const merges=sheet.getElementsByTagNameNS(NS_MAIN,"mergeCells")[0];
+  const dimension = sheet.getElementsByTagNameNS(NS_MAIN,"dimension")[0];
+  if (typeof curriculumEmptySubjectRows === "function") {
+    const blocks = curriculumChoiceBlocks(layout);
+    for (const index of curriculumEmptySubjectRows(layout)) {
+      if (blocks.some((block) => block.startRow === index)) continue;
+      const row = [...sheetData.children].find((node) => Number(node.getAttribute("r")) === index + offsetRow + 1);
+      if (row) row.setAttribute("hidden", "1");
+    }
+  }
+  if (dimension) {
+    const [start, end = start] = dimension.getAttribute("ref").split(":");
+    const lastColumn = Math.max(columnIndex(end), offsetColumn + Math.max(...layout.rows.map((row) => row.length)) - 1);
+    const lastRow = Math.max(Number(end.match(/\d+/)[0]), offsetRow + layout.rows.length);
+    dimension.setAttribute("ref", `${start}:${columnName(lastColumn)}${lastRow}`);
+  }
+  let merges=sheet.getElementsByTagNameNS(NS_MAIN,"mergeCells")[0];
+  if (!merges && layout.mergedRanges?.length) {
+    merges = sheet.createElementNS(NS_MAIN, "mergeCells");
+    const afterMerges = new Set(["phoneticPr", "conditionalFormatting", "dataValidations", "hyperlinks",
+      "printOptions", "pageMargins", "pageSetup", "headerFooter", "rowBreaks", "colBreaks", "customProperties",
+      "cellWatches", "ignoredErrors", "smartTags", "drawing", "legacyDrawing", "legacyDrawingHF", "picture",
+      "oleObjects", "controls", "webPublishItems", "tableParts", "extLst"]);
+    sheet.documentElement.insertBefore(merges, [...sheet.documentElement.children].find((node) => afterMerges.has(node.localName)) || null);
+  }
   if(merges){
     for(const merge of [...merges.children]){
       const ref=merge.getAttribute("ref"), start=ref.split(":")[0],r=Number(start.match(/\d+/)[0])-1,c=columnIndex(start);
@@ -203,11 +295,10 @@ async function buildOriginalCurriculumWorkbook(layout) {
 }
 
 document.getElementById("exportCurriculumPlan").addEventListener("click",async()=>{
-  if(typeof requireTeacherLogin!=="function" || !requireTeacherLogin())return;
+  if(typeof requireLocalWorkspaceAccess==="function" && !requireLocalWorkspaceAccess())return;
   const button=document.getElementById("exportCurriculumPlan");button.disabled=true;
   try{
     const blob=await buildOriginalCurriculumWorkbook(state.curriculumImportedLayout);
-    if(!requireTeacherLogin())throw new Error("로그인이 만료되었습니다. 다시 로그인하세요.");
     const url=URL.createObjectURL(blob),link=document.createElement("a");
     link.href=url;    link.download=state.curriculumPlanFileName.replace(/\.xlsx$/i,`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`);
     link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);

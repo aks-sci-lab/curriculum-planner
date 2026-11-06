@@ -32,6 +32,8 @@ test("nested state and array mutations schedule one persistence pass", () => {
 
   assert.equal(scheduled, 1);
   assert.equal(persisted, 0);
+  assert.equal(vm.runInContext('state.rounds["2"].students === state.students', context), true,
+    "sharing observed arrays must not wrap a proxy in another proxy");
   timerCallback();
   assert.equal(persisted, 1);
 });

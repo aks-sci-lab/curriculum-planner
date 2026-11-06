@@ -1,8 +1,8 @@
 "use strict";
 var requireTeacherLogin;
-var isDeveloperAccount;
 var unlinkApplicationRound;
 var updateApplicationGradeControls;
+var updateRetakeReadiness;
 
 (() => {
   const PROJECT_URL = "https://hapfkdkbhnqpfjdepozv.supabase.co";
@@ -21,16 +21,15 @@ var updateApplicationGradeControls;
   function isOfflineWorkspace() {
     return new URL(window.location.href).protocol === "file:" || navigator.onLine === false;
   }
-  isDeveloperAccount = () => !!session && session.user.email.toLowerCase() === "lany0665@gmail.com" && Date.now() - lastActivity < IDLE_MS;
   requireTeacherLogin = () => {
     if (session && Date.now() - lastActivity < IDLE_MS) return true;
     if (isOfflineWorkspace()) {
-      byId("cloudTeacherMessage").textContent = "오프라인입니다. 온라인 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다.";
+      byId("cloudTeacherMessage").textContent = "오프라인입니다. 웹 수강신청 기능은 인터넷 연결과 교사 로그인이 필요합니다.";
       return false;
     }
-    byId("cloudTeacherMessage").textContent = "편제표 업로드 전에 구글 로그인을 해주세요.";
+    byId("cloudTeacherMessage").textContent = "웹 수강신청 기능은 구글 로그인 후 이용하세요.";
     updateAccountControls();
-    byId("teacherLoginMessage").textContent = "오른쪽 위의 구글 로그인 후 이용하세요.";
+    byId("teacherLoginMessage").textContent = "웹 수강신청 기능은 오른쪽 위 구글 로그인 후 이용하세요.";
     byId("curriculumGoogleLogin").focus();
     return false;
   };
@@ -40,26 +39,29 @@ var updateApplicationGradeControls;
 
   for (const [guideId, tabId] of [
     ["applicationGuideGroups", "applicationGroupsTab"],
-    ["applicationGuideOnline", "applicationOnlineTab"],
-    ["applicationGuideResults", "applicationResultsTab"],
   ]) {
     byId(guideId).addEventListener("click", () => byId(tabId).click());
   }
+  byId("applicationGuideResults").addEventListener("click", () => {
+    const tabId = state.applicationMode === "web" ? "applicationOnlineTab" : "applicationResultsTab";
+    byId(tabId).click();
+  });
+  byId("applicationGuideAggregate").addEventListener("click", () => {
+    if (typeof switchWorkflowStep === "function") switchWorkflowStep(4);
+  });
   function updateAccountControls() {
     const studentRoute = !!eventId || new URL(window.location.href).hash === "#student" || new URL(window.location.href).hash.startsWith("#apply=");
     const offlineWorkspace = isOfflineWorkspace();
     const loggedIn = !!session && Date.now() - lastActivity < IDLE_MS && !studentRoute;
-    const workspaceAvailable = loggedIn || offlineWorkspace;
+    // 교사 작업 화면(편제표·결과 업로드·집계·통계)은 로그인 없이 항상 표시하고, 웹 수강신청만 로그인을 요구한다.
     byId("teacherHeader").classList[studentRoute ? "add" : "remove"]("hidden");
-    byId("teacherWorkspace").classList[workspaceAvailable && !studentRoute ? "remove" : "add"]("hidden");
-    byId("teacherLoginGate").classList[workspaceAvailable || studentRoute ? "add" : "remove"]("hidden");
+    byId("teacherWorkspace").classList[studentRoute ? "add" : "remove"]("hidden");
     byId("headerTeacherLogout").classList[loggedIn ? "remove" : "add"]("hidden");
     byId("curriculumGoogleLogin").classList[loggedIn || offlineWorkspace ? "add" : "remove"]("hidden");
-    byId("developerResultUpload").classList[isDeveloperAccount() ? "remove" : "add"]("hidden");
     byId("curriculumGoogleLogin").disabled = !!session;
     byId("curriculumLoginStatus").textContent = session
       ? `${session.user.email} · 로그인 중`
-      : offlineWorkspace ? "오프라인 · 로컬 기능 사용 가능" : "온라인 신청 관리에만 교사 로그인이 필요합니다.";
+      : offlineWorkspace ? "오프라인 · 로컬 기능 사용 가능" : "로그인 없이 사용 가능 · 웹 수강신청만 로그인 필요";
     byId("cloudTeacherGoogleLogin").classList[offlineWorkspace ? "add" : "remove"]("hidden");
     byId("cloudTeacherOfflineNotice").classList[offlineWorkspace ? "remove" : "add"]("hidden");
   }
@@ -463,7 +465,12 @@ var updateApplicationGradeControls;
     const revision = syncRevision;
     const linked = knownEvents.filter((event) => linkedEvents.has(event.id));
     const rounds = [...new Set(linked.map((event) => String(event.round)))];
+    const lockedRounds = [];
     for (const round of rounds) {
+      if (typeof isRoundLocked === "function" && isRoundLocked(round)) {
+        lockedRounds.push(round);
+        continue;
+      }
       const events = linked.filter((event) => String(event.round) === round);
       if (events.some((event) => event.school_name !== events[0].school_name || event.school_year !== events[0].school_year)) {
         throw new Error(`${round}차에 다른 학교·학년도의 신청이 연동되어 있습니다. 연동을 해제하세요.`);
@@ -507,7 +514,8 @@ var updateApplicationGradeControls;
       }
     }
     byId("cloudSyncStatus").textContent = linked.length
-      ? `집계표 자동 연동 ${linked.length}개 신청 · 최근 갱신 ${new Date().toLocaleTimeString("ko-KR")} · ${realtimeConnected ? "실시간" : "연결 전 30초 간격"}`
+      ? `집계표 자동 연동 ${linked.length}개 신청 · 최근 갱신 ${new Date().toLocaleTimeString("ko-KR")} · ${realtimeConnected ? "실시간" : "연결 전 30초 간격"}` +
+        (lockedRounds.length ? ` · 확정된 ${lockedRounds.map((round) => `${round}차`).join(", ")}는 반영 중지` : "")
       : "집계표 연동 신청 없음";
   }
 
@@ -528,7 +536,7 @@ var updateApplicationGradeControls;
     if (teacherBusy) return;
     teacherBusy = true;
     const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button"),
-      byId("applicationGrade1Tab"), byId("applicationGrade2Tab")];
+      byId("applicationGrade1Tab"), byId("applicationGrade2Tab"), byId("schoolYear")];
     const previous = buttons.map((button) => button.disabled);
     buttons.forEach((button) => { button.disabled = true; });
     byId("cloudRosterInput").disabled = true;
@@ -546,6 +554,7 @@ var updateApplicationGradeControls;
       byId("cloudDownloadCodes").disabled = !latestCodes;
       byId("cloudPrintCodes").disabled = false;
       byId("cloudCreateEvent").disabled = !pendingRoster || !session;
+      updateRetakeReadiness();
     }
   }
 
@@ -581,7 +590,7 @@ var updateApplicationGradeControls;
       source.appendChild(option);
     }
     source.value = [...source.children].some((option) => option.value === previous) ? previous : source.children[0]?.value || "";
-    byId("cloudCreateRetake").disabled = !session || !source.children.length;
+    updateRetakeReadiness();
     const list = byId("cloudEventList");
     list.replaceChildren();
     if (!events.length) list.textContent = `현재 ${Number(grade) - 1}학년의 수강신청이 없습니다.`;
@@ -654,6 +663,50 @@ var updateApplicationGradeControls;
       list.appendChild(section);
     }
   }
+
+  function retakeClosedSubjects(source) {
+    const data = state.rounds?.[String(source.round)];
+    const closed = [];
+    for (const [key, verdict] of Object.entries(state.roundClosures?.[String(source.round)] || {})) {
+      if (verdict !== "closed") continue;
+      const separator = key.indexOf(":");
+      const grade = String(Number(key.slice(0, separator)) + 1);
+      const course = data?.courses.find((item) => String(item.column) === key.slice(separator + 1));
+      if (!course) continue;
+      const subject = course.applicationSubject?.subject || course.name.replace(/\([23]학년\)$/, "").trim();
+      if (source.subjects?.[grade]?.some((item) => item.subject === subject)) closed.push({ grade, subject });
+    }
+    return closed;
+  }
+
+  updateRetakeReadiness = () => {
+    const source = knownEvents.find((event) => event.id === byId("cloudRetakeSource").value);
+    const lines = [];
+    if (!source) {
+      lines.push("이 학년·학년도의 이전 신청을 선택하세요.");
+    } else {
+      const data = state.rounds?.[String(source.round)];
+      const closed = retakeClosedSubjects(source);
+      lines.push(`${source.round}차 · ${source.is_open ? "접수 중 — 먼저 마감하세요." : "마감 완료"}`);
+      lines.push(data ? `로컬 연동 명단 ${data.students.length}명 · 폐강 확정 ${closed.length}과목` : "집계표 연동이 필요합니다.");
+      lines.push(byId("cloudRetakeMode").value === "affected"
+        ? "폐강 과목 신청 학생만 대체 선택 · 기존 개설 과목과 비대상 학생 결과 유지"
+        : "전체 학생 재선택 · 폐강 과목을 제외한 전체 선택지 제공");
+      lines.push("새 신청 링크·개인 코드가 발급됩니다. 생성 후 새 코드를 저장·안내하세요.");
+    }
+    byId("cloudRetakeReadiness").textContent = lines.join("\n");
+    byId("cloudReviewRetake").disabled = !source || !state.rounds?.[String(source?.round)];
+    byId("cloudCreateRetake").disabled = teacherBusy || !session || !source || source.is_open ||
+      !state.rounds?.[String(source?.round)] || !retakeClosedSubjects(source).length;
+  };
+  byId("cloudRetakeSource").addEventListener("change", updateRetakeReadiness);
+  byId("cloudRetakeMode").addEventListener("change", updateRetakeReadiness);
+  byId("cloudReviewRetake").addEventListener("click", () => {
+    const source = knownEvents.find((event) => event.id === byId("cloudRetakeSource").value);
+    if (!source || !state.rounds?.[String(source.round)]) return;
+    switchRound(String(source.round));
+    switchWorkflowStep(4);
+  });
 
   async function openTeacherEditor(event) {
     const revision = sessionRevision;
@@ -996,16 +1049,7 @@ var updateApplicationGradeControls;
     if (typeof syncActiveRound === "function") syncActiveRound();
     const data = state.rounds?.[String(source.round)];
     if (!data) throw new Error("이전 차수를 집계표에 연동한 뒤 폐강을 확정하세요.");
-    const closed = [];
-    for (const [key, verdict] of Object.entries(state.roundClosures?.[String(source.round)] || {})) {
-      if (verdict !== "closed") continue;
-      const separator = key.indexOf(":");
-      const grade = String(Number(key.slice(0,separator)) + 1);
-      const course = data.courses.find((item) => String(item.column) === key.slice(separator+1));
-      if (!course) continue;
-      const subject = course.applicationSubject?.subject || course.name.replace(/\([23]학년\)$/, "").trim();
-      if (source.subjects?.[grade]?.some((item) => item.subject === subject)) closed.push({grade,subject});
-    }
+    const closed = retakeClosedSubjects(source);
     if (!closed.length) throw new Error("선택한 이전 차수의 과목을 집계표에서 폐강으로 확정하세요.");
     const mode = byId("cloudRetakeMode").value;
     latestCodes = await rpc("create_next_course_event", {p_source:source.id,p_closed:closed,p_mode:mode}, true);

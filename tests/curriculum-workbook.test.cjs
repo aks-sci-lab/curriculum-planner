@@ -19,10 +19,11 @@ test("numeric edits recalculate SUM ranges, references and dependent subtotals",
 });
 test("inserted rows shift formula anchors and ranges and preserve absolute references",()=>{
   const ctx=context();
-  const before={formulas:{"3:1":"SUM($A$1:A3)"},rowInsertions:[]},next={};
+  const before={formulas:{"3:1":"SUM($A$1:A3)"},formulaEdits:{"3:1":true},rowInsertions:[]},next={};
   ctx.insertPlanFormulaRow(before,next,1);
   assert.equal(next.formulas["4:1"],"SUM($A$1:A4)");
   assert.deepEqual([...next.rowInsertions],[1]);
+  assert.deepEqual(JSON.parse(JSON.stringify(next.formulaEdits)),{"4:1":true});
   assert.equal(ctx.shiftPlanFormula("SUM(G5:G73)",-2,-1),"SUM(F3:F71)");
   assert.equal(ctx.shiftPlanFormula("SUM($A$1:B2)",2,1,null,true),"SUM($A$1:C4)");
 });
