@@ -1717,6 +1717,9 @@
 .curriculum-versions-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .curriculum-version-dialog .curriculum-versions-form { margin: 12px 0; }
 .curriculum-version-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.curriculum-office-options { display: grid; gap: 8px; margin: 12px 0; }
+.curriculum-office-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid #d8dee8; border-radius: 8px; }
+.curriculum-office-option:has(input:disabled) { color: #8a94a3; }
 
 /* 4단계 집계·개설 확정: 위쪽 한 줄 도구 모음, 학년 탭(요약 겸용), 한 과목 한 행 표 */
 #aggregatePanel .aggregate-toolbar { gap: 6px 10px; margin: 0 0 4px; padding: 6px 10px; }

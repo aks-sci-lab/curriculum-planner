@@ -66,6 +66,8 @@ function planExportWriteCell(sheet, cell, value, formula) {
 
 async function buildCurriculumDataWorkbook(layout) {
   if (!layout?.planData || !layout.planTemplate) throw new Error("편제표 데이터가 없습니다. 편제표를 다시 업로드하세요.");
+  // 울산 편제 점검 프로그램에서 불러온 편제표는 원본 양식이 없으므로 기본 양식(화면 표 그대로)으로 저장한다.
+  if (layout.officeImport && typeof buildCurriculumBasicWorkbook === "function") return buildCurriculumBasicWorkbook(layout);
   if (!layout.archiveId || !layout.sheetPath) throw new Error("원본 양식을 쓰려면 편제표를 다시 업로드하세요.");
   const buffer = await curriculumArchiveStore("get", layout.archiveId);
   if (!buffer) throw new Error("저장된 원본 편제표가 없습니다. 다시 업로드하세요.");
