@@ -379,6 +379,7 @@
           }
           localStorage.setItem(STORAGE_KEY, serialized);
           lastSavedWorkspace = serialized;
+          if (typeof scheduleWorkspaceFileSave === "function") scheduleWorkspaceFileSave();
         }
         updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
         return true;
@@ -472,25 +473,31 @@
       }
     }
 
+    const WORKSPACE_BACKUP_VERSION = 1;
+    function buildWorkspaceBackup() {
+      syncActiveRound();
+      syncActiveCurriculumCohort();
+      const groups = {};
+      for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index);
+        if (key?.startsWith("curriculum-color-semester-groups-v3")) groups[key] = localStorage.getItem(key);
+      }
+      return {
+        type: "curriculum-workspace-backup",
+        backupVersion: WORKSPACE_BACKUP_VERSION,
+        appVersion: typeof APP_VERSION === "string" ? APP_VERSION : "",
+        createdAt: new Date().toISOString(),
+        workspace: workspacePayload(),
+        protectedStoredState,
+        groups,
+        pendingGroupSettings: typeof getApplicationGroupBackup === "function" ? getApplicationGroupBackup() : null,
+        note: "개인정보가 포함될 수 있습니다. 원본 엑셀과 온라인 서버 자료는 별도로 백업하세요. 로그인 정보는 포함하지 않습니다."
+      };
+    }
+
     function downloadWorkspaceBackup() {
       try {
-        syncActiveRound();
-        syncActiveCurriculumCohort();
-        const groups = {};
-        for (let index = 0; index < localStorage.length; index++) {
-          const key = localStorage.key(index);
-          if (key?.startsWith("curriculum-color-semester-groups-v3")) groups[key] = localStorage.getItem(key);
-        }
-        const backup = {
-          type: "curriculum-workspace-backup",
-          createdAt: new Date().toISOString(),
-          workspace: workspacePayload(),
-          protectedStoredState,
-          groups,
-          pendingGroupSettings: typeof getApplicationGroupBackup === "function" ? getApplicationGroupBackup() : null,
-          note: "개인정보가 포함될 수 있습니다. 원본 엑셀과 온라인 서버 자료는 별도로 백업하세요. 로그인 정보는 포함하지 않습니다."
-        };
-        downloadTextFile(JSON.stringify(backup, null, 2), "교육과정_작업자료_백업.json", "application/json");
+        downloadTextFile(JSON.stringify(buildWorkspaceBackup(), null, 2), "교육과정_작업자료_백업.json", "application/json");
         markWorkspaceBackup();
         showAppToast("백업 파일을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
       } catch (error) {
@@ -498,8 +505,9 @@
       }
     }
 
-    async function restoreWorkspaceBackup(file) {
-      if (!file) return;
+    // afterWrite: 자료를 실제로 교체한 직후(새로고침 직전)에 한 번 부른다. 파일 연결처럼 교체가 끝난 뒤에만 해야 하는 일에 쓴다.
+    async function restoreWorkspaceBackup(file, afterWrite = null) {
+      if (!file) return false;
       const previous = new Map();
       const written = [];
       try {
@@ -507,6 +515,9 @@
         if (backup.type !== "curriculum-workspace-backup" || !backup.groups ||
             typeof backup.groups !== "object" || Array.isArray(backup.groups)) {
           throw new Error("교육과정 작업 자료 백업 JSON을 선택하세요.");
+        }
+        if (Number(backup.backupVersion) > WORKSPACE_BACKUP_VERSION) {
+          throw new Error("더 새로운 버전의 프로그램에서 만든 파일입니다. 프로그램을 최신 버전으로 업데이트하세요.");
         }
         validateWorkspaceData(backup.workspace);
         const entries = [[STORAGE_KEY, JSON.stringify(backup.workspace)]];
@@ -537,6 +548,7 @@
           localStorage.setItem(key, value);
           written.push(key);
         }
+        if (afterWrite) await afterWrite();
         statePersistenceReady = false;
         statePersistenceBlocked = true;
         if (statePersistenceTimer !== null) window.clearTimeout(statePersistenceTimer);

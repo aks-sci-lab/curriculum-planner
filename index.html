@@ -62,7 +62,7 @@
   <div class="workspace hidden" id="teacherWorkspace">
     <aside class="app-sidebar gap-3">
       <div class="sidebar-brand">
-        <div class="brand"><span class="brand-mark" aria-hidden="true">✓</span><span>교육과정 관리</span></div>
+        <div class="brand"><span class="brand-mark" aria-hidden="true">✓</span><span>교육과정 관리</span><span class="app-version" id="appVersion"></span></div>
         <a class="file-button" href="#student">학생 수강신청 입구</a>
       </div>
       <section class="panel workflow-panel" aria-label="업무 흐름">
@@ -100,6 +100,11 @@
           <span id="workspaceBackupStatus" class="workspace-backup-status" aria-live="polite"></span>
           <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">파일로 백업하기</button>
           <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json"></label>
+          <span id="workspaceFileStatus" class="workspace-file-status hidden" aria-live="polite">PC 파일 자동 저장 안 함</span>
+          <button class="button button-quiet hidden" id="connectWorkspaceFile" type="button" title="작업 자료를 내 PC의 파일 하나에 자동으로 저장합니다. Chrome·Edge에서 쓸 수 있습니다.">자동 저장 파일 연결</button>
+          <button class="button button-quiet hidden" id="openWorkspaceFile" type="button" title="이전에 저장한 자료 파일을 열어 복원하고, 그 파일에 계속 자동 저장합니다.">자료 파일 열기</button>
+          <button class="button button-secondary hidden" id="allowWorkspaceFile" type="button">저장 허용</button>
+          <button class="button button-quiet hidden" id="disconnectWorkspaceFile" type="button">연결 해제</button>
           <button class="button button-quiet" id="resetWorkspaceAll" type="button" title="이 브라우저에 저장된 모든 작업 자료를 삭제하고 처음 상태로 되돌립니다.">전체 초기화</button>
           <button class="button button-secondary hidden" id="retryWorkspaceSave" type="button">저장·복원 재시도</button>
           <button class="button button-danger hidden" id="resumeWorkspaceSave" type="button">현재 자료로 저장 재개</button>
@@ -107,6 +112,7 @@
         <p class="storage-warning hidden" id="workspaceStorageWarning" role="alert"></p>
         <p class="storage-warning hidden" id="workspaceGroupWarning" role="alert"></p>
       </section>
+      <p class="storage-warning hidden" id="appUpdateNotice" role="status"></p>
       <section class="workflow-readiness" aria-label="다음 작업 안내">
         <p id="workflowReadinessMessage"></p>
         <button class="button button-primary" id="workflowNextAction" type="button">다음 작업</button>
@@ -754,6 +760,7 @@ function courseClient_() {
   </dialog>
   <script src="curriculum-subject-list.js?v=20261105-sheet-cells" defer></script>
   <script src="curriculum-choice-blocks.js?v=20261105-sheet-cells" defer></script>
+  <script src="app-version.js?v=20261105-sheet-cells" defer></script>
   <script src="curriculum-annual.js?v=20261105-sheet-cells" defer></script>
   <script defer src="app.js?v=20261105-sheet-cells"></script>
   <script src="xlsx-parser.js?v=20261105-sheet-cells" defer></script>
@@ -764,6 +771,7 @@ function courseClient_() {
   <script src="curriculum-versions.js?v=20261105-sheet-cells" defer></script>
   <script src="hours-stats.js?v=20261105-sheet-cells" defer></script>
   <script src="curriculum-subject-actions.js?v=20261105-sheet-cells" defer></script>
+  <script src="workspace-file.js?v=20261105-sheet-cells" defer></script>
   <script src="vendor/qrcode.js" defer></script>
   <script src="supabase-client.js?v=20261105-sheet-cells" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>

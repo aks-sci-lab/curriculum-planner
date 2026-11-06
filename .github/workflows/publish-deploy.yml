@@ -1,0 +1,38 @@
+name: 배포용 저장소에 게시
+
+# main에 합쳐질 때 배포용 파일만 만들어 별도의 배포용 저장소에 올린다.
+# 저장소 설정에서 변수 DEPLOY_REPO(예: aks-sci-lab/curriculum-planner-web)와 시크릿 DEPLOY_TOKEN을 만들어야 동작한다.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: ${{ vars.DEPLOY_REPO != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 테스트
+        run: node --test tests/*.test.cjs
+      - name: 배포용 파일 만들기
+        run: node scripts/build-deploy.js
+      - name: 배포용 저장소에 올리기
+        env:
+          DEPLOY_REPO: ${{ vars.DEPLOY_REPO }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${DEPLOY_TOKEN}@github.com/${DEPLOY_REPO}.git" deploy
+          find deploy -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r dist/. deploy/
+          cd deploy
+          git add -A
+          if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
+          git -c user.name="deploy-bot" -c user.email="deploy-bot@users.noreply.github.com" commit -m "배포: $(node -p "require('./version.json').version")"
+          git push

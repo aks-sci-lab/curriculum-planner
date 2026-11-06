@@ -71,8 +71,9 @@ function fixture(saved) {
   for (const name of [
     "syncActiveRound", "syncActiveCurriculumCohort", "applicationRoundNumbers",
     "updateWorkspaceSaveStatus", "isWorkspaceStorageProtected", "workspacePayload", "persistState", "validateWorkspaceData",
-    "loadCurriculumPlanData", "restorePersistedState", "downloadWorkspaceBackup", "restoreWorkspaceBackup",
+    "loadCurriculumPlanData", "restorePersistedState", "buildWorkspaceBackup", "downloadWorkspaceBackup", "restoreWorkspaceBackup",
   ]) vm.runInContext(source(name), context);
+  vm.runInContext("var WORKSPACE_BACKUP_VERSION = 1, APP_VERSION = 'test'; function markWorkspaceBackup() {}", context);
   const groups = fs.readFileSync(path.join(root, "course-groups.js"), "utf8");
   vm.runInContext(groups.slice(groups.indexOf("function validateApplicationGroupData("), groups.indexOf("(() => {")), context);
   return { context, storage, elements, element, timers, notices, writes: () => writes };
