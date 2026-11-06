@@ -255,11 +255,25 @@
       return `${String(row.grade || "1")}::${bundle}`;
     }
 
+    // 학년·반 필터 선택지를 만든다. 반은 고른 학년의 학생만 보여 주어 1학년 1반과 2학년 1반이 섞이지 않게 한다.
     function applyClassFilterOptions(students) {
-      const classes = [...new Set(students.map((student) => student.classroom))]
-        .sort((a, b) => Number(a) - Number(b));
-      $("#classFilter").innerHTML = '<option value="">전체 반</option>' +
+      const gradeSelect = $("#gradeFilter");
+      const classSelect = $("#classFilter");
+      const grades = [...new Set(students.map((student) => String(student.grade)))].sort((a, b) => Number(a) - Number(b));
+      const previousGrade = gradeSelect?.value || "";
+      const grade = grades.includes(previousGrade) ? previousGrade : "";
+      if (gradeSelect) {
+        gradeSelect.innerHTML = '<option value="">전체 학년</option>' +
+          grades.map((value) => `<option value="${escapeHtml(value)}">현 ${escapeHtml(value)}학년</option>`).join("");
+        gradeSelect.value = grade;
+        gradeSelect.disabled = !students.length;
+      }
+      const previousClass = classSelect.value;
+      const classes = [...new Set(students.filter((student) => !grade || String(student.grade) === grade)
+        .map((student) => student.classroom))].sort((a, b) => Number(a) - Number(b));
+      classSelect.innerHTML = '<option value="">전체 반</option>' +
         classes.map((classroom) => `<option value="${escapeHtml(classroom)}">${escapeHtml(classroom)}반</option>`).join("");
+      if (classes.includes(previousClass)) classSelect.value = previousClass;
     }
 
     function syncActiveRound() {
@@ -621,13 +635,20 @@
         preparation.invalidGroups || !preparation.hasSelections;
       const round = state.currentRound;
       const roundState = typeof roundStatus === "function" ? roundStatus(round) : "draft";
+      // 시수 통계는 내년도·올해·전년도 입학생 편제표가 모두 있어야 계산할 수 있다.
+      let missingCohorts = 0;
+      if (typeof annualSourceCohorts === "function" && typeof $ === "function") {
+        const schoolYear = Number($("#schoolYear")?.value);
+        const cohorts = annualSourceCohorts();
+        missingCohorts = [0, 1, 2].filter((grade) => !cohorts[String(schoolYear - grade + 1)]?.plan?.length).length;
+      }
       return {
         1: hasPlan ? ["done", "완료"] : ["todo", "필요"],
         2: hasResult ? ["done", "반영됨"] : hasPlan && prepIssue ? ["todo", "확인"] : ["wait", "대기"],
         3: hasResult ? ["done", "가능"] : ["wait", "대기"],
         4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
           : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
-        7: roundState === "confirmed" ? ["done", "가능"] : ["wait", "대기"]
+        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts ? ["todo", "편제표 필요"] : ["done", "가능"]
       };
     }
 
@@ -712,6 +733,8 @@
             ? `${Number($("#schoolYear").value) + 1}학년도 교과별 시수 통계`
             : `현재 1·2학년 결과 · ${state.currentRound}차`;
       summary.textContent = `${$("#schoolYear").value}학년도 · ${scope}`;
+      const dropHint = document.getElementById("resultDropHint");
+      if (dropHint) dropHint.textContent = `현 ${grade}학년(${Number(grade) + 1}학년 신청) ${state.currentRound}차 수강신청 결과 엑셀을 여기에 놓으세요`;
       const selector = $("#workspaceRound");
       const options = applicationRoundNumbers().map((round) =>
         `<option value="${round}">${round}차</option>`).join("");
@@ -1304,9 +1327,9 @@
         return course.applicationGroups?.[String(currentGrade)] || null;
       }
       const settings = groups || (typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : []);
-      const normalize = (name) => String(name ?? "").trim()
+      const normalize = (name) => normalizeRomanNumerals(String(name ?? "").trim()
         .replace(/\s*\([23]학년\)$/, "").replace(/\s*\([12]학기\)/g, "")
-        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, " ").trim();
+        .replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "")).replace(/\s+/g, "");
       const hint = course.semesterKey || parseSemesterFromCourseName(course.name) ||
         (String(semesterOverride).split("·").length === 1 ? String(semesterOverride) : "");
       const matches = settings.filter((group) => group.grade === String(Number(currentGrade) + 1) &&
@@ -1315,6 +1338,12 @@
       if (matches.length === 1) return {name:matches[0].name, semester:matches[0].semester};
       if (!matches.length) return course.applicationGroups?.[String(currentGrade)] || null;
       return null;
+    }
+
+    // 편제표에는 "미적분Ⅱ"처럼, 결과 파일에는 "미적분2"처럼 적는 로마 숫자 표기를 같은 과목으로 맞춘다.
+    function normalizeRomanNumerals(text) {
+      const digits = { "Ⅰ": "1", "Ⅱ": "2", "Ⅲ": "3", "Ⅳ": "4", "Ⅴ": "5", "ⅰ": "1", "ⅱ": "2", "ⅲ": "3", "ⅳ": "4", "ⅴ": "5" };
+      return String(text ?? "").replace(/[ⅠⅡⅢⅣⅤⅰⅱⅲⅳⅴ]/g, (char) => digits[char]);
     }
 
     function classifyApplicationRecords(data) {
@@ -1335,8 +1364,8 @@
       return [...warnings];
     }
 
-    function courseGroupLabel(course, currentGrade) {
-      const applicationGroup = currentGrade ? applicationGroupForCourse(course, currentGrade) : null;
+    function courseGroupLabel(course, currentGrade, groupSettings = null) {
+      const applicationGroup = currentGrade ? applicationGroupForCourse(course, currentGrade, groupSettings) : null;
       if (applicationGroup) return `${["1", "2"].includes(applicationGroup.semester) ? applicationGroup.semester+"학기 " : ""}${applicationGroup.name}`;
       const semester = resolveSemesterKey(course);
       const category = resolveCourseCategoryForOutput(course);
@@ -2886,9 +2915,11 @@
     function visibleStudents() {
       const query = $("#searchInput").value.trim().toLocaleLowerCase();
       const classValue = $("#classFilter").value;
+      const gradeValue = $("#gradeFilter")?.value || "";
       return state.students.filter((student) => {
         const searchable = `${student.name} ${student.grade} ${student.classroom} ${student.number}`.toLocaleLowerCase();
         return (!query || searchable.includes(query)) &&
+          (!gradeValue || String(student.grade) === gradeValue) &&
           (!classValue || student.classroom === classValue);
       });
     }
@@ -2927,10 +2958,15 @@
       list.replaceChildren(fragment);
     }
 
-    function certificateMarkup(student, printMode = false) {
+    // 그룹 설정을 읽는 데 약 50ms가 걸리므로 일괄 인쇄에서는 한 번만 읽어 학생마다 넘긴다.
+    function certificateGroupSettings() {
+      return typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+    }
+
+    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
       const groups = [];
       for (const course of student.selections) {
-        const groupName = courseGroupLabel(course, student.grade);
+        const groupName = courseGroupLabel(course, student.grade, groupSettings);
         let group = groups.find((item) => item.name === groupName);
         if (!group) { group = { name: groupName, courses: [] }; groups.push(group); }
         group.courses.push(course);
@@ -2950,7 +2986,7 @@
       return `<article class="${printMode ? "print-page" : "preview-paper"}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
-          <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span><span></span></div>
+          <div class="paper-meta"><span class="academic">${escapeHtml($("#schoolYear").value || "____")}학년도&nbsp; ${escapeHtml($("#round").value || "수강 신청")}</span><span>${escapeHtml(Number(student.grade) + 1)}학년 선택과목 신청</span></div>
           <p class="paper-student">${escapeHtml(student.grade)} 학년&nbsp;&nbsp; ${escapeHtml(student.classroom)} 반&nbsp;&nbsp; ${escapeHtml(student.number)} 번&nbsp;&nbsp; ${escapeHtml(student.name)}</p>
           <table class="certificate-table">
             <thead><tr><th class="group-cell">선택군</th><th class="course-cell">과목명</th><th class="credit-cell">학점</th></tr></thead>
@@ -2991,8 +3027,10 @@
       const button = $("#printAll");
       button.disabled = count === 0;
       const classroom = $("#classFilter")?.value;
+      const grade = $("#gradeFilter")?.value;
+      const scope = `${grade ? `현 ${grade}학년 ` : classroom ? "전 학년 " : ""}${classroom ? `${classroom}반 ` : ""}`;
       button.textContent = count === 0 ? "검색 결과 전체 인쇄"
-        : `${classroom ? `${classroom}반 ` : "검색 결과 "}전체 인쇄 (${count}명)`;
+        : `${scope || "검색 결과 "}전체 인쇄 (${count}명)`;
     }
 
     function renderSemesterClassifier() {
@@ -3307,9 +3345,9 @@
         return;
       }
       description.textContent = `${sourceRound}차 결과 기준 · 폐강 확정 과목을 신청한 학생 ${rows.length}명`;
-      content.innerHTML = `<table class="closure-table"><thead><tr><th>학년</th><th>반</th><th>번호</th><th>이름</th><th>폐강 과목</th></tr></thead><tbody>${
+      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th></tr></thead><tbody>${
         rows.map(({ student, courses }) =>
-          `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td></tr>`).join("")
+          `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td></tr>`).join("")
       }</tbody></table>`;
     }
 
@@ -3317,13 +3355,13 @@
       const { sourceRound, rows } = retakeTargets();
       if (!rows.length) return;
       const sheetRows = [
-        ["학년", "반", "번호", "이름", "폐강 과목"],
-        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, courses.join(", ")])
+        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목"],
+        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", ")])
       ];
       const rowsXml = sheetRows.map((cells, rowIndex) =>
         `<row r="${rowIndex + 1}">${cells.map((value, column) =>
           `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`).join("")}</row>`).join("");
-      const columns = [8, 8, 8, 12, 40].map((width, index) =>
+      const columns = [8, 8, 8, 12, 10, 40].map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
       const workbook = createXlsxBlob({
@@ -5327,7 +5365,8 @@
 
     function printStudents(students) {
       if (!students.length) return;
-      $("#printBatch").innerHTML = students.map((student) => certificateMarkup(student, true)).join("");
+      const groupSettings = certificateGroupSettings();
+      $("#printBatch").innerHTML = students.map((student) => certificateMarkup(student, true, groupSettings)).join("");
       window.print();
     }
 
@@ -5867,7 +5906,17 @@
       status.textContent = "편제표를 초기화했습니다.";
     });
     $("#searchInput").addEventListener("input", () => { renderRoster(); renderPreview(); });
-    $("#classFilter").addEventListener("change", () => { renderRoster(); renderPreview(); });
+    function showFirstVisibleStudent() {
+      const visible = visibleStudents();
+      if (visible.length && !visible.some((student) => student.id === state.selectedId)) state.selectedId = visible[0].id;
+      renderRoster();
+      renderPreview();
+    }
+    $("#gradeFilter").addEventListener("change", () => {
+      applyClassFilterOptions(state.students);
+      showFirstVisibleStudent();
+    });
+    $("#classFilter").addEventListener("change", showFirstVisibleStudent);
     $("#studentList").addEventListener("click", (event) => {
       const button = event.target.closest("[data-student-id]");
       if (!button) return;

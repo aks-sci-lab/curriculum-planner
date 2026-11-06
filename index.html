@@ -259,7 +259,7 @@
         <button class="button" id="addApplicationRound" type="button">＋ 차수 추가</button>
         <div class="dropzone" id="dropzone">
           <div class="upload-icon" aria-hidden="true">↑</div>
-          <strong>선택한 학년·차수의 수강신청 결과 엑셀을 여기에 놓으세요</strong>
+          <strong id="resultDropHint">선택한 학년·차수의 수강신청 결과 엑셀을 여기에 놓으세요</strong>
           <span>학년·반·번호·성명과 과목 열이 있는 결과표, 또는 차수·학년·반·번호·성명·선택과목 형식</span>
           <label class="file-button" for="rosterInput" tabindex="0" role="button">결과 엑셀 선택</label>
           <a class="file-button" href="선택과목 수강신청결과 예시.xlsx" download>예시 엑셀 다운로드</a>
@@ -359,6 +359,7 @@
             <div class="roster-header"><h2>학생 목록</h2><span class="count-pill" id="studentCount">0명</span></div>
             <div class="roster-controls">
               <input class="search-input" id="searchInput" type="search" placeholder="이름 또는 번호 검색" aria-label="이름 또는 번호 검색" disabled>
+              <select class="class-select" id="gradeFilter" aria-label="학년 필터" disabled><option value="">전체 학년</option></select>
               <select class="class-select" id="classFilter" aria-label="반 필터" disabled><option value="">전체 반</option></select>
             </div>
             <div class="student-list" id="studentList" aria-live="polite">

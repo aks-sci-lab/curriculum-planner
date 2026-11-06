@@ -512,3 +512,65 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
   assert.equal(reloaded, 1);
   assert.ok(backups >= 1, "a backup is offered first when there is unsaved work");
 });
+
+test("plan and result names match across Roman numerals and spacing", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functionSource(app, "function normalizeRomanNumerals(", "function classifyApplicationRecords("), ctx);
+  assert.equal(ctx.normalizeRomanNumerals("미적분Ⅱ"), "미적분2");
+  assert.equal(ctx.normalizeRomanNumerals("물리학ⅰ"), "물리학1");
+  const results = vm.createContext({ normalizeRomanNumerals: ctx.normalizeRomanNumerals });
+  vm.runInContext(resultImport, results);
+  assert.equal(results.normalizeResultCourseName("미적분Ⅱ"), results.normalizeResultCourseName("미적분 2"));
+  assert.equal(results.normalizeResultCourseName("수학과제 탐구"), results.normalizeResultCourseName("수학과제탐구"));
+  const bare = vm.createContext({ document: { getElementById: () => null } });
+  vm.runInContext(resultImport, bare);
+  assert.equal(bare.normalizeResultCourseName("미적분 2"), "미적분2", "works without the app helper too");
+});
+
+test("the statistics badge waits for the three cohort plans even after the round is confirmed", () => {
+  const cohorts = { "2027": { plan: [{}] }, "2026": { plan: [{}] } };
+  const ctx = vm.createContext({
+    state: { curriculumImportedLayout: {}, curriculumPlan: [{}], students: [{ id: "s" }], currentRound: "1" },
+    getApplicationPreparationStatus: () => ({ subjects: 1, unassigned: 0, invalidGroups: 0, hasSelections: true }),
+    roundStatus: () => "confirmed",
+    annualSourceCohorts: () => cohorts,
+    $: () => ({ value: "2026" })
+  });
+  vm.runInContext(functionSource(app, "function workflowStepStates(", "function renderWorkflowStepStates("), ctx);
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "2025 입학생 편제표가 없다");
+  cohorts["2025"] = { plan: [{}] };
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["done", "가능"]);
+});
+
+test("bulk certificate printing reads the group settings once instead of once per course", () => {
+  let reads = 0;
+  const ctx = vm.createContext({
+    getApplicationGroupSettings: () => { reads++; return []; },
+    applicationGroupForCourse: (course, grade, groups) => { assert.ok(Array.isArray(groups), "settings are passed in"); return null; },
+    resolveSemesterKey: () => "", resolveCourseCategoryForOutput: () => "과목",
+    escapeHtml: String, applicationCourseLabel: String, isCoreCourse: () => false,
+    $: () => ({ value: "2026", innerHTML: "" })
+  });
+  vm.runInContext(functionSource(app, "function courseGroupLabel(", "function courseIndexByColumn("), ctx);
+  vm.runInContext(functionSource(app, "function certificateGroupSettings(", "function renderPreview("), ctx);
+  const students = Array.from({ length: 50 }, (_, index) => ({ grade: "1", classroom: "1", number: String(index + 1), name: "홍", totalCredits: 8,
+    selections: [{ name: "가", credits: 4 }, { name: "나", credits: 4 }] }));
+  const groups = ctx.certificateGroupSettings();
+  for (const student of students) ctx.certificateMarkup(student, true, groups);
+  assert.equal(reads, 1, "50 certificates, one read");
+});
+
+test("the student list can be limited by grade so classes of different grades are never mixed", () => {
+  const values = { "#searchInput": "", "#classFilter": "", "#gradeFilter": "" };
+  const students = [
+    { id: "a", grade: "1", classroom: "1", number: "1", name: "가" }, { id: "b", grade: "2", classroom: "1", number: "1", name: "나" },
+    { id: "c", grade: "2", classroom: "2", number: "1", name: "다" }
+  ];
+  const ctx = vm.createContext({ state: { students }, $: (selector) => ({ value: values[selector] }) });
+  vm.runInContext(functionSource(app, "function visibleStudents(", "function renderRoster("), ctx);
+  assert.equal(ctx.visibleStudents().length, 3);
+  values["#classFilter"] = "1";
+  assert.equal(ctx.visibleStudents().length, 2, "1반 alone mixes the grades");
+  values["#gradeFilter"] = "2";
+  assert.deepEqual(plain(ctx.visibleStudents().map((s) => s.id)), ["b"]);
+});
