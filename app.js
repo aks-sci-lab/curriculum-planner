@@ -1348,8 +1348,8 @@
       return [...warnings];
     }
 
-    function courseGroupLabel(course, currentGrade) {
-      const applicationGroup = currentGrade ? applicationGroupForCourse(course, currentGrade) : null;
+    function courseGroupLabel(course, currentGrade, groupSettings = null) {
+      const applicationGroup = currentGrade ? applicationGroupForCourse(course, currentGrade, groupSettings) : null;
       if (applicationGroup) return `${["1", "2"].includes(applicationGroup.semester) ? applicationGroup.semester+"학기 " : ""}${applicationGroup.name}`;
       const semester = resolveSemesterKey(course);
       const category = resolveCourseCategoryForOutput(course);
@@ -2940,10 +2940,15 @@
       list.replaceChildren(fragment);
     }
 
-    function certificateMarkup(student, printMode = false) {
+    // 그룹 설정을 읽는 데 약 50ms가 걸리므로 일괄 인쇄에서는 한 번만 읽어 학생마다 넘긴다.
+    function certificateGroupSettings() {
+      return typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+    }
+
+    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
       const groups = [];
       for (const course of student.selections) {
-        const groupName = courseGroupLabel(course, student.grade);
+        const groupName = courseGroupLabel(course, student.grade, groupSettings);
         let group = groups.find((item) => item.name === groupName);
         if (!group) { group = { name: groupName, courses: [] }; groups.push(group); }
         group.courses.push(course);
@@ -5340,7 +5345,8 @@
 
     function printStudents(students) {
       if (!students.length) return;
-      $("#printBatch").innerHTML = students.map((student) => certificateMarkup(student, true)).join("");
+      const groupSettings = certificateGroupSettings();
+      $("#printBatch").innerHTML = students.map((student) => certificateMarkup(student, true, groupSettings)).join("");
       window.print();
     }
 

@@ -541,3 +541,21 @@ test("the statistics badge waits for the three cohort plans even after the round
   cohorts["2025"] = { plan: [{}] };
   assert.deepEqual(plain(ctx.workflowStepStates())[7], ["done", "가능"]);
 });
+
+test("bulk certificate printing reads the group settings once instead of once per course", () => {
+  let reads = 0;
+  const ctx = vm.createContext({
+    getApplicationGroupSettings: () => { reads++; return []; },
+    applicationGroupForCourse: (course, grade, groups) => { assert.ok(Array.isArray(groups), "settings are passed in"); return null; },
+    resolveSemesterKey: () => "", resolveCourseCategoryForOutput: () => "과목",
+    escapeHtml: String, applicationCourseLabel: String, isCoreCourse: () => false,
+    $: () => ({ value: "2026", innerHTML: "" })
+  });
+  vm.runInContext(functionSource(app, "function courseGroupLabel(", "function courseIndexByColumn("), ctx);
+  vm.runInContext(functionSource(app, "function certificateGroupSettings(", "function renderPreview("), ctx);
+  const students = Array.from({ length: 50 }, (_, index) => ({ grade: "1", classroom: "1", number: String(index + 1), name: "홍", totalCredits: 8,
+    selections: [{ name: "가", credits: 4 }, { name: "나", credits: 4 }] }));
+  const groups = ctx.certificateGroupSettings();
+  for (const student of students) ctx.certificateMarkup(student, true, groups);
+  assert.equal(reads, 1, "50 certificates, one read");
+});
