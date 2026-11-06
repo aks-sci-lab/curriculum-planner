@@ -731,7 +731,6 @@ function initHoursStats() {
     if (changed === "classes") {
       syncNextYearClassInputs();
       renderAggregate();
-      if (Number(state.workflowStep) === 4) renderClosurePanel(state.currentRound);
       renderRoundStatusControls();
     }
     if (Number(state.workflowStep) === 7) scheduleHoursRerender();

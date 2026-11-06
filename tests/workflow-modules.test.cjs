@@ -436,7 +436,7 @@ test("a save failure keeps the validated preview while a stale preview is closed
   assert.ok(vm.runInContext("resultImportPending", ctx), "preview survives a transient save error");
   ctx.confirmResultImport();
   assert.equal(attempts, 2);
-  assert.match(ctx.status.textContent, /그룹 미확인 1개/);
+  assert.match(ctx.status.textContent, /그룹 미확인 2학년 과목\(현 1학년 신청\) 1개/);
   assert.equal(vm.runInContext("resultImportPending", ctx), null);
   ctx.state.currentRound = "9";
   ctx.resultImportPending = makePreview();
@@ -711,5 +711,250 @@ test("round status locks threshold inputs while confirmed and the snapshot reuse
   assert.match(roundStatus, /input\.disabled = status === "confirmed"/);
   assert.match(roundStatus, /const atRisk = course\.atRisk;/);
   assert.doesNotMatch(roundStatus, /course\.enrollment < summary\.openingLimit/);
-  assert.match(app, /if \(typeof renderRoundStatusControls === "function"\) renderRoundStatusControls\(\);\n\s+if \(Number\(state\.workflowStep\) === 4\) renderClosurePanel/);
+  // 기준 비율·최대 인원을 바꾸면 잠금 상태를 갱신한 뒤 (개설/폐강 결정 칸이 들어 있는) 집계표를 다시 그린다.
+  assert.match(app, /for \(const selector of \["#openingPercent", "#divisionPercent", "#maxClassSize"\]\)[\s\S]{0,400}?renderRoundStatusControls\(\);\n\s+renderAggregate\(\);/);
+  assert.match(roundStatus, /\["openingPercent", "divisionPercent", "maxClassSize"\]/);
+  assert.doesNotMatch(app + hoursStats, /renderClosurePanel/);
+});
+
+function aggregateHelpers(extra = {}) {
+  const values = Object.assign(extra.values || {}, { "#openingPercent": "90", "#divisionPercent": "110", "#maxClassSize": "34", ...(extra.values || {}) });
+  const ctx = vm.createContext({ $: (id) => ({ value: values[id] }), escapeHtml: String, state: {}, ...extra.globals });
+  vm.runInContext(functionSource(app, "function aggregateThresholds(", "function renderAggregate("), ctx);
+  return { ctx, values };
+}
+
+test("class-count adjustment meets n × classes, gives extra classes to the fullest course, and leaves impossible groups alone", () => {
+  const { ctx } = aggregateHelpers();
+  const plan = (rows, target, max = 34) => {
+    const result = ctx.planGroupClassCounts(rows.map(([key, enrollment, closed]) => ({ key, enrollment, closed })), target, max);
+    return { ...plain(result), counts: result.counts ? plain(result.counts) : null };
+  };
+  // 최소 학급(34명 이하): 30→1, 60→2, 10→1 = 4. 목표 4면 그대로.
+  assert.deepEqual(plan([["a", 30], ["b", 60], ["c", 10]], 4).counts, { a: 1, b: 2, c: 1 });
+  // 목표 5: 남는 1학급은 학급당 인원이 가장 많은 과목에(30/1 = 60/2 동률이면 표 순서상 앞 과목).
+  assert.deepEqual(plan([["a", 30], ["b", 60], ["c", 10]], 5).counts, { a: 2, b: 2, c: 1 });
+  // 목표 7: a·b가 15·30명 → b, 그다음 b 20명 > a 15명 → b.
+  assert.deepEqual(plan([["a", 30], ["b", 60], ["c", 10]], 7).counts, { a: 2, b: 4, c: 1 });
+  // 34명 이하로는 최소 6학급이 필요한데 목표가 5면 맞출 수 없다(값을 바꾸지 않음).
+  const impossible = plan([["a", 100], ["b", 100]], 5);
+  assert.equal(impossible.ok, false);
+  assert.equal(impossible.counts, null);
+  assert.equal(impossible.minimum, 6);
+  assert.match(ctx.aggregatePlanMessage(impossible), /34명 이하로는 최소 6학급이 필요해 목표 5와 맞출 수 없음 — 협의회 결정 필요/);
+  // 폐강 과목은 0학급으로 빠지고, 신청자 없는 과목도 0학급이다.
+  assert.deepEqual(plan([["a", 50, true], ["b", 40], ["z", 0]], 3).counts, { a: 0, b: 3, z: 0 });
+  // 최대 인원은 설정값을 쓴다(40명이면 80명은 2학급).
+  assert.deepEqual(plan([["a", 80], ["b", 40]], 3, 40).counts, { a: 2, b: 1 });
+  assert.equal(ctx.aggregateGroupTarget({ choiceCount: 3 }, 11), 33);
+  assert.equal(ctx.aggregateGroupTarget({ choiceCount: null }, 11), null);
+  assert.equal(ctx.aggregateMaxClassSize(), 34);
+});
+
+test("aggregate groups carry their pick count from group settings or the 택n name and read settings once", () => {
+  let reads = 0;
+  const settings = [{ grade: "2", semester: "1", name: "과학 묶음", count: 3, courses: ["물리"] }];
+  const ctx = vm.createContext({
+    collectApplicationSubjects: () => [], UNASSIGNED_GROUP: "미분류",
+    getApplicationGroupSettings: () => { reads++; return settings; },
+    parseSemesterFromCourseName: () => "",
+    applicationGroupForCourse: (course) => course.name === "물리" ? { name: "과학 묶음", semester: "1" }
+      : course.name === "일본어" ? { name: "2-2 택2", semester: "2" } : null,
+    parseAssignedGroupLabel: () => ({ semesterKey: "", category: "" }), applicationCourseLabel: (subject) => subject.subject
+  });
+  vm.runInContext(functionSource(app, "function aggregateRecords(", "function currentStudent("), ctx);
+  const courses = [{ column: 1, name: "물리" }, { column: 2, name: "일본어" }, { column: 3, name: "기타" }];
+  const students = [{ grade: "1", classroom: "1", selections: [{ column: 1 }, { column: 2 }] }];
+  const groups = ctx.aggregateRecords(students, courses, 90, 110).reports[0].semesters.flatMap((semester) => semester.groups);
+  assert.deepEqual(plain(groups.map((group) => [group.category, group.choiceCount])),
+    [["과학 묶음", 3], ["2-2 택2", 2], ["미분류", null]]);
+  assert.equal(reads, 1, "group settings are read once per aggregate, not once per course");
+});
+
+test("automatic class adjustment saves manual class counts, skips closed courses, can be undone, and is blocked while confirmed", () => {
+  let locked = false;
+  const students = [];
+  // 현1학년 60명이 3과목 중 2과목 선택: A 50명, B 40명, C 30명.
+  for (let index = 0; index < 60; index++) {
+    const picks = index < 30 ? [0, 1] : index < 40 ? [1, 2] : [0, 2];
+    students.push({ grade: "1", classroom: String(index % 2 + 1), number: index, selections: picks.map((column) => ({ column })) });
+  }
+  const state = { students, courses: [0, 1, 2].map((column) => ({ column, name: `과목${column}` })),
+    classOverrides: { "1:0": 9 }, semesterAssignments: {}, groupAssignments: {}, roundClosures: { "1": {} }, currentRound: "1" };
+  const values = { "#openingPercent": "90", "#divisionPercent": "110", "#maxClassSize": "34" };
+  const { ctx } = aggregateHelpers({ values, globals: {
+    state, collectApplicationSubjects: () => [], UNASSIGNED_GROUP: "미분류", parseSemesterFromCourseName: () => "",
+    applicationGroupForCourse: () => ({ name: "2-1 택2", semester: "1" }),
+    parseAssignedGroupLabel: () => ({ semesterKey: "", category: "" }), applicationCourseLabel: (subject) => subject.subject,
+    nextYearClassBases: () => ({ "2": 3 }), isRoundLocked: () => locked
+  } });
+  vm.runInContext(functionSource(app, "function aggregateRecords(", "function currentStudent("), ctx);
+  vm.runInContext(functionSource(app, "function adjustAggregateClassCounts(", "function renderRoundStatus("), ctx);
+  const enrollments = ctx.aggregateRecords(students, state.courses, 90, 110).reports[0].semesters[0].groups[0].courses.map((course) => course.enrollment);
+  assert.deepEqual(plain(enrollments), [50, 40, 30]);
+  // 목표 2 × 3학급 = 6: 최소 2·2·1 = 5, 남는 1학급은 학급당 30명인 C에.
+  const result = ctx.adjustAggregateClassCounts("1");
+  assert.equal(result.problems.length, 0);
+  assert.deepEqual(plain(result.changed), ["2-1 택2 13→6"], "9 (manual) + 2 + 2 recommended → 6");
+  assert.deepEqual(plain(state.classOverrides), { "1:0": 2, "1:1": 2, "1:2": 2 });
+  assert.equal(ctx.undoAggregateClassAdjust(), true);
+  assert.deepEqual(plain(state.classOverrides), { "1:0": 9 }, "undo restores the values from right before the adjustment");
+  assert.equal(ctx.undoAggregateClassAdjust(), false, "only one adjustment is kept for undo");
+  // B 폐강: B는 0학급으로 빠지고 수동 입력도 만들지 않는다. A 2·C 1에서 C 30명 → 2, A 25명 → 3, A 16.7명 → 4.
+  state.roundClosures["1"] = { "1:1": "closed" };
+  ctx.adjustAggregateClassCounts("1", "2학년 1학기", "2-1 택2");
+  assert.deepEqual(plain(state.classOverrides), { "1:0": 4, "1:2": 2 });
+  // 최대 10명이면 최소 5 + 3 = 8 > 목표 6 → 바꾸지 않고 이유를 돌려준다.
+  values["#maxClassSize"] = "10";
+  const impossible = ctx.adjustAggregateClassCounts("1");
+  assert.deepEqual(plain(impossible.changed), []);
+  assert.match(impossible.problems[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요해 목표 6와 맞출 수 없음/);
+  assert.deepEqual(plain(state.classOverrides), { "1:0": 4, "1:2": 2 });
+  locked = true;
+  assert.equal(ctx.adjustAggregateClassCounts("1"), null);
+});
+
+test("plan issues list groups that miss n × classes and courses above the per-class maximum", () => {
+  const { ctx } = aggregateHelpers();
+  const aggregate = { reports: [{ summary: { grade: "2", classes: 11 }, semesters: [{ name: "3학년 1학기", groups: [
+    { category: "3-1 택5", choiceCount: 5, totalClasses: 57, courses: [
+      { name: "물리", displayName: "물리(진로)", enrollment: 70, classCount: 2, averageClassSize: 35, closed: false },
+      { name: "화학", enrollment: 60, classCount: 2, averageClassSize: 30, closed: false },
+      { name: "폐강", enrollment: 80, classCount: 0, averageClassSize: 0, closed: true }
+    ] },
+    { category: "3-1 택1", choiceCount: 1, totalClasses: 11, courses: [] },
+    { category: "미분류", choiceCount: null, totalClasses: 3, courses: [] }
+  ] }] }] };
+  assert.deepEqual(plain(ctx.aggregateClassPlanIssues(aggregate, 34)), [
+    "3-1 택5(현2학년): 총 57학급 / 목표 55 (+2)",
+    "물리(진로)(현2학년): 학급당 35.0명 > 최대 34명"
+  ]);
+});
+
+test("confirming a round lists class-plan issues and asks before confirming without blocking", () => {
+  const questions = [];
+  let answer = false;
+  const state = { currentRound: "1", students: [{ grade: "2" }], courses: [], classOverrides: {}, semesterAssignments: {}, groupAssignments: {},
+    roundClosures: { "1": {} }, roundStatuses: {} };
+  const report = { summary: { grade: "2", students: 1, classes: 11, classSource: "roster" }, semesters: [{ name: "3학년 1학기", order: 1, groups: [
+    { category: "3-1 택5", choiceCount: 5, totalClasses: 57, courses: [{ column: 1, name: "물리", enrollment: 1, classCount: 57, averageClassSize: 0.02, atRisk: false, closed: false }] }
+  ] }] };
+  const ctx = vm.createContext({
+    state, document: { getElementById: () => null }, window: { confirm: (text) => { questions.push(text); return answer; } },
+    aggregateThresholds: () => ({ openingPercent: 90, divisionPercent: 110 }), aggregateRecords: () => ({ reports: [report] }),
+    aggregateClassPlanIssues: () => ["3-1 택5(현2학년): 총 57학급 / 목표 55 (+2)"],
+    syncActiveRound() {}, persistState() {}, renderAggregate() {}, renderRoundStatus() {}, renderWorkflowLayout() {},
+    status: { style: {}, textContent: "" }
+  });
+  vm.runInContext(roundStatus, ctx);
+  assert.equal(ctx.confirmCurrentRound(), false);
+  assert.match(questions[0], /협의회 확정 전 조정이 필요합니다\.\n- 3-1 택5\(현2학년\): 총 57학급 \/ 목표 55 \(\+2\)/);
+  assert.match(questions[0], /그래도 확정할까요\?/);
+  assert.equal(ctx.isRoundLocked("1"), false);
+  answer = true;
+  assert.equal(ctx.confirmCurrentRound(), true, "the warning does not block confirmation");
+  assert.equal(ctx.isRoundLocked("1"), true);
+});
+
+test("retake targets, the retake download and the aggregate tabs follow the selected current grade", () => {
+  const state = {
+    rounds: { "1": { courses: [{ column: "a", name: "물리", applicationCurrentGrade: "1" }, { column: "b", name: "기하", applicationCurrentGrade: "2" }],
+      students: [
+        { grade: "1", classroom: "1", number: "1", name: "가", selections: [{ column: "a", name: "물리" }] },
+        { grade: "2", classroom: "1", number: "2", name: "나", selections: [{ column: "b", name: "기하" }] },
+        { grade: "2", classroom: "2", number: "3", name: "다", selections: [{ column: "b", name: "기하" }] }
+      ] } },
+    roundClosures: { "1": { "1:a": "closed", "2:b": "closed" } }
+  };
+  const ctx = vm.createContext({ state, applicationRoundNumbers: () => ["1"] });
+  vm.runInContext(functionSource(app, "function retakeTargets(", "function renderRetakeProgress("), ctx);
+  assert.equal(ctx.retakeTargets().rows.length, 3);
+  assert.equal(ctx.retakeTargets().closedCount, 2);
+  assert.deepEqual(plain(ctx.retakeTargets("2").rows.map((row) => row.student.name)), ["나", "다"]);
+  assert.equal(ctx.retakeTargets("2").closedCount, 1);
+  assert.equal(ctx.retakeTargets("1").rows.length, 1);
+
+  let files = null, link = null;
+  const download = vm.createContext({
+    retakeTargets: ctx.retakeTargets, activeAggregateGrade: () => "2",
+    columnName: (index) => "ABCDEF"[index], xmlEscape: String, createStylesXml: () => "<styleSheet/>",
+    createXlsxBlob: (parts) => { files = parts; return {}; },
+    document: { createElement: () => (link = { click() {} }) },
+    URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} }, setTimeout: () => 0
+  });
+  vm.runInContext(functionSource(app, "function downloadRetakeList(", "function applicationCohortYear("), download);
+  download.downloadRetakeList();
+  assert.equal(link.download, "2차_수강신청_대상자_현2학년(1차_기준).xlsx");
+  assert.match(files["xl/workbook.xml"], /name="2차 대상자\(현2학년\)"/);
+  assert.doesNotMatch(files["xl/worksheets/sheet1.xml"], />가</, "the other grade is not exported");
+  assert.match(files["xl/worksheets/sheet1.xml"], />나</);
+
+  // 학년 탭은 화면 상태: 결과가 없는 학년을 고른 상태면 전체로 돌아가고, 저장 자료에는 넣지 않는다.
+  const { ctx: tabs } = aggregateHelpers({ globals: { state: { students: [{ grade: "2" }] } } });
+  vm.runInContext('aggregateGradeScope = "2";', tabs);
+  assert.equal(tabs.activeAggregateGrade(), "2");
+  vm.runInContext('state.students = [{ grade: "1" }];', tabs);
+  assert.equal(tabs.activeAggregateGrade(), "", "a round without that grade shows every grade");
+  vm.runInContext('state.students = [{ grade: "2" }];', tabs);
+  assert.equal(tabs.activeAggregateGrade(), "2", "the chosen grade comes back when the round has it again");
+  assert.doesNotMatch(app.slice(app.indexOf("function workspacePayload("), app.indexOf("function persistState(")), /aggregateGradeScope/);
+});
+
+test("result import names the file's actual current grade and the tab it belongs to", () => {
+  const ctx = resultImportContext();
+  vm.runInContext(resultImport, ctx);
+  const subjects = { "2": [{ subject: "물리학", semester: "1", credit: 3 }] };
+  const options = { fileName: "r.xlsx", round: "2", grade: "1", revision: 4, subjects, groups: [], existingStudents: [] };
+  const header = ["차수", "학년", "반", "번호", "성명", "선택과목"];
+  // 현 2학년 결과를 '현 1학년' 탭에 올린 경우
+  const wrongTab = ctx.buildResultImportPreview([{ name: "응답", rows: [header, ["2", "2", "1", "1", "가", "물리학"], ["2", "2", "1", "2", "나", "물리학"]] }], options);
+  const message = wrongTab.candidates[0].issues.blocking[0];
+  assert.match(message, /이 파일은 현 2학년\(3학년 과목 신청\) 2명 결과입니다/);
+  assert.match(message, /지금 선택한 탭은 '현 1학년'입니다/);
+  assert.match(message, /'현 2학년' 탭에 올려 주세요/);
+  assert.match(message, /학년 열은 현재 학년입니다\(현 1학년 → 2학년 과목 신청/);
+
+  // 학생별 과목 표시 형식도 같은 안내를 쓴다. 신청 학년(3)을 적은 파일은 현재 학년으로 고치라고 알린다.
+  ctx.createRecords = () => ({ students: [{ grade: "3", classroom: "1", number: "1", name: "다", selections: [] }], courses: [], skippedRows: [] });
+  const targetGrade = ctx.buildResultImportPreview([{ name: "결과", rows: [] }], { ...options, grade: "2" });
+  assert.match(targetGrade.candidates[0].issues.blocking[0], /학년이 '3'인 학생 1명/);
+  assert.match(targetGrade.candidates[0].issues.blocking[0], /현재 학년으로 고쳐 주세요/);
+
+  // 두 학년이 섞인 파일은 선택한 학년만 쓰고 나머지 학년이 어느 탭인지 알려 준다.
+  const mixed = ctx.buildResultImportPreview([{ name: "응답", rows: [header, ["2", "1", "1", "1", "가", "물리학"], ["2", "2", "1", "1", "나", "물리학"]] }], options);
+  assert.equal(mixed.candidates[0].issues.blocking.length, 0);
+  assert.ok(mixed.candidates[0].issues.info.includes("현 2학년(3학년 과목 신청) 1명은 제외했습니다. '현 2학년' 탭에서 따로 올려 주세요."));
+});
+
+test("result import warnings say which grade's subjects (and which current grade) they are about", () => {
+  const ctx = resultImportContext({ classifyApplicationRecords: () => ["2학년 물리학"] });
+  vm.runInContext(resultImport, ctx);
+  const subjects = { "2": [{ subject: "물리학", semester: "1", credit: 3 }, { subject: "화학", semester: "2", credit: 3 }] };
+  const rows = [["차수", "학년", "반", "번호", "성명", "선택과목"], ["2", "1", "1", "1", "가", "물리학, 지구과학"]];
+  ctx.mergeApplications = (entries) => {
+    const courses = [{ column: "c0", name: "물리학", semesterKey: "1" }, { column: "c1", name: "지구과학", semesterKey: "1" }];
+    return { errors: [], courses, students: entries.map((entry) => ({ ...entry, id: "s", selections: courses })) };
+  };
+  const preview = ctx.buildResultImportPreview([{ name: "응답", rows }], {
+    fileName: "r.xlsx", round: "2", grade: "1", revision: 4, subjects, cohortYear: "2026", groups: [], existingStudents: []
+  });
+  const { warnings, info } = preview.candidates[0].issues;
+  assert.ok(warnings.some((item) => item.startsWith("2학년 과목(현 1학년 신청) 중 2026학년도 입학생 편제표(2학년 열)에 없는 과목 1개: 지구과학")), warnings.join("\n"));
+  assert.ok(warnings.some((item) => item.startsWith("선택 그룹이 정해지지 않은 2학년 과목(현 1학년 신청) 1개: 물리학.")), warnings.join("\n"));
+  assert.ok(info.some((item) => item.startsWith("2026학년도 입학생 편제표(2학년 열)의 2학년 과목(현 1학년 신청) 중 결과 파일에 없는 과목 1개: 화학")), info.join("\n"));
+});
+
+test("result file line lists each current grade's file and says when a grade has none", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functionSource(app, "function resultFileNameLabel(", "function clearApplicationRound("), ctx);
+  assert.equal(ctx.resultFileNameLabel(null), "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음");
+  assert.equal(ctx.resultFileNameLabel({ fileName: "현 1학년: a.xlsx", gradeFiles: { "1": "a.xlsx" } }), "현 1학년: a.xlsx / 현 2학년: 업로드 없음");
+  assert.equal(ctx.resultFileNameLabel({ gradeFiles: { "1": "a.xlsx", "2": "b.xlsx" } }), "현 1학년: a.xlsx / 현 2학년: b.xlsx");
+  assert.equal(ctx.resultFileNameLabel({ fileName: "온라인 자동 연동 5명", gradeFiles: {} }), "온라인 자동 연동 5명");
+  vm.runInContext(functionSource(app, "function describeUnclassifiedCourses(", "function courseGroupLabel("), ctx);
+  assert.equal(ctx.describeUnclassifiedCourses(["2학년 물리학", "3학년 기하", "2학년 화학"]),
+    "2학년 과목(현 1학년 신청) 물리학, 화학 / 3학년 과목(현 2학년 신청) 기하");
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  assert.match(html, /id="resultGradeNote">파일의 학년은 현재 학년입니다\(현 1학년 → 2학년 과목 신청\)/);
+  assert.match(app, /gradeNote\.textContent = `파일의 학년은 현재 학년입니다\(현 \$\{grade\}학년/);
 });

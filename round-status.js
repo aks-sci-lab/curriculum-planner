@@ -72,6 +72,7 @@ function buildRoundSnapshot(round) {
   return {
     createdAt: new Date().toISOString(),
     openingPercent, divisionPercent,
+    ...(typeof aggregateMaxClassSize === "function" ? { maxClassSize: aggregateMaxClassSize() } : {}),
     classBases: { ...classBases },
     summaries: aggregate.reports.map(({ summary }) => ({
       grade: String(summary.grade), students: summary.students, classes: summary.classes, classSource: summary.classSource || "roster"
@@ -120,7 +121,7 @@ function renderRoundStatusControls() {
   confirm.disabled = !hasData;
   unlock.classList.toggle("hidden", status !== "confirmed");
   // 확정된 차수는 화면 집계가 확정 시점과 달라지지 않도록 기준 비율 입력도 잠근다.
-  for (const id of ["openingPercent", "divisionPercent"]) {
+  for (const id of ["openingPercent", "divisionPercent", "maxClassSize"]) {
     const input = document.getElementById(id);
     if (!input) continue;
     input.disabled = status === "confirmed";
@@ -130,12 +131,12 @@ function renderRoundStatusControls() {
     const updatedAt = state.roundStatuses[round]?.updatedAt;
     const date = updatedAt ? new Date(updatedAt).toLocaleString("ko-KR") : "";
     const drift = roundSnapshotDrift(round);
-    note.textContent = `${date ? `${date} 확정 · ` : ""}결과 교체·과목별 개설 반 수·개설 결정이 잠겨 있으며, 시수 통계는 확정 시점 결과를 사용합니다.` +
+    note.textContent = `${date ? `${date} 확정 · ` : ""}결과 교체·개설 학급수·개설 결정이 잠겨 있고, 시수 통계는 확정 시점 결과를 씁니다.` +
       (drift.length ? ` 확정 이후 ${drift.join(", ")}이(가) 바뀌어 화면 집계가 확정 시점과 다를 수 있습니다. 반영하려면 확정 해제 후 다시 확정하세요.` : "");
   } else if (!hasData) {
     note.textContent = `${round}차 결과가 없습니다. 2단계에서 결과 엑셀을 반영한 뒤 확정하세요.`;
   } else {
-    note.textContent = "기준 미달 과목의 개설/폐강을 결정한 뒤 확정하세요. 확정하면 결과 교체·과목별 개설 반 수·개설 결정이 잠깁니다.";
+    note.textContent = "기준 미달 과목의 개설/폐강을 정하고 택n 그룹 학급수를 목표에 맞춘 뒤 확정하세요.";
   }
 }
 
@@ -150,15 +151,39 @@ function refreshAfterRoundStatusChange(message) {
   }
 }
 
+function roundClassPlanIssues(round) {
+  round = String(round);
+  const data = roundStatusData(round);
+  if (!data?.students?.length || typeof aggregateClassPlanIssues !== "function") return [];
+  const { openingPercent, divisionPercent } = aggregateThresholds();
+  const aggregate = aggregateRecords(
+    data.students, data.courses, openingPercent, divisionPercent,
+    data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {},
+    typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
+    state.roundClosures?.[round] || {}
+  );
+  return aggregateClassPlanIssues(aggregate);
+}
+
 function confirmCurrentRound() {
   const round = String(state.currentRound);
   syncActiveRound();
   const snapshot = buildRoundSnapshot(round);
   if (!snapshot) throw new Error(`${round}차 결과가 없어 확정할 수 없습니다. 2단계에서 결과를 먼저 반영하세요.`);
   const undecided = snapshot.rows.filter((row) => row.atRisk && !row.decision);
-  const question = undecided.length
-    ? `기준 미달인데 개설/폐강을 정하지 않은 과목이 ${undecided.length}개 있습니다(예: ${undecided.slice(0, 3).map((row) => row.displayName).join(", ")}). 미정 과목은 현재 개설 학급 수 그대로 시수 통계에 반영됩니다. 그래도 ${round}차 결과를 확정할까요?`
-    : `${round}차 결과를 확정할까요? 확정하면 결과 교체·과목별 개설 반 수·개설 결정이 잠기고, 시수 통계는 이 시점의 결과를 사용합니다.`;
+  // 택n 그룹 총 학급수(n × 학급 수)와 다르거나 학급당 최대 인원을 넘는 과목이 있으면 목록을 보여 주고 묻는다(막지는 않음).
+  const planIssues = typeof roundClassPlanIssues === "function" ? roundClassPlanIssues(round) : [];
+  const planText = planIssues.length
+    ? `협의회 확정 전 조정이 필요합니다.\n${planIssues.slice(0, 12).map((issue) => `- ${issue}`).join("\n")}${planIssues.length > 12 ? `\n- 외 ${planIssues.length - 12}건` : ""}\n\n`
+    : "";
+  const undecidedText = undecided.length
+    ? `기준 미달인데 개설/폐강을 정하지 않은 과목이 ${undecided.length}개 있습니다(예: ${undecided.slice(0, 3).map((row) => row.displayName).join(", ")}). 미정 과목은 현재 개설 학급 수 그대로 시수 통계에 반영됩니다. `
+    : "";
+  const question = planIssues.length
+    ? `${planText}${undecidedText}그래도 확정할까요? (확정·해제는 이 차수의 두 학년 결과 전체에 적용됩니다.)`
+    : undecided.length
+      ? `${undecidedText}그래도 ${round}차 결과를 확정할까요?`
+      : `${round}차 결과를 확정할까요? 확정하면 결과 교체·과목별 개설 반 수·개설 결정이 잠기고, 시수 통계는 이 시점의 결과를 사용합니다.`;
   if (!window.confirm(question)) return false;
   setRoundStatus(round, "confirmed", snapshot);
   refreshAfterRoundStatusChange(`${round}차 결과를 확정했습니다. 5단계 시수 통계에서 이 결과를 사용합니다.`);
@@ -230,17 +255,35 @@ function buildRoundCompare() {
   };
 }
 
-function renderRoundCompare() {
+// 4단계 학년 탭을 고르면 그 학년만 비교한다. 학년 탭만 바꿀 때는 신청 인원이 그대로이므로
+// 직전에 만든 비교표를 다시 쓴다(차수마다 집계를 다시 하면 탭 전환이 느려진다).
+var lastRoundCompare = null;
+function roundCompareForScope(reuse = false) {
+  const compare = reuse && lastRoundCompare ? lastRoundCompare : (lastRoundCompare = buildRoundCompare());
+  const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
+  return grade ? { ...compare, grades: compare.grades.filter((entry) => entry.grade === grade) } : compare;
+}
+
+function renderRoundCompare(reuse = false) {
   const content = document.getElementById("roundCompareContent");
   if (!content) return;
   const description = document.getElementById("roundCompareDescription");
   const download = document.getElementById("downloadRoundCompare");
-  const compare = buildRoundCompare();
+  const compare = roundCompareForScope(reuse);
+  const summary = document.getElementById("roundCompareSummaryCount");
   download.disabled = compare.rounds.length < 2;
   if (compare.rounds.length < 2) {
     description.textContent = "결과가 있는 차수가 2개 이상이면 과목별 신청 인원 변화를 비교합니다.";
+    if (summary) summary.textContent = `결과 있는 차수 ${compare.rounds.length}개`;
     content.innerHTML = "";
     return;
+  }
+  if (summary) {
+    const first = compare.rounds[0];
+    const last = compare.rounds.at(-1);
+    const changed = compare.grades.reduce((sum, entry) => sum + entry.courses.filter((course) =>
+      (course.counts[last] || 0) !== (course.counts[first] || 0)).length, 0);
+    summary.textContent = `${compare.rounds.map((round) => `${round}차`).join("·")} · 인원 변화 ${changed}과목`;
   }
   const first = compare.rounds[0];
   const last = compare.rounds.at(-1);
@@ -260,7 +303,7 @@ function renderRoundCompare() {
 }
 
 function downloadRoundCompare() {
-  const compare = buildRoundCompare();
+  const compare = roundCompareForScope();
   if (compare.rounds.length < 2) return;
   const first = compare.rounds[0];
   const last = compare.rounds.at(-1);
@@ -280,7 +323,8 @@ function downloadRoundCompare() {
       })
     ]
   }));
-  downloadBlob(createWorkbookBlob(sheets), `${$("#schoolYear").value}학년도_차수별_신청인원_비교.xlsx`);
+  const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
+  downloadBlob(createWorkbookBlob(sheets), `${$("#schoolYear").value}학년도_차수별_신청인원_비교${grade ? `_현${grade}학년` : ""}.xlsx`);
 }
 
 if (typeof document !== "undefined" && document.getElementById) initRoundStatusControls();
