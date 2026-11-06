@@ -223,8 +223,9 @@ async function server({ hardened }) {
     { id: "g2", grade: "2", semester: "2", name: "2-2 택1", count: 1, courses: ["미적분Ⅱ", "기하", "융합과학 탐구 (2학기)"] },
   ];
   const roster = Core.generateRoster({ grade: "1", classes: 2, perClass: 6 });
-  const event = await call("create_course_event", { p_setup: { type: "course-application-setup", schoolName: "[테스트] 가상고",
-    schoolYear: "2099", round: "1", subjects: { "1": [], "2": subjects, "3": [] }, groups, roster } }, "authenticated", owner);
+  const setup = { type: "course-application-setup", schoolName: "[테스트] 가상고",
+    schoolYear: "2099", round: "1", subjects: { "1": [], "2": subjects, "3": [] }, groups, roster };
+  const event = await call("create_course_event", { p_setup: setup }, "authenticated", owner);
   let codes = event;
   if (hardened) {
     await db.exec("reset role");
@@ -232,7 +233,7 @@ async function server({ hardened }) {
     codes = await call("manage_course_event", { p_event: event.id, p_action: "codes" }, "authenticated", owner);
   }
   const rpc = Core.createRpcClient({ projectUrl: "https://fake.supabase.co", publicKey: "k", fetchImpl });
-  return { db, call, rpc, event, codes, groups };
+  return { db, call, rpc, event, codes, groups, setup };
 }
 
 async function runBot(ctx, plans, concurrency = 4) {
@@ -326,4 +327,243 @@ test("test bot: 배포본과 앱 화면에 연결되어 있고 학생 코드를 
   for (const file of ["test-bot.html", "test-bot.js", "test-bot-core.js", "test-bot-bridge.js", "supabase-config.js"]) {
     assert.ok(files.includes(file), `${file} 배포 포함`);
   }
+  // 앱이 다시 연결용으로 탭 sessionStorage에 두는 값에는 학생 코드가 없다.
+  const link = client.slice(client.indexOf("function saveTestBotLink"), client.indexOf("const savedTestBotLink"));
+  assert.match(link, /sessionStorage\.setItem\(TEST_BOT_LINK_KEY/);
+  assert.doesNotMatch(link, /students|code:|payload/);
+  assert.match(html, /id="testBotAutoRepeat"[^>]*min="1"[^>]*max="20"[^>]*value="1"/);
+  assert.match(html, /id="testBotAutoFresh" type="checkbox">/);
+  const botHtml = fs.readFileSync(path.join(root, "test-bot.html"), "utf8");
+  assert.match(botHtml, /id="botRepeat"[^>]*min="1"[^>]*max="20"[^>]*value="1"/);
+  assert.match(botHtml, /id="botRepeatFresh" type="checkbox">/);
+});
+
+// ---------- 반복 실행(회차) ----------
+test("test bot 반복: 회차 계획·코드 이어받기·회차별 오류 주입·반복 설정 전달", () => {
+  assert.deepEqual(Core.normalizeRepeat({ count: 0 }), { count: 1, freshEvent: false });
+  assert.deepEqual(Core.normalizeRepeat({ count: "99", freshEvent: true }), { count: 20, freshEvent: true });
+  assert.deepEqual(Core.normalizeRepeat({ count: "abc" }), { count: 1, freshEvent: false });
+
+  const same = Core.repeatPlan({ count: 3 }, "ask");
+  assert.deepEqual(same.map((plan) => [plan.round, plan.createEvent, plan.firstLogin, plan.injectWrongCodes, plan.unlockBefore, plan.cleanup]), [
+    [1, false, true, true, false, "none"],
+    [2, false, false, false, true, "none"],
+    [3, false, false, false, true, "ask"],
+  ], "같은 신청: 1회차만 첫 접속·틀린 코드, 2회차부터 잠금 해제 후 재신청, 정리는 마지막 회차 뒤 한 번");
+  const fresh = Core.repeatPlan({ count: 3, freshEvent: true }, "keep");
+  assert.deepEqual(fresh.map((plan) => [plan.createEvent, plan.firstLogin, plan.injectWrongCodes, plan.unlockBefore, plan.cleanup]), [
+    [false, true, true, false, "delete"], [true, true, true, false, "delete"], [true, true, true, false, "delete"],
+  ], "새 신청: 2회차부터 새로 만들고, 정리 설정과 관계없이 회차마다 닫고 삭제");
+
+  const students = Core.generateRoster({ grade: "1", classes: 2, perClass: 5 }).map((student, index) => ({ ...student, code: String(100000 + index) }));
+  const records = [{ grade: "1", classroom: "1", number: "2", newCode: "482915" }, { grade: 1, classroom: 2, number: 1, newCode: "" }];
+  const carried = Core.carryCodes(students, records);
+  assert.equal(carried.find((student) => student.classroom === "1" && student.number === "2").code, "482915");
+  assert.equal(carried.find((student) => student.classroom === "2" && student.number === "1").code, students[5].code, "바뀌지 않은 학생은 그대로");
+  assert.equal(students[1].code, "100001", "원래 목록은 바꾸지 않는다");
+
+  const opts = { wrongCodePercent: 100, wrongCodeTimes: 5, violationPercent: 50, resubmitPercent: 0 };
+  const first = Core.roundTargets(carried, same[0], opts, Core.createRng(1));
+  assert.ok(first.every((student) => student.plan.wrongCodes === 5));
+  const second = Core.roundTargets(carried, same[1], opts, Core.createRng(1), new Set(["1-1-1"]));
+  assert.equal(second.length, 9, "해제하지 못한 잠긴 학생은 뺀다");
+  assert.ok(second.every((student) => student.plan.wrongCodes === 0), "틀린 코드는 첫 회차에만");
+  assert.equal(second.filter((student) => student.plan.violate).length, 5, "규칙 위반은 회차마다 다시 고른다");
+  assert.equal(second.find((student) => student.number === "2" && student.classroom === "1").code, "482915", "2회차는 바뀐 코드로 접속");
+
+  // 교사 화면 대조: 이전 회차 저장분은 유지, 불확실한 학생은 뺀다.
+  const expected = new Map();
+  const uncertain = new Set();
+  Core.updateExpected(expected, uncertain, [
+    { grade: "1", classroom: "1", number: "1", name: "가", verified: true, selections: ["물리학", "기하"], status: "완료" },
+    { grade: "1", classroom: "1", number: "2", name: "나", verified: false, selections: [], status: "확인 실패" },
+  ]);
+  const entries = [
+    { grade: "1", classroom: "1", number: "1", name: "가", submittedAt: "t", selections: ["기하", "물리학"] },
+    { grade: "1", classroom: "1", number: "2", name: "나", submittedAt: "t", selections: ["화학"] },
+  ];
+  const keys = new Set(["1-1-1", "1-1-2"]);
+  assert.equal(Core.compareTeacherApplications({ entries, expected, uncertain, targetKeys: keys }).problems, 0);
+  const wrong = Core.compareTeacherApplications({ entries: [{ ...entries[0], selections: ["화학", "기하"] }], expected, uncertain, targetKeys: keys });
+  assert.deepEqual(wrong.mismatched, ["1-1 가"]);
+  assert.deepEqual(wrong.courseDiff.sort(), ["물리학", "화학"]);
+
+  // 회차 사이 변화
+  const rows = [1, 2, 3].map((round) => ({ round, averageMs: round < 3 ? 20 : 80, maxMs: 50, failed: round === 2 ? 1 : 0, mismatches: 0 }));
+  const notes = Core.compareRounds(rows);
+  assert.match(notes[0], /^3회차부터 평균 응답 시간 증가\(1회차 20ms → 3회차 80ms\)/);
+  assert.ok(notes.some((note) => /2회차부터 실패 발생/.test(note)));
+  assert.ok(notes.some((note) => /대조한 3개 회차 모두 일치/.test(note)));
+
+  // 앱 설정 창의 반복 설정이 봇으로 전달된다.
+  const eventId = "0b0c6c0e-4a8e-4f1f-9a51-2b1c3d4e5f60";
+  const one = { id: eventId, students: [{ grade: "1", classroom: "1", number: "1", code: "482915" }] };
+  const payload = Bridge.validatePayload({ ...Bridge.buildPayload(one), autoRun: true, repeat: { count: 50, freshEvent: true } });
+  assert.deepEqual(payload.repeat, { count: 20, freshEvent: true });
+  assert.equal(Bridge.validatePayload(Bridge.buildPayload(one)).repeat, null);
+  for (const action of ["session", "unlock", "create"]) assert.ok(Bridge.TEACHER_ACTIONS.includes(action));
+});
+
+function stepStatus(round, key) {
+  return round.steps.find((step) => step.key === key).status;
+}
+
+// 앱 창 역할(교사 화면 요청)을 PGlite 실제 SQL로 흉내 낸다.
+function teacherWindow(ctx, { expireAt = new Set() } = {}) {
+  const calls = [];
+  const created = [];
+  let sessionChecks = 0;
+  const teacher = async (action, { eventId }) => {
+    calls.push(`${action}:${eventId.slice(0, 8)}`);
+    if (action === "session") return { loggedIn: !expireAt.has(++sessionChecks) };
+    if (action === "applications") return ctx.call("get_teacher_course_applications", { p_event: eventId }, "authenticated", owner);
+    if (action === "locks") return ctx.call("get_course_code_locks", { p_event: eventId }, "authenticated", owner);
+    if (action === "unlock") return ctx.call("unlock_course_event", { p_event: eventId }, "authenticated", owner);
+    if (action === "close" || action === "delete") return ctx.call("manage_course_event", { p_event: eventId, p_action: action }, "authenticated", owner);
+    if (action === "create") {
+      const event = await ctx.call("create_course_event", { p_setup: ctx.setup }, "authenticated", owner);
+      created.push(event.id);
+      return { ...Bridge.buildPayload(event, { schoolName: ctx.setup.schoolName, schoolYear: "2099", round: "1" }, ""), testEvent: true };
+    }
+    throw new Error(`처리하지 않는 요청 ${action}`);
+  };
+  return { teacher, calls, created };
+}
+const freshStudents = (ctx) => ctx.codes.students.map((student) => ({ ...student, grade: String(student.grade) }));
+
+test("test bot 반복 × 실제 SQL(새 방식): 같은 신청 3회 — 바뀐 코드로 재접속·재신청, 잠긴 학생 교사 해제, 회차마다 교사 화면 대조 일치", async () => {
+  const ctx = await server({ hardened: true });
+  try {
+    // 두 번째 세션 확인에서 로그인이 끝난 것으로 답한다 → 봇은 다시 로그인할 때까지 기다렸다가 이어서 진행해야 한다.
+    const window = teacherWindow(ctx, { expireAt: new Set([2]) });
+    const waits = [];
+    const roundsEnded = [];
+    const report = await Core.runRepeatedTest({
+      source: { eventId: ctx.event.id, students: freshStudents(ctx), testEvent: true },
+      opts: { scope: "all", concurrency: 4, wrongCodePercent: 20, wrongCodeTimes: 5, violationPercent: 20, resubmitPercent: 20,
+        teacherCheck: true, cleanup: "close", popularity: "skewed" },
+      repeat: { count: 3 }, auto: true, connected: true,
+    }, {
+      rpc: ctx.rpc, rng: Core.createRng(21), teacher: window.teacher,
+      waitForTeacher: async (reason) => { waits.push(reason); return true; },
+      onRoundEnd: (round) => roundsEnded.push(round.round),
+    });
+    assert.equal(report.error, "");
+    assert.deepEqual(roundsEnded, [1, 2, 3]);
+    assert.equal(waits.length, 1, "로그인이 끝나면 기다렸다가 이어서 진행");
+    const [one, two, three] = report.rounds;
+    for (const round of report.rounds) {
+      assert.equal(round.status, "done", `${round.round}회차: ${round.steps.filter((step) => step.status === "fail").map((step) => `${step.name} ${step.actual}`).join(" | ")}`);
+      assert.equal(round.eventId, ctx.event.id, "테스트 수강신청은 하나");
+      assert.equal(round.teacher.problems, 0, `${round.round}회차 교사 화면 대조`);
+    }
+    const lockedKeys = one.records.filter((record) => record.status === "잠김 확인").map((record) => `${record.classroom}-${record.number}`);
+    assert.equal(lockedKeys.length, 2, "12명 중 20% → 2명 잠김 확인");
+    assert.equal(one.records.filter((record) => record.newCode).length, 10, "1회차: 잠기지 않은 학생 모두 첫 접속 코드 변경");
+    assert.equal(stepStatus(one, "locks"), "pass");
+    // 2회차: 잠긴 학생은 교사 해제 → 첫 접속(코드 변경)부터, 나머지는 바뀐 코드로 재접속(코드 변경 없음)
+    assert.equal(stepStatus(two, "unlock"), "pass");
+    assert.match(two.steps.find((step) => step.key === "unlock").actual, /2명/);
+    assert.equal(stepStatus(two, "locks"), "pass", "해제 뒤 잠김·실패 기록 0명");
+    assert.equal(two.records.length, 12);
+    assert.deepEqual(two.records.filter((record) => record.newCode).map((record) => `${record.classroom}-${record.number}`).sort(), lockedKeys.sort());
+    assert.ok(two.records.every((record) => record.ok && !record.wrongCode));
+    assert.equal(stepStatus(three, "unlock"), "skip");
+    assert.ok(three.records.every((record) => record.ok && !record.newCode), "3회차: 모두 바뀐 코드로 재접속");
+    const changed = three.records.filter((record) => {
+      const before = two.records.find((item) => item.classroom === record.classroom && item.number === record.number);
+      return before.selections.slice().sort().join() !== record.selections.slice().sort().join();
+    });
+    assert.ok(changed.length > 0, "새 무작위 선택으로 재신청");
+    // 정리는 마지막 회차 뒤 한 번(닫기)
+    assert.deepEqual(report.rounds.map((round) => stepStatus(round, "cleanup")), ["skip", "skip", "pass"]);
+    assert.equal(window.calls.filter((call) => call.startsWith("close:")).length, 1);
+    assert.equal(window.calls.filter((call) => call.startsWith("unlock:")).length, 1);
+    // 서버에 남은 신청 = 3회차 선택
+    const teacher = await ctx.call("get_teacher_course_applications", { p_event: ctx.event.id }, "authenticated", owner);
+    for (const record of three.records) {
+      const entry = teacher.entries.find((item) => item.classroom === record.classroom && item.number === record.number);
+      assert.deepEqual([...entry.selections].sort(), [...record.selections].sort());
+    }
+    // 보고서: 회차별 표·합계·변화, 엑셀 시트
+    const summary = Core.repeatSummary(report);
+    assert.deepEqual(summary.rows.map((row) => [row.round, row.status, row.ok, row.locked, row.mismatches]), [
+      [1, "통과", 10, 2, 0], [2, "통과", 12, 0, 0], [3, "통과", 12, 0, 0]]);
+    assert.equal(summary.totals.ok, 34);
+    assert.ok(summary.trends.some((note) => /대조한 3개 회차 모두 일치/.test(note)));
+    const sheets = Core.repeatReportSheets(report);
+    assert.deepEqual(sheets.map((sheet) => sheet.name), ["회차별 요약", "단계별 결과", "학생별 결과", "요약"]);
+    assert.equal(sheets[0].rows[4][0], "합계(끝난 3회차)");
+    assert.equal(sheets[2].rows.length, 1 + 12 * 3);
+    assert.equal(sheets[2].rows[0][0], "회차");
+    assert.ok(sheets[3].rows.some((row) => row[0] === "반복" && /3회/.test(row[1])));
+    assert.equal(Buffer.from(Core.createXlsxBytes(sheets)).subarray(0, 2).toString(), "PK");
+  } finally { await ctx.db.close(); }
+});
+
+test("test bot 반복 × 실제 SQL: 회차마다 새 수강신청 — 회차마다 만들고 닫고 삭제해 테스트 신청이 쌓이지 않는다", async () => {
+  const ctx = await server({ hardened: true });
+  try {
+    const window = teacherWindow(ctx);
+    const events = [];
+    const report = await Core.runRepeatedTest({
+      source: { eventId: ctx.event.id, students: freshStudents(ctx), testEvent: true },
+      opts: { scope: "all", concurrency: 3, wrongCodePercent: 10, wrongCodeTimes: 5, teacherCheck: true, cleanup: "keep", popularity: "uniform" },
+      repeat: { count: 3, freshEvent: true }, auto: true, connected: true, canCreate: true,
+    }, {
+      rpc: ctx.rpc, rng: Core.createRng(4), teacher: window.teacher,
+      acceptCreated: (data) => Bridge.validatePayload(data),
+      onEvent: (created) => events.push(created.eventId),
+    });
+    assert.equal(report.repeat.freshEvent, true);
+    assert.equal(window.created.length, 2, "2회차부터 회차마다 새 신청");
+    assert.deepEqual(events, window.created);
+    const ids = report.rounds.map((round) => round.eventId);
+    assert.equal(new Set(ids).size, 3);
+    for (const round of report.rounds) {
+      assert.equal(round.status, "done", `${round.round}회차: ${round.steps.filter((step) => step.status === "fail").map((step) => `${step.name} ${step.actual}`).join(" | ")}`);
+      assert.equal(round.records.filter((record) => record.newCode).length, round.records.filter((record) => record.ok).length, "새 신청마다 첫 접속 코드 변경");
+      assert.equal(round.teacher.problems, 0);
+      assert.equal(stepStatus(round, "locks"), "pass", "새 신청마다 틀린 코드·잠금 확인");
+      assert.match(round.steps.find((step) => step.key === "cleanup").actual, /삭제/, "정리 설정(그대로 두기)과 관계없이 삭제");
+    }
+    assert.deepEqual(window.calls.filter((call) => /^(close|delete):/.test(call)), ids.flatMap((id) => [`close:${id.slice(0, 8)}`, `delete:${id.slice(0, 8)}`]));
+    await ctx.db.exec("reset role");
+    assert.equal((await ctx.db.query("select count(*)::int n from public.course_events")).rows[0].n, 0, "테스트 신청이 남지 않음");
+    const sheets = Core.repeatReportSheets(report);
+    assert.ok(sheets[3].rows.some((row) => row[0] === "반복" && /회차마다 새 수강신청/.test(row[1])));
+
+    // 앱 연결이 없거나 앱 자동 테스트가 아니면 새 신청 방식은 쓰지 않고 같은 신청으로 반복한다(보고서에 알림).
+    const fallback = await Core.runRepeatedTest({ source: { eventId: ctx.event.id, students: [], testEvent: false }, opts: {}, repeat: { count: 2, freshEvent: true } }, { rpc: ctx.rpc });
+    assert.equal(fallback.repeat.freshEvent, false);
+    assert.match(fallback.notes[0], /같은 수강신청으로 반복/);
+  } finally { await ctx.db.close(); }
+});
+
+test("test bot 반복: 중지하면 끝난 회차까지 보고서를 만들고, 새 신청 방식은 그 회차 신청도 지운다", async () => {
+  const ctx = await server({ hardened: true });
+  try {
+    const window = teacherWindow(ctx);
+    const controller = new AbortController();
+    let processed = 0;
+    const report = await Core.runRepeatedTest({
+      source: { eventId: ctx.event.id, students: freshStudents(ctx), testEvent: true },
+      opts: { scope: "all", concurrency: 1, teacherCheck: true, cleanup: "close" },
+      repeat: { count: 3, freshEvent: true }, auto: true, connected: true, canCreate: true,
+    }, {
+      rpc: ctx.rpc, rng: Core.createRng(8), teacher: window.teacher, signal: controller.signal,
+      acceptCreated: (data) => Bridge.validatePayload(data),
+      onRecord: (record, round) => { if (round.round === 2 && ++processed === 3) controller.abort(); },
+    });
+    assert.equal(report.stopped, true);
+    assert.deepEqual(report.rounds.map((round) => round.status), ["done", "stopped"]);
+    const summary = Core.repeatSummary(report);
+    assert.equal(summary.totals.rounds, 1, "합계는 끝난 회차만");
+    assert.match(summary.rows[1].status, /^중지됨\(끝나지 않음 · 처리 \d+\/12명\)$/);
+    assert.equal(summary.rows[1].failed, 0, "중지로 끊긴 학생은 실패로 세지 않는다");
+    assert.ok(report.rounds[1].records.length < 12);
+    assert.match(report.rounds[1].steps.find((step) => step.key === "cleanup").actual, /중지했지만 이 회차 신청을 정리/);
+    await ctx.db.exec("reset role");
+    assert.equal((await ctx.db.query("select count(*)::int n from public.course_events")).rows[0].n, 0);
+  } finally { await ctx.db.close(); }
 });

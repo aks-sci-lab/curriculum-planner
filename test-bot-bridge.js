@@ -14,7 +14,10 @@ var TestBotBridge = (() => {
   const STATUS = "test-bot-status";
   const TEACHER_REQUEST = "test-bot-teacher-request";
   const TEACHER_RESPONSE = "test-bot-teacher-response";
-  const TEACHER_ACTIONS = ["applications", "locks", "close", "delete", "import"];
+  // session: 회차 사이 교사 세션 이어 두기(로그인 여부만 답함), unlock: 자동 테스트 신청의 학생 잠금 전체 해제,
+  // create: 회차마다 새 수강신청 방식에서 앱이 같은 설정으로 새 [테스트] 신청을 만들어 코드를 돌려줌.
+  const TEACHER_ACTIONS = ["applications", "locks", "close", "delete", "import", "session", "unlock", "create"];
+  const REPEAT_MAX = 20;
   const NONCE = /^[a-f0-9]{32}$/;
   const EVENT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
   const CODE = /^(?:\d{6}|[a-f0-9]{32})$/;
@@ -104,8 +107,16 @@ var TestBotBridge = (() => {
     return {
       eventId, link: text(payload.link), schoolName: text(payload.schoolName), schoolYear: text(payload.schoolYear),
       round: text(payload.round), partial: payload.partial === true, sentAt: text(payload.sentAt), students,
-      autoRun: payload.autoRun === true, testEvent: payload.testEvent === true,
+      autoRun: payload.autoRun === true, testEvent: payload.testEvent === true, repeat: validateRepeat(payload.repeat),
     };
+  }
+
+  // 자동 테스트 반복 설정(앱 설정 창에서 정함). 없으면 null(봇 화면 설정을 씀).
+  function validateRepeat(value) {
+    if (!value || typeof value !== "object") return null;
+    const count = Math.floor(Number(value.count));
+    if (!Number.isFinite(count)) return null;
+    return { count: Math.max(1, Math.min(REPEAT_MAX, count)), freshEvent: value.freshEvent === true };
   }
 
   function studentKey(student) {
@@ -141,7 +152,7 @@ var TestBotBridge = (() => {
   return {
     READY, CODES, STATUS, TEACHER_REQUEST, TEACHER_RESPONSE, TEACHER_ACTIONS,
     createNonce, nonceFromHash, targetOrigin, originAllowed, accept,
-    acceptReady, acceptCodes, acceptTeacherRequest, acceptTeacherResponse, validatePayload, mergePayload, buildPayload,
+    acceptReady, acceptCodes, acceptTeacherRequest, acceptTeacherResponse, validatePayload, validateRepeat, mergePayload, buildPayload,
   };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = TestBotBridge;
