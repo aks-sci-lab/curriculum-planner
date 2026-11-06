@@ -868,7 +868,7 @@ function courseCheckStudentSaveNote(selected) {
   if (!courseCheckStudentApp) return "";
   const result = courseCheckApplicationState(courseCheckStudentApp.application, selected);
   const count = result?.violations.length || 0;
-  return count ? ` 위계(선이수) 경고 ${count}건이 있는 채로 저장했습니다(${courseCheckIssueText(result.violations[0], { student: true })}). 담당 선생님과 확인하세요.` : "";
+  return count ? ` 위계(선이수) 경고 ${count}건이 있는 채로 저장했습니다. ${courseCheckIssueText(result.violations[0], { student: true })}${count > 1 ? ` (외 ${count - 1}건)` : ""}` : "";
 }
 
 // ---- 2단계 '위계·학점 점검' 팝업
