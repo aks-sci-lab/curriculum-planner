@@ -5130,151 +5130,356 @@
       return name;
     }
 
+    // ---- 집계표 엑셀 시트: 학교 취합 양식(저장소의 '선택과목 수강신청결과 취합 예시.xlsx')을 따른다 ----
+    // 열: A 여백, B 항목명, C~H 과목(한 줄에 최대 6과목), 그룹마다 과목 열 바로 오른쪽에 총 학급수, 그 옆에 '신청 합÷택n'.
+    function aggregateSheetColumnWidths() {
+      return [6.375, 14.75, 16.375, 14.375, 15.75, 16.375, 16.75, 17.625, 10.25, 12];
+    }
+
+    // 셀 너비(엑셀 열 너비 단위)에 글자가 몇 줄로 줄바꿈되는지 어림한다. 한글은 숫자 폭의 약 1.8배.
+    function aggregateTextLines(text, columnWidth, fontSize = 12, bold = false) {
+      const scale = fontSize / 11 * (bold ? 1.06 : 1);
+      const unit = (character) => /[ㄱ-ㆎ가-힣一-鿿]/.test(character) ? 1.8
+        : /[()[\]·.,:/]/.test(character) ? 0.6 : 1.05;
+      const measure = (word) => [...word].reduce((total, character) => total + unit(character), 0) * scale;
+      const available = Math.max(1, columnWidth - 1.2);
+      let lines = 1;
+      let current = 0;
+      for (const word of String(text ?? "").split(/\s+/).filter(Boolean)) {
+        const width = measure(word);
+        const space = current ? 0.55 * scale : 0;
+        if (current && current + space + width <= available) {
+          current += space + width;
+          continue;
+        }
+        if (current) lines += 1;
+        current = width;
+        // 한 낱말이 칸보다 길면 글자 단위로 끊긴다.
+        while (current > available) { lines += 1; current -= available; }
+      }
+      return lines;
+    }
+
+    // 블록 칸 서식 이름. 양식처럼 블록 바깥은 이중선, 항목명 열 오른쪽·묶음 사이는 굵은 선, 안쪽은 가는 선.
+    //   row: head(과목) | count(인원 수) | division(인원수/분반기준) | classes(개설 학급수) | average(학급당 학생수) | value(총 학급수·신청 합 값)
+    //   col: label(B열) | subject | total(총 학급수) | memo(신청 합÷택n)
+    function aggregateBlockStyle(row, col, { firstUnit = true, lastUnit = true, firstColumn = false, lastColumn = false, closed = false } = {}) {
+      const boxed = col === "total" || col === "memo";
+      const left = col === "label" || col === "memo" ? "d" : col === "total" || firstColumn ? "m" : "t";
+      const right = col === "label" || lastColumn && col === "subject" ? "m" : boxed ? "d" : "t";
+      const top = boxed || row === "count" || row === "head" && firstUnit ? "d" : row === "head" ? "m" : "t";
+      const bottom = boxed || row === "head" ? "d" : row === "average" ? (lastUnit ? "d" : "m") : "t";
+      let font = "body", format = "general", wrap = 0;
+      if (col === "label") font = row === "division" ? "small" : "body";
+      else if (col === "subject") {
+        if (row === "head") { font = "bold"; wrap = 1; } else if (row === "division" || row === "average") format = "two";
+      } else if (col === "total") { font = "bold"; wrap = row === "head" ? 1 : 0; }
+      else { font = "small"; wrap = row === "head" ? 1 : 0; format = row === "head" ? "general" : "one"; }
+      const fill = closed && col === "subject" && (row === "count" || row === "division") ? "yellow" : "none";
+      return [font, format, fill, "c", wrap, left + right + top + bottom].join("|");
+    }
+
+    // 집계표 시트가 쓰는 서식 목록(styles.xml의 11번 뒤에 붙는다). createStylesXml과 createWorksheetXml이 같은 목록을 쓴다.
+    function aggregateSheetStyles() {
+      if (aggregateSheetStyles.cache) return aggregateSheetStyles.cache;
+      const keys = new Set([
+        "title|general|none|c|0|---m", "small|general|none|r|0|----", "small|general|none|c|1|----",
+        "bold|general|none|c|1|mtmm", "bold|general|none|c|1|ttmm", "bold|general|none|c|1|tmmm",
+        "bold|two|none|c|1|tmmm", "bold|two|yellow|c|1|tmmm",
+        "semester|general|none|c|0|mmmm", "bold|general|none|l|0|----", "note|general|none|l|0|----"
+      ]);
+      const flags = [false, true];
+      for (const row of ["head", "count", "division", "classes", "average"]) {
+        for (const firstUnit of flags) for (const lastUnit of flags) {
+          keys.add(aggregateBlockStyle(row, "label", { firstUnit, lastUnit }));
+          for (const firstColumn of flags) for (const lastColumn of flags) for (const closed of flags) {
+            keys.add(aggregateBlockStyle(row, "subject", { firstUnit, lastUnit, firstColumn, lastColumn, closed }));
+          }
+        }
+      }
+      for (const row of ["head", "value"]) for (const col of ["total", "memo"]) keys.add(aggregateBlockStyle(row, col));
+      const list = [...keys];
+      const borders = [...new Set(list.map((key) => key.split("|")[5]))];
+      aggregateSheetStyles.cache = {
+        list,
+        borders,
+        fonts: ["title", "semester", "bold", "body", "small", "note"],
+        index: new Map(list.map((key, offset) => [key, 11 + offset]))
+      };
+      return aggregateSheetStyles.cache;
+    }
+
     function createWorksheetXml(report, openingPercent, divisionPercent) {
       const { summary, semesters } = report;
-      //보내기 서식: 과목 6개씩 한 묶음(열)으로 배치하고, 총 학급수는 학기 전체를 하나로 병합한다.
-      const BLOCK_SIZE = 6;
-      const columnCount = 9; // 라벨 1 + 과목 6 + 총 학급수 1 + 총학생수 메모 1
-      const lastColumn = columnCount - 1;
+      const styles = aggregateSheetStyles();
+      const style = (key) => {
+        const id = styles.index.get(key);
+        if (id === undefined) throw new Error(`집계표 서식이 없습니다: ${key}`);
+        return id;
+      };
+      const widths = aggregateSheetColumnWidths();
+      const lastColumn = widths.length - 1;
+      const UNIT_SIZE = 6;
       const rows = [];
       const merges = [];
-      const addRow = (height = 22) => {
-        rows.push({ cells: Array(columnCount).fill(null), height });
-        return rows.length;
-      };
-      const setCell = (rowNumber, column, value, style, numeric = false) => {
-        rows[rowNumber - 1].cells[column] = { value, style, numeric };
-      };
-      const merge = (firstColumn, firstRow, lastMergeColumn, lastRow) => {
-        if (firstColumn !== lastMergeColumn || firstRow !== lastRow) {
-          merges.push(`${columnName(firstColumn)}${firstRow}:${columnName(lastMergeColumn)}${lastRow}`);
+      const rules = [];
+      const chunks = [];
+      const addRow = (height) => { rows.push({ cells: [], height }); return rows.length; };
+      const put = (row, column, cell) => { rows[row - 1].cells[column] = cell; };
+      const text = (row, column, value, key) => put(row, column, { kind: "s", value, style: style(key) });
+      const number = (row, column, value, key) => put(row, column, { kind: "n", value, style: style(key) });
+      const formula = (row, column, expression, cached, key) => put(row, column, { kind: "f", expression, value: cached, style: style(key) });
+      const blank = (row, column, key) => put(row, column, { kind: "blank", style: style(key) });
+      const cellRef = (column, row) => `${columnName(column)}${row}`;
+      const rangeRef = (firstColumn, firstRow, lastMergeColumn, lastRow) =>
+        firstColumn === lastMergeColumn && firstRow === lastRow ? cellRef(firstColumn, firstRow)
+          : `${cellRef(firstColumn, firstRow)}:${cellRef(lastMergeColumn, lastRow)}`;
+      // 병합 범위의 나머지 칸에도 같은 서식을 넣어야 엑셀이 병합 칸 테두리를 빠짐없이 그린다.
+      const merge = (firstColumn, firstRow, lastMergeColumn, lastRow, key) => {
+        merges.push(rangeRef(firstColumn, firstRow, lastMergeColumn, lastRow));
+        for (let row = firstRow; row <= lastRow; row++) {
+          for (let column = firstColumn; column <= lastMergeColumn; column++) {
+            if (!rows[row - 1].cells[column]) blank(row, column, key);
+          }
         }
       };
       const confirmDigits = String($("#confirmDate").value || "").match(/\d+/g) || [];
+      const today = new Date();
       const shortDate = confirmDigits.length >= 2
         ? `${confirmDigits[0]}.${Number(confirmDigits[1])}.`
-        : String($("#confirmDate").value || "");
+        : String($("#confirmDate").value || "").trim() || `${today.getFullYear()}.${today.getMonth() + 1}.`;
+      const classes = Number(summary.classes) || 0;
+      const students = Number(summary.students) || 0;
+      const factor = (percent) => String(Number((percent / 100).toFixed(4)));
+      const divisionLimit = Number(summary.divisionLimit) || 0;
+
+      // 1~3행: 제목과 기준 칸. 값은 엑셀에서 고쳐도 따라 바뀌도록 수식으로 둔다(학급 수는 내년 학급 수 입력값 또는 명단 반 수).
+      const titleRow = addRow(54.6);
+      text(titleRow, 1, `${Number(summary.grade) + 1}학년(현${summary.grade}학년) 수강신청결과(${$("#round").value || "1차"})`, "title|general|none|c|0|---m");
+      merge(1, titleRow, 6, titleRow, "title|general|none|c|0|---m");
+      text(titleRow, lastColumn, shortDate, "small|general|none|r|0|----");
+      const openingRow = addRow(35.45);
+      const divisionRow = addRow(35.45);
+      text(openingRow, 1, "총학생수", "bold|general|none|c|1|mtmm");
+      number(openingRow, 2, students, "bold|general|none|c|1|ttmm");
+      text(openingRow, 3, "학급당 학생수", "bold|general|none|c|1|ttmm");
+      if (classes > 0) formula(openingRow, 4, `C2/${classes}`, students / classes, "bold|two|none|c|1|tmmm");
+      else number(openingRow, 4, 0, "bold|two|none|c|1|tmmm");
+      text(openingRow, 5, `학급당 학생수의 ${openingPercent}%(개설기준)`, "bold|general|none|c|1|mtmm");
+      merge(5, openingRow, 6, openingRow, "bold|general|none|c|1|ttmm");
+      if (classes > 0) formula(openingRow, 7, `C2/${classes}*${factor(openingPercent)}`, Number(summary.openingLimit) || 0, "bold|two|yellow|c|1|tmmm");
+      else number(openingRow, 7, 0, "bold|two|yellow|c|1|tmmm");
+      text(divisionRow, 5, `학급당 학생수의 ${divisionPercent}%(분반기준)`, "bold|general|none|c|1|mtmm");
+      merge(5, divisionRow, 6, divisionRow, "bold|general|none|c|1|ttmm");
+      if (classes > 0) formula(divisionRow, 7, `C2/${classes}*${factor(divisionPercent)}`, divisionLimit, "bold|two|none|c|1|tmmm");
+      else number(divisionRow, 7, 0, "bold|two|none|c|1|tmmm");
+      text(openingRow, 8, "학급당 학생수는 개설기준과 분반기준의 사이가 되도록 조정", "small|general|none|c|1|----");
+      merge(8, openingRow, 9, divisionRow, "small|general|none|c|1|----");
+      const divisionCell = "$H$3";
 
       for (const [semesterIndex, semester] of semesters.entries()) {
-        let row;
-        if (semesterIndex === 0) {
-          row = addRow(34);
-          const futureGrade = Number(summary.grade) + 1;
-          setCell(row, 0, `${futureGrade}학년(현${summary.grade}학년) 수강신청결과(${$("#round").value || "1차"})`, 1);
-          merge(0, row, lastColumn - 1, row);
-          setCell(row, lastColumn, shortDate, 10);
+        const semesterStart = semesterIndex > 0 ? addRow(18) : rows.length + 1;
+        const semesterRow = addRow(36.6);
+        text(semesterRow, 1, semester.name, "semester|general|none|c|0|mmmm");
+        merge(1, semesterRow, 2, semesterRow, "semester|general|none|c|0|mmmm");
 
-          addRow(8);
-          row = addRow(30);
-          setCell(row, 0, "총학생수", 2); setCell(row, 1, summary.students, 3, true);
-          setCell(row, 2, "학급당 학생수", 2); setCell(row, 3, summary.averageClassSize, 8, true);
-          setCell(row, 4, `학급당 학생수의 ${openingPercent}%(개설기준)`, 2);
-          setCell(row, 5, summary.openingLimit, 4, true);
-          const noteRow = row;
-          setCell(noteRow, 7, "학급당 학생수는 개설기준과 분반기준의 사이가 되도록 조정", 10);
-
-          row = addRow(30);
-          setCell(row, 4, `학급당 학생수의 ${divisionPercent}%(분반기준)`, 2);
-          setCell(row, 5, summary.divisionLimit, 8, true);
-          merge(7, noteRow, 8, row);
-
-          addRow(12);
-        }
-
-        row = addRow(26);
-        setCell(row, 0, semester.name, 5);
-        merge(0, row, 1, row);
-
-        // 학교 서식처럼 선택 그룹(화면 소제목과 같은 이름)마다 묶음을 나누고, 그룹마다 총 학급수와 학생 수 확인 메모를 둔다.
         for (const [groupIndex, group] of semester.groups.entries()) {
-          if (groupIndex > 0) addRow(8);
+          const chunkStart = groupIndex === 0 ? semesterStart : addRow(18);
+          chunks.push({ start: chunkStart, semesterIndex, semesterStart: groupIndex === 0 });
           const groupLabel = typeof aggregateGroupLabel === "function" ? aggregateGroupLabel(semester, group) : group.category;
-          const courses = group.courses;
-          const groupTotal = courses.reduce((total, course) => total + course.classCount, 0);
-          // 메모: 신청 인원 합 ÷ 택 수. 모든 학생이 그룹에서 n과목씩 신청했으면 총학생수와 같아 누락·중복을 확인할 수 있다.
           const choiceCount = Number(group.choiceCount);
-          const enrollmentTotal = courses.reduce((total, course) => total + (Number(course.enrollment) || 0), 0);
-          const studentCheck = Number.isInteger(choiceCount) && choiceCount > 0 ? enrollmentTotal / choiceCount : enrollmentTotal;
-          const blocks = [];
-          for (let index = 0; index < courses.length; index += BLOCK_SIZE) {
-            blocks.push(courses.slice(index, index + BLOCK_SIZE));
+          const hasChoice = Number.isInteger(choiceCount) && choiceCount > 0;
+          const target = hasChoice && Number.isInteger(classes) && classes > 0 ? choiceCount * classes : null;
+          // 그룹 이름은 블록 위 소제목 줄에 한 번만 쓴다(묶음이 여러 개여도 머리 칸은 모두 '과목').
+          const labelRow = addRow(22);
+          text(labelRow, 1, groupLabel, "bold|general|none|l|0|----");
+          if (target !== null) text(labelRow, 3, `목표 총 학급수 ${target} (택${choiceCount} × ${classes}학급)`, "note|general|none|l|0|----");
+
+          // 과목이 6개를 넘으면 고르게 나눠 여러 묶음으로 이어 쓴다(8과목 → 4+4, 16과목 → 6+5+5).
+          const courses = group.courses;
+          const unitCount = Math.max(1, Math.ceil(courses.length / UNIT_SIZE));
+          const baseSize = Math.floor(courses.length / unitCount);
+          const units = [];
+          for (let index = 0, offset = 0; index < unitCount; index++) {
+            const size = baseSize + (index < courses.length % unitCount ? 1 : 0);
+            units.push(courses.slice(offset, offset + size));
+            offset += size;
           }
+          const width = Math.max(1, ...units.map((unit) => unit.length));
+          const totalColumn = 2 + width;
+          const memoColumn = totalColumn + 1;
           const groupFirstRow = rows.length + 1;
-          const groupLastRow = groupFirstRow + blocks.length * 5 - 1;
-          blocks.forEach((block, blockIndex) => {
-            const headerRow = addRow(21);
-            const metricRows = [addRow(23), addRow(23), addRow(23), addRow(23)];
-            setCell(headerRow, 0, groupLabel, 6);
-            block.forEach((course, index) => setCell(headerRow, index + 1, `${course.displayName || course.name}${course.closed ? " (폐강)" : ""}`, 6));
-            for (let col = block.length + 1; col <= BLOCK_SIZE; col++) setCell(headerRow, col, "", 6);
-            if (blockIndex === 0) {
-              setCell(headerRow, 7, "총 학급수", 9);
-              setCell(metricRows[0], 7, groupTotal, 9, true);
-              merge(7, metricRows[0], 7, groupLastRow);
-              setCell(metricRows[0], 8, studentCheck, 10, true);
-              merge(8, metricRows[0], 8, metricRows[1]);
+          const groupLastRow = groupFirstRow + units.length * 5 - 1;
+          const classRanges = [];
+          const countRanges = [];
+          const memoHeader = hasChoice ? `신청 합÷택${choiceCount}` : "신청 합";
+          units.forEach((unit, unitIndex) => {
+            const firstUnit = unitIndex === 0;
+            const lastUnit = unitIndex === units.length - 1;
+            // 과목명이 길면 그 머리 줄만 높여 두 줄이 모두 보이게 한다.
+            const lines = Math.max(1, ...unit.map((course, index) =>
+              aggregateTextLines(course.displayName || course.name, widths[2 + index], 12, true)),
+            firstUnit ? aggregateTextLines("총 학급수", widths[totalColumn], 12, true) : 1,
+            firstUnit ? aggregateTextLines(memoHeader, widths[memoColumn], 11) : 1);
+            const head = addRow(lines > 1 ? Math.round((lines * 18 + 1.5) * 4) / 4 : 18.75);
+            const metric = { count: addRow(18), division: addRow(17.25), classes: addRow(17.25), average: addRow(18) };
+            const labels = { head: "과목", count: "인원 수", division: "인원수/분반기준", classes: "개설 학급수", average: "학급당 학생수" };
+            const rowOf = { head, ...metric };
+            for (const [role, label] of Object.entries(labels)) {
+              text(rowOf[role], 1, label, aggregateBlockStyle(role, "label", { firstUnit, lastUnit }));
             }
-            const metrics = [
-              ["인원 수", (course) => course.enrollment, 3],
-              ["인원수/분반기준", (course) => course.enrollmentPerDivision, 8],
-              ["개설 학급수", (course) => course.classCount, 3],
-              ["학급당 학생수", (course) => course.averageClassSize, 8]
-            ];
-            for (const [metricIndex, [label, getValue, valueStyle]] of metrics.entries()) {
-              const metricRow = metricRows[metricIndex];
-              setCell(metricRow, 0, label, 7);
-              block.forEach((course, index) =>
-                setCell(metricRow, index + 1, getValue(course), valueStyle, true));
-              for (let col = block.length + 1; col <= BLOCK_SIZE; col++) setCell(metricRow, col, "", 7);
+            for (let index = 0; index < width; index++) {
+              const column = 2 + index;
+              const course = unit[index];
+              const options = { firstUnit, lastUnit, firstColumn: index === 0, lastColumn: index === width - 1,
+                closed: !!course && (course.closed || !course.classCount) };
+              const key = (role) => aggregateBlockStyle(role, "subject", options);
+              if (!course) {
+                for (const role of Object.keys(labels)) blank(rowOf[role], column, key(role));
+                continue;
+              }
+              const enrollment = Number(course.enrollment) || 0;
+              const classCount = Number(course.classCount) || 0;
+              text(head, column, course.displayName || course.name, key("head"));
+              number(metric.count, column, enrollment, key("count"));
+              if (course.closed) text(metric.division, column, "폐강", key("division"));
+              else if (divisionLimit > 0) formula(metric.division, column, `${cellRef(column, metric.count)}/${divisionCell}`, enrollment / divisionLimit, key("division"));
+              else number(metric.division, column, 0, key("division"));
+              // 개설 학급수는 앱의 값(자동 조정·직접 입력 반영, 폐강 0)을 그대로 쓴다.
+              number(metric.classes, column, classCount, key("classes"));
+              if (classCount > 0) formula(metric.average, column, `${cellRef(column, metric.count)}/${cellRef(column, metric.classes)}`, enrollment / classCount, key("average"));
+              else blank(metric.average, column, key("average"));
+            }
+            classRanges.push(rangeRef(2, metric.classes, 1 + width, metric.classes));
+            countRanges.push(rangeRef(2, metric.count, 1 + width, metric.count));
+            if (firstUnit) {
+              text(head, totalColumn, "총 학급수", aggregateBlockStyle("head", "total"));
+              text(head, memoColumn, memoHeader, aggregateBlockStyle("head", "memo"));
             }
           });
+          // 총 학급수·신청 합은 그룹의 첫 '인원 수' 줄부터 마지막 줄까지 한 칸으로 병합한다.
+          const valueRow = groupFirstRow + 1;
+          const groupTotal = courses.reduce((total, course) => total + (Number(course.classCount) || 0), 0);
+          const enrollmentTotal = courses.reduce((total, course) => total + (Number(course.enrollment) || 0), 0);
+          formula(valueRow, totalColumn, `SUM(${classRanges.join(",")})`, groupTotal, aggregateBlockStyle("value", "total"));
+          merge(totalColumn, valueRow, totalColumn, groupLastRow, aggregateBlockStyle("value", "total"));
+          // 신청 합÷택n: 모든 학생이 그룹에서 n과목씩 신청했으면 총학생수와 같아 누락·중복을 확인할 수 있다.
+          formula(valueRow, memoColumn, `SUM(${countRanges.join(",")})${hasChoice ? `/${choiceCount}` : ""}`,
+            hasChoice ? enrollmentTotal / choiceCount : enrollmentTotal, aggregateBlockStyle("value", "memo"));
+          merge(memoColumn, valueRow, memoColumn, groupLastRow, aggregateBlockStyle("value", "memo"));
+          // 목표(택n × 학급 수)나 총학생수와 다르면 연한 경고색(엑셀에서 학급수를 고치면 따라 바뀐다).
+          if (target !== null) rules.push({ ref: cellRef(totalColumn, valueRow), value: String(target) });
+          if (hasChoice) rules.push({ ref: cellRef(memoColumn, valueRow), value: "$C$2" });
         }
-        addRow(12);
       }
 
+      // 양식처럼 A4 세로에 B열부터 너비를 맞춰 인쇄하고(A열은 여백), 블록이 쪽 사이에서 잘리지 않게
+      // 그룹(가능하면 학기) 경계에서 쪽을 나눈다. 열 너비 1 = 약 8px(맑은 고딕 11pt), 8% 여유.
+      const heightOf = (firstRow, lastRow) => rows.slice(firstRow - 1, lastRow).reduce((total, row) => total + row.height, 0);
+      const widthPx = widths.slice(1).reduce((total, value) => total + Math.floor(value * 8 + 5), 0);
+      const printScale = Math.min(1, (8.27 - 1.42) * 96 / widthPx);
+      const capacity = (11.69 - 1.5) * 72 / printScale * 0.92 - heightOf(1, 3);
+      const breaks = [];
+      let used = 0;
+      chunks.forEach((chunk, index) => {
+        const nextStart = chunks[index + 1]?.start ?? rows.length + 1;
+        const height = heightOf(chunk.start, nextStart - 1);
+        let breakHere = used > 0 && used + height > capacity;
+        if (!breakHere && used > 0 && chunk.semesterStart) {
+          const semesterEnd = (chunks.find((item, later) => later > index && item.semesterStart)?.start ?? rows.length + 1) - 1;
+          const semesterHeight = heightOf(chunk.start, semesterEnd);
+          breakHere = used + semesterHeight > capacity && semesterHeight <= capacity;
+        }
+        if (breakHere) { breaks.push(chunk.start - 1); used = 0; }
+        used += height;
+      });
+
+      const numberText = (value) => {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? String(Number(numeric.toPrecision(15))) : "0";
+      };
       const rowsXml = rows.map((row, rowIndex) => {
-        const cells = row.cells.map((cell, columnIndexValue) => {
-          if (!cell) return "";
-          const reference = `${columnName(columnIndexValue)}${rowIndex + 1}`;
-          if (cell.numeric) {
-            const value = Number(cell.value);
-            const rounded = Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
-            return `<c r="${reference}" s="${cell.style}"><v>${rounded}</v></c>`;
-          }
-          return `<c r="${reference}" s="${cell.style}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell.value)}</t></is></c>`;
-        }).join("");
-        return `<row r="${rowIndex + 1}" ht="${row.height}" customHeight="1">${cells}</row>`;
+        const cells = [];
+        for (let column = 0; column < row.cells.length; column++) {
+          const cell = row.cells[column];
+          if (!cell) continue;
+          const reference = cellRef(column, rowIndex + 1);
+          if (cell.kind === "blank") cells.push(`<c r="${reference}" s="${cell.style}"/>`);
+          else if (cell.kind === "n") cells.push(`<c r="${reference}" s="${cell.style}"><v>${numberText(cell.value)}</v></c>`);
+          else if (cell.kind === "f") cells.push(`<c r="${reference}" s="${cell.style}"><f>${xmlEscape(cell.expression)}</f><v>${numberText(cell.value)}</v></c>`);
+          else cells.push(`<c r="${reference}" s="${cell.style}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell.value)}</t></is></c>`);
+        }
+        return `<row r="${rowIndex + 1}" ht="${row.height}" customHeight="1">${cells.join("")}</row>`;
       }).join("");
-      const columns = Array.from({ length: columnCount }, (_, index) => {
-        const width = index === 0 ? 15 : index === lastColumn ? 11 : index === 7 ? 11 : 13;
-        return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`;
-      }).join("");
+      const columns = widths.map((width, index) =>
+        `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const mergeXml = merges.length
         ? `<mergeCells count="${merges.length}">${merges.map((reference) => `<mergeCell ref="${reference}"/>`).join("")}</mergeCells>`
         : "";
-      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData>${mergeXml}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`;
+      const ruleXml = rules.map((rule, index) =>
+        `<conditionalFormatting sqref="${rule.ref}"><cfRule type="cellIs" dxfId="0" priority="${index + 1}" operator="notEqual"><formula>${rule.value}</formula></cfRule></conditionalFormatting>`).join("");
+      const breakXml = breaks.length
+        ? `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">${breaks.map((id) => `<brk id="${id}" max="16383" man="1"/>`).join("")}</rowBreaks>`
+        : "";
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${cellRef(lastColumn, rows.length)}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="16.5"/><cols>${columns}</cols><sheetData>${rowsXml}</sheetData>${mergeXml}${ruleXml}<pageMargins left="0.71" right="0.71" top="0.75" bottom="0.75" header="0.31" footer="0.31"/><pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="0"/>${breakXml}</worksheet>`;
+    }
+
+    // 4단계 집계표 엑셀의 학년 시트 이름(양식처럼 신청 학년만: '2학년', '3학년')과 인쇄 설정.
+    function aggregateSheetName(report) {
+      return `${Number(report.summary.grade) + 1}학년`;
+    }
+
+    // printTitles가 있는 시트는 쪽마다 그 행(제목·기준 칸)을 되풀이하고, 인쇄 영역은 양식처럼 B열부터로 한다.
+    function aggregateWorkbookExtrasXml(sheets) {
+      const names = sheets.map((sheet, index) => {
+        if (!sheet.printTitles) return "";
+        const quoted = `'${xmlEscape(String(sheet.name).replace(/'/g, "''"))}'`;
+        const dimension = String(sheet.xml || "").match(/<dimension ref="A1:([A-Z]+)(\d+)"/);
+        const area = dimension ? `<definedName name="_xlnm.Print_Area" localSheetId="${index}">${quoted}!$B$1:$${dimension[1]}$${dimension[2]}</definedName>` : "";
+        return `${area}<definedName name="_xlnm.Print_Titles" localSheetId="${index}">${quoted}!${sheet.printTitles}</definedName>`;
+      }).join("");
+      return `${names ? `<definedNames>${names}</definedNames>` : ""}<calcPr calcId="191029" fullCalcOnLoad="1"/>`;
     }
 
     function createStylesXml() {
+      // 앞의 0~10번 서식은 다른 내려받기(재신청 대상자 등)가 번호로 쓰므로 그대로 두고, 집계표 서식은 11번부터 덧붙인다.
+      const sheet = aggregateSheetStyles();
+      const fontXml = {
+        title: '<sz val="24"/>', semester: '<sz val="18"/>', bold: '<b/><sz val="12"/>',
+        body: '<sz val="12"/>', small: '<sz val="11"/>', note: '<sz val="11"/><color rgb="FF595959"/>'
+      };
+      const lineStyle = { t: "thin", m: "medium", d: "double" };
+      const side = (name, code) => lineStyle[code] ? `<${name} style="${lineStyle[code]}"><color indexed="64"/></${name}>` : `<${name}/>`;
+      const borderXml = sheet.borders.map((code) =>
+        `<border>${side("left", code[0])}${side("right", code[1])}${side("top", code[2])}${side("bottom", code[3])}<diagonal/></border>`).join("");
+      const formatId = { general: 0, two: 165, one: 166 };
+      const xfXml = sheet.list.map((key) => {
+        const [font, format, fill, align, wrap, border] = key.split("|");
+        const horizontal = { c: "center", l: "left", r: "right" }[align];
+        return `<xf numFmtId="${formatId[format]}" fontId="${3 + sheet.fonts.indexOf(font)}" fillId="${fill === "yellow" ? 3 : 0}" borderId="${2 + sheet.borders.indexOf(border)}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="${horizontal}" vertical="center"${wrap === "1" ? ' wrapText="1"' : ""}/></xf>`;
+      }).join("");
       return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-          <numFmts count="1"><numFmt numFmtId="164" formatCode="0.00"/></numFmts>
-          <fonts count="3">
-            <font><sz val="10"/><name val="맑은 고딕"/><family val="2"/></font>
+          <numFmts count="3"><numFmt numFmtId="164" formatCode="0.00"/><numFmt numFmtId="165" formatCode="0.00_ "/><numFmt numFmtId="166" formatCode="0.0_ "/></numFmts>
+          <fonts count="${3 + sheet.fonts.length}">
+            <font><sz val="11"/><name val="맑은 고딕"/><family val="2"/></font>
             <font><b/><sz val="18"/><name val="맑은 고딕"/><family val="2"/></font>
             <font><b/><sz val="10"/><name val="맑은 고딕"/><family val="2"/></font>
+            ${sheet.fonts.map((font) => `<font>${fontXml[font]}<name val="맑은 고딕"/><family val="2"/></font>`).join("")}
           </fonts>
-          <fills count="3">
+          <fills count="4">
             <fill><patternFill patternType="none"/></fill>
             <fill><patternFill patternType="gray125"/></fill>
             <fill><patternFill patternType="solid"><fgColor rgb="FFFFFF55"/><bgColor indexed="64"/></patternFill></fill>
+            <fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill>
           </fills>
-          <borders count="2">
+          <borders count="${2 + sheet.borders.length}">
             <border><left/><right/><top/><bottom/><diagonal/></border>
             <border><left style="thin"><color rgb="FF222222"/></left><right style="thin"><color rgb="FF222222"/></right><top style="thin"><color rgb="FF222222"/></top><bottom style="thin"><color rgb="FF222222"/></bottom><diagonal/></border>
+            ${borderXml}
           </borders>
           <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-          <cellXfs count="11">
+          <cellXfs count="${11 + sheet.list.length}">
             <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
             <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
             <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
@@ -5286,8 +5491,10 @@
             <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
             <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
             <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+            ${xfXml}
           </cellXfs>
           <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+          <dxfs count="1"><dxf><font><color rgb="FF9C0006"/></font><fill><patternFill><bgColor rgb="FFFCE4D6"/></patternFill></fill></dxf></dxfs>
         </styleSheet>`;
     }
 
@@ -5354,7 +5561,8 @@
       // 4단계에서 학년 탭을 고르면 그 학년 시트만 만든다(시트 내용은 학교 서식 그대로).
       const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
       const sheets = aggregate.reports.filter((report) => !grade || String(report.summary.grade) === grade).map((report) => ({
-        name: `${Number(report.summary.grade) + 1}학년(현${report.summary.grade}학년)`,
+        name: aggregateSheetName(report),
+        printTitles: "$1:$3",
         xml: createWorksheetXml(report, openingPercent, divisionPercent)
       }));
       const sheetOverrides = sheets.map((sheet, index) =>
@@ -5366,7 +5574,7 @@
       const files = {
         "[Content_Types].xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetOverrides}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
         "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-        "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets></workbook>`,
+        "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets>${aggregateWorkbookExtrasXml(sheets)}</workbook>`,
         "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetRels}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
         "xl/styles.xml": createStylesXml()
       };

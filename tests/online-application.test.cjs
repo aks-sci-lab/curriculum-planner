@@ -1257,32 +1257,127 @@ test("result bundle import checks round and reports empty results without changi
   assert.equal(ctx.merged.length, 2);
 });
 
-test("the aggregate workbook keeps the school columns but labels each choice group and checks its student count", () => {
+function aggregateSheetFixture() {
   const ctx = vm.createContext({ $: (selector) => ({ value: { "#confirmDate": "2026. 11. 6.", "#round": "1차" }[selector] || "" }) });
   vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("), ctx);
-  const course = (column, name, enrollment, classCount) => ({ column, name, enrollment, classCount, closed: false,
-    enrollmentPerDivision: enrollment / 33.8, averageClassSize: classCount ? enrollment / classCount : 0 });
-  const report = { summary: { grade: "1", students: 30, classes: 1, averageClassSize: 30, openingLimit: 27, divisionLimit: 33 },
+  vm.runInContext(functionSource("function createStylesXml(", "function crc32("), ctx);
+  const course = (column, name, enrollment, classCount, closed = false) => ({ column, name, displayName: name, enrollment, classCount, closed,
+    enrollmentPerDivision: enrollment / 16.5, averageClassSize: classCount ? enrollment / classCount : 0 });
+  // 30명 2학급: 학급당 15, 개설기준 13.5, 분반기준 16.5
+  const report = { summary: { grade: "1", students: 30, classes: 2, averageClassSize: 15, openingLimit: 13.5, divisionLimit: 16.5 },
     semesters: [{ name: "2학년 1학기", groups: [
-      { category: "2-1 택3", choiceCount: 3, totalClasses: 3, courses: Array.from({ length: 7 }, (_, index) => course(index + 1, `과목${index + 1}`, index < 3 ? 29 : 0, index < 3 ? 1 : 0)) },
-      { category: "2-1 택1", choiceCount: 1, totalClasses: 2, courses: [course(8, "일본어", 20, 1), course(9, "중국어", 9, 1)] }
+      { category: "2-1 택3", choiceCount: 3, courses: [
+        course(1, "과목1", 30, 2), course(2, "과목2", 30, 2), course(3, "과목3", 20, 2), course(4, "과목4", 5, 0, true),
+        course(5, "과목5", 5, 1), course(6, "과목6", 0, 0), course(7, "과목7", 0, 0)] },
+      { category: "2-1 택1", choiceCount: 1, courses: [course(8, "일본어", 20, 1), course(9, "기후변화와 지속가능한 세계(융합)", 10, 1)] }
     ] }] };
   const xml = ctx.createWorksheetXml(report, 90, 110);
-  const cell = (reference) => {
-    const match = xml.match(new RegExp(`<c r="${reference}"[^>]*>(?:<v>([^<]*)</v>|<is><t[^>]*>([^<]*)</t></is>)</c>`));
-    return match ? (match[1] ?? match[2]) : undefined;
+  const cells = new Map([...xml.matchAll(/<c r="([A-Z]+\d+)" s="(\d+)"(?: t="inlineStr")?(?:\/>|>(?:<f>([^<]*)<\/f>)?(?:<v>([^<]*)<\/v>|<is><t[^>]*>([^<]*)<\/t><\/is>)<\/c>)/g)]
+    .map((match) => [match[1], { style: Number(match[2]), formula: match[3], value: match[4] ?? match[5] }]));
+  const merges = [...xml.matchAll(/<mergeCell ref="([^"]+)"\/>/g)].map((match) => match[1]);
+  return { ctx, xml, cells, merges };
+}
+
+test("the aggregate sheet follows the school template: title, formula criteria and 5-row blocks under one group heading", () => {
+  const { xml, cells } = aggregateSheetFixture();
+  const value = (reference) => cells.get(reference)?.value;
+  const formula = (reference) => cells.get(reference)?.formula;
+  assert.deepEqual([...xml.matchAll(/<col [^>]*width="([\d.]+)"/g)].map((match) => Number(match[1])),
+    [6.375, 14.75, 16.375, 14.375, 15.75, 16.375, 16.75, 17.625, 10.25, 12], "the template column widths");
+  assert.equal(value("B1"), "2학년(현1학년) 수강신청결과(1차)");
+  assert.equal(value("J1"), "2026.11.");
+  assert.equal(value("C2"), "30");
+  assert.equal(formula("E2"), "C2/2", "students per class from the class count");
+  assert.equal(formula("H2"), "C2/2*0.9", "opening criterion uses the set percent");
+  assert.equal(formula("H3"), "C2/2*1.1", "division criterion uses the set percent");
+  assert.equal(value("H3"), "16.5");
+  assert.equal(value("B4"), "2학년 1학기");
+  // 그룹 이름은 블록 위 소제목 줄에 한 번만, 두 묶음(7과목 → 4+3)의 머리 칸은 모두 '과목'.
+  assert.equal(value("B5"), "2-1 택3");
+  assert.equal([...cells.values()].filter((cell) => cell.value === "2-1 택3").length, 1);
+  assert.equal(value("B6"), "과목");
+  assert.deepEqual(["B7", "B8", "B9", "B10"].map(value), ["인원 수", "인원수/분반기준", "개설 학급수", "학급당 학생수"]);
+  assert.equal(value("B11"), "과목");
+  assert.deepEqual(["C6", "D6", "E6", "F6", "C11", "D11", "E11"].map(value), ["과목1", "과목2", "과목3", "과목4", "과목5", "과목6", "과목7"]);
+  assert.equal(formula("C8"), "C7/$H$3", "enrollment per division points at the division criterion cell");
+  assert.equal(formula("C10"), "C7/C9");
+  assert.equal(value("C9"), "2", "class counts are the app values");
+  assert.equal(value("F8"), "폐강");
+  assert.equal(value("F9"), "0", "a closed course has 0 classes");
+  assert.equal(value("F10"), undefined, "no division by zero for a closed course");
+  assert.ok(cells.has("F10") && cells.has("F11") && cells.has("F15"), "empty block cells still carry the bordered style");
+  assert.equal(value("G6"), "총 학급수");
+  assert.equal(formula("G7"), "SUM(C9:F9,C14:F14)");
+  assert.equal(value("G7"), "7");
+  assert.equal(value("H6"), "신청 합÷택3");
+  assert.equal(formula("H7"), "SUM(C7:F7,C12:F12)/3");
+  assert.equal(value("H7"), "30");
+  // 블록 사이 빈 행은 모두 같은 높이.
+  assert.match(xml, /<row r="16" ht="18" customHeight="1"><\/row>/);
+  assert.equal(value("B17"), "2-1 택1");
+  assert.equal(formula("E19"), "SUM(C21:D21)");
+  assert.equal(formula("F19"), "SUM(C19:D19)/1");
+  const rowHeight = (row) => Number(xml.match(new RegExp(`<row r="${row}" ht="([\\d.]+)"`))[1]);
+  assert.equal(rowHeight(6), 18.75, "short subject names keep the template header height");
+  assert.ok(rowHeight(18) >= 37.5, "a long subject name gets a taller header row");
+  assert.match(xml, /<cfRule type="cellIs" dxfId="0" priority="1" operator="notEqual"><formula>6<\/formula>/, "total ≠ 택3 × 2학급 is highlighted");
+  assert.match(xml, /orientation="portrait" fitToWidth="1" fitToHeight="0"/);
+});
+
+test("aggregate sheet merges line up with every block row and never overlap, and every style exists", () => {
+  const { ctx, xml, cells, merges } = aggregateSheetFixture();
+  for (const reference of ["B1:G1", "F2:G2", "F3:G3", "I2:J3", "B4:C4", "G7:G15", "H7:H15", "E19:E22", "F19:F22"]) {
+    assert.ok(merges.includes(reference), `${reference} is merged`);
+  }
+  const decode = (reference) => {
+    const [, letters, row] = reference.match(/([A-Z]+)(\d+)/);
+    return [[...letters].reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0), Number(row)];
   };
-  assert.equal((xml.match(/<col /g) || []).length, 9, "the nine school columns stay");
-  // 1행 제목, 2행 공백, 3·4행 기준, 5행 공백, 6행 학기, 7행부터 그룹 묶음(과목 6개씩 5행).
-  assert.equal(cell("A6"), "2학년 1학기");
-  assert.equal(cell("A7"), "2-1 택3");
-  assert.equal(cell("A12"), "2-1 택3", "the second block of the same group keeps the group name");
-  assert.equal(cell("H7"), "총 학급수");
-  assert.equal(cell("H8"), "3", "the class total is per group, as on the screen");
-  assert.match(xml, /<mergeCell ref="H8:H16"\/>/);
-  assert.equal(cell("I8"), "29", "memo = enrollments ÷ 3, so a missing choice shows up against 30 students");
-  assert.equal(cell("A18"), "2-1 택1", "a blank row separates the next group");
-  assert.equal(cell("H19"), "2");
-  assert.equal(cell("I19"), "29");
-  assert.doesNotMatch(xml, />30\.0</, "the old string memo is gone");
+  const covered = new Map();
+  for (const range of merges) {
+    const [from, to] = range.split(":").map(decode);
+    for (let column = from[0]; column <= to[0]; column++) {
+      for (let row = from[1]; row <= to[1]; row++) {
+        assert.ok(!covered.has(`${column}:${row}`), `${range} overlaps ${covered.get(`${column}:${row}`)}`);
+        covered.set(`${column}:${row}`, range);
+        assert.ok(cells.has(`${ctx.columnName(column - 1)}${row}`), `merged cell ${column}:${row} keeps its border style`);
+      }
+    }
+  }
+  const styles = ctx.createStylesXml();
+  const xfCount = Number(styles.match(/<cellXfs count="(\d+)"/)[1]);
+  assert.equal((styles.match(/<cellXfs[\s\S]*<\/cellXfs>/)[0].match(/<xf /g) || []).length, xfCount);
+  assert.ok(Math.max(...[...cells.values()].map((cell) => cell.style)) < xfCount, "every cell style is defined");
+  assert.match(styles, /<dxfs count="1">/);
+  // 다른 내려받기가 쓰는 앞쪽 서식 번호(2: 굵은 머리글, 7: 본문)는 그대로다.
+  assert.match(styles, /<cellXfs count="\d+">\s*<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"\/>/);
+  const extras = ctx.aggregateWorkbookExtrasXml([{ name: "2학년", printTitles: "$1:$3", xml }, { name: "다른 시트", xml: "" }]);
+  assert.match(extras, /<definedName name="_xlnm.Print_Area" localSheetId="0">'2학년'!\$B\$1:\$J\$22<\/definedName>/);
+  assert.match(extras, /<definedName name="_xlnm.Print_Titles" localSheetId="0">'2학년'!\$1:\$3<\/definedName>/);
+  assert.doesNotMatch(extras, /localSheetId="1"/, "sheets without print titles are left alone");
+  assert.match(extras, /fullCalcOnLoad="1"/);
+  assert.equal(ctx.aggregateSheetName({ summary: { grade: "2" } }), "3학년");
+});
+
+test("aggregate sheet splits large groups evenly, six subjects at most per row", () => {
+  const ctx = vm.createContext({ $: () => ({ value: "" }) });
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("), ctx);
+  const courses = Array.from({ length: 16 }, (_, index) => ({ column: index, name: `과목${index + 1}`, enrollment: 10, classCount: 1, closed: false }));
+  const report = { summary: { grade: "2", students: 32, classes: 1, openingLimit: 28.8, divisionLimit: 35.2 },
+    semesters: [{ name: "3학년 1학기", groups: [{ category: "3-1 택5", choiceCount: 5, courses }] }] };
+  const xml = ctx.createWorksheetXml(report, 90, 110);
+  const text = (reference) => xml.match(new RegExp(`<c r="${reference}"[^>]*><is><t[^>]*>([^<]*)</t>`))?.[1];
+  // 16과목 → 6 + 5 + 5, 총 학급수는 I열(과목 6열 오른쪽), 세 묶음 15행에 걸쳐 병합
+  assert.equal(text("H6"), "과목6");
+  assert.equal(text("C11"), "과목7");
+  assert.equal(text("G11"), "과목11");
+  assert.equal(text("H11"), undefined);
+  assert.equal(text("C16"), "과목12");
+  assert.equal(text("I6"), "총 학급수");
+  assert.match(xml, /<mergeCell ref="I7:I20"\/>/);
+  assert.match(xml, /<mergeCell ref="J7:J20"\/>/);
+  assert.match(xml, /<f>SUM\(C9:H9,C14:H14,C19:H19\)<\/f><v>16<\/v>/);
+  assert.match(xml, /<f>SUM\(C7:H7,C12:H12,C17:H17\)\/5<\/f><v>32<\/v>/);
+  assert.equal(ctx.aggregateTextLines("과목1", 16.375), 1);
+  assert.equal(ctx.aggregateTextLines("세계시민과 지리(일반)", 16.375, 12, true), 2);
 });
