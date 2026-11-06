@@ -42,6 +42,7 @@ function curriculumVersionScopeLabel(key) {
 // 편제표 레이아웃에서 학년·학기별 과목 항목을 읽는다. 병합된 과목 행(택n·교차집중 아래 숫자 행)과
 // 학기 칸 메모(소인수/공동 ○학년 ○학기 ○학점)를 해석하고, 소계·창체 행은 제외한다.
 function curriculumPlanEntries(layout) {
+  if (layout?.planData && typeof curriculumDataPlanEntries === "function") return curriculumDataPlanEntries(layout);
   const result = { entries: [], issues: [] };
   if (!layout || !Array.isArray(layout.rows) || !layout.rows.length) return result;
   const columns = importedPlanColumnMap(layout);
@@ -195,6 +196,8 @@ function curriculumSavedBaseline(snapshot, id, savedAt) {
     mergedRanges: [...(snapshot.layout.mergedRanges || [])],
     choiceBlockRanges: JSON.parse(JSON.stringify(snapshot.layout.choiceBlockRanges || [])),
     sheetMerges: JSON.parse(JSON.stringify(snapshot.layout.sheetMerges || [])),
+    ...(snapshot.layout.planData ? { planData: JSON.parse(JSON.stringify(snapshot.layout.planData)),
+      planTemplate: JSON.parse(JSON.stringify(snapshot.layout.planTemplate)) } : {}),
     plan: JSON.parse(JSON.stringify(snapshot.plan)),
     source: "saved", versionId: id, savedAt
   };
