@@ -3380,6 +3380,7 @@
     function downloadRetakeList() {
       const { sourceRound, rows } = retakeTargets();
       if (!rows.length) return;
+      const nextRound = String(Number(sourceRound) + 1);
       const sheetRows = [
         ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목"],
         ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", ")])

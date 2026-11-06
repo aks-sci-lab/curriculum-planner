@@ -713,3 +713,12 @@ test("the split-merged-cells button sits left of the version save button and rel
   assert.ok(!next.mergedRanges.includes("G2:H2"));
   assert.equal(next.rows[1][6], "1학년", "the original value stays after splitting");
 });
+
+test("subjects inside a 택n block without their own credit cell still count for that semester", () => {
+  const ctx = context();
+  const layout = fixture();
+  layout.rows[5][8] = ""; // 화학: 묶음(택2) 안이지만 자기 학점 칸이 비어 있다
+  const entries = plain(ctx.curriculumPlanEntries(layout).entries);
+  const chemistry = entries.filter((entry) => entry.subject === "화학");
+  assert.deepEqual(chemistry.map((entry) => [entry.grade, entry.semester, entry.credit, entry.kind]), [["2", "1", 4, "선택"]]);
+});
