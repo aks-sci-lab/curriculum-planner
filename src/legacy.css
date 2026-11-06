@@ -275,7 +275,13 @@
     }
     .round-status-item strong { color: #2f4f9f; }
     .round-status-item .button { margin-left: auto; padding: 3px 10px; font-size: 11px; }
-    .certificate-round-line { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .certificate-info-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 10px; font-size: 13px; }
+    .certificate-info-summary { color: #29364d; font-weight: 700; }
+    .certificate-info-value.is-missing { color: #a44939; }
+    .certificate-info-button { min-height: 30px; padding: 3px 10px; font-size: 12px; }
+    .certificate-info-dialog .settings-grid { margin: 12px 0; }
+    .certificate-info-dialog input[readonly] { color: #526078; background: #f0f3f8; }
+    .certificate-info-dialog .certificate-today-button { align-self: flex-start; min-height: 30px; padding: 3px 10px; font-size: 12px; }
     .note-inline { color: #60708a; font-size: 12px; }
     .aggregate-subject.at-risk { color: #b3261e; }
     .at-risk-text { color: #b3261e; }
@@ -1310,22 +1316,40 @@
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
     }
-    @page { size: A4 portrait; margin: 14mm; }
+    @page { size: A4 portrait; margin: 12mm 14mm; }
     @media print {
       body { min-width: 0; background: white; }
-      .topbar, .workspace, .teacher-header, .login-gate { display: none !important; }
+      /* 화면 전용 요소(알림·팝업·작업 화면)는 인쇄하지 않는다. */
+      .topbar, .workspace, .teacher-header, .login-gate, .app-toast, dialog, dialog::backdrop { display: none !important; }
       #printBatch { display: block !important; }
-      .print-page { width: 182mm; min-height: 269mm; padding: 8mm 5mm; page-break-after: always; break-after: page; color: #111; }
+      /* A4 세로(273mm × 182mm 인쇄 영역) 한 장에 한 학생. 높이를 고정하지 않아 빈 장이 생기지 않는다. */
+      .print-page { width: 182mm; min-height: 0; padding: 3mm 5mm 0; page-break-after: always; break-after: page; color: #111; }
       .print-page:last-child { page-break-after: auto; break-after: auto; }
-      .paper { width: 100%; min-height: 0; padding: 0; box-shadow: none; }
-      .paper-title { margin-bottom: 8mm; font-size: 25px; }
-      .paper-meta { margin-bottom: 3mm; font-size: 12px; }
-      .paper-student { padding-bottom: 2mm; font-size: 12px; }
-      .certificate-table { font-size: 12px; }
-      .certificate-table th, .certificate-table td { height: 8mm; padding: 1mm 2mm; }
-      .paper-total { margin-top: 7mm; font-size: 12px; }
-      .paper-signature { gap: 3mm; margin-top: 14mm; font-size: 12px; }
-      .paper-school { margin-top: 20mm; font-size: 15px; }
+      .print-page .paper { width: 100%; min-height: 0; padding: 0; box-shadow: none; }
+      .print-page .paper-title { margin: 0 0 6mm; font-size: 24px; letter-spacing: 5px; }
+      .print-page .paper-meta { margin-bottom: 2mm; font-size: 12px; }
+      .print-page .paper-student { padding-bottom: 1.5mm; font-size: 12px; }
+      .print-page .certificate-table { font-size: 12px; }
+      .print-page .certificate-table th, .print-page .certificate-table td { height: 7.5mm; padding: .6mm 2mm; line-height: 1.3; }
+      .print-page .certificate-table tr { break-inside: avoid; page-break-inside: avoid; }
+      /* 확인 문구·날짜·서명·학교명은 함께 묶어 다음 장으로 갈라지지 않게 한다. */
+      .print-page .paper-closing { break-inside: avoid; page-break-inside: avoid; }
+      .print-page .paper-total { margin-top: 6mm; font-size: 12px; line-height: 1.6; }
+      .print-page .paper-signature { gap: 2.5mm; margin-top: 9mm; font-size: 12px; }
+      .print-page .paper-school { margin-top: 12mm; font-size: 15px; }
+      /* 15과목 이상: 행 높이를 줄인다. */
+      .print-page.paper-compact .paper-title { margin-bottom: 4mm; font-size: 22px; }
+      .print-page.paper-compact .certificate-table th, .print-page.paper-compact .certificate-table td { height: 6.4mm; padding: .4mm 2mm; }
+      .print-page.paper-compact .paper-total { margin-top: 4mm; }
+      .print-page.paper-compact .paper-signature { margin-top: 6mm; }
+      .print-page.paper-compact .paper-school { margin-top: 9mm; }
+      /* 22과목 이상: 글자와 여백도 줄인다. */
+      .print-page.paper-dense .paper-title { margin-bottom: 3mm; font-size: 20px; }
+      .print-page.paper-dense .certificate-table { font-size: 11px; }
+      .print-page.paper-dense .certificate-table th, .print-page.paper-dense .certificate-table td { height: 5.4mm; padding: .2mm 1.5mm; line-height: 1.2; }
+      .print-page.paper-dense .paper-total { margin-top: 3mm; font-size: 11px; line-height: 1.4; }
+      .print-page.paper-dense .paper-signature { gap: 1.5mm; margin-top: 4mm; font-size: 11px; }
+      .print-page.paper-dense .paper-school { margin-top: 6mm; font-size: 14px; }
     }
 
     .result-import-preview, .round-confirm-bar, .curriculum-versions,
@@ -1654,7 +1678,7 @@
       .certificate-controls .field { gap: 3px; }
       .certificate-controls .roster-panel { min-height: 0; }
       .certificate-controls .roster-controls { margin: 8px 0; }
-      .certificate-controls .student-list { max-height: clamp(160px, calc(100dvh - 430px), 600px); }
+      .certificate-controls .student-list { max-height: clamp(160px, calc(100dvh - 330px), 720px); }
       .certificate-preview-column .main-heading { align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
       .certificate-preview-column .main-heading h1 { font-size: 18px; }
       .certificate-preview-column .toolbar .button { min-height: 34px; padding: 4px 10px; font-size: 13px; }
