@@ -23,10 +23,16 @@ var COURSE_CHECK_DEFAULT_RULES = [
   ...COURSE_CHECK_SECOND_LANGUAGES.flatMap((language) => [[language, `${language} 회화`], [language, `심화 ${language}`]]),
   ["한문", "한문 고전 읽기"]
 ];
-// 2022 개정 총론 고등학교 교과(군)별 필수 이수 학점(편제표 '필수이수' 열이 비었을 때의 기본값).
-var COURSE_CHECK_FAMILIES = ["국어", "수학", "영어", "사회(역사/도덕 포함)", "과학", "체육", "예술", "기술·가정/정보/제2외국어/한문/교양"];
-var COURSE_CHECK_REQUIRED_DEFAULTS = { "국어": 8, "수학": 8, "영어": 8, "사회(역사/도덕 포함)": 14, "과학": 10, "체육": 10, "예술": 10, "기술·가정/정보/제2외국어/한문/교양": 16 };
+// 교과(군)별 필수 이수 학점·총 이수 학점·국어·수학·영어 상한의 기본값(울산 편제 점검 프로그램 '지침' = 2022 개정 총론).
+// 앱에서는 1단계 '편제 점검 기준 설정'(state.curriculumCompliance.settings) 한 곳의 값을 읽어 넘긴다(courseCheckLimits).
+// 교과(군)은 편제 점검표와 같은 9개: 한국사 6과 사회(역사/도덕 포함) 8을 따로 본다.
+var COURSE_CHECK_FAMILIES = ["국어", "수학", "영어", "한국사", "사회", "과학", "체육", "예술", "기술·가정/정보/제2외국어/한문/교양"];
+var COURSE_CHECK_KEM = ["국어", "수학", "영어"];
+var COURSE_CHECK_REQUIRED_DEFAULTS = { "국어": 8, "수학": 8, "영어": 8, "한국사": 6, "사회": 8, "과학": 10, "체육": 10, "예술": 10, "기술·가정/정보/제2외국어/한문/교양": 16 };
 var COURSE_CHECK_TOTALS = { subjects: 174, creative: 18, total: 192 };
+var COURSE_CHECK_LIMIT_DEFAULTS = { subjects: 174, creative: 18, kemLimit: 81, kemExtraRatio: 50 };
+// 예전(학생 점검 쪽 설정) 교과(군) 이름 → 지금 이름. 사회는 한국사와 합쳐 14로 보던 값이다.
+var COURSE_CHECK_LEGACY_FAMILIES = { "사회(역사/도덕 포함)": "사회" };
 
 function courseCheckKey(name) {
   const text = typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name)
@@ -64,19 +70,20 @@ function courseCheckJosa(word, pair) {
   return `${word}${final ? withFinal : withoutFinal}`;
 }
 
-// 교과(군): 편제표 교과 칸을 먼저 보고, 없으면 2022 개정 과목 목록의 교과(군)을 쓴다.
+// 교과(군): 편제표 교과 칸을 먼저 보고, 없으면 2022 개정 과목 목록의 교과(군)을 쓴다. 한국사1·2는 사회와 따로 센다(편제 점검표와 같다).
 function courseCheckFamily(area, name = "") {
   const text = String(area ?? "").replace(/\s+/g, "");
+  if (/^한국사[12]?$/.test(courseCheckKey(name)) || /한국사/.test(text)) return "한국사";
   // '제2외국어'에 '국어'가 들어 있으므로 외국어·한문·기술·가정·정보·교양을 먼저 본다.
-  const byText = /외국어|한문|기술|가정|정보|교양/.test(text) ? 7 : /국어/.test(text) ? 0 : /수학/.test(text) ? 1 : /영어/.test(text) ? 2
-    : /한국사|사회|역사|도덕|윤리|지리/.test(text) ? 3 : /과학/.test(text) ? 4 : /체육/.test(text) ? 5
-      : /예술|음악|미술|연극/.test(text) ? 6 : -1;
+  const byText = /외국어|한문|기술|가정|정보|교양/.test(text) ? 8 : /국어/.test(text) ? 0 : /수학/.test(text) ? 1 : /영어/.test(text) ? 2
+    : /사회|역사|도덕|윤리|지리/.test(text) ? 4 : /과학/.test(text) ? 5 : /체육/.test(text) ? 6
+      : /예술|음악|미술|연극/.test(text) ? 7 : -1;
   if (byText >= 0) return COURSE_CHECK_FAMILIES[byText];
   const official = typeof findCurriculumOfficialSubject === "function" ? findCurriculumOfficialSubject(name) : null;
-  const areas = { "국어": 0, "수학": 1, "영어": 2, "사회(역사/도덕 포함)": 3, "과학": 4, "체육": 5, "예술": 6,
-    "기술⋅가정/정보": 7, "제2외국어/한문": 7, "교양": 7, "과학 계열(수학)": 1, "과학 계열(과학)": 4, "과학 계열(정보)": 7,
-    "체육 계열(체육)": 5, "예술 계열(예술)": 6, "외국어‧국제계열(영어)": 2, "외국어‧국제계열(사회(역사/도덕 포함)": 3,
-    "외국어‧국제계열(제2외국어)": 7 };
+  const areas = { "국어": 0, "수학": 1, "영어": 2, "사회(역사/도덕 포함)": 4, "과학": 5, "체육": 6, "예술": 7,
+    "기술⋅가정/정보": 8, "제2외국어/한문": 8, "교양": 8, "과학 계열(수학)": 1, "과학 계열(과학)": 5, "과학 계열(정보)": 8,
+    "체육 계열(체육)": 6, "예술 계열(예술)": 7, "외국어‧국제계열(영어)": 2, "외국어‧국제계열(사회(역사/도덕 포함)": 4,
+    "외국어‧국제계열(제2외국어)": 8 };
   const index = official ? areas[official.area] : undefined;
   return index === undefined ? "기타" : COURSE_CHECK_FAMILIES[index];
 }
@@ -140,7 +147,7 @@ function courseCheckPlanModel(planData) {
       target: designatedCredits + fieldGroups.reduce((sum, group) => sum + group.pick * group.credit, 0)
     };
   }
-  // 필수이수 열: 병합 칸(세그먼트)마다 값 하나. 같은 교과(군)의 서로 다른 칸은 더한다(예: 한국사 6 + 사회 8 = 14).
+  // 필수이수 열: 병합 칸(세그먼트)마다 값 하나. 같은 교과(군)의 서로 다른 칸은 더한다(한국사·사회는 다른 교과(군)이라 따로 둔다).
   const required = {};
   const segments = new Set();
   for (const subject of subjects) {
@@ -272,9 +279,37 @@ function courseCheckOpenGroupFamilies(model, grade, priorKnown, certain) {
   return possible;
 }
 
+// 기준값 정리: 교과(군) 필수 학점(값이 있는 것만, 0 이상)·총 이수 학점·창체·국수영 상한·174 초과분 비율.
+function courseCheckNormalizeLimits(limits) {
+  const source = limits && typeof limits === "object" ? limits : {};
+  const number = (value, fallback, max = 400) => {
+    const parsed = value === "" || value === null || value === undefined ? NaN : Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= max ? parsed : fallback;
+  };
+  return { subjects: number(source.subjects, COURSE_CHECK_LIMIT_DEFAULTS.subjects), creative: number(source.creative, COURSE_CHECK_LIMIT_DEFAULTS.creative),
+    kemLimit: number(source.kemLimit, COURSE_CHECK_LIMIT_DEFAULTS.kemLimit), kemExtraRatio: number(source.kemExtraRatio, COURSE_CHECK_LIMIT_DEFAULTS.kemExtraRatio, 100) };
+}
+
+// 국어·수학·영어 상한: 81학점, 교과 총 이수 학점이 174를 넘으면 초과분의 50%만큼 늘린다(울산 지침 · 편제 점검표 7번과 같은 식).
+function courseCheckKemLimit(limits, total) {
+  const value = courseCheckNormalizeLimits(limits);
+  return value.kemLimit + Math.max(0, Number(total) - value.subjects) * value.kemExtraRatio / 100;
+}
+
+function courseCheckRequiredValue(required, family) {
+  const value = required && typeof required === "object" && Object.hasOwn(required, family) ? required[family] : undefined;
+  const number = value === "" || value === null || value === undefined ? NaN : Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 200 ? number : null;
+}
+
 // 학생 한 명의 이수 학점 점검(신청 학년 targetGrade 기준).
-// selections: [{ name, semester, credit }], prior: 이전 학년 이수 과목명 배열 또는 null, required: 교과(군)별 필수 학점 덮어쓰기
-function courseCheckCredits(model, { targetGrade, selections = [], prior = null, required = {} } = {}) {
+// selections: [{ name, semester, credit }], prior: 이전 학년 이수 과목명 배열 또는 null,
+// required: 교과(군)별 필수 학점(앱은 편제 점검 기준 설정의 표 전체를 넘긴다. 없는 교과(군)은 편제표 '필수이수' 열 → 기본값),
+// limits: { subjects, creative, kemLimit, kemExtraRatio } (편제 점검 기준 설정과 같은 값)
+// kem: 국어·수학·영어 3년 누계(이전 학년 지정 + 이전 학년 결과(있으면) + 이번 신청 + 지정·같은 교과(군)만 있는 뒤 학년 묶음).
+//      상한을 넘으면 경고만 한다(웹 학생 화면에는 보이지 않는다).
+function courseCheckCredits(model, { targetGrade, selections = [], prior = null, required = {}, limits = null } = {}) {
+  const limit = courseCheckNormalizeLimits(limits);
   const grade = String(targetGrade);
   const fieldsOf = (g) => [`sem${g}1`, `sem${g}2`];
   const gradeFields = fieldsOf(grade);
@@ -351,23 +386,48 @@ function courseCheckCredits(model, { targetGrade, selections = [], prior = null,
   const futureUnknown = model.groups.some((group) => group.fields.some((field) => field.slice(3, 4) > grade));
   const priorUnknown = !priorKeys && model.groups.some((group) => group.fields.some((field) => field.slice(3, 4) < grade));
   const families = COURSE_CHECK_FAMILIES.map((family) => {
-    const need = Number(required?.[family]) > 0 ? Number(required[family])
-      : Number(model.required?.[family]) > 0 ? Number(model.required[family]) : COURSE_CHECK_REQUIRED_DEFAULTS[family];
-    const source = Number(required?.[family]) > 0 ? "custom" : Number(model.required?.[family]) > 0 ? "plan" : "default";
+    const custom = courseCheckRequiredValue(required, family);
+    const need = custom !== null ? custom : Number(model.required?.[family]) > 0 ? Number(model.required[family]) : COURSE_CHECK_REQUIRED_DEFAULTS[family];
+    const source = custom !== null ? "custom" : Number(model.required?.[family]) > 0 ? "plan" : "default";
     const earned = familyEarned[family] || 0;
     const status = earned >= need ? "ok" : earned + (possible[family] || 0) >= need ? "pending" : "short";
     return { family, required: need, earned, possible: possible[family] || 0, ok: status !== "short", status, source };
   });
   const gradeEarned = semesters.reduce((sum, row) => sum + row.earned, 0) + unplaced;
   const gradeTarget = semesters.reduce((sum, row) => sum + row.target, 0);
+  const total = before + gradeEarned + after;
+  // 아직 모르는 선택(뒤 학년, 결과 없는 이전 학년) 중 교과(군)이 섞인 묶음: 국수영 아닌 선택지가 모자라 꼭 고르게 되는 학점만 더하고,
+  // 더 고를 수 있는 국수영 학점은 kemPossible(참고)로 둔다. 한 교과(군)만 있는 묶음은 familyEarned에 이미 들어 있다.
+  let kemForced = 0, kemPossible = 0;
+  for (const group of model.groups) {
+    const open = group.fields.filter((field) => field.slice(3, 4) !== grade && (field.slice(3, 4) > grade || !priorKeys));
+    if (!open.length || new Set(group.families.values()).size < 2) continue;
+    const inside = [...group.families.values()].filter((family) => COURSE_CHECK_KEM.includes(family)).length;
+    const forced = Math.max(0, group.pick - (group.families.size - inside));
+    kemForced += forced * group.credit * open.length;
+    kemPossible += (Math.min(group.pick, inside) - forced) * group.credit * open.length;
+  }
+  const kemEarned = COURSE_CHECK_KEM.reduce((sum, family) => sum + (familyEarned[family] || 0), 0) + kemForced;
+  const kemLimit = courseCheckKemLimit(limit, total);
+  const kem = { earned: kemEarned, possible: kemPossible,
+    limit: kemLimit, base: limit.kemLimit, total, over: Math.max(0, kemEarned - kemLimit), status: kemEarned > kemLimit ? "over" : "ok",
+    families: Object.fromEntries(COURSE_CHECK_KEM.map((family) => [family, familyEarned[family] || 0])) };
   return {
     targetGrade: grade, semesters, groups: groupRows, extras, unplaced,
     grade: { earned: gradeEarned, target: gradeTarget, diff: gradeEarned - gradeTarget },
-    cumulative: { before, beforeEstimated, after, earned: before + gradeEarned + after, target: COURSE_CHECK_TOTALS.subjects,
-      creative: COURSE_CHECK_TOTALS.creative, total: COURSE_CHECK_TOTALS.total },
-    families, futureUnknown, priorUnknown,
+    cumulative: { before, beforeEstimated, after, earned: total, target: limit.subjects,
+      creative: limit.creative, total: limit.subjects + limit.creative },
+    families, kem, futureUnknown, priorUnknown,
     short: semesters.filter((row) => row.diff < 0), over: semesters.filter((row) => row.diff > 0)
   };
+}
+
+// "국어·수학·영어 3년 누계 84/81학점(3학점 초과)". 174를 넘으면 늘어난 상한을 함께 적는다.
+function courseCheckKemText(kem, { short = false } = {}) {
+  const round = (value) => Math.round(Number(value || 0) * 100) / 100;
+  const raised = kem.limit > kem.base ? `, 총 ${round(kem.total)}학점이라 ${round(kem.base)}+초과분 ${round(kem.limit - kem.base)}` : "";
+  return short ? `국수영 ${round(kem.earned)}/${round(kem.limit)}`
+    : `국어·수학·영어 3년 누계 ${round(kem.earned)}/${round(kem.limit)}학점(${round(kem.over)}학점 초과${raised})`;
 }
 
 // "2-1 학기 이수 학점 28/31 (택3 중 2개 선택, 4학점 부족)"
@@ -384,8 +444,9 @@ function courseCheckSemesterText(row, { short = false } = {}) {
 //    편제표 이전 학년 지정 과목으로 이미 충족되는 조건은 싣지 않는다. 편제표에 없는 선이수 과목도 싣지 않는다.
 //  · 그룹.checks: 학기별 지정·기준 학점, 교과(군) 기준(3년 지정 학점), 3년 누계(앞·뒤 학년 편제표 기준)
 // 위계는 경고만 한다. 예전에 실었던 저장 막기 값(checks.blockPrerequisites)은 더 싣지 않고, 남아 있어도 무시한다.
-function courseCheckEventPayload(model, rules, { targetGrade, courses = [], required = {} } = {}) {
+function courseCheckEventPayload(model, rules, { targetGrade, courses = [], required = {}, limits = null } = {}) {
   const grade = String(targetGrade);
+  const limit = courseCheckNormalizeLimits(limits);
   const baseKey = (course) => courseCheckKey(course.groupSubject || String(course.subject ?? "").replace(/\s*\([12]학기\)\s*$/, ""));
   const earliest = courseCheckFieldIndex(grade, 1);
   const requires = new Map();
@@ -423,10 +484,11 @@ function courseCheckEventPayload(model, rules, { targetGrade, courses = [], requ
   // 앞·뒤 학년 선택과목군: 같은 교과(군)끼리면 확실한 학점(base), 섞여 있으면 들어올 수도 있는 학점(possible).
   const possible = courseCheckOpenGroupFamilies(model, grade, false, base);
   const families = COURSE_CHECK_FAMILIES.map((family) => ({ family,
-    required: Number(required?.[family]) > 0 ? Number(required[family]) : Number(model.required?.[family]) > 0 ? Number(model.required[family]) : COURSE_CHECK_REQUIRED_DEFAULTS[family],
+    required: courseCheckRequiredValue(required, family) ?? (Number(model.required?.[family]) > 0 ? Number(model.required[family]) : COURSE_CHECK_REQUIRED_DEFAULTS[family]),
     base: base[family] || 0, possible: possible[family] || 0 }));
+  // 국어·수학·영어 상한(81) 점검은 교사 화면에서만 한다(학생 화면에는 싣지 않는다).
   return { requires, checks: { v: 1, grade, semesters, families,
-    cumulative: { before, after, target: COURSE_CHECK_TOTALS.subjects, creative: COURSE_CHECK_TOTALS.creative, total: COURSE_CHECK_TOTALS.total } } };
+    cumulative: { before, after, target: limit.subjects, creative: limit.creative, total: limit.subjects + limit.creative } } };
 }
 
 // 웹 수강신청 학생 화면의 점검(서버가 보낸 이벤트 자료와 지금 고른 과목으로 계산). 규칙·점검 정보가 없는 예전 이벤트는 null.
@@ -544,9 +606,45 @@ function courseCheckTeacherReview(data, currentGrade) {
   return review;
 }
 
+// 예전 저장분 이전(한 번): 학생 위계·학점 점검 설정(state.courseChecks.required, 교과(군) 8개·사회 14)에 교사가 고친 값이 있으면
+// 편제 점검 기준 설정(state.curriculumCompliance.settings.required)으로 옮기고 학생 점검 쪽 값은 지운다.
+//  · 편제 점검 기준 설정에서 이미 기본값과 다르게 고친 교과(군)은 그 값을 둔다(나중에 한 곳에서 고친 값이 우선).
+//  · '사회(역사/도덕 포함)'(한국사 포함 합계)는 한국사 학점을 뺀 값을 사회로 옮긴다(예: 16 → 한국사 6 + 사회 10).
+// 입력을 바꾸지 않고 { courseChecks, compliance, moved: [교과(군)] }를 돌려준다. 옮길 값이 없으면 moved는 빈 배열.
+function courseCheckMigrateRequired(courseChecks, compliance) {
+  const object = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  const checks = object(courseChecks) ? { ...courseChecks } : courseChecks;
+  const store = object(compliance) ? { ...compliance } : {};
+  const old = object(checks) && object(checks.required) ? checks.required : null;
+  if (object(checks)) delete checks.required;
+  const moved = [];
+  if (!old) return { courseChecks: checks, compliance: object(compliance) ? compliance : store, moved };
+  const settings = object(store.settings) ? { ...store.settings } : {};
+  const current = object(settings.required) ? { ...settings.required } : {};
+  const edited = (family) => {
+    const value = courseCheckRequiredValue(current, family);
+    return value !== null && value !== COURSE_CHECK_REQUIRED_DEFAULTS[family];
+  };
+  for (const name of Object.keys(old)) {
+    const value = courseCheckRequiredValue(old, name);
+    const family = COURSE_CHECK_LEGACY_FAMILIES[name] || name;
+    if (value === null || !COURSE_CHECK_FAMILIES.includes(family) || edited(family)) continue;
+    const history = courseCheckRequiredValue(current, "한국사") ?? COURSE_CHECK_REQUIRED_DEFAULTS["한국사"];
+    const next = name in COURSE_CHECK_LEGACY_FAMILIES ? Math.max(0, value - history) : value;
+    current[family] = next;
+    moved.push(family);
+  }
+  if (!moved.length) return { courseChecks: checks, compliance: object(compliance) ? compliance : store, moved };
+  settings.required = current;
+  store.settings = settings;
+  return { courseChecks: checks, compliance: store, moved };
+}
+
 // ---- 앱 연결 (아래는 화면·저장에 연결한다)
 
-// 설정(state.courseChecks): 기본 위계 중 삭제·끔, 추가 위계, 교과(군) 필수 학점 수정값, 입학연도별 이전 학년 이수 결과.
+// 설정(state.courseChecks): 기본 위계 중 삭제·끔, 추가 위계, 입학연도별 이전 학년 이수 결과.
+// 교과(군) 필수 학점·총 이수 학점·국수영 상한은 편제 점검 기준 설정(state.curriculumCompliance.settings) 한 곳에 둔다
+// (예전 저장분의 required는 열 때 courseCheckMigrateRequired로 옮기고, 여기서는 버린다).
 // 예전 저장분의 '저장 막기'(blockPrerequisites)는 버린다(위계는 경고만).
 function courseCheckNormalizeSettings(value) {
   const object = (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item);
@@ -560,10 +658,6 @@ function courseCheckNormalizeSettings(value) {
     if (courseCheckKey(rule.before) === courseCheckKey(rule.after) || custom.some((item) => courseCheckRuleKey(item.before, item.after) === key)) continue;
     custom.push({ before: text(rule.before), after: text(rule.after) });
   }
-  const required = {};
-  for (const [family, number] of Object.entries(object(source.required) ? source.required : {})) {
-    if (COURSE_CHECK_FAMILIES.includes(family) && number !== "" && number !== null && Number(number) >= 0 && Number(number) <= 200) required[family] = Number(number);
-  }
   const prior = {};
   for (const [year, entry] of Object.entries(object(source.prior) ? source.prior : {})) {
     if (!/^\d{4}$/.test(year) || !object(entry) || !Array.isArray(entry.students)) continue;
@@ -575,7 +669,7 @@ function courseCheckNormalizeSettings(value) {
       }))
     };
   }
-  return { removed: strings(source.removed), off: strings(source.off), custom, required, prior };
+  return { removed: strings(source.removed), off: strings(source.off), custom, prior };
 }
 
 let courseCheckContextCache = null;
@@ -602,13 +696,25 @@ function courseCheckCohortYear(currentGrade) {
   return typeof getApplicationCohortYear === "function" ? String(getApplicationCohortYear(String(currentGrade))) : "";
 }
 
-// 화면 한 번 그리는 동안 쓰는 점검 문맥(설정·규칙·편제표 모델). 설정 객체나 편제표가 바뀌면 다시 만든다.
+// 기준값(교과(군) 필수 학점·총 이수 학점·창체·국수영 상한): 1단계 '편제 점검 기준 설정'과 같은 값을 읽는다.
+function courseCheckLimits() {
+  const settings = typeof planComplianceCurrentSettings === "function" ? planComplianceCurrentSettings() : null;
+  const required = { ...COURSE_CHECK_REQUIRED_DEFAULTS };
+  for (const family of COURSE_CHECK_FAMILIES) {
+    const value = courseCheckRequiredValue(settings?.required, family);
+    if (value !== null) required[family] = value;
+  }
+  return { ...courseCheckNormalizeLimits(settings || {}), required };
+}
+
+// 화면 한 번 그리는 동안 쓰는 점검 문맥(설정·규칙·편제표 모델·기준값). 설정 객체나 편제표가 바뀌면 다시 만든다.
 function courseCheckContext() {
   const raw = typeof state !== "undefined" ? state.courseChecks : null;
+  const shared = typeof state !== "undefined" ? state.curriculumCompliance?.settings : null;
   const years = typeof state !== "undefined" ? Object.keys(state.curriculumCohorts || {}).sort() : [];
   const models = years.map((year) => courseCheckModel(year));
   const students = typeof state !== "undefined" ? state.students : null;
-  if (courseCheckContextCache && courseCheckContextCache.raw === raw && courseCheckContextCache.students === students &&
+  if (courseCheckContextCache && courseCheckContextCache.raw === raw && courseCheckContextCache.shared === shared && courseCheckContextCache.students === students &&
       courseCheckContextCache.schoolYear === courseCheckCohortYear("1") && courseCheckContextCache.models.length === models.length &&
       courseCheckContextCache.models.every((model, index) => model === models[index])) return courseCheckContextCache;
   const settings = courseCheckNormalizeSettings(raw);
@@ -619,7 +725,7 @@ function courseCheckContext() {
     if (!rules.some((item) => item.key === key)) rules.push({ key, before: rule.before, after: rule.after, source: "custom" });
   }
   for (const rule of rules) rule.off = settings.off.includes(rule.key);
-  courseCheckContextCache = { raw, students, schoolYear: courseCheckCohortYear("1"), models, settings, rules,
+  courseCheckContextCache = { raw, shared, limits: courseCheckLimits(), students, schoolYear: courseCheckCohortYear("1"), models, settings, rules,
     active: rules.filter((rule) => !rule.off), priorIndexes: new Map(), reports: new WeakMap() };
   return courseCheckContextCache;
 }
@@ -686,7 +792,7 @@ function courseCheckStudentReport(student, context = courseCheckContext(), { exc
     report = {
       year, targetGrade, model, priorFound: Boolean(prior),
       prerequisites: courseCheckPrerequisites(model, context.active, { targetGrade, selections, prior }),
-      credits: courseCheckCredits(model, { targetGrade, selections, prior, required: context.settings.required })
+      credits: courseCheckCredits(model, { targetGrade, selections, prior, required: context.limits.required, limits: context.limits })
     };
   }
   if (!exclude) context.reports.set(student, report);
@@ -711,7 +817,7 @@ function courseCheckList(items, limit = 5) {
 
 // 학생 묶음 요약(2단계 결과 검증·대화상자·4단계 요약이 함께 쓴다).
 function courseCheckSummary(students, context = courseCheckContext()) {
-  const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], byCourse: new Map(), unknownByCourse: new Map(), priorMissing: 0, priorAvailable: false };
+  const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], kemOver: [], byCourse: new Map(), unknownByCourse: new Map(), priorMissing: 0, priorAvailable: false };
   for (const student of students) {
     if (!(student.selections || []).length) continue;
     const report = courseCheckStudentReport(student, context);
@@ -733,6 +839,7 @@ function courseCheckSummary(students, context = courseCheckContext()) {
     if (report.credits.short.length) summary.short.push({ student, report });
     if (report.credits.over.length) summary.over.push({ student, report });
     if (report.credits.families.some((family) => !family.ok)) summary.familyShort.push({ student, report });
+    if (report.credits.kem?.status === "over") summary.kemOver.push({ student, report });
   }
   return summary;
 }
@@ -765,6 +872,10 @@ function courseCheckResultIssues(students, { grade } = {}) {
     const lookup = new Map([...summary.short, ...summary.over].map((item) => [item.student, item.report]));
     result.warnings.push(`${target} 학기 이수 학점이 편제표 기준(이수학점 소계)과 다른 학생 ${credit.length}명(부족 ${summary.short.length}명·초과 ${summary.over.length}명): ${courseCheckList(credit.map((student) => `${courseCheckSeat(student)} ${courseCheckCreditBrief(lookup.get(student))}`), 3)}.`);
   }
+  if (summary.kemOver.length) {
+    const limits = courseCheckContext().limits;
+    result.warnings.push(`국어·수학·영어 3년 누계가 기준(${limits.kemLimit}학점${limits.kemExtraRatio ? `, 총 이수 ${limits.subjects}학점 초과 시 초과분의 ${limits.kemExtraRatio}%까지` : ""})을 넘는 학생 ${summary.kemOver.length}명(이전 학년 지정${summary.priorAvailable ? "·이수 결과" : ""} + 이번 신청 선택 기준, 경고만): ${courseCheckList(summary.kemOver.map(({ student, report }) => `${courseCheckSeat(student)} ${courseCheckKemText(report.credits.kem, { short: true })}`), 3)}.`);
+  }
   if (summary.familyShort.length) {
     result.warnings.push(`교과(군) 필수 이수 학점 미달 학생 ${summary.familyShort.length}명: ${courseCheckList(summary.familyShort.map(({ student, report }) => `${courseCheckSeat(student)} ${report.credits.families.filter((family) => !family.ok).map((family) => `${family.family} ${family.earned}/${family.required}`).join("·")}`), 3)}.`);
   }
@@ -772,7 +883,7 @@ function courseCheckResultIssues(students, { grade } = {}) {
     result.info.push(`위계 확인 불가 학생 ${summary.unknowns.length}명(이전 학년 이수 결과가 없어 판단하지 않음 · 과목별 ${courseCheckCountText(summary.unknownByCourse)}). '위계·학점 점검'에서 이전 학년 이수 결과를 올리면 판단합니다.`);
   }
   if (summary.priorAvailable && summary.priorMissing) result.info.push(`이전 학년 이수 결과에서 찾지 못한 학생 ${summary.priorMissing}명은 확인 불가로 둡니다.`);
-  if (!summary.violators.length && !credit.length && !summary.familyShort.length) {
+  if (!summary.violators.length && !credit.length && !summary.familyShort.length && !summary.kemOver.length) {
     result.info.push(`위계·이수학점 점검: ${summary.checked}명 모두 이상 없음${summary.unknowns.length ? "(확인 불가 제외)" : ""}.`);
   }
   result.html = courseCheckStudentTableHtml(summary, { grade });
@@ -782,7 +893,7 @@ function courseCheckResultIssues(students, { grade } = {}) {
 function courseCheckStudentTableHtml(summary, { grade = "", limit = 400 } = {}) {
   const rows = new Map();
   const add = (item) => { if (!rows.has(item.student)) rows.set(item.student, item); };
-  [summary.violators, summary.short, summary.over, summary.familyShort, summary.unknowns].forEach((list) => list.forEach(add));
+  [summary.violators, summary.short, summary.over, summary.familyShort, summary.kemOver, summary.unknowns].forEach((list) => list.forEach(add));
   if (!rows.size) return "";
   const list = [...rows.values()].sort((a, b) => Number(a.student.classroom) - Number(b.student.classroom) || Number(a.student.number) - Number(b.student.number));
   const esc = courseCheckEscape;
@@ -791,9 +902,10 @@ function courseCheckStudentTableHtml(summary, { grade = "", limit = 400 } = {}) 
       `<li class="${issue.status === "violation" ? "is-violation" : "is-unknown"}">${esc(issue.status === "violation" ? "" : "확인 불가 · ")}${esc(courseCheckIssueText(issue))}</li>`);
     const credits = [...report.credits.short, ...report.credits.over].map((row) => `<li class="is-credit">${esc(courseCheckSemesterText(row))}</li>`);
     const families = report.credits.families.filter((family) => !family.ok).map((family) => `<li class="is-credit">${esc(`${family.family} 필수 이수 ${family.earned}/${family.required}학점`)}</li>`);
-    return `<tr><th scope="row">${esc(`현 ${student.grade}학년 ${courseCheckSeat(student)}`)}</th><td><ul>${[...issues, ...credits, ...families].join("")}</ul></td></tr>`;
+    const kem = report.credits.kem?.status === "over" ? [`<li class="is-credit is-kem">${esc(courseCheckKemText(report.credits.kem))}</li>`] : [];
+    return `<tr><th scope="row">${esc(`현 ${student.grade}학년 ${courseCheckSeat(student)}`)}</th><td><ul>${[...issues, ...credits, ...families, ...kem].join("")}</ul></td></tr>`;
   }).join("");
-  return `<details class="course-check-details"${summary.violators.length ? " open" : ""}><summary>위계·이수학점 점검 학생 ${rows.size}명${grade ? ` (현 ${esc(grade)}학년 → ${Number(grade) + 1}학년 과목)` : ""} · 위계 미충족 ${summary.violators.length} · 학점 부족 ${summary.short.length} · 초과 ${summary.over.length} · 확인 불가 ${summary.unknowns.length}</summary>
+  return `<details class="course-check-details"${summary.violators.length ? " open" : ""}><summary>위계·이수학점 점검 학생 ${rows.size}명${grade ? ` (현 ${esc(grade)}학년 → ${Number(grade) + 1}학년 과목)` : ""} · 위계 미충족 ${summary.violators.length} · 학점 부족 ${summary.short.length} · 초과 ${summary.over.length}${summary.kemOver.length ? ` · 국수영 기준 초과 ${summary.kemOver.length}` : ""} · 확인 불가 ${summary.unknowns.length}</summary>
     <div class="aggregate-sheet-wrap"><table class="course-check-table"><thead><tr><th scope="col">학생</th><th scope="col">점검 내용</th></tr></thead><tbody>${body}</tbody></table></div>
     ${list.length > limit ? `<p class="note">앞 ${limit}명만 표시했습니다.</p>` : ""}</details>`;
 }
@@ -806,7 +918,10 @@ function courseCheckCertificateHtml(student, context = courseCheckContext()) {
   const credits = report.credits;
   const semesters = credits.semesters.map((row) => `${row.label} ${row.earned}/${row.target}`).join(" · ");
   const cumulative = `3년 누계 ${credits.cumulative.earned}/${credits.cumulative.target}${credits.cumulative.beforeEstimated || credits.cumulative.after ? "(편제표 기준 포함)" : ""}`;
-  const creditNote = credits.short.length || credits.over.length ? ` — ${[...credits.short, ...credits.over].map((row) => `${row.label} ${Math.abs(row.diff)}학점 ${row.diff < 0 ? "부족" : "초과"}`).join(", ")}` : "";
+  const notes = [...credits.short, ...credits.over].map((row) => `${row.label} ${Math.abs(row.diff)}학점 ${row.diff < 0 ? "부족" : "초과"}`);
+  // 국어·수학·영어 3년 누계가 기준을 넘을 때만 같은 줄에 덧붙인다(줄 수가 늘지 않게 · 인쇄 1장 유지).
+  if (credits.kem?.status === "over") notes.push(`국수영 ${credits.kem.earned}/${Math.round(credits.kem.limit * 100) / 100}학점 기준 초과`);
+  const creditNote = notes.length ? ` — ${notes.join(", ")}` : "";
   const { violations, unknowns } = report.prerequisites;
   const prereq = violations.length
     ? `확인 필요 — ${violations.map((issue) => `${issue.course}: ${issue.requires} ${issue.reason === "same" ? "같은 학기 선택" : issue.reason === "missing" ? "미이수" : "뒤 학기"}`).join(", ")}`
@@ -947,6 +1062,7 @@ function courseCheckAggregateNote(grade, flags = null) {
     <button type="button" class="aggregate-check-note${violators ? " has-issue" : ""}" data-open-dialog="prereqStudentsDialog" data-prereq-grade="${esc(grade)}" title="위계(선이수) 경고 학생 보기">위계 경고 ${violators}명</button>
     ${unknowns ? `<button type="button" class="aggregate-check-note is-muted" data-open-dialog="prereqStudentsDialog" data-prereq-grade="${esc(grade)}" data-prereq-unknown title="이전 학년 이수 결과가 없어 판단하지 못한 학생(위반 아님)">확인 불가 ${unknowns}명</button>` : ""}
     <button type="button" class="aggregate-check-note${summary.short.length ? " has-issue" : ""}" data-open-dialog="courseCheckDialog" title="위계·이수학점 점검 결과 보기">학기 학점 부족 ${summary.short.length}명</button>
+    ${summary.kemOver.length ? `<button type="button" class="aggregate-check-note has-issue" data-open-dialog="courseCheckDialog" title="국어·수학·영어 3년 누계가 기준을 넘는 학생(경고만) — 위계·이수학점 점검 결과 보기">국수영 기준 초과 ${summary.kemOver.length}명</button>` : ""}
   </span>`;
 }
 
@@ -988,7 +1104,7 @@ function courseCheckAttachToSetup(setup) {
     if (!["2", "3"].includes(targetGrade) || !Array.isArray(courses) || !courses.length) continue;
     const model = courseCheckModel(courseCheckCohortYear(String(Number(targetGrade) - 1)));
     if (!model) continue;
-    const payload = courseCheckEventPayload(model, context.active, { targetGrade, courses, required: context.settings.required });
+    const payload = courseCheckEventPayload(model, context.active, { targetGrade, courses, required: context.limits.required, limits: context.limits });
     for (const course of courses) {
       const requires = payload.requires.get(course.subject);
       if (requires?.length) course.requires = requires;
@@ -1120,18 +1236,18 @@ function courseCheckRenderDialog() {
   const year = courseCheckCohortYear(grade);
   const model = courseCheckModel(year);
   const prior = context.settings.prior[year];
+  const limits = context.limits;
   const requiredRows = COURSE_CHECK_FAMILIES.map((family) => {
     const plan = model?.required?.[family];
-    const custom = context.settings.required[family];
-    return `<tr><th scope="row">${esc(family)}</th><td>${plan ? `${plan}` : "—"}</td><td>${COURSE_CHECK_REQUIRED_DEFAULTS[family]}</td>
-      <td><input type="number" min="0" max="200" step="1" data-cc-required="${esc(family)}" value="${custom ?? ""}" placeholder="${plan || COURSE_CHECK_REQUIRED_DEFAULTS[family]}" aria-label="${esc(family)} 필수 이수 학점"></td></tr>`;
+    const value = limits.required[family];
+    return `<tr><th scope="row">${esc(family)}</th><td><b>${esc(value)}</b></td><td>${plan ? `${esc(plan)}${Number(plan) !== Number(value) ? ' <small class="course-check-differs">기준과 다름</small>' : ""}` : "—"}</td></tr>`;
   }).join("");
   const results = ["1", "2"].map((currentGrade) => {
     const students = (state.students || []).filter((student) => String(student.grade) === currentGrade);
     if (!students.length) return "";
     if (!courseCheckModel(courseCheckCohortYear(currentGrade))) return `<p class="note">현 ${currentGrade}학년: ${esc(courseCheckCohortYear(currentGrade))}학년도 입학생 편제표가 없어 점검할 수 없습니다.</p>`;
     const summary = courseCheckSummary(students, context);
-    return `<p class="course-check-result-line"><b>현 ${currentGrade}학년 → ${Number(currentGrade) + 1}학년 과목</b> ${summary.checked}명 점검 · 위계 미충족 ${summary.violators.length}명 · 학기 학점 부족 ${summary.short.length}명 · 초과 ${summary.over.length}명 · 교과(군) 미달 ${summary.familyShort.length}명 · 확인 불가 ${summary.unknowns.length}명</p>
+    return `<p class="course-check-result-line"><b>현 ${currentGrade}학년 → ${Number(currentGrade) + 1}학년 과목</b> ${summary.checked}명 점검 · 위계 미충족 ${summary.violators.length}명 · 학기 학점 부족 ${summary.short.length}명 · 초과 ${summary.over.length}명 · 교과(군) 미달 ${summary.familyShort.length}명 · 국수영 기준 초과 ${summary.kemOver.length}명 · 확인 불가 ${summary.unknowns.length}명</p>
       ${courseCheckStudentTableHtml(summary, { grade: currentGrade })}`;
   }).join("");
   body.innerHTML = `
@@ -1162,15 +1278,35 @@ function courseCheckRenderDialog() {
       ${prior ? '<button class="button button-quiet" type="button" id="courseCheckPriorDelete">이전 학년 자료 삭제</button>' : ""}
     </section>
     <section class="course-check-section" aria-labelledby="courseCheckRequiredTitle">
-      <h3 id="courseCheckRequiredTitle">교과(군) 필수 이수 학점 (현 ${esc(grade)}학년 · ${esc(year)}학년도 입학생 편제표)</h3>
-      <p class="note">편제표 '필수이수' 열 값을 먼저 쓰고, 비어 있으면 2022 개정 기준을 씁니다. 다르게 볼 값만 입력하세요(비우면 원래 값). 총 이수 학점 기준: 교과 ${COURSE_CHECK_TOTALS.subjects} + 창의적 체험활동 ${COURSE_CHECK_TOTALS.creative} = ${COURSE_CHECK_TOTALS.total}학점.</p>
-      <div class="aggregate-sheet-wrap"><table class="course-check-required-table"><thead><tr><th scope="col">교과(군)</th><th scope="col">편제표</th><th scope="col">2022 기준</th><th scope="col">직접 입력</th></tr></thead><tbody>${requiredRows}</tbody></table></div>
+      <h3 id="courseCheckRequiredTitle">교과(군) 필수 이수 학점·총 이수 학점·국어·수학·영어 기준</h3>
+      <p class="note">1단계 편제 점검표와 <b>같은 기준값</b>을 씁니다. <button class="button button-quiet course-check-settings-link" type="button" data-cc-open-settings>편제 점검 기준 설정에서 바꿉니다</button></p>
+      <p class="course-check-limits">교과 ${esc(limits.subjects)} + 창의적 체험활동 ${esc(limits.creative)} = ${esc(limits.subjects + limits.creative)}학점 · 국어·수학·영어 3년 누계 ${esc(limits.kemLimit)}학점 이하(교과 ${esc(limits.subjects)}학점 초과분의 ${esc(limits.kemExtraRatio)}%까지 더 허용) — 학생별 경고만</p>
+      <div class="aggregate-sheet-wrap"><table class="course-check-required-table"><caption>현 ${esc(grade)}학년 · ${esc(year)}학년도 입학생 편제표</caption><thead><tr><th scope="col">교과(군)</th><th scope="col">필수 이수(기준)</th><th scope="col">편제표 '필수이수' 열(참고)</th></tr></thead><tbody>${requiredRows}</tbody></table></div>
     </section>
     <section class="course-check-section" aria-labelledby="courseCheckResultTitle">
       <h3 id="courseCheckResultTitle">현재 차수 결과 점검</h3>
       ${results || '<p class="note">2단계에서 결과를 반영하면 학생별 점검 결과가 여기에 표시됩니다.</p>'}
     </section>
     <p id="courseCheckDialogMessage" role="status"></p>`;
+}
+
+// 편제 점검 기준 설정(교과(군) 필수 학점·총 이수 학점·국수영 상한)이 바뀌면 curriculum-compliance.js가 부른다.
+function courseCheckSharedSettingsChanged() {
+  courseCheckContextCache = null;
+  if (document.getElementById("courseCheckDialog")?.open) courseCheckRenderDialog();
+  courseCheckRefreshViews();
+  if (typeof resultImportPending !== "undefined" && resultImportPending && typeof revalidateResultImport === "function") revalidateResultImport();
+}
+
+// 편제 점검표 7번(국수영) 비고: 이 입학생 편제표로 신청한 학생(현 1·2학년) 중 국수영 기준을 넘는 학생 수. 결과가 없으면 null.
+function courseCheckKemOverCount(cohortYear) {
+  if (typeof state === "undefined") return null;
+  const grade = ["1", "2"].find((item) => courseCheckCohortYear(item) === String(cohortYear));
+  if (!grade || !courseCheckModel(String(cohortYear))) return null;
+  const students = (state.students || []).filter((student) => String(student.grade) === grade && (student.selections || []).length);
+  if (!students.length) return null;
+  const summary = courseCheckSummary(students);
+  return { grade, checked: summary.checked, over: summary.kemOver.length };
 }
 
 function courseCheckDialogMessage(text, failed = false) {
@@ -1270,6 +1406,9 @@ function initCourseChecks() {
     } else if (event.target.closest("#courseCheckRestoreRules")) {
       courseCheckSaveSettings((settings) => { settings.removed = []; settings.off = []; });
       courseCheckSettingsChanged("기본 위계 규칙을 되돌렸습니다(추가한 규칙은 유지).");
+    } else if (event.target.closest("[data-cc-open-settings]")) {
+      // 기준값은 1단계 '편제 점검 기준 설정' 한 곳에서 고친다(이 팝업 위에 그 설정 팝업을 연다).
+      if (typeof openPlanComplianceSettings === "function") openPlanComplianceSettings();
     } else if (event.target.closest("#courseCheckPriorDelete")) {
       const year = courseCheckCohortYear(String(state.applicationMenuGrade || "1"));
       courseCheckSaveSettings((settings) => { delete settings.prior[year]; });
@@ -1285,14 +1424,6 @@ function initCourseChecks() {
         if (!toggle.checked) settings.off.push(key);
       });
       courseCheckSettingsChanged(toggle.checked ? "위계 규칙을 켰습니다." : "위계 규칙을 껐습니다.");
-    } else if (event.target.matches("[data-cc-required]")) {
-      const family = event.target.dataset.ccRequired;
-      const value = event.target.value.trim();
-      courseCheckSaveSettings((settings) => {
-        if (value === "") delete settings.required[family];
-        else settings.required[family] = Number(value);
-      });
-      courseCheckSettingsChanged(`${family} 필수 이수 학점을 ${value === "" ? "원래 값으로" : `${value}학점으로`} 정했습니다.`);
     } else if (event.target.id === "courseCheckPriorInput") {
       const file = event.target.files?.[0];
       event.target.value = "";

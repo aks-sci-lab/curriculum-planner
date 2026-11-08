@@ -1973,6 +1973,14 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
 .plan-compliance-stats tr.is-check { background: #fff4ec; }
 .plan-compliance-stats tr.plan-compliance-kem th, .plan-compliance-stats tr.plan-compliance-total th { background: #f5f7fb; }
 .plan-compliance-stats td.plan-compliance-kem-note { white-space: normal; text-align: left; color: #5d6b84; font-size: 11px; }
+.plan-compliance-table small.plan-compliance-extra { margin-top: 3px; color: #2c4f9e; font-weight: 600; }
+.plan-compliance-table .plan-compliance-suggest { min-height: 24px; margin-top: 4px; padding: 0 8px; font-size: 12px; }
+.plan-compliance-stats small.plan-compliance-shared { color: #8a5a00; }
+.plan-compliance-shared-note { padding: 6px 8px; border-left: 3px solid #9fb4dc; background: #f4f7fd; }
+.course-check-settings-link { min-height: 26px; padding: 0 10px; font-size: 13px; }
+.course-check-limits { margin: 4px 0 8px; color: #344462; font-size: 13px; }
+.course-check-required-table caption { padding: 2px 0 4px; text-align: left; color: #344462; font-weight: 600; font-size: 12px; }
+.course-check-required-table .course-check-differs { margin-left: 4px; color: #8a5a00; font-size: 11px; }
 .plan-compliance-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 12px; }
 .plan-compliance-setting { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #344462; }
 .plan-compliance-setting input[type="number"], .plan-compliance-setting textarea { padding: 4px 6px; border: 1px solid #cad5e5; border-radius: 6px; font: inherit; }
