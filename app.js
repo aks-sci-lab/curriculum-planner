@@ -1063,7 +1063,13 @@
         state.hoursStats = plainObject(saved.hoursStats)
           ? Object.fromEntries(Object.entries(saved.hoursStats).filter(([year, value]) => /^\d{4}$/.test(year) && plainObject(value)))
           : {};
-        // 위계·이수학점 점검 설정(규칙·필수 학점·이전 학년 결과). 예전 저장분에는 없고, 예전 '저장 막기' 값은 버린다.
+        // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.
+        if (typeof courseCheckMigrateRequired === "function") {
+          const migrated = courseCheckMigrateRequired(saved.courseChecks, saved.curriculumCompliance);
+          saved.courseChecks = migrated.courseChecks;
+          saved.curriculumCompliance = migrated.compliance;
+        }
+        // 위계·이수학점 점검 설정(규칙·이전 학년 결과). 예전 저장분에는 없고, 예전 '저장 막기' 값은 버린다.
         state.courseChecks = typeof courseCheckNormalizeSettings === "function"
           ? courseCheckNormalizeSettings(saved.courseChecks) : plainObject(saved.courseChecks) ? saved.courseChecks : {};
         // 1단계 편제 점검표(기준값·편제표별 인정 오류·자체 점검). 예전 저장분에는 없다.

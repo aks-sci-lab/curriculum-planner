@@ -138,6 +138,43 @@ test("교과(군)별 학생 최소~최대: 택n 묶음의 선택지 수로 계�
   assert.ok(rows.some((row) => row[0] === "학기 합계" && row.slice(2, 8).join(",") === "30,30,31,31,26,26"));
 });
 
+test("같은 과목이 두 선택과목군에 있으면(기후변화와 환경생태 3-1·3-2) 학생 최대 학점에 한 번만 센다", () => {
+  const ctx = context();
+  const layout = compliantPlan();
+  const before = ctx.planComplianceReport(layout, {}).stats.families.find((row) => row.family === "과학");
+  assert.equal(before.max, 10 + 12 + 4 + 8 + 4);
+  // 3-1 택5에도 기후변화와 환경생태를 넣는다(3-2 택5에도 있음)
+  const climate = layout.planData.subjects.find((entry) => entry.name === "기후변화와 환경생태");
+  const again = subject("기후변화와 환경생태", "과학", "융합선택", {}, { category: "학생 선택 교육과정" });
+  layout.planData.subjects.push(again);
+  layout.planData.groups[2].members.push(again.id);
+  assert.ok(layout.planData.groups[3].members.includes(climate.id));
+  const report = ctx.planComplianceReport(layout, {});
+  const science = report.stats.families.find((row) => row.family === "과학");
+  // 묶음마다 따로 세면 3-1 과학 3개(12) + 3-2 과학 1개(4) = 16이지만, 과학 과목은 역학과 에너지·세포와 물질대사·기후변화 3개뿐이라 12
+  assert.equal(science.max, 38, "같은 과목은 두 번 고를 수 없다");
+  assert.equal(science.sharedReduction, 4);
+  assert.equal(science.choiceMax.sem31 + science.choiceMax.sem32, 16, "학기 칸의 '선택 a~b'는 그 학기 묶음만 본 값");
+  assert.equal(science.min, before.min);
+  // 묶음 단위 계산(최소 비용 유량): 교과(군)이 섞인 여러 묶음에서도 정확하다
+  const option = (key, family) => ({ key, family });
+  const groups = [
+    { pick: 2, credit: 4, fields: ["sem31"], options: [option("a", "과학"), option("b", "과학"), option("x", "사회")] },
+    { pick: 2, credit: 4, fields: ["sem32"], options: [option("a", "과학"), option("b", "과학"), option("y", "사회"), option("z", "사회")] }
+  ];
+  const range = ctx.planComplianceGroupsRange(groups, (item) => item.family === "과학");
+  assert.deepEqual(plain({ min: range.min, max: range.max, repeats: range.repeats }), { min: 4, max: 8, repeats: false },
+    "과학 과목은 a·b 둘뿐: 최대 8(묶음마다 따로면 16), 3-1에서 x 하나만 사회라 최소 4");
+  assert.deepEqual(plain(range.separate), { min: 4, max: 16 });
+  // 같은 과목을 두 학기 묶음에서 이어 들어야 택 수를 채울 수 있는 편제표면 예전처럼 묶음마다 센다.
+  const repeated = ctx.planComplianceGroupsRange([
+    { pick: 2, credit: 2, fields: ["sem21"], options: [option("a", "과학"), option("b", "과학")] },
+    { pick: 2, credit: 2, fields: ["sem22"], options: [option("a", "과학"), option("b", "과학")] }
+  ], (item) => item.family === "과학");
+  assert.equal(repeated.repeats, true);
+  assert.equal(repeated.max, 8);
+});
+
 test("국수영 81학점: 174를 넘으면 초과 학점의 50%까지 늘리고, 그래도 넘으면 확인필요", () => {
   const ctx = context();
   const layout = compliantPlan();

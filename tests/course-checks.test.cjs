@@ -154,23 +154,111 @@ test("credits: required credits per subject family use the plan column, then the
   assert.equal(family("과학").source, "default");
   assert.equal(family("과학").earned, 16, "1학년 지정 통합과학 8 + 3학년 과학만 있는 택2 묶음 8(무엇을 골라도 과학)");
   assert.equal(family("과학").ok, true);
-  assert.equal(family("사회(역사/도덕 포함)").required, 14);
+  // 한국사 6과 사회(역사/도덕 포함) 8은 편제 점검표처럼 따로 본다(예전에는 합쳐 14).
+  assert.equal(family("한국사").required, 6);
+  assert.equal(family("사회").required, 8);
+  assert.equal(family("사회(역사/도덕 포함)"), undefined);
+  assert.deepEqual(plain(ctx.COURSE_CHECK_FAMILIES), ["국어", "수학", "영어", "한국사", "사회", "과학", "체육", "예술", "기술·가정/정보/제2외국어/한문/교양"]);
   const edited = ctx.courseCheckCredits(model, { targetGrade: "2", selections: [], required: { "과학": 30 } });
-  assert.equal(family("과학", edited).status, "short", "교사가 입력한 기준보다 적으면 미달");
+  assert.equal(family("과학", edited).status, "short", "기준 설정 값보다 적으면 미달");
   assert.equal(family("과학", edited).source, "custom");
+  // 기준 설정(한 곳)의 표 전체를 넘기면 편제표 '필수이수' 열보다 그 값을 쓴다. 0도 값이다.
+  const shared = ctx.courseCheckCredits(model, { targetGrade: "2", selections: [], required: { "수학": 12, "과학": 0 } });
+  assert.equal(family("수학", shared).required, 12);
+  assert.equal(family("수학", shared).source, "custom");
+  assert.equal(family("과학", shared).required, 0);
   // 여러 교과(군)가 섞인 다른 학년 묶음은 '충족 가능'(pending)으로만 센다.
   const certain = {};
   const possible = ctx.courseCheckOpenGroupFamilies({ groups: [
-    { fields: ["sem31"], pick: 2, credit: 4, families: new Map([["a", "과학"], ["b", "사회(역사/도덕 포함)"]]) },
+    { fields: ["sem31"], pick: 2, credit: 4, families: new Map([["a", "과학"], ["b", "사회"]]) },
     { fields: ["sem32"], pick: 1, credit: 3, families: new Map([["c", "기술·가정/정보/제2외국어/한문/교양"], ["d", "기술·가정/정보/제2외국어/한문/교양"]]) },
     { fields: ["sem21"], pick: 1, credit: 4, families: new Map([["e", "과학"]]) }
   ] }, "2", false, certain);
   assert.deepEqual(plain(certain), { "기술·가정/정보/제2외국어/한문/교양": 3 });
-  assert.deepEqual(plain(possible), { "과학": 8, "사회(역사/도덕 포함)": 8 });
+  assert.deepEqual(plain(possible), { "과학": 8, "사회": 8 });
   assert.equal(ctx.courseCheckFamily("제2외국어"), "기술·가정/정보/제2외국어/한문/교양", "'제2외국어'의 '국어'에 걸리지 않는다");
   assert.equal(ctx.courseCheckFamily("기술·가정\n/교양"), "기술·가정/정보/제2외국어/한문/교양");
-  assert.equal(ctx.courseCheckFamily("한국사"), "사회(역사/도덕 포함)");
+  assert.equal(ctx.courseCheckFamily("한국사"), "한국사");
+  assert.equal(ctx.courseCheckFamily("사회(역사/도덕 포함)", "한국사1"), "한국사", "교과 칸이 사회여도 한국사1·2는 한국사");
+  assert.equal(ctx.courseCheckFamily("사회(역사/도덕 포함)", "세계사"), "사회");
+  assert.equal(ctx.courseCheckFamily("", "동아시아 역사 기행"), "사회");
   assert.equal(ctx.courseCheckFamily("", "일본어 회화"), "기술·가정/정보/제2외국어/한문/교양");
+});
+
+// 국어·수학·영어 3년 누계: 1학년 지정 국16·수16·영16(48) + 2-1 택2(국어·수학·영어·과학 4학점) + 3학년 국수영 지정 12 + 3-1 택2(수학·과학, 결과 없음)
+function kemPlan(extra = 0) {
+  let id = 0;
+  const subject = (area, name, credits = {}) => ({ id: `s${++id}`, area, name, credits, texts: {} });
+  const subjects = [
+    subject("국어", "공통국어1", { sem11: 8 }), subject("국어", "공통국어2", { sem12: 8 }),
+    subject("수학", "공통수학1", { sem11: 8 }), subject("수학", "공통수학2", { sem12: 8 }),
+    subject("영어", "공통영어1", { sem11: 8 }), subject("영어", "공통영어2", { sem12: 8 }),
+    subject("국어", "문학", { sem31: 4 }), subject("영어", "영어Ⅰ", { sem31: 4 }), subject("수학", "대수", { sem32: 4 + extra }),
+    subject("국어", "독서와 작문"), subject("수학", "확률과 통계"), subject("영어", "영어 발표와 토론"), subject("과학", "물리학"),
+    subject("수학", "기하"), subject("과학", "화학")
+  ];
+  const groups = [
+    { id: "g1", fields: ["sem21"], pick: 2, credit: 4, members: ["s10", "s11", "s12", "s13"] },
+    { id: "g2", fields: ["sem31"], pick: 1, credit: 4, members: ["s14", "s15"] }
+  ];
+  return { version: 1, subjects, groups };
+}
+
+test("credits: Korean·math·English 3-year total warns above 81, and above 174 the limit grows by 50% of the excess", () => {
+  const ctx = pureContext();
+  const model = ctx.courseCheckPlanModel(kemPlan());
+  const pick = (names) => names.map((name) => ({ name, semester: "1" }));
+  // 지정 48 + 3학년 지정 12 = 60, 2-1에서 국어·수학 8 → 68 (3-1 택1은 수학·과학이 섞여 있어 확실한 학점이 아니다)
+  let report = ctx.courseCheckCredits(model, { targetGrade: "2", selections: pick(["독서와 작문", "확률과 통계"]) });
+  assert.equal(report.kem.earned, 68);
+  assert.equal(report.kem.limit, 81);
+  assert.equal(report.kem.status, "ok");
+  assert.equal(report.kem.possible, 4, "3-1 택1(기하·화학)의 수학은 '들어올 수도 있는' 학점");
+  // 기준을 60으로 낮추면 8학점 초과 경고(기준값은 편제 점검 기준 설정과 같은 값을 넘긴다)
+  report = ctx.courseCheckCredits(model, { targetGrade: "2", selections: pick(["독서와 작문", "확률과 통계"]), limits: { kemLimit: 60 } });
+  assert.equal(report.kem.status, "over");
+  assert.equal(report.kem.over, 8);
+  assert.equal(ctx.courseCheckKemText(report.kem), "국어·수학·영어 3년 누계 68/60학점(8학점 초과)");
+  // 과학을 고르면 국수영이 줄어든다
+  report = ctx.courseCheckCredits(model, { targetGrade: "2", selections: pick(["독서와 작문", "물리학"]), limits: { kemLimit: 60 } });
+  assert.equal(report.kem.earned, 64);
+  // 현 2학년(3학년 신청): 이전 학년 결과가 있으면 그 선택을 더한다
+  report = ctx.courseCheckCredits(model, { targetGrade: "3", selections: pick(["기하"]), prior: ["영어 발표와 토론", "확률과 통계"], limits: { kemLimit: 60 } });
+  assert.equal(report.kem.earned, 48 + 8 + 12 + 4);
+  assert.equal(report.kem.over, 12);
+  // 174 초과분의 50%: 교과 총 이수 180이면 상한 81 + 3 = 84
+  assert.equal(ctx.courseCheckKemLimit({ kemLimit: 81, kemExtraRatio: 50, subjects: 174 }, 180), 84);
+  assert.equal(ctx.courseCheckKemLimit({}, 170), 81);
+  const total = ctx.courseCheckCredits(model, { targetGrade: "2", selections: pick(["독서와 작문", "확률과 통계"]), limits: { kemLimit: 60, subjects: 50 } });
+  assert.equal(total.cumulative.target, 50);
+  assert.equal(total.kem.limit, 60 + (total.cumulative.earned - 50) / 2);
+  assert.match(ctx.courseCheckKemText({ ...total.kem, status: "over", over: 1, earned: total.kem.limit + 1 }), /총 \d+학점이라 60\+초과분/);
+  // 학생 화면용 이벤트 자료에는 국수영 점검을 싣지 않는다(웹 학생 화면에는 이 경고를 띄우지 않음).
+  const payload = ctx.courseCheckEventPayload(model, [], { targetGrade: "2", courses: [{ subject: "독서와 작문", credit: 4, semester: "1" }], limits: { kemLimit: 60 } });
+  assert.doesNotMatch(JSON.stringify(payload.checks), /kem|국수영|국어·수학·영어/);
+  const state = ctx.courseCheckApplicationState({ courses: [{ subject: "독서와 작문", credit: 4, semester: "1" }], groups: [{ id: "g1", grade: "2", semester: "1", count: 2, courses: ["독서와 작문"], checks: payload.checks }] }, ["독서와 작문"]);
+  assert.equal("kem" in state, false);
+});
+
+test("settings: the old student-check required credits move once to the shared compliance settings (edits there win)", () => {
+  const ctx = pureContext();
+  // 학생 점검 쪽에서 고친 값(예전 8개 교과(군), 사회 14 = 한국사 포함)
+  const moved = ctx.courseCheckMigrateRequired({ off: ["a>b"], required: { "수학": 10, "사회(역사/도덕 포함)": 16, "체육": 10 } }, undefined);
+  assert.deepEqual(plain(moved.moved), ["수학", "사회", "체육"]);
+  assert.equal("required" in moved.courseChecks, false, "옮긴 뒤 학생 점검 쪽 값은 지운다(한 번만)");
+  assert.deepEqual(plain(moved.courseChecks.off), ["a>b"], "위계 설정은 그대로");
+  assert.deepEqual(plain(moved.compliance.settings.required), { "수학": 10, "사회": 10, "체육": 10 }, "사회 16 → 한국사 6 + 사회 10");
+  // 편제 점검 기준 설정에서 이미 고친 값은 그대로 둔다.
+  const kept = ctx.courseCheckMigrateRequired({ required: { "수학": 10, "국어": 12 } }, { plans: { "cohort:2026": { ack: {} } }, settings: { kemLimit: 90, required: { "수학": 14, "국어": 8 } } });
+  assert.equal(kept.compliance.settings.required["수학"], 14);
+  assert.equal(kept.compliance.settings.required["국어"], 12, "기본값 그대로인 교과(군)은 예전 값으로");
+  assert.equal(kept.compliance.settings.kemLimit, 90);
+  assert.ok(kept.compliance.plans["cohort:2026"], "점검표 저장 자료는 그대로");
+  // 옮길 값이 없으면(예전·새 저장분) 바꾸지 않는다.
+  const none = ctx.courseCheckMigrateRequired({ off: [] }, { plans: {} });
+  assert.deepEqual(plain(none.moved), []);
+  assert.deepEqual(plain(none.compliance), { plans: {} });
+  assert.equal(ctx.courseCheckMigrateRequired(undefined, undefined).moved.length, 0);
 });
 
 test("korean particles follow the final consonant, roman numerals read as numbers", () => {

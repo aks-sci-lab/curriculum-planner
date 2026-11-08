@@ -25,6 +25,8 @@ var PLAN_COMPLIANCE_DEFAULTS = {
   kemLimit: 81, kemExtraRatio: 50, semesterGap: 5, peTotal: 10, peEverySemester: true, specialization: 27,
   suneung: PLAN_COMPLIANCE_SUNEUNG
 };
+// 7번(국수영 81학점) 인정 오류 사유 제안 문구. 편성 단계 최대는 선택 조합에 따른 값이라, 학생별 실제 선택은 2단계 이수학점 점검에서 본다.
+var PLAN_COMPLIANCE_KEM_SUGGESTION = "선택과목 조합에 따라 초과 가능 — 학생별 점검으로 관리";
 // 울산 점검표 문구(연번·영역·점검 내용). kind: auto(자동) / self(자체 점검)
 var PLAN_COMPLIANCE_ITEMS = [
   { no: 1, id: "a1", area: "이수학점", text: "교과와 창의적 체험활동의 총 이수 학점 수가 교육과정 편성 기준에 맞게 편성하였는가?", hint: "창의적 체험활동 교육과정은 18학점(288시간) 이상의 시수를 편성･운영하되, 특정 학년이나 학기에 편중하여 편성하지 않아야 함." },
@@ -356,6 +358,64 @@ function planComplianceFamilyRange(group, families) {
   return { min: Math.max(0, group.pick - outside) * group.credit, max: Math.min(group.pick, inside) * group.credit };
 }
 
+// 선택과목군 전체에서 한 학생이 이수할 수 있는 해당 교과(군) 학점 최소~최대(같은 과목은 묶음이 달라도 한 번만 고른다).
+// 묶음마다 택 수를 모두 채우고 과목마다 한 번만 쓰는 배정을 최소 비용 유량(묶음 → 과목)으로 풀어 정확히 구한다.
+// 묶음 수·과목 수가 수십 개라 금방 끝나 근사가 필요 없다. 같은 과목을 여러 묶음에서 이어 들어야 택 수를 채울 수 있는 편제표(배정 불가)면
+// 예전처럼 묶음마다 따로 센다(repeats: true).
+// inside(option): 그 선택지가 셀 교과(군)인지.
+function planComplianceGroupsRange(groups, inside) {
+  const list = (groups || []).filter((group) => group.options.length && group.pick > 0);
+  const separate = { min: 0, max: 0 };
+  for (const group of list) {
+    const count = group.options.filter(inside).length;
+    const weight = group.credit * group.fields.length;
+    separate.min += Math.max(0, group.pick - (group.options.length - count)) * weight;
+    separate.max += Math.min(group.pick, count) * weight;
+  }
+  const keys = [...new Set(list.flatMap((group) => group.options.map((option) => option.key)))];
+  const demand = list.reduce((sum, group) => sum + group.pick, 0);
+  const solve = (sign) => {
+    // 노드: 0 출발, 1..G 묶음, G+1..G+K 과목, G+K+1 도착
+    const G = list.length, K = keys.length, sink = G + K + 1;
+    const edges = [];
+    const graph = Array.from({ length: sink + 1 }, () => []);
+    const add = (from, to, cap, cost) => {
+      graph[from].push(edges.length); edges.push({ to, cap, cost });
+      graph[to].push(edges.length); edges.push({ to: from, cap: 0, cost: -cost });
+    };
+    list.forEach((group, index) => {
+      add(0, index + 1, group.pick, 0);
+      const weight = group.credit * group.fields.length;
+      for (const option of group.options) add(index + 1, G + 1 + keys.indexOf(option.key), 1, inside(option) ? sign * weight : 0);
+    });
+    keys.forEach((key, index) => add(G + 1 + index, sink, 1, 0));
+    let flow = 0, cost = 0;
+    while (flow < demand) {
+      const dist = Array(sink + 1).fill(Infinity), back = Array(sink + 1).fill(-1);
+      dist[0] = 0;
+      for (let round = 0; round <= sink; round++) {
+        let changed = false;
+        for (let node = 0; node <= sink; node++) {
+          if (dist[node] === Infinity) continue;
+          for (const id of graph[node]) {
+            const edge = edges[id];
+            if (edge.cap > 0 && dist[node] + edge.cost < dist[edge.to] - 1e-9) { dist[edge.to] = dist[node] + edge.cost; back[edge.to] = id; changed = true; }
+          }
+        }
+        if (!changed) break;
+      }
+      if (dist[sink] === Infinity) break;
+      for (let node = sink; node !== 0; node = edges[back[node] ^ 1].to) { edges[back[node]].cap -= 1; edges[back[node] ^ 1].cap += 1; }
+      flow += 1;
+      cost += dist[sink];
+    }
+    return flow < demand ? null : sign * cost;
+  };
+  const max = solve(-1), min = solve(1);
+  if (max === null || min === null) return { ...separate, separate, repeats: true };
+  return { min, max, separate, repeats: false };
+}
+
 // 교과(군) 편성 통계: 학기별 지정 학점·선택 최소~최대, 학생별 이수 최소~최대, 필수 이수 학점 대비 여유.
 function planComplianceStats(model, settings = PLAN_COMPLIANCE_DEFAULTS) {
   const empty = () => Object.fromEntries(PLAN_COMPLIANCE_FIELDS.map((field) => [field, 0]));
@@ -392,8 +452,12 @@ function planComplianceStats(model, settings = PLAN_COMPLIANCE_DEFAULTS) {
   const sum = (values) => PLAN_COMPLIANCE_FIELDS.reduce((total, field) => total + (values[field] || 0), 0);
   for (const row of families) {
     row.designatedTotal = sum(row.designated);
-    row.choiceMinTotal = sum(row.choiceMin);
-    row.choiceMaxTotal = sum(row.choiceMax);
+    // 학기 칸의 '선택 a~b'는 그 학기 묶음만 본 값, 학생 합계는 같은 과목을 한 번만 고르게 묶음 전체로 계산한다.
+    const range = planComplianceGroupsRange(model.groups, (option) => option.family === row.family);
+    const optional = sum(row.choiceMax) - range.separate.max;
+    row.choiceMinTotal = range.min;
+    row.choiceMaxTotal = range.max + optional;
+    row.sharedReduction = range.separate.max - range.max;
     row.extraTotal = sum(row.extra);
     row.min = row.designatedTotal + row.choiceMinTotal;
     row.max = row.designatedTotal + row.choiceMaxTotal;
@@ -406,10 +470,11 @@ function planComplianceStats(model, settings = PLAN_COMPLIANCE_DEFAULTS) {
   for (const row of model.rows) {
     if (row.role === "optional" && PLAN_COMPLIANCE_KEM.includes(row.family)) kem.choiceMax += row.total;
   }
-  for (const group of model.groups) {
-    const range = planComplianceFamilyRange(group, PLAN_COMPLIANCE_KEM);
-    kem.choiceMin += range.min * group.fields.length;
-    kem.choiceMax += range.max * group.fields.length;
+  {
+    const range = planComplianceGroupsRange(model.groups, (option) => PLAN_COMPLIANCE_KEM.includes(option.family));
+    kem.choiceMin += range.min;
+    kem.choiceMax += range.max;
+    kem.sharedReduction = range.separate.max - range.max;
   }
   kem.min = kem.designated + kem.choiceMin;
   kem.max = kem.designated + kem.choiceMax;
@@ -726,10 +791,10 @@ function planComplianceReport(layout, options = {}) {
   const specialRows = model.rows.filter((row) => row.names.some((name) => name.marks.specialization));
   let specialMin = 0, specialMax = 0;
   for (const row of specialRows) if (row.role === "required") { specialMin += row.total; specialMax += row.total; }
-  for (const group of model.groups) {
-    const inside = group.options.filter((option) => option.marks.specialization).length;
-    specialMin += Math.max(0, group.pick - (group.options.length - inside)) * group.credit * group.fields.length;
-    specialMax += Math.min(group.pick, inside) * group.credit * group.fields.length;
+  {
+    const range = planComplianceGroupsRange(model.groups, (option) => option.marks.specialization);
+    specialMin += range.min;
+    specialMax += range.max;
   }
   const self = PLAN_COMPLIANCE_SELF_ITEMS.map((item) => ({ ...item, hint: {
     s1: vocational.length ? `전문교과: ${planComplianceJoin(vocational)}` : "전문교과 과목 없음",
@@ -760,7 +825,8 @@ function planComplianceCounts(report, saved) {
 }
 
 // 점검표 엑셀 행(울산 점검표 열 구성: 연번·영역·점검 내용·점검 결과·비고·인정오류·인정오류 사유).
-function planComplianceSheetRows(report, saved, title) {
+// extras: { 항목 id: 비고에 덧붙일 글 } (앱이 학생 결과로 만든 7번 안내 등)
+function planComplianceSheetRows(report, saved, title, extras = {}) {
   const rows = [[{ v: title, s: 1 }, null, null, null, null, null, null], [],
     ["연번", "영역", "점검 내용", "점검 결과", "비고", "인정오류", "인정오류 사유"].map((v) => ({ v, s: 2 })),
     [{ v: "편성과목 기반 자동점검", s: 6 }, null, null, null, null, null, null]];
@@ -769,7 +835,7 @@ function planComplianceSheetRows(report, saved, title) {
     const ack = saved?.ack?.[item.id];
     rows.push([{ v: item.no, s: 4 }, { v: item.area, s: 4 }, { v: item.hint ? `${item.text}\n※ ${item.hint}` : item.text, s: 3 },
       { v: display.status, s: display.status === "확인필요" ? 9 : 4 },
-      { v: [display.acknowledged ? `(원래 결과: ${item.status})` : "", item.note].filter(Boolean).join(" "), s: 3 },
+      { v: [display.acknowledged ? `(원래 결과: ${item.status})` : "", item.note, extras?.[item.id] || ""].filter(Boolean).join(" "), s: 3 },
       { v: ack?.on ? "O" : "", s: 4 }, { v: ack?.reason || "", s: 3 }]);
   }
   rows.push([{ v: "자체점검", s: 6 }, null, null, null, null, null, null]);
@@ -929,6 +995,17 @@ function planComplianceFor(key) {
   return { report, plan };
 }
 
+// 점검표 비고에 덧붙이는 앱 자료 안내(7번: 학생별 실제 선택은 2단계 이수학점 점검에서 본다 · 현재 경고 학생 수).
+function planComplianceItemExtras(result) {
+  const { report, plan } = result;
+  const item = report.items.find((entry) => entry.id === "a7");
+  if (plan.type === "annual" || !item || item.status === "해당 없음") return {};
+  let count = null;
+  try { count = typeof courseCheckKemOverCount === "function" ? courseCheckKemOverCount(plan.year) : null; } catch { count = null; }
+  const where = count ? `현재 경고 ${count.over}명 · 현 ${count.grade}학년 ${count.checked}명 점검` : "이 입학생의 수강신청 결과 없음";
+  return { a7: `학생별 실제 선택은 2단계 이수학점 점검에서 확인(${where})` };
+}
+
 function planComplianceStatusClass(status) {
   return status === "O" ? "is-ok" : status === "확인필요" ? "is-check" : status === "자체 확인" ? "is-self" : "is-na";
 }
@@ -971,6 +1048,7 @@ function planComplianceDialogs() {
     <form method="dialog" id="planComplianceSettingsForm">
       <h2 id="planComplianceSettingsTitle">편제 점검 기준 설정</h2>
       <p class="note">울산광역시교육청 편제 점검 프로그램(2026) 지침의 기준값입니다. 교육청 기준이 다르면 고치세요. 입력하면 바로 저장되고 모든 편제표 점검에 반영됩니다.</p>
+      <p class="note plan-compliance-shared-note">교과(군)별 필수 이수 학점·교과 총 이수 학점·창의적 체험활동·국어·수학·영어 상한은 <b>2단계 학생 위계·이수학점 점검</b>(결과 검증·확인서 점검란·4단계 요약)도 같은 값을 씁니다. 여기 한 곳에서만 고칩니다.</p>
       <div id="planComplianceSettingsBody"></div>
       <div class="curriculum-version-dialog-actions">
         <button class="button" type="button" data-pc-action="reset-settings">기본값으로</button>
@@ -1047,6 +1125,7 @@ function renderPlanComplianceDialog() {
     return;
   }
   const counts = planComplianceCounts(report, saved);
+  const extras = planComplianceItemExtras(result);
   const summary = `<p class="plan-compliance-summary" role="status"><span class="plan-compliance-chip is-ok">O ${counts["O"]}</span><span class="plan-compliance-chip is-check">확인필요 ${counts["확인필요"]}</span><span class="plan-compliance-chip is-self">자체 확인 ${counts["자체 확인"]}</span>${counts["해당 없음"] ? `<span class="plan-compliance-chip is-na">해당 없음 ${counts["해당 없음"]}</span>` : ""}${counts.acknowledged ? `<span class="plan-compliance-chip">인정 오류 ${counts.acknowledged}</span>` : ""}</p>`;
   const autoRows = report.items.map((item) => {
     const display = planComplianceDisplayStatus(item, saved);
@@ -1056,9 +1135,9 @@ function renderPlanComplianceDialog() {
       <td class="plan-compliance-no">${item.no}</td><td class="plan-compliance-area">${planComplianceEscape(item.area)}</td>
       <td>${planComplianceEscape(item.text)}${item.hint ? `<small>※ ${planComplianceEscape(item.hint)}</small>` : ""}</td>
       <td class="plan-compliance-result"><b>${planComplianceEscape(display.status)}</b>${display.acknowledged ? `<small>인정(원래 ${planComplianceEscape(item.status)})</small>` : ""}</td>
-      <td class="plan-compliance-note">${planComplianceEscape(item.note)}</td>
+      <td class="plan-compliance-note">${planComplianceEscape(item.note)}${extras[item.id] ? `<small class="plan-compliance-extra">${planComplianceEscape(extras[item.id])}</small>` : ""}</td>
       <td class="plan-compliance-ack">${canAck ? `<label><input type="checkbox" data-pc-ack="${item.id}"${ack.on ? " checked" : ""} aria-label="${item.no}번 인정 오류"> 인정</label>` : ""}</td>
-      <td class="plan-compliance-reason">${canAck ? `<input type="text" maxlength="300" data-pc-ack-reason="${item.id}" value="${planComplianceEscape(ack.reason || "")}" placeholder="의도한 편성 사유" aria-label="${item.no}번 인정 오류 사유">` : ""}</td>
+      <td class="plan-compliance-reason">${canAck ? `<input type="text" maxlength="300" data-pc-ack-reason="${item.id}" value="${planComplianceEscape(ack.reason || "")}" placeholder="의도한 편성 사유" aria-label="${item.no}번 인정 오류 사유">` : ""}${canAck && item.id === "a7" ? `<button class="button button-quiet plan-compliance-suggest" type="button" data-pc-suggest="${item.id}" title="${planComplianceEscape(PLAN_COMPLIANCE_KEM_SUGGESTION)}">제안 문구 넣기</button>` : ""}</td>
     </tr>`;
   }).join("");
   const selfRows = report.self.map((item) => {
@@ -1108,7 +1187,7 @@ function renderPlanComplianceSettings() {
       ${field("specialization", "교과특성화 기준 학점", settings.specialization)}
       <label class="plan-compliance-setting plan-compliance-check"><input type="checkbox" data-pc-setting="peEverySemester"${settings.peEverySemester ? " checked" : ""}> 체육 매 학기 편성</label>
     </div>
-    <h3>교과(군)별 필수 이수 학점</h3>
+    <h3>교과(군)별 필수 이수 학점 <small>(한국사 6과 사회(역사/도덕 포함) 8은 따로)</small></h3>
     <div class="plan-compliance-settings-grid">${PLAN_COMPLIANCE_FAMILIES.map((family) => field(`required:${family}`, family, settings.required[family])).join("")}</div>
     <label class="plan-compliance-setting plan-compliance-wide">수능 출제 과목(쉼표로 구분 · 3학년 2학기 편성·미편성 점검)<textarea rows="2" data-pc-setting="suneung">${planComplianceEscape(settings.suneung.join(", "))}</textarea></label>
     <p class="note">위계(선이수) 규칙은 2단계 '위계·학점 점검 설정'과 같은 규칙을 씁니다.</p>`;
@@ -1125,6 +1204,16 @@ function planComplianceUpdateSetting(input) {
   store.settings = planComplianceNormalizeSettings(settings);
   if (typeof persistState === "function") persistState();
   planComplianceRefresh(true);
+  if (typeof courseCheckSharedSettingsChanged === "function") courseCheckSharedSettingsChanged();
+}
+
+// 기준 설정 팝업 열기(2단계 '위계·학점 점검' 팝업의 "편제 점검 기준 설정에서 바꿉니다" 단추도 이것을 부른다).
+function openPlanComplianceSettings() {
+  planComplianceDialogs();
+  renderPlanComplianceSettings();
+  const dialog = document.getElementById("planComplianceSettingsDialog");
+  if (!dialog.open) dialog.showModal();
+  dialog.querySelector("[data-pc-setting]")?.focus();
 }
 
 function renderPlanComplianceStats() {
@@ -1143,12 +1232,12 @@ function renderPlanComplianceStats() {
   };
   const familyRows = stats.families.filter((row) => row.family !== "기타" || row.max || row.extraTotal).map((row) => `<tr${row.margin !== null && row.margin < 0 ? ' class="is-check"' : ""}>
       <th scope="row">${planComplianceEscape(row.family)}</th><td>${row.required ?? ""}</td>${PLAN_COMPLIANCE_FIELDS.map((field) => cell(row, field)).join("")}
-      <td>${r(row.designatedTotal)}</td><td>${r(row.choiceMinTotal)}~${r(row.choiceMaxTotal)}</td><td><b>${r(row.min)}~${r(row.max)}</b></td>
+      <td>${r(row.designatedTotal)}</td><td>${r(row.choiceMinTotal)}~${r(row.choiceMaxTotal)}${row.sharedReduction > 0 ? `<small class="plan-compliance-shared" title="같은 과목이 여러 선택과목군에 있어 한 번만 고를 수 있게 계산했습니다">같은 과목 중복 −${r(row.sharedReduction)}</small>` : ""}</td><td><b>${r(row.min)}~${r(row.max)}</b></td>
       <td>${row.margin === null ? "" : `${row.margin >= 0 ? "+" : ""}${r(row.margin)}`}</td></tr>`).join("");
   const kem = stats.kem;
   const limit = report.settings.kemLimit + Math.max(0, stats.totalMax - report.settings.subjects) * report.settings.kemExtraRatio / 100;
   const kemRow = `<tr class="plan-compliance-kem${kem.max > limit ? " is-check" : ""}"><th scope="row">국어·수학·영어 합</th><td>≤ ${r(limit)}</td><td colspan="6" class="plan-compliance-kem-note">한 묶음에서 세 교과를 함께 고르는 경우를 합쳐 계산(교과별 최대의 단순 합이 아님)${kem.extra ? ` · 순증 ${r(kem.extra)}학점 별도` : ""}</td>
-    <td>${r(kem.designated)}</td><td>${r(kem.choiceMin)}~${r(kem.choiceMax)}</td><td><b>${r(kem.min)}~${r(kem.max)}</b></td><td>${limit - kem.max >= 0 ? "+" : ""}${r(limit - kem.max)}</td></tr>`;
+    <td>${r(kem.designated)}</td><td>${r(kem.choiceMin)}~${r(kem.choiceMax)}${kem.sharedReduction > 0 ? `<small class="plan-compliance-shared">같은 과목 중복 −${r(kem.sharedReduction)}</small>` : ""}</td><td><b>${r(kem.min)}~${r(kem.max)}</b></td><td>${limit - kem.max >= 0 ? "+" : ""}${r(limit - kem.max)}</td></tr>`;
   const totalRow = `<tr class="plan-compliance-total"><th scope="row">학기 합계</th><td>${report.settings.subjects}</td>${PLAN_COMPLIANCE_FIELDS.map((field) => `<td><b>${r(stats.semester[field].total)}</b></td>`).join("")}<td></td><td></td><td><b>${r(stats.totalMin)}${stats.totalMax > stats.totalMin ? `~${r(stats.totalMax)}` : ""}</b></td><td>${stats.totalMin - report.settings.subjects >= 0 ? "+" : ""}${r(stats.totalMin - report.settings.subjects)}</td></tr>`;
   const domainRows = PLAN_COMPLIANCE_DOMAINS.map((domain) => {
     const entry = stats.domains[domain];
@@ -1165,7 +1254,7 @@ function renderPlanComplianceStats() {
     <div class="plan-compliance-table-wrap"><table class="plan-compliance-stats">
       <caption>편성 영역별 학점(학생 1명 기준 · 학생선택은 택 수 × 과목당 학점, 소인수·공동은 순증)</caption>
       <thead><tr><th>편성 영역</th><th>과목 수</th>${heads}<th>합계</th></tr></thead><tbody>${domainRows}</tbody></table></div>
-    <p class="note">학생 이수 최소~최대는 선택과목군(택n)의 선택지 중 해당 교과(군) 과목 수로 계산합니다. 같은 과목이 두 묶음에 있으면 최대가 실제보다 클 수 있습니다. 소인수·공동(학기 칸 메모, 순증) 과목은 합계에 넣지 않습니다.</p>`;
+    <p class="note">학생 이수 최소~최대는 모든 선택과목군(택n)의 택 수를 채우면서 <b>같은 과목은 한 번만</b> 고르는 경우로 정확히 계산합니다(같은 과목이 1·2학기 묶음에 모두 있어도 두 번 세지 않음). 학기 칸의 '선택 a~b'는 그 학기 묶음만 본 값입니다. 소인수·공동(학기 칸 메모, 순증) 과목은 합계에 넣지 않습니다. 국어·수학·영어 81학점은 편성 단계 최대로 보며, 학생이 실제로 고른 과목 기준은 2단계 이수학점 점검에서 경고합니다.</p>`;
 }
 
 function planComplianceFileName(plan) {
@@ -1176,7 +1265,7 @@ function exportPlanCompliance() {
   const result = planComplianceFor(planComplianceDialogKey);
   if (!result || typeof createWorkbookBlob !== "function" || typeof downloadBlob !== "function") return;
   const { report, plan } = result;
-  const sheet = planComplianceSheetRows(report, planComplianceSaved(plan.key), `${plan.label} 교육과정 편제 점검표`);
+  const sheet = planComplianceSheetRows(report, planComplianceSaved(plan.key), `${plan.label} 교육과정 편제 점검표`, planComplianceItemExtras(result));
   const statsSheet = planComplianceStatsRows(report, `${plan.label} 교과(군) 편성 통계`);
   downloadBlob(createWorkbookBlob([
     { name: "점검표", rows: sheet.rows, merges: sheet.merges, widths: sheet.widths, freeze: "A4" },
@@ -1191,11 +1280,12 @@ function printPlanCompliance() {
   if (!result || !target) return;
   const { report, plan } = result;
   const saved = planComplianceSaved(plan.key);
+  const extras = planComplianceItemExtras(result);
   const rows = report.items.map((item) => {
     const display = planComplianceDisplayStatus(item, saved);
     const ack = saved.ack?.[item.id];
     return `<tr><td>${item.no}</td><td>${planComplianceEscape(item.area)}</td><td>${planComplianceEscape(item.text)}</td><td><b>${planComplianceEscape(display.status)}</b></td>
-      <td>${planComplianceEscape([display.acknowledged ? `(원래 결과: ${item.status})` : "", item.note].filter(Boolean).join(" "))}</td><td>${ack?.on ? "O" : ""}</td><td>${planComplianceEscape(ack?.reason || "")}</td></tr>`;
+      <td>${planComplianceEscape([display.acknowledged ? `(원래 결과: ${item.status})` : "", item.note, extras[item.id] || ""].filter(Boolean).join(" "))}</td><td>${ack?.on ? "O" : ""}</td><td>${planComplianceEscape(ack?.reason || "")}</td></tr>`;
   }).join("");
   const selfRows = report.self.map((item) => {
     const entry = saved.self?.[item.id];
@@ -1312,7 +1402,17 @@ function initPlanCompliance() {
     const open = event.target.closest("[data-pc-open]");
     if (open) { planComplianceDialogKey = open.dataset.pcOpen; renderPlanComplianceDialog(); return; }
     const action = event.target.closest("[data-pc-action]")?.dataset.pcAction;
-    if (action === "settings") { renderPlanComplianceSettings(); document.getElementById("planComplianceSettingsDialog").showModal(); }
+    if (action === "settings") openPlanComplianceSettings();
+    const suggest = event.target.closest("[data-pc-suggest]");
+    if (suggest) {
+      const id = suggest.dataset.pcSuggest;
+      const input = dialog.querySelector(`[data-pc-ack-reason="${id}"]`);
+      const current = String(input?.value || "").trim();
+      if (current && current !== PLAN_COMPLIANCE_KEM_SUGGESTION && !window.confirm(`적어 둔 사유를 제안 문구로 바꿀까요?\n지금: ${current}`)) return;
+      planComplianceSave(planComplianceDialogKey, (plan) => { plan.ack[id] = { ...(plan.ack[id] || {}), reason: PLAN_COMPLIANCE_KEM_SUGGESTION }; });
+      planComplianceRefresh();
+      dialog.querySelector(`[data-pc-ack="${id}"]`)?.focus();
+    }
     if (action === "stats") { renderPlanComplianceStats(); document.getElementById("planComplianceStatsDialog").showModal(); }
     if (action === "export") exportPlanCompliance();
     if (action === "print") printPlanCompliance();
@@ -1339,6 +1439,7 @@ function initPlanCompliance() {
     if (typeof persistState === "function") persistState();
     renderPlanComplianceSettings();
     planComplianceRefresh(true);
+    if (typeof courseCheckSharedSettingsChanged === "function") courseCheckSharedSettingsChanged();
   });
   const sectionForm = document.getElementById("planSectionForm");
   sectionForm.addEventListener("submit", (event) => { event.preventDefault(); applyPlanSectionDialog(); });

@@ -286,3 +286,42 @@ test("web application status: teacher review is computed on screen from student 
   assert.doesNotMatch(panel, /rpc\("(?!get_teacher_course_applications)/);
   assert.match(client, /⚠ 위계 경고/);
 });
+
+test("Korean·math·English limit: one shared setting drives step 2 warning, popup list, certificate line, step 4 header and checklist note", () => {
+  const ctx = checksContext();
+  // 1단계 '편제 점검 기준 설정'(state.curriculumCompliance.settings)이 유일한 기준값. 학생 점검은 planComplianceCurrentSettings로 읽는다.
+  ctx.state.curriculumCompliance = { settings: { kemLimit: 81, kemExtraRatio: 50, subjects: 174, creative: 18, required: {} } };
+  ctx.planComplianceCurrentSettings = () => ctx.state.curriculumCompliance.settings;
+  let result = ctx.courseCheckResultIssues(ctx.state.students.filter((item) => item.grade === "1"), { grade: "1" });
+  assert.ok(!result.warnings.some((text) => /국어·수학·영어/.test(text)), "수학 12 + 선택 8 = 20 < 81");
+  // 기준값을 바꾸면(새 설정 객체) 다시 계산한다: 상한 15 → 모두 5학점 초과
+  ctx.state.curriculumCompliance = { settings: { kemLimit: 15, kemExtraRatio: 50, subjects: 174, creative: 18, required: { "수학": 30 } } };
+  const first = ctx.state.students[0];
+  result = ctx.courseCheckResultIssues(ctx.state.students.filter((item) => item.grade === "1"), { grade: "1" });
+  const warning = result.warnings.find((text) => /국어·수학·영어/.test(text));
+  assert.match(warning, /기준\(15학점, 총 이수 174학점 초과 시 초과분의 50%까지\)을 넘는 학생 3명/);
+  assert.match(warning, /2-34 진가람 국수영 20\/15/);
+  assert.match(result.html, /<li class="is-credit is-kem">국어·수학·영어 3년 누계 20\/15학점\(5학점 초과\)<\/li>/);
+  assert.ok(result.warnings.some((text) => /교과\(군\) 필수 이수 학점 미달 학생 3명: .*수학 20\/30/.test(text)), "필수 학점도 같은 설정 값");
+  // 확인서 점검란: 같은 줄에 덧붙인다(줄 수 그대로 · 인쇄 1장 유지)
+  const paper = ctx.courseCheckCertificateHtml(first);
+  assert.match(paper, /국수영 20\/15학점 기준 초과/);
+  assert.equal((paper.match(/<p>/g) || []).length, 2);
+  // 4단계 학년 머리줄·점검표 7번 비고
+  assert.match(ctx.courseCheckAggregateNote("1"), /data-open-dialog="courseCheckDialog"[^>]*>국수영 기준 초과 3명</);
+  assert.deepEqual(plain(ctx.courseCheckKemOverCount("2026")), { grade: "1", checked: 3, over: 3 });
+  assert.equal(ctx.courseCheckKemOverCount("2027"), null, "신청 결과가 없는 입학생 편제표");
+  // 웹 수강신청으로 보내는 설정에는 국수영 점검을 싣지 않는다.
+  const setup = { subjects: { "2": [{ subject: "미적분Ⅰ", credit: 4, semester: "1" }] }, groups: [{ id: "g1", grade: "2", semester: "1", courses: ["미적분Ⅰ"] }] };
+  ctx.courseCheckAttachToSetup(setup);
+  assert.equal(setup.groups[0].checks.families.find((item) => item.family === "수학").required, 30);
+  assert.doesNotMatch(JSON.stringify(setup), /kem|국수영|국어·수학·영어/);
+  // 위계·학점 점검 팝업에는 필수 학점 입력칸을 두지 않고 기준 설정으로 가는 단추만 둔다.
+  assert.doesNotMatch(source, /data-cc-required=/);
+  assert.match(source, /data-cc-open-settings>편제 점검 기준 설정에서 바꿉니다</);
+  const compliance = fs.readFileSync(path.join(root, "curriculum-compliance.js"), "utf8");
+  assert.match(compliance, /function openPlanComplianceSettings\(/);
+  assert.match(compliance, /courseCheckSharedSettingsChanged\(\)/);
+  assert.match(compliance, /data-pc-suggest="\$\{item\.id\}"[^`]*>제안 문구 넣기</);
+  assert.match(app, /courseCheckMigrateRequired\(saved\.courseChecks, saved\.curriculumCompliance\)/);
+});
