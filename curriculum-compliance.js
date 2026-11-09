@@ -321,7 +321,10 @@ function planComplianceModel(planData, options = {}) {
     }
     const pick = Math.max(1, Number(group.pick) || 1);
     const label = `${fields.map((field) => planComplianceFieldLabel(field, true)).join("·")} 택${pick}`;
-    return { id: group.id || `g${index}`, fields, pick, credit: Number(group.credit) || 0, options: [...optionMap.values()], label };
+    // 학점을 학기 칸에서 읽지 못한 묶음(0)은 구성 과목 운영학점을 쓴다(curriculum-data.js와 같은 규칙).
+    const credit = Number(group.credit) > 0 ? Number(group.credit)
+      : typeof planDataGroupCredit === "function" ? planDataGroupCredit(planData, group) : 0;
+    return { id: group.id || `g${index}`, fields, pick, credit, options: [...optionMap.values()], label };
   }).filter((group) => group.fields.length && group.options.length);
   const labelCounts = new Map();
   for (const group of groups) labelCounts.set(group.label, (labelCounts.get(group.label) || 0) + 1);
@@ -568,17 +571,26 @@ function planComplianceReport(layout, options = {}) {
               const credits = Object.entries(row.designated).filter(([field]) => field.slice(3, 4) === grade).map(([, credit]) => credit);
               if (!credits.length) continue;
               const total = credits.reduce((sum, credit) => sum + credit, 0);
-              units.push({ row, name, credit: row.crossed && row.names.length > 1 ? total / row.names.length : total, each: credits, where: `${grade}학년` });
+              const split = row.crossed && row.names.length > 1;
+              units.push({ row, name, credit: split ? total / row.names.length : total, each: credits, where: `${grade}학년`,
+                how: split ? `교차집중 ${grade}학년 학기 학점 합 ${planComplianceRound(total)} ÷ ${row.names.length}과목` : `${grade}학년 학기 학점 ${credits.map(planComplianceRound).join("+")}` });
             }
-          } else units.push({ row, name, credit: row.unitCredit, each: [], where: Object.keys(row.designated).map((field) => planComplianceFieldLabel(field, true)).join("·") });
+          } else {
+            const where = Object.keys(row.designated).map((field) => planComplianceFieldLabel(field, true)).join("·");
+            const values = Object.values(row.designated).map(planComplianceRound);
+            const how = row.crossed && row.names.length > 1 ? `교차집중 ${where} 학기 학점 합 ${planComplianceRound(row.total)} ÷ ${row.names.length}과목`
+              : values.length > 1 ? `${where} 학기 학점 ${values.join("+")}` : `${where} 학기 학점`;
+            units.push({ row, name, credit: row.unitCredit, each: [], where, how });
+          }
         }
-        if (row.note && row.note.credit) units.push({ row, name, credit: row.note.credit, each: [], where: "학기 칸 메모" });
+        if (row.note && row.note.credit) units.push({ row, name, credit: row.note.credit, each: [], where: "학기 칸 메모", how: `학기 칸 메모 ${planComplianceRound(row.note.credit)}학점` });
       }
     }
     for (const group of model.groups) {
       for (const option of group.options) {
         const row = model.rows.find((item) => item.id === option.rowId);
-        units.push({ row, name: option, credit: group.credit * group.fields.length, each: [], where: group.label });
+        units.push({ row, name: option, credit: group.credit * group.fields.length, each: [], where: group.label,
+          how: `${group.label} 묶음 과목당 ${planComplianceRound(group.credit)}학점${group.fields.length > 1 ? ` × ${group.fields.length}학기` : ""}` });
       }
     }
     const seenOut = new Set();
@@ -592,7 +604,8 @@ function planComplianceReport(layout, options = {}) {
       seenOut.add(key);
       const text = `${unit.name.name} ${planComplianceRound(unit.credit)}학점(기준 ${range.base}, ${range.min}~${range.max})`;
       out.push(text);
-      flag(unit.row.id, { kind: "range", name: unit.name.name, credit: unit.credit, min: range.min, max: range.max, base: range.base, where: unit.where, text });
+      const reason = `${unit.name.name}: ${unit.how || unit.where} → ${planComplianceRound(unit.credit)}학점, 2022 개정 기준 ${range.base}학점의 증감 범위 ${range.min}~${range.max}학점 밖`;
+      flag(unit.row.id, { kind: "range", name: unit.name.name, credit: unit.credit, min: range.min, max: range.max, base: range.base, where: unit.where, text, reason });
       if (unit.name.type === "공통" && unit.credit < range.min) common.push(`${unit.name.name} ${planComplianceRound(unit.credit)}학점(기준 ${range.base})`);
     }
     const noRangeText = noRange.length ? `범위 정보 없음: ${planComplianceJoin(noRange, 8)}` : "";
@@ -1332,11 +1345,24 @@ function applyPlanSectionDialog() {
 // ---- 편제표 표에 영역 표시·학점/과목명 경고(app.js renderCurriculumStep에서 표를 그린 뒤 부른다)
 function decoratePlanComplianceSheet() {
   const wrap = document.getElementById("curriculumPlanWrap");
+  const legend = document.getElementById("planWarnLegend");
+  legend?.classList.add("hidden");
   const key = planComplianceActiveKey();
   if (!wrap || !key) return;
   let result = null;
   try { result = planComplianceFor(key); } catch { result = null; }
   if (!result) return;
+  try { planComplianceDecorateRows(wrap, result); } finally {
+    // 범례: 주황 테두리의 뜻(편제 점검 3번 학점 범위 확인)을 표 위에 알린다.
+    const count = wrap.querySelectorAll("tr[data-plan-row] .curriculum-subject-cell.is-plan-warn-row").length;
+    if (legend && count) {
+      legend.classList.remove("hidden");
+      document.getElementById("planWarnLegendText").textContent = `주황 테두리 = 학점 범위 확인 ${count}과목(편제 점검 3번 · 칸에 마우스를 올리면 이유)`;
+    }
+  }
+}
+
+function planComplianceDecorateRows(wrap, result) {
   const { report, plan } = result;
   const columns = plan.layout.planTemplate?.columns || {};
   const warn = report.revision.revision !== "2015";
@@ -1354,7 +1380,7 @@ function decoratePlanComplianceSheet() {
     const issues = report.subjectIssues.get(row.id) || [];
     const range = issues.filter((issue) => issue.kind === "range");
     if (range.length) {
-      const message = `학점 범위 확인: ${range.map((issue) => `${issue.text} · ${issue.where}`).join(" / ")}`;
+      const message = `학점 범위 확인(편제 점검 3번) — ${range.map((issue) => issue.reason || `${issue.text} · ${issue.where}`).join(" / ")}. 학기 학점·운영학점·묶음(택n)·교차집중 설정을 확인하세요.`;
       const creditColumn = columns.op >= 0 ? columns.op : columns.base;
       const cells = [...tr.querySelectorAll(`td[data-source-column="${creditColumn}"]`)];
       for (const field of Object.keys(row.designated)) {

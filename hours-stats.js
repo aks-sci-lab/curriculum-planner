@@ -137,6 +137,18 @@ function hoursItemKey(item) {
   return `${item.grade}|${item.semester}|${normalizeResultCourseName(item.subject)}`;
 }
 
+// 학교 지정 과목의 개설반 수. 한 칸에 과목이 여럿이면 학급을 나눈다.
+// 1·2학기에 걸친 교차집중(음악↔미술)은 반마다 한 학기씩 이수하므로 학기마다 엇갈려 나눈다: 11학급이면 1학기 음악 5·미술 6, 2학기 음악 6·미술 5
+// (과목마다 두 학기 합이 전체 학급 수). 분할 편성은 두 학기 모두 앞 과목부터 1반씩 더 준다.
+function hoursDesignatedShare(total, entry) {
+  const names = Math.max(1, Number(entry.names) || 1);
+  const base = Math.floor(total / names), extra = total % names;
+  const index = Number(entry.nameIndex) || 0;
+  const alternate = entry.crossed && names > 1 && Number(entry.crossSemesters) > 1;
+  const position = alternate && String(entry.semester) === "1" ? names - 1 - index : index;
+  return base + (position < extra ? 1 : 0);
+}
+
 function computeHoursStats(year = hoursTargetYear()) {
   if (!/^\d{4}$/.test(year)) throw new Error("학년도를 먼저 올바르게 입력하세요.");
   if (typeof syncActiveCurriculumCohort === "function") syncActiveCurriculumCohort();
@@ -214,9 +226,12 @@ function computeHoursStats(year = hoursTargetYear()) {
       seen.add(item.key);
       if (entry.kind === "지정") {
         const total = classCounts[grade] || 0;
-        const share = Math.floor(total / entry.names) + (entry.nameIndex < total % entry.names ? 1 : 0);
-        item.autoClasses = share;
-        item.basis = entry.names > 1 ? `학교 지정 · ${entry.crossed ? "교차 편성" : "분할 편성"} ${total}학급을 ${entry.names}과목에 나눔` : "학교 지정 · 전체 학급";
+        item.autoClasses = hoursDesignatedShare(total, entry);
+        item.basis = entry.names > 1
+          ? entry.crossed
+            ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반)`
+            : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
+          : "학교 지정 · 전체 학급";
       } else if (grade === "1") {
         item.autoClasses = 0;
         item.basis = "1학년 선택과목 · 개설반 직접 입력";

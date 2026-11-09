@@ -161,7 +161,9 @@ function curriculumOfficeEntries(data, fields = OFFICE_FIELDS, { key = "" } = {}
       (section === "choice" ? parts.choicePlain : parts.school).push({ ...base, division, values: plainValues });
     }
     for (const group of own) {
-      const values = OFFICE_FIELDS.map((field) => group.fields.includes(field) ? Number(group.credit) || 0 : "");
+      // 학점을 읽지 못한 묶음(0)은 구성 과목 운영학점(curriculum-data.js planDataGroupCredit)을 쓴다.
+      const credit = Number(group.credit) > 0 ? Number(group.credit) : typeof planDataGroupCredit === "function" ? planDataGroupCredit(data, group) : 0;
+      const values = OFFICE_FIELDS.map((field) => group.fields.includes(field) ? credit : "");
       groupRows.get(group.id).push({ ...base, division: curriculumOfficeDivision(subject, { section: "choice" }), values });
     }
   });

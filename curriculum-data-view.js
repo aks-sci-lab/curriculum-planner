@@ -235,15 +235,32 @@ function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, co
           const classes = `curriculum-group-cell${group.first ? " is-group-first" : ""}${group.last ? " is-group-last" : ""}`;
           const label = planDataGroupLabel(group.group);
           const key = blockKey.get(`${group.group.id}:${field}`) || "";
+          const creditHint = group.group.creditFrom === "op"
+            ? ` · 학기 칸에 학점이 없어 구성 과목 운영학점 ${planDataNumberText(group.group.credit)}을(를) 썼습니다${group.group.creditNote ? `(${group.group.creditNote})` : ""}` : "";
+          const check = group.group.creditNote ? ' <span class="curriculum-group-check" aria-label="학점 확인 필요">확인</span>' : "";
           const band = group.first
-            ? `<button type="button" class="curriculum-group-band" data-plan-group="${planViewEscape(group.group.id)}" title="${planViewEscape(label)}: ${planViewEscape(group.members.map((member) => member.name).join(" / "))} · 누르면 택 수·학점 변경·묶음 풀기"${readOnly ? " disabled" : ""}>택${group.group.pick} · ${planViewEscape(planDataNumberText(group.group.credit))}학점</button>`
+            ? `<button type="button" class="curriculum-group-band${group.group.creditNote ? " is-credit-check" : ""}" data-plan-group="${planViewEscape(group.group.id)}" title="${planViewEscape(label)}: ${planViewEscape(group.members.map((member) => member.name).join(" / "))}${planViewEscape(creditHint)} · 누르면 택 수·학점 변경·교차집중으로 바꾸기·묶음 풀기"${readOnly ? " disabled" : ""}>택${group.group.pick} · ${planViewEscape(planDataNumberText(group.group.credit))}학점${check}</button>`
             : "";
           cells.push(`<td class="${classes}" data-source-row="${item.row}" data-source-column="${column}"${selectable} data-plan-group-cell="${planViewEscape(group.group.id)}"${group.first ? ` data-choice-block="${planViewEscape(key)}"` : ""} title="${planViewEscape(label)}">${band}</td>`);
           continue;
         }
+        const crossFields = PLAN_DATA_FIELDS.filter((item2) => item.cross?.includes(item2));
+        if (crossFields.includes(field)) {
+          // 교차집중: 두 학기에 걸친 띠 하나(학생이 고르는 묶음이 아니라 반마다 학기를 엇갈려 이수).
+          const crossColumns = crossFields.map((item2) => semesterColumns[PLAN_DATA_FIELDS.indexOf(item2)]);
+          const adjacent = crossColumns.every((item2, index) => index === 0 || item2 === crossColumns[index - 1] + 1) &&
+            crossColumns.every((item2) => !groupCell.has(`${item.id}:${PLAN_DATA_FIELDS[semesterColumns.indexOf(item2)]}`));
+          if (adjacent && column !== crossColumns[0]) continue;
+          const label = planDataCrossLabel(item);
+          const names = planDataSubjectNames(item.name);
+          const title = `${label}: 학생이 고르는 과목이 아니라 반마다 한 학기는 ${names[0] || ""}, 다른 학기는 ${names.slice(1).join("·")}을(를) 이수합니다. 과목당 ${planDataNumberText(item.credits?.[crossFields[0]] || 0)}학점(학기당 한 번만 셉니다).${readOnly ? "" : " 누르면 학기당 학점 변경·선택과목군으로 바꾸기"}`;
+          const span = adjacent && crossColumns.length > 1 ? ` colspan="${crossColumns.length}"` : "";
+          const band = `<button type="button" class="curriculum-cross-band" data-plan-cross="${planViewEscape(item.id)}" title="${planViewEscape(title)}"${readOnly ? " disabled" : ""}>${planViewEscape(label)}</button>`;
+          cells.push(`<td class="curriculum-cross-cell is-cross" data-source-row="${item.row}" data-source-column="${column}"${span}${selectable} title="${planViewEscape(title)}">${band}</td>`);
+          continue;
+        }
         const value = Object.hasOwn(item.credits || {}, field) ? planDataNumberText(item.credits[field]) : item.texts?.[field] || "";
-        const cross = item.cross?.includes(field) ? "is-cross" : "";
-        cells.push(editableCell(column, field, value, cross, `${selectable}${cross ? ' title="교차집중(↔)"' : ""}`));
+        cells.push(editableCell(column, field, value, "", selectable));
         continue;
       }
       const segment = segmentCells.get(`${item.id}:${column}`);
@@ -357,6 +374,7 @@ function openCurriculumGroupDialog(context) {
     fields = group.fields; members = group.members; pick = group.pick; credit = group.credit;
     field("Title").textContent = `선택과목군 ${planDataGroupLabel(group)}`;
     field("Release").classList.remove("hidden");
+    field("Cross").classList.toggle("hidden", !planDataCrossCandidates(layout.planData, group) || planDataNamesCount(layout.planData, group.members) < 2);
     field("Apply").textContent = "적용";
   } else {
     fields = planDataSelectionFields(layout.planTemplate, context.selection);
@@ -373,10 +391,13 @@ function openCurriculumGroupDialog(context) {
     credit = existing?.credit || credits[0] || Number(layout.planData.subjects.find((item) => item.id === members[0])?.op) || 4;
     field("Title").textContent = `선택과목군으로 묶기 · ${planDataFieldLabel(fields)}`;
     field("Release").classList.add("hidden");
+    field("Cross").classList.add("hidden");
     field("Apply").textContent = "묶기";
   }
   curriculumGroupDialogContext = { ...context, fields, members };
-  field("Members").textContent = `${planDataFieldLabel(fields)} · 구성 과목 ${planDataNamesCount(layout.planData, members)}개: ${curriculumGroupMembersText(layout, members)}`;
+  const group = context.groupId ? layout.planData.groups.find((item) => item.id === context.groupId) : null;
+  const creditHint = group?.creditFrom === "op" ? ` · 학기 칸에 학점이 없어 구성 과목 운영학점을 썼습니다.${group.creditNote ? ` ${group.creditNote}` : ""} 맞는지 확인하고 적용하세요.` : "";
+  field("Members").textContent = `${planDataFieldLabel(fields)} · 구성 과목 ${planDataNamesCount(layout.planData, members)}개: ${curriculumGroupMembersText(layout, members)}${creditHint}`;
   field("Pick").value = String(pick);
   field("Credit").value = String(credit);
   field("Error").textContent = "";
@@ -416,6 +437,64 @@ function applyCurriculumGroupDialog(release = false) {
   const message = release ? `${planDataFieldLabel(context.fields)} 선택과목군을 풀었습니다. 구성 과목은 각자 묶음 학점으로 편성됩니다.`
     : context.groupId ? `선택과목군을 ${label}으로 바꿨습니다.` : `선택과목군 ${label}으로 묶었습니다.`;
   if (commitCurriculumDataEdit(build, message) && !context.groupId) leaveCurriculumSelectionMode();
+}
+
+// 선택과목군 → 교차집중
+function convertCurriculumGroupToCross() {
+  const context = curriculumGroupDialogContext;
+  if (!context?.groupId) return;
+  const layout = state.curriculumImportedLayout;
+  const group = layout?.planData?.groups.find((item) => item.id === context.groupId);
+  if (!group) return;
+  const error = document.getElementById("curriculumGroupError");
+  const build = (current) => curriculumDataGroupToCross(current, context.groupId);
+  let subject = null;
+  try { subject = build(layout).result; } catch (problem) { error.textContent = problem?.message || String(problem); return; }
+  document.getElementById("curriculumGroupDialog").close();
+  curriculumGroupDialogContext = null;
+  commitCurriculumDataEdit(build, `${planDataFieldLabel(subject.cross)} ${planDataSubjectNames(subject.name).join("↔")}을(를) 교차집중으로 바꿨습니다. 학생이 고르는 과목이 아니므로 2단계 선택 그룹에서 빠집니다.`);
+}
+
+let curriculumCrossDialogTarget = null;
+
+// 교차집중 띠를 누르면 여는 팝업: 학기당 학점 변경, 선택과목군(택1)으로 바꾸기.
+function openCurriculumCrossDialog(id) {
+  const layout = state.curriculumImportedLayout;
+  const subject = layout?.planData?.subjects.find((item) => item.id === id);
+  if (!subject?.cross?.length || layout.derived) return;
+  curriculumCrossDialogTarget = id;
+  const field = (name) => document.getElementById(`curriculumCross${name}`);
+  const names = planDataSubjectNames(subject.name);
+  field("Title").textContent = `교차집중 · ${planDataFieldLabel(PLAN_DATA_FIELDS.filter((item) => subject.cross.includes(item)))}`;
+  field("Members").textContent = `${names.join(" ↔ ")}: 학생이 고르는 과목이 아니라 반마다 한 학기는 ${names[0] || ""}, 다른 학기는 ${names.slice(1).join("·")}을(를) 이수합니다. 과목당 학점은 학기당 학점 한 번이고, 학기 합계에도 한 번만 셉니다.`;
+  field("Credit").value = String(Math.max(0, ...subject.cross.map((item) => Number(subject.credits?.[item]) || 0)) || planDataNumber(subject.op) || "");
+  field("Error").textContent = "";
+  refreshCurriculumCrossPreview();
+  document.getElementById("curriculumCrossDialog").showModal();
+  field("Credit").focus();
+}
+
+function refreshCurriculumCrossPreview() {
+  const layout = state.curriculumImportedLayout;
+  const subject = layout?.planData?.subjects.find((item) => item.id === curriculumCrossDialogTarget);
+  const credit = Number(document.getElementById("curriculumCrossCredit").value);
+  document.getElementById("curriculumCrossPreview").textContent = subject && Number.isFinite(credit) && credit > 0
+    ? `과목마다 ${planDataNumberText(credit)}학점 · 학기마다 ${planDataNumberText(credit)}학점(두 학기 이수 ${planDataNumberText(credit * subject.cross.length)}학점)` : "";
+}
+
+function applyCurriculumCrossDialog(toGroup = false) {
+  const id = curriculumCrossDialogTarget;
+  if (!id) return;
+  const value = document.getElementById("curriculumCrossCredit").value;
+  const build = toGroup ? (layout) => curriculumDataCrossToGroup(layout, id) : (layout) => curriculumDataSetCrossCredit(layout, id, value);
+  try { build(state.curriculumImportedLayout); } catch (problem) {
+    document.getElementById("curriculumCrossError").textContent = problem?.message || String(problem);
+    return;
+  }
+  document.getElementById("curriculumCrossDialog").close();
+  curriculumCrossDialogTarget = null;
+  commitCurriculumDataEdit(build, toGroup ? "교차집중을 1·2학기 택1 선택과목군으로 바꿨습니다. 학생이 고르는 과목으로 2단계 선택 그룹에 들어갑니다."
+    : `교차집중 학기당 학점을 ${value}학점으로 바꿨습니다.`);
 }
 
 function leaveCurriculumSelectionMode() {
@@ -523,6 +602,11 @@ function initCurriculumDataView() {
       openCurriculumGroupDialog({ groupId: band.dataset.planGroup });
       return;
     }
+    const crossBand = event.target.closest("[data-plan-cross]");
+    if (crossBand && !state.curriculumImportedLayout?.derived) {
+      openCurriculumCrossDialog(crossBand.dataset.planCross);
+      return;
+    }
     const menuButton = event.target.closest("[data-plan-row-menu]");
     if (menuButton) {
       event.stopPropagation();
@@ -560,6 +644,14 @@ function initCurriculumDataView() {
   form.addEventListener("input", refreshCurriculumGroupPreview);
   form.addEventListener("submit", (event) => { event.preventDefault(); applyCurriculumGroupDialog(false); });
   document.getElementById("curriculumGroupRelease").addEventListener("click", () => applyCurriculumGroupDialog(true));
+  document.getElementById("curriculumGroupCross")?.addEventListener("click", convertCurriculumGroupToCross);
+  const crossForm = document.getElementById("curriculumCrossForm");
+  if (crossForm) {
+    crossForm.addEventListener("input", refreshCurriculumCrossPreview);
+    crossForm.addEventListener("submit", (event) => { event.preventDefault(); applyCurriculumCrossDialog(false); });
+    document.getElementById("curriculumCrossToGroup").addEventListener("click", () => applyCurriculumCrossDialog(true));
+    document.getElementById("curriculumCrossCancel").addEventListener("click", () => { document.getElementById("curriculumCrossDialog").close(); curriculumCrossDialogTarget = null; });
+  }
   document.getElementById("curriculumGroupCancel").addEventListener("click", () => { dialog.close(); curriculumGroupDialogContext = null; });
 }
 

@@ -1884,6 +1884,17 @@
           if (layout && !layout.planData) ensureCurriculumPlanData(layout);
         }
       }
+      // 저장된 데이터 편제표 보정(학점 0인 선택과목군 → 운영학점, 학교 지정 1·2학기 택1 → 교차집중).
+      const repairs = [];
+      if (typeof repairCurriculumLayoutData === "function") {
+        const repaired = new Set();
+        for (const [label, layout] of [[String(state.curriculumCohortYear || ""), state.curriculumImportedLayout],
+          ...Object.entries(state.curriculumCohorts || {}).map(([year, item]) => [year, item?.importedLayout])]) {
+          if (!layout?.planData || layout.derived || repaired.has(layout)) continue;
+          repaired.add(layout);
+          for (const text of repairCurriculumLayoutData(layout)) repairs.push(`${label}학년도 입학생: ${text}`);
+        }
+      }
       const rebuild = (layout, previous, label) => {
         if (!layout) return null;
         try {
@@ -1906,6 +1917,7 @@
           item.templateRows = plan.map((row) => normalizeCurriculumPlanRow(row));
         }
       }
+      return repairs;
     }
 
     function curriculumBundleSummaryHtml(rows, layout = null) {
@@ -3987,6 +3999,7 @@
             const credit = own[field] || Number(row.opCredit) || Number(row.baseCredit) || 0;
             resolved[field] = credit > 0 ? String(credit) : "";
           });
+          if (own.crossNames?.length > 1) { resolved.crossNames = own.crossNames.slice(); resolved.crossFields = own.crossFields.slice(); }
           return resolved;
         });
       } else if (plan.length) {
@@ -4128,8 +4141,11 @@
           }
         }
       }
+      // 교차집중 과목은 학생이 고르는 과목이 아니라 학급마다 학기를 엇갈려 이수하므로 선택 그룹·신청 과목에서 뺀다.
+      const crossRows = new Set((layout.planData?.subjects || []).filter((item) => !item.fixed && item.cross?.length).map((item) => item.row));
       for (const context of contexts) {
         if (!String(context.division || "").replace(/\s+/g, "").includes("학생선택교육과정")) continue;
+        if (crossRows.has(context.rowIndex)) continue;
         const rowText = [context.division, context.detail, context.subject, ...context.row]
           .map((value) => String(value ?? "").replace(/\s+/g, "")).join(" ");
         if (!includeExcluded && /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
@@ -6111,8 +6127,9 @@
           renderCurriculumStep();
           persistState();
           status.style.color = plan.length ? "#287956" : "#a44939";
+          const repairNotes = typeof curriculumDataRepairNotes === "function" ? curriculumDataRepairNotes(importedLayout) : [];
           status.textContent = plan.length
-            ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${plan.length}개 과목을 불러왔습니다.`
+            ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${plan.length}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
           const message = error instanceof Error ? error.message : "편제표 파일 처리 중 오류가 발생했습니다.";
@@ -7159,7 +7176,13 @@
       $("#certificateSchoolName").value = $("#schoolName").value;
       // 결과 검증·차수 확정·시수 통계 모듈은 app.js 다음에 로드되므로 모두 로드된 뒤 한 번 더 그린다.
       document.addEventListener("DOMContentLoaded", () => {
-        refreshCurriculumDerivedPlans();
+        const planRepairs = refreshCurriculumDerivedPlans();
+        if (planRepairs.length) {
+          persistState();
+          if (Number(state.workflowStep) === 1 && typeof renderCurriculumStep === "function") renderCurriculumStep();
+          status.style.color = "#287956";
+          status.textContent = `저장된 편제표를 보정했습니다: ${planRepairs.slice(0, 4).join(" / ")}${planRepairs.length > 4 ? ` 외 ${planRepairs.length - 4}건` : ""}`;
+        }
         renderAggregate();
         renderWorkflowLayout();
         if (statePersistenceTimer !== null) {
