@@ -2018,3 +2018,40 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
   .plan-compliance-print th, .plan-compliance-print td { padding: 1.2mm 1.5mm; border: 1px solid #777; vertical-align: top; text-align: left; }
   .plan-compliance-print tr { break-inside: avoid; page-break-inside: avoid; }
 }
+/* 교차집중 학급 배분·원본 재변환·공식 과목명 자동 수정·편제 점검 다시 점검·해당 위치로 */
+.curriculum-cross-split { margin: 8px 0 0; padding: 6px 10px; border: 1px solid #d7dfed; border-radius: 8px; }
+.curriculum-cross-split legend { padding: 0 4px; color: #344462; font-size: 12px; font-weight: 600; }
+.curriculum-cross-split-options { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.curriculum-cross-split-options small { color: #6b7890; }
+.curriculum-cross-split .note { margin: 4px 0 0; }
+.curriculum-reconvert-button { border-color: #f0b37a !important; background: #fff5eb !important; color: #9a3412 !important; font-weight: 600; }
+.curriculum-reconvert-note { align-self: center; padding: 0 6px; border-radius: 999px; background: #eef1f5; color: #475467; font-size: 11px; white-space: nowrap; cursor: help; }
+.curriculum-reconvert-list { max-height: 50vh; overflow: auto; font-size: 13px; }
+.curriculum-reconvert-list h3 { margin: 8px 0 4px; font-size: 13px; }
+.curriculum-reconvert-list ul { margin: 0; padding-left: 18px; }
+.plan-autoname-notice { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; border-radius: 999px; background: #ecfdf3; color: #166534; font-size: 11px; }
+.plan-autoname-notice.hidden { display: none; }
+.plan-autoname-notice .button { min-height: 20px; padding: 0 6px; font-size: 11px; }
+.plan-autoname-mark { display: inline-block; margin-left: 3px; padding: 0 4px; border-radius: 4px; background: #ecfdf3; color: #166534; font-size: 10px; line-height: 15px; vertical-align: 1px; cursor: help; white-space: nowrap; }
+.plan-autoname-toggle { display: flex; align-items: center; gap: 6px; margin: 6px 0 8px; font-size: 13px; }
+.plan-compliance-recheck { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: #475467; }
+.plan-compliance-recheck .button { min-height: 26px; padding: 0 10px; }
+.plan-compliance-goto { display: block; margin-top: 3px; min-height: 20px; padding: 0 6px; font-size: 11px; white-space: nowrap; }
+.plan-compliance-table tr.is-recheck-changed td { animation: plan-recheck-flash 2.4s ease-out; }
+@keyframes plan-recheck-flash { 0%, 40% { background-color: #fde68a; } 100% { background-color: transparent; } }
+.curriculum-data-sheet tr.is-plan-focus td { box-shadow: inset 0 2px 0 #2563eb, inset 0 -2px 0 #2563eb; background-color: #eaf1ff !important; }
+.plan-compliance-return { display: inline-flex; align-items: center; gap: 6px; padding: 1px 4px 1px 8px; border-radius: 999px; background: #eaf1ff; color: #1e3a8a; font-size: 11px; }
+.plan-compliance-return.hidden { display: none; }
+.plan-compliance-return .button { min-height: 22px; padding: 0 8px; font-size: 11px; }
+/* 드래그로 고른 칸 옆 할 일 단추 · 묶음 띠 끝 손잡이 */
+.curriculum-selection-actions { position: fixed; z-index: 60; display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; border: 1px solid #9eb4e8; border-radius: 10px; background: #fff; box-shadow: 0 6px 18px rgba(30, 58, 138, .18); }
+.curriculum-selection-actions.hidden { display: none; }
+.curriculum-selection-actions .button { min-height: 28px; padding: 0 10px; font-size: 12px; }
+.curriculum-selection-actions-label { color: #344462; font-size: 12px; white-space: nowrap; }
+.curriculum-data-sheet td[data-plan-group-cell] { position: relative; }
+.curriculum-group-handle { position: absolute; left: 20%; right: 20%; height: 7px; border-radius: 4px; background: transparent; cursor: ns-resize; touch-action: none; z-index: 2; }
+.curriculum-group-handle.is-top { top: -2px; }
+.curriculum-group-handle.is-bottom { bottom: -2px; }
+td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .curriculum-group-handle { background: #6d8fe0; }
+.is-group-resizing, .is-group-resizing * { cursor: ns-resize !important; user-select: none; }
+.curriculum-data-sheet tr.is-group-resize-target td { box-shadow: inset 0 -2px 0 #315fce; }

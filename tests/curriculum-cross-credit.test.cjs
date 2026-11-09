@@ -91,8 +91,10 @@ test("택n 아래 학점 칸이 비어 있으면 구성 과목 운영학점을 �
   const ctx = context();
   const layout = converted(ctx);
   const group = layout.planData.groups.find((item) => item.fields.join() === "sem32");
-  assert.deepEqual(plain({ pick: group.pick, credit: group.credit, from: group.creditFrom }), { pick: 2, credit: 4, from: "op" });
-  assert.match(ctx.curriculumDataRepairNotes(layout).join(" "), /3-2 택2 · 4학점: 학기 칸에 학점이 없어 구성 과목 운영학점/);
+  // 저장 데이터는 읽은 그대로(0) 두고, 계산할 때만 구성 과목 운영학점을 쓴다.
+  assert.deepEqual(plain({ pick: group.pick, credit: group.credit, from: group.creditFrom }), { pick: 2, credit: 0 });
+  assert.deepEqual(plain(ctx.planDataGroupCreditInfo(layout.planData, group)), { credit: 4, from: "op", note: "" });
+  assert.match(ctx.curriculumDataRepairNotes(layout).join(" "), /3-2 택2: 학기 칸에 학점이 없어 계산에는 구성 과목 운영학점 4학점을 씁니다/);
   // 다시 만든 표: 학점 칸 2개(4, 첫 칸 수식), 이수학점 = 학기 합 수식, 소계 3-2 = 8
   const first = byName(layout, "주제 탐구 독서");
   assert.equal(layout.rows[first.row + 1][11], "4");
@@ -102,7 +104,7 @@ test("택n 아래 학점 칸이 비어 있으면 구성 과목 운영학점을 �
   assert.equal(layout.rows[footer][11], "8");
   const html = ctx.curriculumDataSheetHtml(layout);
   assert.match(html, /택2 · 4학점/);
-  assert.match(html, /구성 과목 운영학점 4을\(를\) 썼습니다/);
+  assert.match(html, /구성 과목 운영학점 4을\(를\) 씁니다/);
   // 묶음 블록(수강신청 과목·시수 통계 입력)도 4학점
   assert.equal(ctx.curriculumDataChoiceBlocks(layout).find((block) => block.field === "sem32").credit, 4);
   assert.equal(ctx.curriculumDataPlanEntries(layout).entries.find((entry) => entry.subject === "수학과제 탐구").credit, 4);
@@ -112,14 +114,17 @@ test("구성 과목 운영학점이 서로 다르면 가장 큰 값을 쓰고 �
   const ctx = context();
   const layout = converted(ctx, { creditCells: ["", "", "mixed"] });
   const group = layout.planData.groups.find((item) => item.fields.join() === "sem32");
-  assert.equal(group.credit, 5);
-  assert.match(group.creditNote, /운영학점\(4·5\)이 서로 달라 가장 큰 5학점/);
+  assert.equal(group.credit, 0);
+  const info = ctx.planDataGroupCreditInfo(layout.planData, group);
+  assert.equal(info.credit, 5);
+  assert.match(info.note, /운영학점\(4·5\)이 서로 달라 가장 큰 5학점/);
   assert.match(ctx.curriculumDataSheetHtml(layout), /is-credit-check/);
   // 교사가 띠에서 학점을 정하면 확인 표시는 사라진다
   const { layout: next } = ctx.curriculumDataUpdateGroup(layout, group.id, { pick: "2", credit: "4" });
   const updated = next.planData.groups.find((item) => item.id === group.id);
   assert.equal(updated.credit, 4);
   assert.equal("creditFrom" in updated || "creditNote" in updated, false);
+  assert.doesNotMatch(ctx.curriculumDataSheetHtml(next), /is-credit-check/);
 });
 
 test("학점 칸이 '4학점' 글자이거나 저장값 없이 다른 칸을 가리키는 수식(=F9)만 있어도 학점을 읽는다", () => {
@@ -166,36 +171,33 @@ test("예전 앱의 '교차집중과목군' 병합은 1·2학기 택1 묶음이 
   assert.equal(legacy.planData.groups.some((group) => group.members.includes(art.id)), false);
 });
 
-test("저장된 편제표 보정: 학점 0 묶음 → 운영학점, 학교 지정 1·2학기 택1 → 교차집중, 학생 선택 1년 택1은 그대로", () => {
+test("업로드 변환 단계: 학교 지정 1·2학기 택1 → 교차집중, 학생 선택 1년 택1은 그대로, 학점 0 묶음은 저장값을 바꾸지 않는다", () => {
   const ctx = context();
   const layout = converted(ctx);
-  const data = layout.planData;
-  const art = byName(layout, "음악, 미술");
-  // 사용자 화면과 같은 저장 상태: 3-2 택2 학점 0, 예술 교차집중이 1-1·1-2 택1 묶음
+  const data = plain(layout.planData);
+  const art = data.subjects.find((item) => item.name === "음악, 미술");
   data.groups.find((group) => group.fields.join() === "sem32").credit = 0;
   art.cross = null; art.credits = {};
   data.groups.push({ id: "g90", fields: ["sem11", "sem12"], pick: 1, credit: 2, members: [art.id] });
-  // 학생 선택 1년 택1(일본어Ⅰ, 중국어Ⅰ)은 교차집중이 아니다
   data.subjects.push({ id: "s90", name: "일본어Ⅰ, 중국어Ⅰ", category: "학생 선택 교육과정", area: "제2외국어", kind: "일반선택",
     base: "5", op: "4", credits: {}, texts: {}, cross: null, note: "", extra: {}, span: 1, fills: [{}], heights: [null], styleRows: [null] });
   data.groups.push({ id: "g91", fields: ["sem21", "sem22"], pick: 1, credit: 0, members: ["s90"] });
-  const changes = ctx.repairCurriculumLayoutData(layout);
+  const changes = ctx.curriculumDataRepair(data);
   assert.ok(changes.some((text) => /교차집중으로 인식: 음악↔미술\(1-1·2\)/.test(text)), changes.join(" / "));
-  assert.equal(data === layout.planData, false, "보정 뒤 표를 다시 만든다");
-  const repaired = byName(layout, "음악, 미술");
+  const repaired = data.subjects.find((item) => item.name === "음악, 미술");
   assert.deepEqual(plain([repaired.cross, repaired.credits]), [["sem11", "sem12"], { sem11: 2, sem12: 2 }]);
-  assert.equal(layout.planData.groups.find((group) => group.fields.join() === "sem32").credit, 4);
-  const year = layout.planData.groups.find((group) => group.members.includes("s90"));
-  assert.deepEqual(plain([year.fields, year.pick, year.credit]), [["sem21", "sem22"], 1, 2], "1년 묶음은 운영학점 4 ÷ 2학기");
-  assert.deepEqual(plain(ctx.repairCurriculumLayoutData(layout)), [],"두 번째로 열 때는 바꿀 것이 없다");
+  assert.equal(data.groups.find((group) => group.fields.join() === "sem32").credit, 0, "저장값은 그대로");
+  const year = data.groups.find((group) => group.members.includes("s90"));
+  assert.deepEqual(plain([year.fields, year.pick, year.credit]), [["sem21", "sem22"], 1, 0]);
+  assert.equal(ctx.planDataGroupCredit(data, year), 2, "계산할 때는 운영학점 4 ÷ 2학기");
   // 1학기·2학기 택1 묶음이 따로 있는 모양도 교차집중으로 인식한다
-  const split = converted(ctx);
-  const splitArt = byName(split, "음악, 미술");
+  const split = plain(converted(ctx).planData);
+  const splitArt = split.subjects.find((item) => item.name === "음악, 미술");
   splitArt.cross = null; splitArt.credits = {};
-  split.planData.groups.push({ id: "g92", fields: ["sem11"], pick: 1, credit: 2, members: [splitArt.id] },
+  split.groups.push({ id: "g92", fields: ["sem11"], pick: 1, credit: 2, members: [splitArt.id] },
     { id: "g93", fields: ["sem12"], pick: 1, credit: 2, members: [splitArt.id] });
-  ctx.repairCurriculumLayoutData(split);
-  assert.deepEqual(plain(byName(split, "음악, 미술").cross), ["sem11", "sem12"]);
+  ctx.curriculumDataRepair(split);
+  assert.deepEqual(plain(split.subjects.find((item) => item.name === "음악, 미술").cross), ["sem11", "sem12"]);
 });
 
 test("띠 메뉴: 선택과목군 ↔ 교차집중으로 바꾸고 교차집중 학기당 학점을 고친다", () => {
@@ -320,9 +322,9 @@ test("시수 통계: 1·2학기 교차집중은 학기마다 학급을 엇갈려
     [["음악", "1", 0, 2, "지정"], ["미술", "1", 1, 2, "지정"], ["음악", "2", 0, 2, "지정"], ["미술", "2", 1, 2, "지정"]]);
 });
 
-test("앱 연결: 열 때 저장 편제표 보정, 수강신청 과목에서 교차집중 제외, 띠 팝업·범례 화면 요소", () => {
-  assert.match(app, /repairCurriculumLayoutData\(layout\)/);
-  assert.match(app, /const planRepairs = refreshCurriculumDerivedPlans\(\);/);
+test("앱 연결: 열 때 원본 재변환 호출, 수강신청 과목에서 교차집중 제외, 띠 팝업·범례 화면 요소", () => {
+  assert.doesNotMatch(app, /repairCurriculumLayoutData/, "저장 자료를 열 때 추정으로 고치지 않는다");
+  assert.match(app, /reconvertCurriculumOriginals\(\{ startup: true \}\)/);
   assert.match(app, /crossRows\.has\(context\.rowIndex\)/);
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   for (const id of ["curriculumCrossDialog", "curriculumCrossCredit", "curriculumCrossToGroup", "curriculumGroupCross", "planWarnLegend"]) {

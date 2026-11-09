@@ -651,7 +651,8 @@ function curriculumOfficeDataFromInputs(inputs, catalog = new Map()) {
     } else subject.note = row.label || "그 외";
     subjects.push(subject);
   }
-  return { version: typeof PLAN_DATA_VERSION !== "undefined" ? PLAN_DATA_VERSION : 1, nextId, subjects, groups };
+  return { version: typeof PLAN_DATA_VERSION !== "undefined" ? PLAN_DATA_VERSION : 1,
+    converter: typeof PLAN_DATA_CONVERTER !== "undefined" ? PLAN_DATA_CONVERTER : 2, nextId, subjects, groups };
 }
 
 // 불러온 편제표의 화면용 양식(머리글·소계 행). 원본 엑셀이 없으므로 앱이 만든다.

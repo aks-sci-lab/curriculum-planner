@@ -185,6 +185,7 @@
                 <button class="button" id="curriculumMergeToggle" type="button" aria-pressed="false" aria-controls="curriculumMergeControls" title="표 전체에서 셀 병합·삽입. 학기 세로 병합은 선택과목군, 같은 학년 1·2학기 병합은 교차집중으로 연결됩니다.">셀 선택·병합·삽입</button>
                 <span id="curriculumChangeSummary" class="curriculum-change-summary" role="status"></span>
                 <span id="planWarnLegend" class="plan-warn-legend hidden" title="편제 점검 3번(과목별 기준 학점·증감 범위)에서 확인이 필요한 과목입니다. 주황 칸에 마우스를 올리면 계산한 학점과 기준 범위가 보입니다."><span class="plan-warn-swatch" aria-hidden="true"></span><span id="planWarnLegendText">주황 테두리 = 학점 범위 확인(칸에 마우스를 올리면 이유)</span></span>
+                <span id="planAutoNameNotice" class="plan-autoname-notice hidden"><span id="planAutoNameNoticeText"></span> <button class="button button-quiet" type="button" id="planAutoNameOpen">보기·되돌리기</button></span>
                 <div id="curriculumMergeControls" class="curriculum-merge-controls hidden">
                   <span id="curriculumMergeSelection" role="status">셀 선택: 드래그·Shift+클릭 · 학기 세로 병합: 선택과목군 · 1·2학기 병합: 교차집중</span>
                   <label>택 <input id="curriculumMergePick" type="number" min="1" max="30" step="1" value="1"></label>
@@ -907,6 +908,11 @@ function courseClient_() {
       <div class="curriculum-versions-form">
         <label for="curriculumCrossCredit">학기당 학점(과목당 학점)<input id="curriculumCrossCredit" type="number" min="0.5" max="30" step="any" required></label>
       </div>
+      <fieldset class="curriculum-cross-split hidden" id="curriculumCrossSplitField">
+        <legend id="curriculumCrossSplitLegend">학급 수가 홀수일 때 1학기에 1반 더</legend>
+        <div class="curriculum-cross-split-options" id="curriculumCrossSplitOptions"></div>
+        <p class="note" id="curriculumCrossSplitNote"></p>
+      </fieldset>
       <p class="curriculum-subject-preview" id="curriculumCrossPreview" role="status" aria-live="polite"></p>
       <p class="curriculum-subject-error" id="curriculumCrossError" role="alert"></p>
       <div class="curriculum-subject-actions">
@@ -983,6 +989,7 @@ function courseClient_() {
   <script src="result-import.js?v=20261109-cross-credit" defer></script>
   <script src="round-status.js?v=20261109-cross-credit" defer></script>
   <script src="curriculum-versions.js?v=20261109-cross-credit" defer></script>
+  <script src="curriculum-reconvert.js?v=20261109-cross-credit" defer></script>
   <script src="hours-stats.js?v=20261109-cross-credit" defer></script>
   <script src="curriculum-subject-actions.js?v=20261109-cross-credit" defer></script>
   <script src="workspace-file.js?v=20261109-cross-credit" defer></script>

@@ -145,6 +145,12 @@ function hoursDesignatedShare(total, entry) {
   const base = Math.floor(total / names), extra = total % names;
   const index = Number(entry.nameIndex) || 0;
   const alternate = entry.crossed && names > 1 && Number(entry.crossSemesters) > 1;
+  if (alternate && Number.isInteger(entry.crossExtra) && entry.crossExtra >= 0) {
+    // 1단계 교차집중 팝업에서 고른 과목(crossExtra)이 첫 학기에 1반 더, 둘째 학기는 반대로.
+    const split = entry.crossExtra;
+    const position = String(entry.semester) === "1" ? (index - split + names) % names : (split - 1 - index + 2 * names) % names;
+    return base + (position < extra ? 1 : 0);
+  }
   const position = alternate && String(entry.semester) === "1" ? names - 1 - index : index;
   return base + (position < extra ? 1 : 0);
 }
@@ -229,7 +235,7 @@ function computeHoursStats(year = hoursTargetYear()) {
         item.autoClasses = hoursDesignatedShare(total, entry);
         item.basis = entry.names > 1
           ? entry.crossed
-            ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반)`
+            ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`
             : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
           : "학교 지정 · 전체 학급";
       } else if (grade === "1") {

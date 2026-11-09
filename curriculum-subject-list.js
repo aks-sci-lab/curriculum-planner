@@ -1048,3 +1048,72 @@ function curriculumOfficialTypeCheck(name, detail) {
   }
   return { ok: false, official, reason: `목록상 '${official.type}' 과목이므로 '${detail}'(으)로 편성할 수 없습니다.` };
 }
+
+// ---- 공식 과목명 자동 수정(업로드·원본 재변환 때 curriculum-data.js curriculumDataAutoNames가 쓴다)
+// 확실한 경우만 고친다: 띄어쓰기·Ⅰ/Ⅱ↔1/2·가운뎃점·괄호 표기만 다른 이름, 편집 거리 1~2로 공식 목록에서 하나만 맞는 오탈자.
+// 후보가 여럿이거나 목록에 없는 과목(전문교과·학교 개설 과목), ☆(고시 외)·■(교과특성화) 표시 과목은 고치지 않는다.
+function curriculumOfficialSpellingText(name) {
+  return String(name ?? "").normalize("NFC").replace(/[*＊★☆■]/g, "").replace(/[⋅·•ㆍ∙‧]/g, "·").replace(/\s+/g, " ").trim();
+}
+
+function curriculumOfficialBareKey(name) {
+  return curriculumOfficialSubjectKey(name).replace(/[()（）[\]［］{}<>〈〉「」『』]/g, "");
+}
+
+var curriculumOfficialAutoIndex = null;
+function curriculumOfficialAutoNames() {
+  if (!curriculumOfficialAutoIndex) {
+    const bare = new Map(), keys = [];
+    for (const [key, item] of curriculumOfficialSubjects()) {
+      keys.push([key, item.name]);
+      const plain = curriculumOfficialBareKey(item.name);
+      if (!bare.has(plain)) bare.set(plain, new Set());
+      bare.get(plain).add(item.name);
+    }
+    curriculumOfficialAutoIndex = { bare, keys };
+  }
+  return curriculumOfficialAutoIndex;
+}
+
+function curriculumOfficialEditDistance(a, b, limit) {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    let best = previous[0];
+    for (let j = 1; j <= b.length; j++) {
+      const above = previous[j];
+      previous[j] = Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+      best = Math.min(best, previous[j]);
+    }
+    if (best > limit) return limit + 1;
+  }
+  return previous[b.length];
+}
+
+// 과목명 하나(표기 기호 포함 가능) → { name: 공식명, kind: "notation" | "typo" } 또는 null(고치지 않음)
+function curriculumOfficialAutoName(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text || /[☆■]/.test(text)) return null;
+  const core = text.replace(/[*＊★↔]/g, "").replace(/\s+/g, " ").trim();
+  if (core.length < 2) return null;
+  const exact = findCurriculumOfficialSubject(core);
+  if (exact) return curriculumOfficialSpellingText(exact.name) === curriculumOfficialSpellingText(core) ? null : { name: exact.name, kind: "notation" };
+  const index = curriculumOfficialAutoNames();
+  const bare = index.bare.get(curriculumOfficialBareKey(core));
+  if (bare?.size === 1) return { name: [...bare][0], kind: "notation" };
+  if (bare?.size > 1) return null;
+  const key = curriculumOfficialSubjectKey(core);
+  if (key.length < 3) return null;
+  // 숫자만 다른 이름(영어1 ↔ 영어2)은 오탈자로 보지 않는다.
+  const limit = key.length <= 4 ? 1 : 2;
+  const found = [];
+  for (const [officialKey, name] of index.keys) {
+    if (key.replace(/\d+/g, "") === officialKey.replace(/\d+/g, "") && key !== officialKey) continue;
+    if (curriculumOfficialEditDistance(key, officialKey, limit) <= limit) found.push(name);
+    if (found.length > 1) return null;
+  }
+  return found.length === 1 ? { name: found[0], kind: "typo" } : null;
+}

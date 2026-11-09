@@ -327,13 +327,13 @@ function validateApplicationGroupData(groups, seeded) {
     chip.textContent = course.subject;
     if (course.groupLinked) {
       chip.classList.add("is-linked");
-      chip.title = "편제표 택n 묶음 과목입니다. 1단계 편제표의 묶음 칸에서 변경하세요.";
-      return chip;
+      chip.title = "편제표 택n 묶음 과목입니다. 다른 그룹으로 끌면 1단계 편제표의 선택과목군을 바꿉니다(확인 후 반영).";
     }
     chip.draggable = true;
     chip.setAttribute("aria-label", `그룹 변경을 위해 끌기: ${course.subject}`);
     chip.addEventListener("dragstart", (event) => {
-      draggedCourse = { grade: course.grade, semester: course.semester, subject: course.subject };
+      draggedCourse = { grade: course.grade, semester: course.semester, subject: course.subject,
+        linked: Boolean(course.groupLinked), groupName: course.groupName || "", groupSubject: course.groupSubject || course.subject };
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", course.subject);
@@ -345,6 +345,30 @@ function validateApplicationGroupData(groups, seeded) {
   function planSubjectsForGroup(group) {
     return group.courses.map((subject) =>
       available.get(`${group.grade}:${group.semester}:${subject}`)?.groupSubject || subject);
+  }
+  // 편제표와 연동된 과목(또는 연동 그룹으로 옮길 때): 편제표가 기준이므로 1단계 편제표 데이터의 묶음을 바꾼 뒤 다시 읽는다.
+  function moveLinkedCourse(course, targetGroup) {
+    if (typeof window.moveCurriculumGroupSubject !== "function") {
+      message.textContent = "편제표 연동 과목은 1단계 편제표에서 묶음을 바꾸세요.";
+      return;
+    }
+    const where = targetGroup ? targetGroup.name : "미분류(묶음 밖)";
+    if (!window.confirm(`편제표의 선택과목군을 바꿉니다(1단계 편제표에 반영).\n${course.subject}: ${course.groupName || "묶음 없음"} → ${where}\n계속할까요?`)) return;
+    let ok = false;
+    try {
+      ok = window.moveCurriculumGroupSubject(activeCohortYear, course.grade, course.semester, course.groupSubject || course.subject,
+        targetGroup?.linked ? targetGroup.name : "");
+    } catch (error) {
+      message.textContent = error?.message || String(error);
+      return;
+    }
+    if (!ok) {
+      message.textContent = (typeof status !== "undefined" && status.textContent) || "편제표 묶음을 바꾸지 못했습니다.";
+      return;
+    }
+    if (targetGroup && !targetGroup.linked) moveCourseToGroup({ grade: course.grade, semester: course.semester, subject: course.subject }, targetGroup);
+    else renderCourseGroups();
+    message.textContent = `${course.subject}: 편제표의 선택과목군을 바꿨습니다(1단계 편제표에 반영).`;
   }
   function moveCourseToGroup(course, targetGroup) {
     if (!course || !targetGrades.includes(course.grade) ||
@@ -429,18 +453,20 @@ function validateApplicationGroupData(groups, seeded) {
         panel.className = "course-group-card";
         if (group.linked) panel.classList.add("is-linked");
         panel.addEventListener("dragover", (event) => {
-          if (group.linked || !draggedCourse || draggedCourse.grade !== grade || draggedCourse.semester !== semester) return;
+          if (!draggedCourse || draggedCourse.grade !== grade || draggedCourse.semester !== semester) return;
           event.preventDefault();
           if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
           panel.classList.add("is-drag-over");
         });
         panel.addEventListener("dragleave", () => panel.classList.remove("is-drag-over"));
         panel.addEventListener("drop", (event) => {
-          if (group.linked || !draggedCourse || draggedCourse.grade !== grade || draggedCourse.semester !== semester) return;
+          if (!draggedCourse || draggedCourse.grade !== grade || draggedCourse.semester !== semester) return;
           event.preventDefault();
           panel.classList.remove("is-drag-over");
-          moveCourseToGroup(draggedCourse, group);
+          const course = draggedCourse;
           draggedCourse = null;
+          if (course.linked || group.linked) moveLinkedCourse(course, group);
+          else moveCourseToGroup(course, group);
         });
         if (group.fill) panel.style.borderTop=`6px solid ${group.fill}`;
         const legend = document.createElement("legend");
@@ -485,8 +511,8 @@ function validateApplicationGroupData(groups, seeded) {
           // 긴 안내 문장은 카드마다 반복하지 않고 마우스를 올리면 보이게 한다(전체 설명은 '그룹 설정 방법' 팝업).
           const linkedNote = document.createElement("p");
           linkedNote.className = "note course-group-linked-note";
-          linkedNote.textContent = "과목·선택 수는 1단계 편제표에서 수정";
-          linkedNote.title = `편제표 택${group.count} 묶음과 연결된 그룹입니다. 과목·선택 수는 1단계 편제표 묶음 칸에서 수정하세요.`;
+          linkedNote.textContent = "선택 수는 1단계 편제표에서 · 과목은 끌어 옮기면 편제표에 반영";
+          linkedNote.title = `편제표 택${group.count} 묶음과 연결된 그룹입니다. 과목 칩을 다른 그룹으로 끌면 확인 후 1단계 편제표의 묶음이 바뀝니다. 선택 수는 1단계 편제표 묶음 띠에서 수정하세요.`;
           panel.appendChild(linkedNote);
         }
         const subjectList = document.createElement("p");
@@ -531,8 +557,10 @@ function validateApplicationGroupData(groups, seeded) {
         if (!draggedCourse || draggedCourse.grade !== grade || draggedCourse.semester !== semester) return;
         event.preventDefault();
         unassignedPanel.classList.remove("is-drag-over");
-        moveCourseToGroup(draggedCourse, null);
+        const course = draggedCourse;
         draggedCourse = null;
+        if (course.linked) moveLinkedCourse(course, null);
+        else moveCourseToGroup(course, null);
       });
       unassignedPanel.append(unassignedTitle, unassignedList);
       scopePanel.appendChild(unassignedPanel);

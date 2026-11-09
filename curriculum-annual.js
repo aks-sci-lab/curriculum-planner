@@ -59,7 +59,8 @@ function buildAnnualCurriculumLayout(cohorts, schoolYear) {
         if (entries.has(key)) continue;
         entries.set(key, {
           division: row.division || "", area: row.area || "", detail: row.detail || "", subject: row.crossNames.join(", "),
-          baseCredit: row.baseCredit || 0, opCredit: row.opCredit || 0, credits: {}, cross: crossFields.map((field) => `${field.slice(3, 4)}-${field.slice(4, 5)}`)
+          baseCredit: row.baseCredit || 0, opCredit: row.opCredit || 0, credits: {}, cross: crossFields.map((field) => `${field.slice(3, 4)}-${field.slice(4, 5)}`),
+          ...(row.crossSplit ? { crossSplit: row.crossSplit } : {})
         });
         for (const semester of [1, 2]) entries.get(key).credits[`${grade}-${semester}`] = annualCreditNumber(row[`sem${grade}${semester}`]);
         continue;
@@ -93,6 +94,7 @@ function buildAnnualCurriculumLayout(cohorts, schoolYear) {
   const totals = Object.fromEntries(semesterKeys.map((key) => [key, 0]));
   const body = [];
   const crossMerges = [];
+  const crossSplits = {};
   for (const [division, areas] of divisions) {
     let firstOfDivision = true;
     for (const [area, rows] of areas) {
@@ -108,6 +110,8 @@ function buildAnnualCurriculumLayout(cohorts, schoolYear) {
           const label = semesterKeys.map((key, index) => index + 6 === columns[0] ? "교차집중(↔)" : "");
           const row = 3 + body.length + 1;
           crossMerges.push(`${String.fromCharCode(65 + columns[0])}${row}:${String.fromCharCode(65 + columns.at(-1))}${row}`);
+          // 교차집중 학급 배분(첫 학기에 1반 더 받는 과목)은 원본 입학생 편제표의 선택을 물려받는다.
+          if (entry.crossSplit) crossSplits[annualSubjectKey(entry.subject)] = entry.crossSplit;
           body.push([...head, ...label, annualCreditText(sum)]);
           body.push(["", "", "", "", "", "", ...semesterKeys.map((key) => annualCreditText(entry.credits[key])), ""]);
         } else {
@@ -123,7 +127,7 @@ function buildAnnualCurriculumLayout(cohorts, schoolYear) {
   return {
     rows: [...header, ...body, subtotal],
     mergedRanges: ["A1:M1", "A2:A3", "B2:B3", "C2:D3", "E2:E3", "F2:F3", "G2:H2", "I2:J2", "K2:L2", "M2:M3", ...crossMerges],
-    rowInsertions: [], rowHeights: {}, cellFills: {}, formulas: {},
+    rowInsertions: [], rowHeights: {}, cellFills: {}, formulas: {}, ...(Object.keys(crossSplits).length ? { crossSplits } : {}),
     columnWidths: [16, 14, 10, 24, 8, 8, 8, 8, 8, 8, 8, 8, 10],
     sheetName: "전학년 편제표",
     derived: true
