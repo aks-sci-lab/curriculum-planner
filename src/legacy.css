@@ -2055,3 +2055,41 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
 td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .curriculum-group-handle { background: #6d8fe0; }
 .is-group-resizing, .is-group-resizing * { cursor: ns-resize !important; user-select: none; }
 .curriculum-data-sheet tr.is-group-resize-target td { box-shadow: inset 0 -2px 0 #315fce; }
+
+/* 1단계 편제표 = 원본 양식 그대로(curriculum-data-view.js). 칸마다 원본 서식(글꼴·정렬·테두리·채움색)을 인라인으로 입히므로
+   여기서는 앱 기본 표 모양(회색 테두리·여백·머리글 색)을 지우고, 편집 도구는 마우스를 올리거나 고를 때만 보인다. */
+.curriculum-source-table.is-original-form { min-width: 0; color: #000; border-collapse: collapse; table-layout: fixed; background: #fff; }
+.curriculum-source-table.is-original-form td { min-width: 0; padding: 0 2px; line-height: 1.18; overflow: hidden; background: #fff; text-overflow: clip; }
+.curriculum-source-table.is-original-form td[contenteditable="true"] { min-width: 0; }
+.curriculum-source-table.is-original-form tr.curriculum-data-header td,
+.curriculum-source-table.is-original-form tr.curriculum-footer-row td { background: #fff; color: #000; }
+.curriculum-source-table.is-original-form td.curriculum-group-cell,
+.curriculum-source-table.is-original-form td.curriculum-cross-cell { padding: 0 2px; background-color: #fff; }
+.curriculum-source-table.is-original-form td.curriculum-note-cell { color: inherit; font-size: inherit; }
+.curriculum-source-table.is-original-form td.curriculum-subject-cell { position: relative; }
+.curriculum-source-table.is-original-form .curriculum-group-band,
+.curriculum-source-table.is-original-form .curriculum-cross-band {
+  display: inline; width: auto; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit;
+  font: inherit; line-height: inherit; white-space: inherit; text-align: inherit; cursor: pointer;
+}
+.curriculum-source-table.is-original-form .curriculum-group-band:hover, .curriculum-source-table.is-original-form .curriculum-group-band:focus-visible,
+.curriculum-source-table.is-original-form .curriculum-cross-band:hover, .curriculum-source-table.is-original-form .curriculum-cross-band:focus-visible {
+  background: transparent; outline: 1px solid #5b7fd6; outline-offset: 1px; text-decoration: underline;
+}
+.curriculum-source-table.is-original-form .curriculum-group-band.is-credit-check { background: transparent; }
+.curriculum-source-table.is-original-form.show-plan-marks .curriculum-group-band.is-credit-check { box-shadow: inset 0 -2px 0 #b45309; }
+.curriculum-source-table.is-original-form .curriculum-subject-name:hover { color: inherit; text-decoration: underline; text-decoration-color: #2852ce; }
+.curriculum-source-table.is-original-form .curriculum-subject-name[data-change-kind] { background-color: rgba(255, 196, 61, .28); border-radius: 2px; }
+.curriculum-source-table.is-original-form td[contenteditable="true"]:hover { box-shadow: inset 0 0 0 1px rgba(59, 104, 232, .45); }
+/* 묶음(택n) 테두리는 칸 모양을 가리지 않게 마우스를 올렸을 때만 얇은 선으로 */
+.curriculum-source-table.is-original-form td.curriculum-group-cell:hover { box-shadow: inset 0 0 0 1px rgba(91, 127, 214, .7); }
+/* 행 메뉴(⋯)는 열을 따로 두지 않고 과목명 칸 오른쪽에 마우스를 올렸을 때만(우클릭 메뉴와 같은 메뉴) */
+.curriculum-source-table.is-original-form .curriculum-row-menu-button {
+  position: absolute; top: 50%; right: 2px; width: 22px; height: 18px; margin-top: -9px; font-size: 12px; line-height: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .12s;
+}
+.curriculum-source-table.is-original-form tr.curriculum-data-row:hover .curriculum-row-menu-button,
+.curriculum-source-table.is-original-form .curriculum-row-menu-button:focus-visible { opacity: 1; pointer-events: auto; }
+.curriculum-source-table.is-original-form tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: none; }
+.curriculum-source-table.is-original-form.show-plan-marks tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: inset 3px 0 0 #e0a43a; }
+.curriculum-source-table.is-original-form td.curriculum-cell-selected { background: #dce8ff !important; box-shadow: inset 0 0 0 2px #315fce; }

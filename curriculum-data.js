@@ -7,8 +7,8 @@
 const PLAN_DATA_FIELDS = ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"];
 const PLAN_DATA_VERSION = 1;
 // 업로드 변환기 버전. 저장된 편제표 데이터의 planData.converter가 이보다 낮으면(없으면 1 이하) 원본 엑셀을 새 변환기로 다시 읽는다
-// (curriculum-reconvert.js). 2: 교차집중 과목·묶음 학점(수식·글자 칸)·공식 과목명 자동 수정.
-const PLAN_DATA_CONVERTER = 2;
+// (curriculum-reconvert.js). 2: 교차집중 과목·묶음 학점(수식·글자 칸)·공식 과목명 자동 수정. 3: 원본 양식 서식(글꼴·테두리·정렬·서식 있는 글자).
+const PLAN_DATA_CONVERTER = 3;
 const PLAN_DATA_STOP = /소계|합계|총이수|창의적체험|필수이수|표기방법/;
 const PLAN_DATA_NOTE = /[123]\s*학년[\s\S]*학기/;
 
@@ -113,6 +113,37 @@ function planDataHeaderLabels(layout, rowsBefore, mergeAt, expanded) {
     if (merge && merge.endColumn - merge.startColumn >= 3) return "";
     return planDataKey(expanded[row]?.[column]).replace(/[()（）]/g, "");
   }).filter(Boolean).join(" "));
+}
+
+// 원본 양식 서식: 한 행의 칸 서식 번호(styleTable 위치). 서식 정보가 없는 예전 자료는 빈 값이다.
+function planDataRowStyles(layout, row, width) {
+  const result = {};
+  if (!layout.cellStyles) return result;
+  for (let column = 0; column < width; column++) {
+    const style = layout.cellStyles[`${row}:${column}`];
+    if (Number.isInteger(style) && style >= 0) result[column] = style;
+  }
+  return result;
+}
+
+// 양식 전체 서식: 서식 표, 시트 확대 비율·기본 글꼴, '택n' 칸과 교차집중 칸의 채움색(묶음이 옮겨 가도 같은 모양으로 그린다).
+function planDataTemplateFormat(layout, tags, mergeAt, semesterColumns) {
+  if (!Array.isArray(layout.styleTable)) return {};
+  const roleFill = (row, column) => layout.cellFills?.[`${row}:${column}`] || "";
+  const tag = tags.find((item) => roleFill(item.row, item.column)) || tags[0];
+  let cross = null;
+  for (const key of Object.keys(layout.cellFills || {})) {
+    const [row, column] = key.split(":").map(Number);
+    if (semesterColumns.includes(column) && /교차/.test(String(layout.rows[row]?.[column] ?? ""))) { cross = { row, column }; break; }
+  }
+  return {
+    format: {
+      styleTable: planDataClone(layout.styleTable), baseFont: layout.baseFont || null, zoom: Number(layout.sheetZoom) || 100,
+      defaultColumnWidth: Number(layout.defaultColumnWidth) || 8.43, defaultRowHeight: Number(layout.defaultRowHeight) || 15,
+      tagFill: tag ? roleFill(tag.row, tag.column) : "", tagStyle: tag ? layout.cellStyles?.[`${tag.row}:${tag.column}`] ?? null : null,
+      crossFill: cross ? roleFill(cross.row, cross.column) : ""
+    }
+  };
 }
 
 // 편제표 표(layout)를 과목·선택과목군 데이터와 내보내기 양식으로 나눈다.
@@ -293,8 +324,10 @@ function curriculumDataFromLayout(layout) {
         const merge = mergeAt.get(`${start}:${column}`);
         return merge && merge.startRow === start && merge.endRow > start && merge.startColumn === merge.endColumn;
       }),
-      fills: [], heights: [], hidden: false, styleRows: []
+      fills: [], heights: [], hidden: false, styleRows: [], styles: []
     };
+    // 과목명 칸의 서식 있는 글자(일부만 빨간 글씨 등). 과목명이 바뀌어도 과목 순서대로 다시 입힌다(planDataNameRunStyles).
+    if (layout.cellRich?.[`${start}:${columnSet.name}`]) subject.nameRuns = planDataClone(layout.cellRich[`${start}:${columnSet.name}`]);
     semesterColumns.forEach((column, index) => {
       if (column < 0) return;
       const field = PLAN_DATA_FIELDS[index];
@@ -344,6 +377,7 @@ function curriculumDataFromLayout(layout) {
         if (fill) fills[column] = fill;
       }
       subject.fills.push(fills);
+      subject.styles.push(planDataRowStyles(layout, row, width));
       subject.heights.push(Number(layout.rowHeights?.[row]) || null);
       subject.styleRows.push(rowSources[row] ?? null);
       if ((layout.hiddenRows || []).includes(row)) subject.hidden = true;
@@ -365,6 +399,7 @@ function curriculumDataFromLayout(layout) {
     body.push({
       id: `s${nextId++}`, fixed: true, values: Array.from({ length: width }, (_, column) => raw(row, column)),
       fills: [Object.fromEntries(Array.from({ length: width }, (_, column) => [column, layout.cellFills?.[`${row}:${column}`]]).filter(([, fill]) => fill))],
+      styles: [planDataRowStyles(layout, row, width)],
       heights: [Number(layout.rowHeights?.[row]) || null], styleRows: [rowSources[row] ?? null],
       hidden: (layout.hiddenRows || []).includes(row), span: 1
     });
@@ -392,7 +427,7 @@ function curriculumDataFromLayout(layout) {
   }
 
   const pickRows = (from, to) => {
-    const result = { rows: [], formulas: {}, fills: {}, heights: {}, hidden: [], sources: [] };
+    const result = { rows: [], formulas: {}, fills: {}, styles: {}, rich: {}, heights: {}, hidden: [], sources: [] };
     for (let row = from; row <= to; row++) {
       const offset = row - from;
       result.rows.push(Array.from({ length: width }, (_, column) => planDataText(rows[row]?.[column])));
@@ -402,6 +437,8 @@ function curriculumDataFromLayout(layout) {
       for (let column = 0; column < width; column++) {
         if (Object.hasOwn(formulas, `${row}:${column}`)) result.formulas[`${offset}:${column}`] = formulas[`${row}:${column}`];
         if (layout.cellFills?.[`${row}:${column}`]) result.fills[`${offset}:${column}`] = layout.cellFills[`${row}:${column}`];
+        if (Number.isInteger(layout.cellStyles?.[`${row}:${column}`])) result.styles[`${offset}:${column}`] = layout.cellStyles[`${row}:${column}`];
+        if (layout.cellRich?.[`${row}:${column}`]) result.rich[`${offset}:${column}`] = planDataClone(layout.cellRich[`${row}:${column}`]);
       }
     }
     return result;
@@ -414,7 +451,8 @@ function curriculumDataFromLayout(layout) {
   const template = {
     version: PLAN_DATA_VERSION, width, columnWidths: Array.from({ length: width }, (_, column) => layout.columnWidths?.[column] ?? null),
     columns: columnSet, header, footer, bodyStart, bodyEnd, crossLabel: crossLabel || "교차집중(↔)",
-    defaultHeight: subjects.map((subject) => subject.heights[0]).filter(Boolean).sort((a, b) => a - b)[Math.floor(subjects.length / 2)] || null
+    defaultHeight: subjects.map((subject) => subject.heights[0]).filter(Boolean).sort((a, b) => a - b)[Math.floor(subjects.length / 2)] || null,
+    ...planDataTemplateFormat(layout, tags, mergeAt, semesterColumns)
   };
   const data = { version: PLAN_DATA_VERSION, converter: PLAN_DATA_CONVERTER, nextId, subjects: body, groups };
   normalizeCurriculumData(data);
@@ -561,6 +599,8 @@ function curriculumSheetFromData(data, template) {
   const merges = [];
   const formulas = {};
   const fills = {};
+  const styles = {};
+  const rich = {};
   const heights = {};
   const hidden = [];
   const meta = [];
@@ -578,6 +618,14 @@ function curriculumSheetFromData(data, template) {
     for (const [key, fill] of Object.entries(part.fills || {})) {
       const [row, column] = key.split(":").map(Number);
       fills[`${row + offset}:${column}`] = fill;
+    }
+    for (const [key, style] of Object.entries(part.styles || {})) {
+      const [row, column] = key.split(":").map(Number);
+      styles[`${row + offset}:${column}`] = style;
+    }
+    for (const [key, runs] of Object.entries(part.rich || {})) {
+      const [row, column] = key.split(":").map(Number);
+      rich[`${row + offset}:${column}`] = runs;
     }
     for (const [row, height] of Object.entries(part.heights || {})) heights[Number(row) + offset] = height;
     for (const row of part.hidden || []) hidden.push(row + offset);
@@ -623,6 +671,9 @@ function curriculumSheetFromData(data, template) {
       const height = item.heights?.[offset] ?? (offset >= (item.heights?.length || 0) ? item.heights?.[0] : null) ?? template.defaultHeight;
       if (height) heights[start + offset] = height;
       for (const [column, fill] of Object.entries(item.fills?.[offset] || {})) fills[`${start + offset}:${column}`] = fill;
+      // 행이 늘어난 과목(택n 학점 칸이 모자랄 때)은 마지막 행 서식을 이어 쓴다.
+      const rowStyles = item.styles?.[Math.min(offset, (item.styles?.length || 1) - 1)] || {};
+      for (const [column, style] of Object.entries(rowStyles)) styles[`${start + offset}:${column}`] = style;
       if (item.hidden) hidden.push(start + offset);
     }
     if (item.fixed) {
@@ -804,7 +855,7 @@ function curriculumSheetFromData(data, template) {
       }
     }
   }
-  return { rows, mergedRanges: [...new Set(merges)], formulas, cellFills: fills, rowHeights: heights,
+  return { rows, mergedRanges: [...new Set(merges)], formulas, cellFills: fills, cellStyles: styles, cellRich: rich, rowHeights: heights,
     hiddenRows: [...new Set(hidden)].sort((a, b) => a - b), rowMeta: meta, bodyStart, bodyEnd };
 }
 
@@ -829,6 +880,9 @@ function applyCurriculumData(layout, data = layout.planData, template = layout.p
   layout.mergedRanges = sheet.mergedRanges;
   layout.formulas = sheet.formulas;
   layout.cellFills = sheet.cellFills;
+  layout.cellStyles = sheet.cellStyles;
+  layout.cellRich = sheet.cellRich;
+  if (template.format?.styleTable) layout.styleTable = template.format.styleTable;
   layout.rowHeights = sheet.rowHeights;
   layout.hiddenRows = sheet.hiddenRows;
   layout.planRowMeta = sheet.rowMeta;
@@ -1376,6 +1430,63 @@ function planDataCrossLabel(subject) {
   return `교차집중 · ${names.join("↔")} · ${creditText}`;
 }
 
+// ---- 과목명 칸의 서식 있는 글자(원본에서 한 칸 안의 일부 과목만 빨간 글씨 등). subject.nameRuns = 업로드 때 글자 조각.
+// 과목명이 바뀌어도(자동 수정·과목 분리) 과목마다 원래 글꼴을 다시 입힌다. 키는 과목명 키(띄어쓰기·기호 무시).
+function planDataNameRunStyles(subject) {
+  const runs = subject?.nameRuns;
+  if (!Array.isArray(runs) || !runs.length) return null;
+  const chars = [];
+  for (const run of runs) for (const char of String(run.t)) chars.push(run);
+  const text = runs.map((run) => String(run.t)).join("");
+  const map = new Map();
+  let offset = 0;
+  text.split(/([,，、])/).forEach((part, index) => {
+    const start = offset;
+    offset += [...part].length;
+    if (index % 2) return;
+    const core = part.trim();
+    if (!core) return;
+    const run = chars[start + [...part.match(/^\s*/)[0]].length];
+    map.set(planDataNameKey(core), run && !run.inherit ? run : null);
+  });
+  return map;
+}
+
+// 과목 하나(core)의 원래 글꼴. 이름이 바뀌었으면 같은 자리의 원래 이름(original)으로 찾는다. 칸 서식 그대로면 null.
+function planDataNameRunFor(styles, core, original) {
+  const own = planDataNameKey(core);
+  if (styles.has(own)) return styles.get(own);
+  return original ? styles.get(planDataNameKey(original)) || null : null;
+}
+
+// 지금 과목명을 글자 조각으로(엑셀 내보내기의 서식 있는 글자). 원래 서식 있는 글자가 없으면 null.
+function planDataNameRuns(subject) {
+  const styles = planDataNameRunStyles(subject);
+  if (!styles) return null;
+  const originals = subject.originalName !== undefined ? String(subject.originalName).split(/[,，、]/).map((part) => part.trim()) : [];
+  const result = [];
+  const push = (text, run) => {
+    if (!text) return;
+    const style = run ? Object.fromEntries(Object.entries(run).filter(([key]) => key !== "t" && key !== "inherit")) : null;
+    const last = result.at(-1);
+    if (last && JSON.stringify(last.style) === JSON.stringify(style)) last.t += text;
+    else result.push({ t: text, style });
+  };
+  let index = -1;
+  String(subject.name ?? "").split(/([,，、])/).forEach((part, position) => {
+    if (position % 2) { push(part, null); return; }
+    const core = part.trim();
+    if (!core) { push(part, null); return; }
+    index += 1;
+    const run = planDataNameRunFor(styles, core, originals[index]);
+    const lead = part.match(/^\s*/)[0], tail = part.slice(lead.length).match(/\s*$/)[0];
+    push(lead, null);
+    push(core, run);
+    push(tail, null);
+  });
+  return result.some((item) => item.style) ? result.map((item) => item.style ? { t: item.t, ...item.style } : { t: item.t, inherit: 1 }) : null;
+}
+
 // ---- 공식 과목명 자동 수정(업로드·원본 재변환 단계). 원래 이름은 subject.originalName에 남긴다.
 // 과목 칸 하나에 여러 과목(쉼표)이 있으면 과목마다 고치고 쉼표·표기 기호(*·★)는 그대로 둔다.
 function planDataAutoName(name) {
@@ -1661,7 +1772,9 @@ function planDataInsert(data, spec, before = null) {
     credits: { ...(spec.credits || {}) }, texts: {}, cross: null, note: spec.note || "",
     completion: inherit("completion"), required: inherit("required"), extra: {},
     span: 1, semMerge: false, fills: [{}], heights: [neighbor?.heights?.[0] ?? null], hidden: false,
-    styleRows: [neighbor?.styleRows?.[0] ?? null], added: true
+    styleRows: [neighbor?.styleRows?.[0] ?? null], added: true,
+    // 새 행은 이웃 행의 원본 서식(글꼴·테두리·정렬)을 쓰되 글자색(변경 표시 빨간 글씨 등)은 물려받지 않는다.
+    styles: [{ ...(neighbor?.styles?.[0] || {}) }], plainFont: true
   };
   data.subjects.splice(index, 0, subject);
   return subject;
@@ -1725,7 +1838,7 @@ function planDataIsolate(data, name) {
   copy.id = planDataNewId(data);
   copy.name = String(own).trim();
   Object.assign(copy, { span: 1, semMerge: false, kindJoin: false, fills: [subject.fills?.[0] || {}],
-    heights: [subject.heights?.[0] ?? null], styleRows: [subject.styleRows?.[0] ?? null], added: true });
+    heights: [subject.heights?.[0] ?? null], styleRows: [subject.styleRows?.[0] ?? null], styles: [subject.styles?.[0] || {}], added: true });
   data.subjects.splice(planDataIndex(data, subject.id) + 1, 0, copy);
   for (const group of planDataGroupsOf(data, subject.id)) if (!group.members.includes(copy.id)) group.members.push(copy.id);
   return copy;

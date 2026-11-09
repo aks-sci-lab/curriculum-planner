@@ -33,7 +33,33 @@ function planExportShiftReferences(text, mapRow) {
     })).join("");
 }
 
-function planExportWriteCell(sheet, cell, value, formula) {
+// 서식 있는 글자 조각 → <r><rPr>…</rPr><t>…</t></r>. inherit 조각은 칸 글꼴을 그대로 쓴다(rPr 없음).
+function planExportRichRun(sheet, run) {
+  const r = sheet.createElementNS(NS_MAIN, "r");
+  if (!run.inherit) {
+    const properties = sheet.createElementNS(NS_MAIN, "rPr");
+    const add = (name, attributes = {}) => {
+      const node = sheet.createElementNS(NS_MAIN, name);
+      for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+      properties.appendChild(node);
+    };
+    if (run.b) add("b");
+    if (run.i) add("i");
+    if (run.s) add("strike");
+    if (run.u) add("u");
+    if (run.sz) add("sz", { val: run.sz });
+    add("color", run.fc ? { rgb: `FF${String(run.fc).replace(/^#/, "")}` } : { theme: 1 });
+    if (run.fn) add("rFont", { val: run.fn });
+    r.appendChild(properties);
+  }
+  const t = sheet.createElementNS(NS_MAIN, "t");
+  t.setAttribute("xml:space", "preserve");
+  t.textContent = run.t;
+  r.appendChild(t);
+  return r;
+}
+
+function planExportWriteCell(sheet, cell, value, formula, runs = null) {
   for (const child of [...cell.children]) cell.removeChild(child);
   cell.removeAttribute("t");
   const text = String(value ?? "");
@@ -57,6 +83,11 @@ function planExportWriteCell(sheet, cell, value, formula) {
   }
   cell.setAttribute("t", "inlineStr");
   const is = sheet.createElementNS(NS_MAIN, "is");
+  if (Array.isArray(runs) && runs.length && runs.map((run) => run.t).join("") === text) {
+    for (const run of runs) is.appendChild(planExportRichRun(sheet, run));
+    cell.appendChild(is);
+    return;
+  }
   const t = sheet.createElementNS(NS_MAIN, "t");
   t.setAttribute("xml:space", "preserve");
   t.textContent = text;
@@ -106,6 +137,7 @@ async function buildCurriculumDataWorkbook(layout) {
     }
   }
   const usedSources = new Set();
+  const subjectById = new Map((layout.planData.subjects || []).map((item) => [item.id, item]));
 
   // 1) 크롭 위쪽 행은 그대로, 2) 크롭 영역은 새 표로, 3) 크롭 아래 행은 늘어난 만큼 내린다.
   const above = [...sheetData.children].filter((node) => rowNumber(node) <= offsetRow);
@@ -155,7 +187,15 @@ async function buildCurriculumDataWorkbook(layout) {
         const next = [...rowNode.children].find((node) => columnIndex(node.getAttribute("r")) > column) || null;
         rowNode.insertBefore(cell, next);
       }
-      planExportWriteCell(sheet, cell, value, formula === undefined ? "" : shiftPlanFormula(formula, offsetRow, offsetColumn));
+      // 과목명 칸: 원본의 서식 있는 글자(일부 과목만 빨간 글씨 등)를 지금 과목명에 다시 입힌다.
+      const subject = info.type === "subject" && info.part === 0 && local === template.columns.name ? subjectById.get(info.id) : null;
+      let runs = subject && typeof planDataNameRuns === "function" ? planDataNameRuns(subject) : null;
+      // 새로 넣은 과목 행은 이웃 행 서식을 복사하지만 글자색(변경 표시 빨간 글씨)은 물려받지 않는다: 글자 조각으로 검정 글꼴을 적는다.
+      if (subject?.plainFont && value.trim()) {
+        const font = (layout.styleTable || [])[layout.cellStyles?.[`${index}:${local}`]] || {};
+        if (font.fc) runs = [{ t: value, ...(font.b ? { b: 1 } : {}), ...(font.i ? { i: 1 } : {}), ...(font.sz ? { sz: font.sz } : {}), ...(font.fn ? { fn: font.fn } : {}) }];
+      }
+      planExportWriteCell(sheet, cell, value, formula === undefined ? "" : shiftPlanFormula(formula, offsetRow, offsetColumn), runs);
     }
     sheetData.appendChild(rowNode);
   });
