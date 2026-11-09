@@ -1238,7 +1238,7 @@ function curriculumDataMoveSubjectToGroup(layout, name, field, targetGroupId) {
     }
     if (!target && credit > 0) item.credits[field] = credit;
     normalizeCurriculumData(data);
-    const joined = planDataGroupsOf(data, item.id).filter((group) => group !== target);
+    const joined = planDataGroupsOf(data, item.id).filter((group) => group.id !== target?.id);
     if (joined.length) throw new Error(`${name}을(를) 옮길 자리에 ${joined.map(planDataGroupLabel).join(", ")} 묶음도 있어 다른 학기 묶음까지 바뀝니다. 1단계 편제표에서 묶음 띠 끝을 끌어 바꾸세요.`);
     return item;
   });

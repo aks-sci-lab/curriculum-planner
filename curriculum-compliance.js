@@ -687,7 +687,12 @@ function planComplianceReport(layout, options = {}) {
     add("a8", notListed.length ? "확인필요" : "O", notListed.length ? `${new Set(notListed).size}개 확인필요: ${planComplianceJoin(notListed)}` : "");
     // 업로드·원본 재변환 때 공식 과목명으로 자동 수정한 곳(subject.originalName)은 비고에만 남긴다.
     const autoFixed = (planData?.subjects || []).filter((subject) => !subject.fixed && subject.originalName !== undefined && subject.originalName !== subject.name);
-    const autoText = autoFixed.length ? `자동 수정 ${autoFixed.length}곳(${planComplianceJoin(autoFixed.map((subject) => `${subject.originalName} → ${subject.name}`), 6)})` : "";
+    const autoPairs = autoFixed.flatMap((subject) => {
+      const before = planComplianceSplitNames(subject.originalName), after = planComplianceSplitNames(subject.name);
+      return before.length === after.length ? before.map((name, index) => [name.name, after[index].name]).filter(([a, b]) => a !== b).map(([a, b]) => `${a} → ${b}`)
+        : [`${subject.originalName} → ${subject.name}`];
+    });
+    const autoText = autoPairs.length ? `자동 수정 ${autoPairs.length}곳(${planComplianceJoin(autoPairs, 6)})` : "";
     add("a9", spelled.length ? "확인필요" : "O", [spelled.length ? `${new Set(spelled).size}개 확인필요: ${planComplianceJoin(spelled)}` : "", autoText].filter(Boolean).join(" · "));
   }
   if (!annual) {

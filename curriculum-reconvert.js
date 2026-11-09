@@ -279,8 +279,9 @@ function planReconvertDifferences(current, fresh) {
     group.members = group.members.map((id) => idMap.get(id) || id);
     group.id = freshGroups.get(groupKey(group)) || `x${group.id}`;
   }
-  const after = { data: remapped, template: current.template };
-  return planReconvertEdits(fresh, after).map((edit) => ({ ...edit, text: planReconvertEditText(edit, fresh, after) }));
+  // 지금 값 → 원본 값(갱신하면 바뀌는 방향)
+  const now = { data: remapped, template: current.template };
+  return planReconvertEdits(now, fresh).map((edit) => ({ ...edit, text: planReconvertEditText(edit, now, fresh) }));
 }
 
 // 업로드 시점(또는 지금) 데이터 → 새로 읽은 데이터에서 바뀐 것 요약(상태 줄 안내)
@@ -431,6 +432,7 @@ function curriculumReconvertDialog() {
 }
 
 function curriculumReconvertAsk({ label, lost, kept, unknown }) {
+  if (typeof document === "undefined" || !document.body) return Promise.resolve(false);
   const dialog = curriculumReconvertDialog();
   const escape = typeof escapeHtml === "function" ? escapeHtml : (value) => String(value ?? "");
   document.getElementById("curriculumReconvertTitle").textContent = `원본 기준으로 다시 읽기 · ${label}`;
@@ -474,7 +476,7 @@ async function reconvertCurriculumLayout(target, { ask = true } = {}) {
   }
   if (!curriculumReconvertStillCurrent(target)) return { status: "skipped", text: "" };
   if (lost.length) {
-    const accepted = ask && typeof document !== "undefined" ? await curriculumReconvertAsk({ label, lost, kept, unknown }) : false;
+    const accepted = ask ? await curriculumReconvertAsk({ label, lost, kept, unknown }) : false;
     if (!curriculumReconvertStillCurrent(target)) return { status: "skipped", text: "" };
     if (!accepted) {
       target.layout.reconvertPending = PLAN_DATA_CONVERTER;

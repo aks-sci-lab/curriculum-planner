@@ -6495,7 +6495,8 @@
         const heights = [...table.rows].map((row) => row.getBoundingClientRect().height);
         curriculumCellSelectionMode = true;
         $("#curriculumMergeToggle").setAttribute("aria-pressed", "true");
-        $("#curriculumMergeControls").classList.remove("hidden");
+        // 데이터 편제표는 고른 칸 옆에 뜨는 단추를 쓰므로 도구 줄을 펼치지 않는다(펼치면 끄는 중에 표가 아래로 밀린다).
+        if (!state.curriculumImportedLayout?.planData) $("#curriculumMergeControls").classList.remove("hidden");
         renderCurriculumStep();
         // Keep the cells under the pointer when expanded blocks change intrinsic column widths.
         const nextTable = wrap.querySelector(".curriculum-source-table");
