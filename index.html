@@ -132,6 +132,9 @@
         </div>
         <p class="storage-warning hidden" id="workspaceStorageWarning" role="alert"></p>
         <p class="storage-warning hidden" id="workspaceGroupWarning" role="alert"></p>
+        <div class="collapse-divider workspace-context-divider" id="workspaceContextDivider" title="눌러서 작업 대상·결과 차수·저장 상태 머리 줄을 접거나 펼칩니다. 아래로 스크롤하면 저절로 얇게 접힙니다.">
+          <button class="collapse-handle" id="workspaceContextToggle" type="button" aria-expanded="true" aria-label="작업 대상·저장 머리 줄 접기"><span class="collapse-handle-arrow" aria-hidden="true">▲</span><span class="collapse-handle-text">접기</span></button>
+        </div>
       </section>
       <p class="storage-warning hidden" id="appUpdateNotice" role="status"></p>
       <section class="workflow-readiness" aria-label="다음 작업 안내">
@@ -996,6 +999,7 @@ function courseClient_() {
   <script src="hours-stats.js?v=20261109-ui-collapse" defer></script>
   <script src="curriculum-subject-actions.js?v=20261109-ui-collapse" defer></script>
   <script src="workspace-file.js?v=20261109-ui-collapse" defer></script>
+  <script src="workspace-header.js?v=20261109-ui-collapse" defer></script>
   <script src="vendor/qrcode.js" defer></script>
   <script src="supabase-config.js?v=20261109-ui-collapse" defer></script>
   <script src="test-bot-bridge.js?v=20261109-ui-collapse" defer></script>
