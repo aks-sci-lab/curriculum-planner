@@ -797,6 +797,8 @@ test("automatic class adjustment saves manual class counts, skips closed courses
   assert.equal(result.problems.length, 0);
   assert.deepEqual(plain(result.changed), ["2-1 택2 13→6"], "9 (manual) + 2 + 2 recommended → 6");
   assert.deepEqual(plain(state.classOverrides), { "1:0": 2, "1:1": 2, "1:2": 2 });
+  // 조정한 그룹을 기억해 그 그룹의 총 학급수 칸에 '조정 취소'를 둔다.
+  assert.deepEqual(plain(vm.runInContext("[...aggregateAdjustUndo.groups]", ctx)), ["2학년 1학기\u00002-1 택2"]);
   assert.equal(ctx.undoAggregateClassAdjust(), true);
   assert.deepEqual(plain(state.classOverrides), { "1:0": 9 }, "undo restores the values from right before the adjustment");
   assert.equal(ctx.undoAggregateClassAdjust(), false, "only one adjustment is kept for undo");

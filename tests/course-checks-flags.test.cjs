@@ -140,11 +140,12 @@ test("prereq sheet rows: grade filter, header columns, a single 'none' row and t
   assert.equal(none.courseCheckAggregateSheetRows(none.state.students, ""), null);
 });
 
-test("aggregate table: the course row shows the warning badge and 'attention only' keeps it (count included)", () => {
+test("aggregate sheet: the course column shows the warning badge and 'attention only' keeps it (count included)", () => {
   const checks = checksContext();
   const ctx = vm.createContext({ $: () => ({ value: "" }), state: {}, escapeHtml: String,
     courseCheckCourseBadges: checks.courseCheckCourseBadges, courseCheckAggregateNote: () => "" });
   vm.runInContext(functionSource(app, "function aggregateThresholds(", "function renderAggregate("), ctx);
+  vm.runInContext(functionSource(app, "function xmlEscape(", "function createStylesXml("), ctx);
   const course = (column, name, enrollment, classCount) => ({ column, name, enrollment, atRisk: false, closed: false, classCount,
     enrollmentPerDivision: 1, averageClassSize: enrollment / classCount });
   const report = { summary: { grade: "1", students: 60, classes: 2, classSource: "roster", averageClassSize: 30, openingLimit: 27, divisionLimit: 33 },
@@ -153,13 +154,18 @@ test("aggregate table: the course row shows the warning badge and 'attention onl
   const prereq = checks.courseCheckFlags(checks.state.students);
   const options = { closures: { "1:c3": "open", "1:c4": "open" }, round: "1", locked: false, maxClassSize: 34, attentionOnly: false, canUndo: false, prereq };
   const markup = ctx.aggregateGradeSectionMarkup(report, options);
-  assert.match(markup, /data-course-key="1:c3"[\s\S]*?<td class="aggregate-status"><span class="aggregate-ok">충족<\/span><button type="button" class="at-risk-badge prereq-badge"[^>]*>위계 경고 2<\/button>/);
-  assert.doesNotMatch(markup.slice(markup.indexOf('data-course-key="1:c4"')), /위계 경고/);
+  // 학교 양식: 위계 경고 수는 그 과목 '인원 수' 칸 오른쪽 모서리의 작은 단추(누르면 학생 목록 팝업), 과목 메뉴에도 경고 수를 넘긴다.
+  const countCell = (key) => markup.match(new RegExp(`<td [^>]*data-af-role="count">(?:(?!</td>).)*?data-prereq-course="${key}"(?:(?!</td>).)*</td>`))?.[0] || "";
+  assert.match(countCell("1:c3"), /<span class="af-corner af-corner-right"><button type="button" class="at-risk-badge prereq-badge" data-open-dialog="prereqStudentsDialog" data-prereq-course="1:c3"[^>]*>위계 경고 2<\/button><\/span><\/td>$/);
+  assert.match(markup, /data-aggregate-course="1:c3"[^>]*data-prereq-count="2"/);
+  assert.match(markup, /data-aggregate-course="1:c4"[^>]*data-prereq-count="0"/);
+  assert.equal(markup.match(/prereq-badge/g).length, 1, "기하(1:c4)에는 위계 표시가 없다");
   // 처리할 것만: 결정·인원·목표가 모두 정상이어도 위계 경고가 있는 과목은 남는다.
   assert.equal(ctx.aggregateAttention(report, options.closures, 34).count, 0, "위계 정보 없이 부르면 예전과 같다");
   assert.equal(ctx.aggregateAttention(report, options.closures, 34, prereq).count, 1);
   const attention = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
-  assert.deepEqual([...attention.matchAll(/data-course-key="([^"]+)"/g)].map((match) => match[1]), ["1:c3"]);
+  assert.deepEqual([...attention.matchAll(/<td class="[^"]*\bis-attention\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="([^"]+)"/g)].map((match) => match[1]), ["1:c3"]);
+  assert.match(attention, /<td class="[^"]*\bis-dimmed\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:c4"/);
   // 위계 정보를 넘기지 않으면 배지가 없다(이전 호출 그대로).
   assert.doesNotMatch(ctx.aggregateGradeSectionMarkup(report, { ...options, prereq: null }), /prereq-badge/);
 });
