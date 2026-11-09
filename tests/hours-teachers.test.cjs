@@ -143,7 +143,10 @@ test("공통 시수 자동 배분: 반 단위로 나눠 세부 교과 1인당 �
     assert.ok(Math.max(...loads) - Math.min(...loads) <= 4 / 2 + 1e-9, `${semester}학기 1인당 시수 차이는 한 반(4시간) 이내: ${loads}`);
     for (const member of members) assert.equal(result.allocations[member.id][semester] % 1, 0);
   }
-  assert.match(result.notes["과학-지구"]["1"], /통합과학1 \d반/);
+  // 배분 메모는 원래 양식처럼 줄인 과목명 + 시수('통과8 · 과탐실2').
+  assert.match(result.notes["과학-지구"]["1"], /^(통과|과탐실)\d+( · (통과|과탐실)\d+)?$/);
+  const hours = (note) => [...note.matchAll(/\d+/g)].reduce((acc, match) => acc + Number(match[0]), 0);
+  for (const member of members) assert.equal(hours(result.notes[member.id]["1"] || ""), result.allocations[member.id]["1"]);
   assert.equal(ctx.hoursBalanceCommonAllocation(members.map((member) => ({ ...member, teachers: 0 })), items).ok, false);
 });
 
@@ -157,7 +160,7 @@ test("교원 구성: 총 교사 수 직접 입력, 비교과는 교과 평균에
   assert.equal(before.staff.suggested, 6);
   assert.equal(before.staff.total, 6);
   assert.equal(before.staff.other, null);
-  assert.match(ctx.hoursStaffFormula(before), /총 교사 수 <span class="hours-suggested"[^>]*>6 \(제안값\)<\/span> = 교과 5 \+ 진로 1\(평균 제외\) \+ 비교과 0\(보건 0·영양 0·사서 0·상담 0\)$/);
+  assert.match(ctx.hoursStaffFormula(before), /총 교사 수 <span class="hours-suggested"[^>]*>6 \(제안값\)<\/span> = 교과 5 \+ 진로 1\(평균 제외\) \+ 비교과 0\(특수 0·영양 0·보건 0·사서 0·상담 0\)$/);
   const average = before.totals.average.year;
 
   settings["2027"].totalTeachers = 12;
@@ -165,7 +168,7 @@ test("교원 구성: 총 교사 수 직접 입력, 비교과는 교과 평균에
   const after = ctx.computeHoursStats("2027");
   assert.equal(after.totals.average.year, average, "비교과 교사 수를 넣어도 교과 평균은 그대로");
   assert.deepEqual(plain([after.staff.total, after.staff.subject, after.staff.career, after.staff.nonTeaching, after.staff.other, after.staff.over]), [12, 5, 1, 4, 2, false]);
-  assert.equal(ctx.hoursStaffFormula(after), "총 교사 수 <b>12</b> = 교과 5 + 진로 1(평균 제외) + 비교과 4(보건 1·영양 1·사서 1·상담 1) + 기타 2(교과 미배정)");
+  assert.equal(ctx.hoursStaffFormula(after), "총 교사 수 <b>12</b> = 교과 5 + 진로 1(평균 제외) + 비교과 4(특수 0·영양 1·보건 1·사서 1·상담 1) + 기타 2(교과 미배정)");
   // 전체 교원 기준 평균(참고) = (교과 + 진로 + 비교과 수업) ÷ 총 교사 수.
   assert.equal(after.staff.allHours["1"], after.totals["1"]);
   assert.equal(after.staff.average["2"], (after.totals["2"] + 10) / 12);
@@ -189,23 +192,22 @@ test("교원 구성: 총 교사 수 직접 입력, 비교과는 교과 평균에
   assert.equal(over.staff.over, true);
   assert.ok(over.issues.some((issue) => issue.level === "warning" && issue.action === "focus:hoursTotalTeachers" && issue.text.includes("1명 많습니다")));
 
-  // 엑셀 요약 시트: 교과 평균 줄과 전체 교원 기준 평균(참고) 줄, 교원 구성 표.
+  // 엑셀: 첫 시트는 원래 양식(교사시수표), 교원 구성은 따로 시트(전체 교원 기준 평균은 참고 줄).
   settings["2027"].totalTeachers = 12;
   const stats = ctx.computeHoursStats("2027");
-  const sheets = ctx.buildHoursWorkbookSheets(stats);
-  const summary = sheets[0].rows;
-  const labels = summary.map((row) => row[0]?.v);
-  assert.ok(labels.includes("교과 교사 1인당 평균 (창체 제외)"));
-  const reference = summary.find((row) => String(row[0]?.v).startsWith("전체 교원 기준 평균 (참고)"));
-  assert.ok(reference && reference[15].f.includes("SUM(E"));
-  const staffStart = labels.indexOf("교원 구성");
-  assert.deepEqual(plain(labels.slice(staffStart, staffStart + 9)), ["교원 구성", "총 교사 수", "교과 교사 (진로 제외)", "진로 (평균 제외)",
-    "비교과 · 보건교사", "비교과 · 영양교사", "비교과 · 사서교사", "비교과 · 전문상담교사", "기타 (교과 미배정)"]);
-  assert.equal(summary[staffStart + 1][3].v, 12);
-  assert.equal(summary[staffStart + 4][4].v, 10);
-  assert.match(summary[staffStart + 4][7].v, /맡은 과목: 1-1 보건 10시간 · 직접 입력 0\/3시간/);
-  assert.equal(summary[staffStart + 8][3].f, `D${staffStart + 2}-SUM(D${staffStart + 3}:D${staffStart + 8})`);
-  assert.equal(summary[staffStart + 8][3].v, 2);
+  const sheets = ctx.buildHoursWorkbookSheets(stats, { schoolName: "천상고등학교", date: new Date(2026, 9, 1) });
+  assert.deepEqual(plain(sheets.map((sheet) => sheet.name)).slice(0, 3), ["2027 교사시수표", "과목별 상세", "교원 구성"]);
+  const staffSheet = sheets[2].rows;
+  const labels = staffSheet.map((row) => row[0]?.v);
+  assert.deepEqual(plain(labels.slice(2, 12)), ["총 교사 수", "교과 교사 (진로 제외)", "진로 (평균 제외)",
+    "비교과 · 특수교사", "비교과 · 영양교사", "비교과 · 보건교사", "비교과 · 사서교사", "비교과 · 전문상담교사", "기타 (교과 미배정)",
+    "전체 교원 기준 평균 (참고) = (교과 + 진로 + 비교과 수업 시수) ÷ 총 교사 수"]);
+  assert.equal(staffSheet[2][1].v, 12);
+  assert.equal(staffSheet[7][2].v, 10, "보건교사가 맡은 보건 1학기 10시간");
+  assert.match(staffSheet[7][5].v, /맡은 과목: 1-1 보건 10시간 · 직접 입력 0\/3시간/);
+  assert.equal(staffSheet[10][1].f, "B3-SUM(B4:B10)");
+  assert.equal(staffSheet[10][1].v, 2);
+  assert.ok(staffSheet[11][2].f.startsWith("IF(B3>0,SUM(C4:C10)/B3"));
   assert.equal(sheets[1].rows.find((row) => row[4]?.v === "보건")[6].v, "보건교사(비교과)");
   const recommendSheet = sheets.find((sheet) => sheet.name === "교사 수 추천");
   assert.ok(recommendSheet);

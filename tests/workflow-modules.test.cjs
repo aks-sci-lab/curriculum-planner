@@ -274,7 +274,8 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.equal(stats.totals.excludedHours, 22);
   assert.equal(stats.totals.creative, 64);
   const sheets = ctx.buildHoursWorkbookSheets(stats);
-  assert.equal(sheets[0].freeze, "A5");
+  assert.equal(sheets[0].freeze, "D5");
+  assert.equal(sheets[0].name, "2027 교사시수표");
   assert.ok(sheets[0].rows.some((row) => row.some((cell) => cell?.f?.includes("SUM(P"))));
   const physicsRow = sheets[1].rows.findIndex((row) => row[4]?.v === "물리학");
   assert.ok(physicsRow > 0);
@@ -284,8 +285,10 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.equal(sheets[1].rows[0][11].v, "근거 차수");
   assert.deepEqual(plain(stats.grades.map((info) => info.label)),
     ["1학년(2027 입학 · 신입생)", "2학년(2026 입학 · 현 1학년 1차 확정)", "3학년(2025 입학 · 현 2학년 결과 없음)"]);
-  const headerText = sheets[0].rows[2].map((cell) => cell.v);
-  assert.ok(headerText.includes("2학년\n(2026 입학 · 현 1학년 1차 확정)"));
+  // 원래 양식의 'N학년' 머리글에 입학연도와 근거(현 N−1학년 결과)를 붙인다.
+  const headerText = sheets[0].rows[2].map((cell) => cell?.v);
+  assert.ok(headerText.includes("2학년 (2026 입학 · 현 1학년 1차 확정)"));
+  assert.ok(headerText.includes("3학년 (2025 입학 · 현 2학년 결과 없음)"));
   assert.equal(stats.issues.some((issue) => issue.drift), false);
   drift = ["내년 2학년 학급 수(확정 명단 반 수)"];
   const drifted = ctx.computeHoursStats("2027");
@@ -525,7 +528,7 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
   answers = { prompt: "초기화", confirm: true };
   await ctx.resetWorkspaceAll();
   assert.deepEqual([...store.keys()].sort(), ["curriculum-google-pkce", "curriculum-teacher-session-v1", "other-app"]);
-  assert.equal(deletedDb, "curriculum-original-workbooks");
+  assert.equal(deletedDb, "curriculum-workspace-db", "the new workspace store is deleted too");
   assert.equal(reloaded, 1);
   assert.ok(backups >= 1, "a backup is offered first when there is unsaved work");
 });
@@ -797,6 +800,8 @@ test("automatic class adjustment saves manual class counts, skips closed courses
   assert.equal(result.problems.length, 0);
   assert.deepEqual(plain(result.changed), ["2-1 택2 13→6"], "9 (manual) + 2 + 2 recommended → 6");
   assert.deepEqual(plain(state.classOverrides), { "1:0": 2, "1:1": 2, "1:2": 2 });
+  // 조정한 그룹을 기억해 그 그룹의 총 학급수 칸에 '조정 취소'를 둔다.
+  assert.deepEqual(plain(vm.runInContext("[...aggregateAdjustUndo.groups]", ctx)), ["2학년 1학기\u00002-1 택2"]);
   assert.equal(ctx.undoAggregateClassAdjust(), true);
   assert.deepEqual(plain(state.classOverrides), { "1:0": 9 }, "undo restores the values from right before the adjustment");
   assert.equal(ctx.undoAggregateClassAdjust(), false, "only one adjustment is kept for undo");

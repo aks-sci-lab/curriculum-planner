@@ -555,7 +555,8 @@
     .curriculum-selectable-cell { cursor: crosshair; user-select: none; }
     .curriculum-selectable-cell:focus-visible { outline: 2px solid #315fce; outline-offset: -2px; }
     .curriculum-source-table td.curriculum-cell-selected { background: #dce8ff !important; box-shadow: inset 0 0 0 2px #315fce; }
-    .curriculum-change-summary { color: #825314; font-size: 11px; }
+    .curriculum-change-summary { display: inline-flex; align-items: center; gap: 4px; color: #825314; font-size: 11px; cursor: help; }
+    .curriculum-change-summary .curriculum-change-history { min-height: 22px; padding: 0 7px; font-size: 11px; cursor: pointer; }
     /* 데이터 편제표: 선택과목군은 병합 대신 묶음 테두리와 띠로 보인다. 칸 사이 가는 선은 과목마다 남긴다. */
     .curriculum-data-sheet thead.curriculum-data-head { position: sticky; top: 0; z-index: 3; }
     .curriculum-source-table tr.curriculum-data-header td { background: #edf2fa; color: #172945; font-weight: 750; }
@@ -626,6 +627,31 @@
     .curriculum-top-collapsed #curriculumMetaRow,
     .curriculum-top-collapsed #workflowStep1Panel .curriculum-workflow-help { display: none; }
     .curriculum-top-collapsed:has(#workflowStep1Panel:not(.hidden)) > .main > .workflow-readiness { display: none; }
+    /* 1단계 위쪽(학교·학년도·편제표 카드)과 편제표 표 사이 경계선 가운데의 접기·펼치기 손잡이. 경계선 어디를 눌러도 된다. */
+    .collapse-divider {
+      position: relative; display: flex; justify-content: center; align-items: center; height: 22px; margin: 6px 0 4px;
+      cursor: pointer; user-select: none;
+    }
+    .collapse-divider::before {
+      content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 2px; margin-top: -1px;
+      border-radius: 2px; background: #d5ddeb; transition: background .15s, height .15s;
+    }
+    .collapse-handle {
+      position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 22px; padding: 1px 14px 1px 10px;
+      border: 1px solid #b9c6e6; border-radius: 999px; background: #fff; color: #2f4f9a;
+      font: inherit; font-size: 12px; font-weight: 700; line-height: 1.2; cursor: pointer;
+      box-shadow: 0 1px 3px rgba(20, 40, 80, .12); transition: background .15s, border-color .15s, color .15s;
+    }
+    .collapse-handle-arrow { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #e7eeff; color: #2852ce; font-size: 9px; }
+    .collapse-divider:hover::before, .collapse-divider:focus-within::before { height: 4px; margin-top: -2px; background: #7d9be6; }
+    .collapse-divider:hover .collapse-handle, .collapse-handle:focus-visible { border-color: #3b68e8; background: #eef3ff; color: #1f3f9a; }
+    .collapse-divider:hover .collapse-handle-arrow, .collapse-handle:focus-visible .collapse-handle-arrow { background: #3b68e8; color: #fff; }
+    .collapse-handle:focus-visible { outline: 2px solid #3b68e8; outline-offset: 2px; }
+    kbd.curriculum-shortcut {
+      display: inline-block; margin-left: 4px; padding: 0 4px; border: 1px solid currentColor; border-radius: 3px;
+      font: inherit; font-size: 10px; font-weight: 600; line-height: 1.4; opacity: .75;
+    }
+    @media print { .collapse-divider { display: none; } }
     .curriculum-bundle-chip.is-linked { border-color: #6b8be0; background: #eef3ff; color: #1f3f9a; cursor: pointer; }
     .curriculum-selection-group-linked td { background: #f5f8ff; color: #44506e; }
     .course-group-card.is-linked { border-color: #9fb3ea; background: #f7f9ff; }
@@ -1745,7 +1771,7 @@
 .curriculum-office-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid #d8dee8; border-radius: 8px; }
 .curriculum-office-option:has(input:disabled) { color: #8a94a3; }
 
-/* 4단계 집계·개설 확정: 위쪽 한 줄 도구 모음, 학년 탭(요약 겸용), 한 과목 한 행 표 */
+/* 4단계 집계·개설 확정: 위쪽 한 줄 도구 모음, 학년 탭(요약 겸용), 학교 양식 집계표 */
 #aggregatePanel .aggregate-toolbar { gap: 6px 10px; margin: 0 0 4px; padding: 6px 10px; }
 .aggregate-toolbar-title { margin: 0; white-space: nowrap; }
 .aggregate-toolbar .round-confirm-state { font-weight: 700; white-space: nowrap; }
@@ -1769,39 +1795,75 @@
 .aggregate-risk-filter[aria-pressed="true"] { border-color: #b3261e; background: #fdecea; color: #8f1f18; }
 #aggregatePanel .aggregate-content { gap: 10px; }
 .aggregate-grade-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; border-bottom: 1px solid #cad5ea; background: #f7f9fe; }
-.aggregate-grade-heading { flex: 1 1 520px; margin: 0; color: #26407a; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.aggregate-grade-heading strong { font-size: 14px; }
 .aggregate-grade-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .aggregate-grade-actions .button, .aggregate-adjust-button { min-height: 28px; padding: 2px 9px; font-size: 12px; }
-#aggregatePanel .aggregate-grade .aggregate-sheet-wrap { border: 0; border-radius: 0; }
-.aggregate-course-table { width: 100%; border-collapse: collapse; color: #14233c; font-size: 12px; font-variant-numeric: tabular-nums; }
-.aggregate-course-table th, .aggregate-course-table td { height: 30px; padding: 2px 8px; border-bottom: 1px solid #e3e9f3; text-align: center; white-space: nowrap; }
-.aggregate-course-table thead th { position: sticky; top: 0; z-index: 2; background: #eef3fb; color: #2f3f60; font-weight: 700; box-shadow: 0 1px 0 #cad5ea; }
-.aggregate-course-table thead th:first-child { text-align: left; }
-.aggregate-course-table .aggregate-subject { width: 30%; min-width: 180px; color: #1f2d47; font-weight: 600; text-align: left; white-space: normal; }
-.aggregate-course-table .aggregate-subject { color: #1f2d47; }
-.aggregate-course-row.at-risk .aggregate-subject { color: #b3261e; }
-.aggregate-course-row.is-closed { background: #f6f6f8; color: #7a8295; }
-.aggregate-course-row.is-closed .aggregate-subject { text-decoration: line-through; }
-.aggregate-course-row:hover { background: #f8fbff; }
-.aggregate-enrollment-cell { width: 150px; }
-.aggregate-course-table .aggregate-enrollment { display: grid; grid-template-columns: 46px minmax(60px, 1fr); align-items: center; gap: 6px; }
-.aggregate-course-table .aggregate-enrollment-value { text-align: right; }
-.aggregate-course-table .aggregate-progress-track { height: 6px; margin: 0; }
-.aggregate-course-table .aggregate-class-input { width: 58px; height: 26px; }
-.aggregate-average.is-over { color: #b3261e; font-weight: 700; }
-.aggregate-status { text-align: left !important; }
-.aggregate-status .at-risk-badge { margin: 0 4px 0 0; }
 .closed-badge { background: #eceef3; color: #4b556a; }
 .over-badge { background: #fff0e2; color: #98500d; }
-.aggregate-ok { color: #287956; font-size: 11px; }
-.aggregate-group-row th { padding: 5px 8px; border-top: 1px solid #cad5ea; border-bottom: 1px solid #cad5ea; background: #f3f6fc; text-align: left; font-weight: 500; white-space: normal; }
-.aggregate-group-name { margin-right: 8px; color: #253f76; font-weight: 700; }
-.aggregate-group-total { margin-right: 8px; color: #33425f; font-weight: 600; }
-.aggregate-group-row[data-group-status="mismatch"] th { background: #fff6e8; }
-.aggregate-group-row[data-group-status="mismatch"] .aggregate-group-total { color: #a04a00; }
-.aggregate-group-row[data-group-status="ok"] .aggregate-group-total { color: #287956; }
-.aggregate-group-message { display: inline-block; margin-left: 8px; color: #8f1f18; font-size: 12px; }
+/* 집계표: 엑셀과 같은 학교 양식(열 너비·행 높이·병합·테두리·노란 칸). 과목명·개설 학급수·총 학급수 칸에서 바로 고친다. */
+#aggregatePanel .aggregate-grade { border-color: #d6deec; }
+#aggregatePanel .aggregate-grade .aggregate-form-wrap { max-height: none; padding: 6px 12px 14px; border: 0; border-radius: 0; overflow-x: auto; overflow-y: visible; }
+.aggregate-form-hint { flex: 1 1 320px; color: #5c6982; font-size: 12px; }
+.aggregate-form { width: 100%; min-width: 900px; table-layout: fixed; border-collapse: collapse; color: #111; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; font-variant-numeric: tabular-nums; }
+.aggregate-form td { position: relative; padding: 1px 4px; overflow: visible; line-height: 1.25; white-space: nowrap; vertical-align: middle; }
+.aggregate-form td.af-wrap { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
+.aggregate-form .af-c { text-align: center; }
+.aggregate-form .af-l { text-align: left; }
+.aggregate-form .af-r { text-align: right; }
+.aggregate-form .af-title { font-size: 24px; font-weight: 400; }
+.aggregate-form .af-semester { font-size: 19px; }
+.aggregate-form .af-bold { font-size: 13px; font-weight: 700; }
+.aggregate-form .af-body { font-size: 13px; }
+.aggregate-form .af-small { font-size: 12px; }
+.aggregate-form .af-note { color: #595959; font-size: 12px; }
+.aggregate-form .af-yellow { background: #ffff00; }
+.aggregate-form .af-off { background: #fce4d6; color: #9c0006; }
+.aggregate-form .af-group-diff { color: #9c0006; }
+.aggregate-form .af-group-ok { color: #287956; }
+.aggregate-form .af-plan-message { margin-left: 6px; color: #8f1f18; font-weight: 700; }
+/* 과목명: 누르면 개설·폐강·미정 메뉴. 미정은 빨간 글자, 기준 미달은 칸 글자색. */
+.aggregate-form .af-course { display: block; width: 100%; min-height: 100%; padding: 1px 0; border: 0; border-radius: 3px; background: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; word-break: keep-all; overflow-wrap: anywhere; cursor: pointer; }
+.aggregate-form .af-course:hover, .aggregate-form .af-course:focus-visible { background: #eaf0ff; outline: 1px solid #3b68e8; }
+.aggregate-form td.is-undecided .af-course { color: #b3261e; text-decoration: underline dotted 1px; text-underline-offset: 3px; }
+.aggregate-form td.is-risk { color: #b3261e; font-weight: 700; }
+.aggregate-form td.is-over { color: #b3261e; font-weight: 700; }
+/* 개설 학급수: 칸처럼 보이는 입력. 누르면 바로 고친다. */
+.aggregate-form .af-class-input { display: block; width: 100%; max-width: none; height: 100%; min-height: 20px; margin: 0; padding: 0 2px; border: 1px dashed transparent; border-radius: 2px; background: transparent; color: inherit; font: inherit; text-align: center; -moz-appearance: textfield; }
+.aggregate-form .af-class-input::-webkit-inner-spin-button, .aggregate-form .af-class-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.aggregate-form td:hover > .af-class-input:not(:disabled) { border-color: #8aa2d8; background: #f5f8ff; cursor: text; }
+.aggregate-form .af-class-input:focus { border: 1px solid var(--blue); background: #fff; outline: 2px solid #dce6ff; }
+.aggregate-form .af-class-input:disabled { color: inherit; opacity: 1; cursor: not-allowed; }
+/* 과목 칸 모서리의 작은 표시(기준 미달·미정·인원 초과·위계 경고). 누르면 설명 메뉴·학생 목록 팝업. */
+.aggregate-form .af-corner { position: absolute; top: 50%; transform: translateY(-50%); display: inline-flex; line-height: 1; }
+.aggregate-form .af-corner-left { left: 2px; }
+.aggregate-form .af-corner-right { right: 2px; }
+.aggregate-form .af-tag, .aggregate-form .af-corner .prereq-badge { padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; background: #fff; font: inherit; font-size: 10px; font-weight: 700; line-height: 1.3; white-space: nowrap; cursor: pointer; }
+.aggregate-form .af-tag.is-risk, .aggregate-form .af-tag.is-undecided { border-color: #f1b7ae; background: #fdecea; color: #a3261c; }
+.aggregate-form .af-tag.is-over { border-color: #f0c28f; background: #fff0e2; color: #98500d; }
+.aggregate-form .af-corner .prereq-badge { margin: 0; border-color: #d4b7ef; background: #f6efff; color: #6a2ca3; }
+/* 총 학급수 칸: 값, 목표, 목표와 다를 때만 '학급수 자동 조정', 조정한 뒤에는 '조정 취소'. */
+.aggregate-form .af-total-value { display: block; font-size: 15px; }
+.aggregate-form .af-total-target { display: block; margin-top: 2px; font-size: 11px; font-weight: 500; }
+.aggregate-form .af-mini-button { display: block; max-width: 100%; margin: 5px auto 0; padding: 2px 5px; border: 1px solid #b8c4d8; border-radius: 4px; background: #fff; color: #244ba0; font: inherit; font-size: 11px; font-weight: 700; line-height: 1.3; white-space: normal; cursor: pointer; }
+.aggregate-form .af-mini-button > span { display: inline-block; white-space: nowrap; }
+.aggregate-form .af-mini-button:hover:not(:disabled) { border-color: #3b68e8; background: #eaf0ff; }
+.aggregate-form .af-mini-button:disabled { color: #8a94a3; cursor: not-allowed; }
+/* 처리할 것만: 처리할 과목 열·그룹은 강조, 나머지 과목은 흐리게(그룹은 처리할 것이 있는 것만 남긴다). */
+.aggregate-form.is-attention-mode td.is-dimmed { color: #9aa3b2; }
+.aggregate-form.is-attention-mode td.is-dimmed .af-course { color: #9aa3b2; }
+.aggregate-form td.is-attention { box-shadow: inset 0 0 0 999px rgba(255, 196, 0, .16); }
+.aggregate-form td.af-off.is-attention { box-shadow: inset 0 0 0 2px #e07a16; }
+.aggregate-course-menu { position: absolute; z-index: 60; width: 290px; padding: 10px 12px; border: 1px solid #b9c6dd; border-radius: 10px; background: #fff; box-shadow: 0 10px 28px rgba(22, 39, 77, .18); color: #1f2d47; font-size: 12px; }
+.aggregate-course-menu[hidden] { display: none; }
+.aggregate-course-menu-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 13px; }
+.aggregate-course-menu-close { padding: 0 4px; border: 0; background: none; color: #5c6982; font-size: 16px; line-height: 1; cursor: pointer; }
+.aggregate-course-menu-status { margin: 6px 0 8px; padding-left: 16px; color: #46546e; line-height: 1.5; }
+.aggregate-course-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.aggregate-course-choice { min-height: 30px; border: 1px solid #c9d3e6; border-radius: 6px; background: #fff; color: #33425f; font: inherit; font-weight: 700; cursor: pointer; }
+.aggregate-course-choice[aria-pressed="true"] { border-color: #3b68e8; background: #eaf0ff; color: #244ba0; box-shadow: inset 0 0 0 1px #3b68e8; }
+.aggregate-course-choice.is-closed[aria-pressed="true"] { border-color: #b39b00; background: #ffff00; color: #3d3300; box-shadow: inset 0 0 0 1px #b39b00; }
+.aggregate-course-choice:disabled { color: #8a94a3; cursor: not-allowed; }
+.aggregate-course-menu-note { margin: 8px 0 0; color: #6a7489; font-size: 11px; line-height: 1.5; }
+.aggregate-course-menu-prereq { width: 100%; min-height: 30px; margin-top: 8px; font-size: 12px; }
 .aggregate-fold-panel { padding-top: 4px; padding-bottom: 4px; }
 .aggregate-fold > summary { display: flex; align-items: center; gap: 10px; padding: 6px 8px; cursor: pointer; list-style: none; }
 .aggregate-fold > summary::-webkit-details-marker { display: none; }
@@ -1848,6 +1910,35 @@
 .hours-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
 .hours-heading h3 { margin: 0; }
 .hours-heading .hours-toolbar { margin: 0; }
+/* 5단계 시수표: 학교 교과별 시수표(원래 양식)와 같은 행·열·병합·색. 칸 종류별 글꼴·채움은 hours-stats.js가 만든다(style[data-hours-form-styles]). */
+.hours-table-tools .hours-note { flex: 1 1 320px; color: #4b5872; font-size: 12px; }
+.hours-legend-red { color: #e00000; font-weight: 700; }
+.hours-zero-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.hours-form-wrap { margin-top: 6px; overflow: auto; }
+.hours-form { border-collapse: collapse; table-layout: fixed; width: max-content; color: #111; font-family: "맑은 고딕", "Malgun Gothic", sans-serif; font-size: 12px; background: #fff; }
+.hours-form td { height: 21px; padding: 1px 2px; border: 0; text-align: center; vertical-align: middle; white-space: pre-line; line-height: 1.2; overflow: hidden; overflow-wrap: anywhere; }
+.hours-form .hf-title-row td { padding: 3px 4px; border: 0; }
+.hours-form .hf-summary-row td { height: 46px; }
+/* 원래 양식의 틀 고정(D5)처럼 표 안에서 내려도 3·4행 머리글이 위에 남는다. */
+.hours-form .hf-head-row td { position: sticky; z-index: 2; box-shadow: inset 0 -1px 0 #4a5464; }
+.hours-form .hf-head-top td { top: 0; height: 34px; }
+.hours-form .hf-head-bottom td { top: 36px; }
+.hours-form td.hb-lm { border-left: 2px solid #1f2733; } .hours-form td.hb-lt { border-left: 1px solid #4a5464; } .hours-form td.hb-lh { border-left: 1px solid #b9c2cf; }
+.hours-form td.hb-rm { border-right: 2px solid #1f2733; } .hours-form td.hb-rt { border-right: 1px solid #4a5464; } .hours-form td.hb-rh { border-right: 1px solid #b9c2cf; }
+.hours-form td.hb-tm { border-top: 2px solid #1f2733; } .hours-form td.hb-tt { border-top: 1px solid #4a5464; } .hours-form td.hb-th { border-top: 1px solid #b9c2cf; }
+.hours-form td.hb-bm { border-bottom: 2px solid #1f2733; } .hours-form td.hb-bt { border-bottom: 1px solid #4a5464; } .hours-form td.hb-bh { border-bottom: 1px solid #b9c2cf; }
+.hours-form .hf-input { box-sizing: border-box; width: 100%; min-width: 0; height: 22px; margin: 0; padding: 0 2px; border: 1px solid rgba(60, 80, 110, .28); border-radius: 3px; background: rgba(255, 255, 255, .92); color: inherit; font: inherit; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.hours-form .hf-input::-webkit-outer-spin-button, .hours-form .hf-input::-webkit-inner-spin-button { margin: 0; -webkit-appearance: none; }
+.hours-form .hf-input:hover { border-color: #6b84ad; }
+.hours-form .hf-input:focus { border-color: #2852ce; outline: 2px solid rgba(40, 82, 206, .25); outline-offset: 0; }
+.hours-form .hf-input.is-manual { background: #fff3c4; border-style: dashed; }
+.hours-form .hf-input.is-zero { color: #8a93a3; }
+.hours-form .hf-memo .hf-input, .hours-form td.hf-memo { text-align: left; }
+.hours-form .hf-s .hf-input { height: 28px; font-size: 15px; font-weight: 700; }
+.hours-form td.hf-box { padding: 4px 8px; text-align: left; vertical-align: top; white-space: normal; }
+.hours-form .hf-memo-fixed { white-space: pre-line; font-weight: 700; line-height: 1.35; }
+.hours-form .hf-textarea { display: block; width: 100%; height: auto; min-height: 44px; margin-top: 4px; padding: 3px 5px; text-align: left; font-weight: 700; line-height: 1.35; resize: vertical; white-space: pre-wrap; }
+.hours-form .hf-memo-reset { min-height: 22px; margin-top: 3px; padding: 1px 8px; font-size: 11px; }
 
 /* 위계(선이수)·이수학점 점검 (course-checks.js) */
 .course-check-dialog { width: min(880px, calc(100vw - 24px)); }
@@ -2104,3 +2195,46 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 .curriculum-source-table.is-original-form tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: none; }
 .curriculum-source-table.is-original-form.show-plan-marks tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: inset 3px 0 0 #e0a43a; }
 .curriculum-source-table.is-original-form td.curriculum-cell-selected { background: #dce8ff !important; box-shadow: inset 0 0 0 2px #315fce; }
+/* 웹 화면(띠 방식, curriculum-data-view.js): 행 메뉴(⋯)는 열을 따로 두지 않고 과목명 칸에 마우스를 올렸을 때만, 추가 행 표시는 점검 표시를 켰을 때만 */
+.curriculum-source-table.is-band-form td.curriculum-subject-cell { position: relative; padding-right: 26px; }
+.curriculum-source-table.is-band-form .curriculum-row-menu-button {
+  position: absolute; top: 50%; right: 2px; width: 22px; height: 20px; margin-top: -10px; font-size: 12px; line-height: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .12s;
+}
+.curriculum-source-table.is-band-form tr.curriculum-data-row:hover .curriculum-row-menu-button,
+.curriculum-source-table.is-band-form .curriculum-row-menu-button:focus-visible { opacity: 1; pointer-events: auto; }
+.curriculum-source-table.is-band-form tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: none; }
+.curriculum-source-table.is-band-form.show-plan-marks tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: inset 3px 0 0 #e0a43a; }
+
+/* 화면 맨 위 공통 머리 줄(workspace-header.js): 저장 상태는 문제가 있을 때만 눈에 띄게, 백업 시각은 오래됐을 때만,
+   아래로 스크롤하거나 손잡이로 접으면 얇은 띠(결과 차수·⚙ 설정·☰ 자료 관리 아이콘)로. 경계선 손잡이는 1단계 위쪽 접기와 같은 모양. */
+.workspace-context[data-save-state="ok"] #workspaceSaveStatus { font-size: 0 !important; color: #356348; cursor: help; }
+.workspace-context[data-save-state="ok"] #workspaceSaveStatus::before { content: "● 저장됨"; font-size: 12px; }
+.workspace-context[data-save-state="busy"] #workspaceSaveStatus { color: #596780; font-size: 12px; }
+.workspace-context[data-save-state="failed"] #workspaceSaveStatus { padding: 2px 8px; border-radius: 999px; background: #fdebe7; color: #a44939 !important; font-weight: 700; }
+.workspace-context[data-save-state="failed"] #workspaceSaveStatus::before { content: "⚠ "; }
+#workspaceBackupStatus:not(.is-stale) { display: none; }
+.workspace-context { position: relative; }
+.workspace-context > .workspace-context-divider { grid-column: 1 / -1; height: 16px; margin: 2px 0 -4px; }
+.workspace-context-divider .collapse-handle { min-height: 18px; padding: 0 10px 0 6px; font-size: 11px; }
+.workspace-context-divider .collapse-handle-arrow { width: 14px; height: 14px; font-size: 8px; }
+.workspace-context.is-compact { display: flex !important; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; min-height: 30px; padding: 2px 10px !important; }
+.workspace-context.is-compact > * { position: relative; z-index: 1; }
+.workspace-context.is-compact > .workspace-context-divider { position: absolute; inset: 0 10px; z-index: 0; height: auto; margin: 0; justify-content: flex-start; padding-left: 72px; }
+.workspace-context.is-compact > .storage-warning { display: none; }
+.workspace-context.is-compact .workspace-context-heading { flex: 0 0 auto; margin-right: auto; background: #fff; }
+.workspace-context.is-compact #workspaceContextSummary { display: none; }
+.workspace-context.is-compact .workspace-round-control { gap: 0; font-size: 0; }
+.workspace-context.is-compact .workspace-round-control select { min-height: 24px !important; padding: 1px 6px !important; font-size: 12px; }
+.workspace-context.is-compact .workspace-settings { background: #fff; }
+.workspace-context.is-compact .workspace-settings-button { font-size: 0; }
+.workspace-context.is-compact .workspace-settings-button::before { content: "⚙"; font-size: 15px; }
+.workspace-context.is-compact .workspace-storage { flex-wrap: nowrap; gap: 6px; background: #fff; }
+.workspace-context.is-compact .workspace-storage > span { margin-right: 0; }
+.workspace-context.is-compact #workspaceFileStatus:not(.is-warning) { display: none; }
+.workspace-context.is-compact[data-save-state="failed"] #workspaceSaveStatus { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-context.is-compact .workspace-data-menu > summary { min-height: 24px !important; padding: 1px 8px !important; font-size: 0 !important; }
+.workspace-context.is-compact .workspace-data-menu > summary::before { content: "☰"; font-size: 14px; }
+.workspace-context.is-compact .workspace-data-menu > summary::after { content: ""; }
+.workspace-context.is-compact .workspace-storage .button { min-height: 24px !important; padding: 1px 8px !important; }
+@media print { .workspace-context-divider { display: none; } }

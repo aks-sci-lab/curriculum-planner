@@ -61,6 +61,54 @@
     let statePersistenceTimer = null;
     let statePersistenceSuppressed = 0;
     let statePersistenceReady = false;
+    // state가 바뀔 때마다(프록시 set/delete) 1씩 오른다. 같은 자료로 반복되는 계산은 이 값이 같을 때만 캐시를 쓴다.
+    let stateRevision = 0;
+    let stateViewOnlyDirty = false;
+    const stateRevisionCaches = new Map();
+    // 화면 위치만 바꾸는 값(단계·고른 학생·선택 칸 등)은 계산 결과를 바꾸지 않으므로 revision을 올리지 않는다(단계를 오갈 때 캐시가 살아 있게).
+    // 캐시하는 계산이 이 값에 기대면 cachedByStateRevision의 key에 넣을 것.
+    const STATE_VIEW_ONLY_KEYS = new Set(["workflowStep", "selectedId", "applicationMenuGrade", "curriculumTopCollapsed", "curriculumShowMarks",
+      "curriculumSelectedRow", "curriculumSelectedColumn", "selectedCourseColumns", "lastSelectedCourseColumn"]);
+
+    // 자료(state)·학년도가 그대로면 이전 계산 결과를 돌려준다. key에는 state 밖의 입력(학년도 칸 값, 인수)을 넣는다.
+    // state를 거치지 않고 바꾸는 자료(예: localStorage의 선택 그룹)에 기대는 계산에는 쓰지 말 것. 강제로 비우려면 invalidateStateCaches().
+    function cachedByStateRevision(name, key, compute) {
+      let entry = stateRevisionCaches.get(name);
+      if (!entry || entry.revision !== stateRevision) {
+        entry = { revision: stateRevision, values: new Map() };
+        stateRevisionCaches.set(name, entry);
+      }
+      const cacheKey = String(key);
+      if (entry.values.has(cacheKey)) return entry.values.get(cacheKey);
+      const value = compute();
+      // 계산하는 동안 state가 바뀌었으면(정리용 쓰기 등) 바뀐 뒤의 자료로 다시 계산하도록 저장하지 않는다.
+      if (entry.revision === stateRevision) entry.values.set(cacheKey, value);
+      return value;
+    }
+
+    // 곧바로 저장하지 않고 200ms 뒤 한 번에 저장(여러 변경을 묶음). 창을 닫거나 숨길 때는 즉시 저장된다.
+    // 4MB 자료를 매번 직렬화하면 100ms 넘게 걸리므로 화면 조작 처리기에서는 persistState() 대신 이것을 쓴다.
+    function persistStateSoon({ viewOnly = false } = {}) {
+      if (viewOnly) {
+        stateViewOnlyDirty = true;
+        return;
+      }
+      scheduleStatePersistence();
+    }
+
+    function invalidateStateCaches() {
+      stateRevision++;
+    }
+
+    // 프록시를 벗긴 원래 객체. 읽기만 하는 큰 반복·JSON 직렬화에서 프록시 비용을 피할 때 쓴다(여기에 쓰면 저장이 예약되지 않는다).
+    function stateRawValue(value) {
+      return (value && typeof value === "object" && stateRawTargets.get(value)) || value;
+    }
+
+    // JSON.stringify(값, stateJsonReplacer): 안쪽에 섞인 프록시도 원래 객체로 바꿔 직렬화(4MB 자료에서 약 3배 빠름).
+    function stateJsonReplacer(key, value) {
+      return (value && typeof value === "object" && stateRawTargets.get(value)) || value;
+    }
 
     function scheduleStatePersistence() {
       if (!statePersistenceReady || statePersistenceSuppressed || statePersistenceTimer !== null) return;
@@ -72,10 +120,12 @@
 
     function observeState(value) {
       if (!value || typeof value !== "object") return value;
+      // 자주 읽는 경로가 먼저: 이미 만든 프록시면 바로 돌려준다(학생·과목 반복에서 읽을 때마다 거치므로).
+      const cached = stateProxyCache.get(value);
+      if (cached) return cached;
       if (stateRawTargets.has(value)) return value;
       const prototype = Object.getPrototypeOf(value);
       if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
-      if (stateProxyCache.has(value)) return stateProxyCache.get(value);
       const proxy = new Proxy(value, {
         get(target, property, receiver) {
           return observeState(Reflect.get(target, property, receiver));
@@ -84,13 +134,23 @@
           const rawValue = stateRawTargets.get(nextValue) || nextValue;
           if (Object.is(target[property], rawValue)) return true;
           const updated = Reflect.set(target, property, rawValue, receiver);
-          if (updated) scheduleStatePersistence();
+          if (updated) {
+            // 단계·고른 학생 같은 화면 위치만 바뀌면 4MB를 다시 저장하지 않고, 다음 저장·창 닫기·숨기기 때 함께 저장한다.
+            if (target === rawState && STATE_VIEW_ONLY_KEYS.has(property)) stateViewOnlyDirty = true;
+            else {
+              stateRevision++;
+              scheduleStatePersistence();
+            }
+          }
           return updated;
         },
         deleteProperty(target, property) {
           if (!Object.hasOwn(target, property)) return true;
           const deleted = Reflect.deleteProperty(target, property);
-          if (deleted) scheduleStatePersistence();
+          if (deleted) {
+            stateRevision++;
+            scheduleStatePersistence();
+          }
           return deleted;
         }
       });
@@ -109,6 +169,15 @@
     let protectedStoredState = null;
     let workspaceSaveFailed = false;
     let lastSavedWorkspace = null;
+    // 새 저장소(IndexedDB, workspace-store.js) 상태. active: 이번 창이 새 저장소에 저장하는지(아니면 예전처럼 localStorage에 전체 자료)
+    // rev: 마지막으로 읽거나 쓴 저장 번호(다른 창 충돌 확인) · known: 저장소에 있는 조각 · cache: 지난번 나눈 결과
+    // lastCore: 마지막으로 저장(예약)한 본문 · pending/writing: 쓰기 대기·진행 · force: 다음 쓰기는 번호 확인 없이 모두 다시 씀(저장 재개)
+    // migrate: 예전 localStorage 자료를 읽었으니 시작 후 옮김. 이때 lastSavedWorkspace는 localStorage의 작은 기록이다.
+    const workspaceStoreState = { active: false, rev: "", known: new Set(), cache: new Map(), lastCore: null,
+      pending: null, writing: null, force: false, migrate: false, boot: null };
+    let resolveWorkspaceStartup = null;
+    // 저장 자료를 모두 읽은 뒤(새 저장소 읽기·옮기기 포함) 풀린다. PC 파일 자동 저장은 이것을 기다린 뒤 파일과 비교한다.
+    const workspaceStartupReady = new Promise((resolve) => { resolveWorkspaceStartup = resolve; });
     let curriculumSearchTimer = null;
     let curriculumImportRevision = 0;
     const $ = (selector) => document.querySelector(selector);
@@ -320,9 +389,10 @@
       const warning = $("#workspaceStorageWarning");
       warning.classList.toggle("hidden", !failed);
       warning.textContent = failed
-        ? `${message}. 새로고침하거나 창을 닫기 전에 작업 자료를 백업하세요. 원본 엑셀은 별도로 보관해야 합니다.`
+        ? `${message}. 새로고침하거나 창을 닫기 전에 작업 자료를 백업하세요('백업 내려받기'). 원본 엑셀은 별도로 보관해야 합니다.`
         : "";
       $("#retryWorkspaceSave").classList.toggle("hidden", !failed);
+      $("#workspaceFailureBackup")?.classList.toggle("hidden", !failed);
       $("#resumeWorkspaceSave").classList.toggle("hidden", !statePersistenceBlocked);
     }
 
@@ -400,7 +470,12 @@
           statePersistenceSuppressed--;
         }
         if (!$("#schoolYear").checkValidity()) throw new Error("학년도에 2000~2100 사이의 정수를 입력하세요.");
-        const serialized = JSON.stringify(workspacePayload());
+        // 화면 위치만 바뀐 값(stateViewOnlyDirty)도 이번 저장에 함께 들어간다.
+        if (typeof stateViewOnlyDirty === "boolean") stateViewOnlyDirty = false;
+        // 새 저장소(IndexedDB)를 쓰면 큰 자료는 그쪽에 조각별로, localStorage에는 작은 기록만 쓴다(workspace-store.js).
+        // persistStateSoon(묶음 저장)도 200ms 뒤 여기를 거치므로 같은 저장 계층을 탄다.
+        if (workspaceStoreState.active) return persistWorkspaceToStore(workspacePayload());
+        const serialized = JSON.stringify(workspacePayload(), typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined);
         if (serialized !== lastSavedWorkspace) {
           const stored = localStorage.getItem(STORAGE_KEY);
           if (stored !== lastSavedWorkspace) {
@@ -429,6 +504,302 @@
       } catch (error) {
         updateWorkspaceSaveStatus(`자동 저장 실패: ${error.message}`, true);
         return false;
+      }
+    }
+
+    // ---- 새 저장소(IndexedDB, workspace-store.js) 연결 ----
+    function readWorkspaceRecord() {
+      try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
+    }
+
+    // localStorage에 작은 기록을 쓴다. 예전 큰 자료가 차 있어 쓰지 못하면 지우고 다시 쓴다. 실패해도 자료는 IndexedDB에 있다.
+    function writeWorkspaceStoreRecord(record) {
+      try {
+        localStorage.setItem(STORAGE_KEY, record);
+      } catch {
+        try { localStorage.removeItem(STORAGE_KEY); localStorage.setItem(STORAGE_KEY, record); } catch { /* 다른 창 알림만 늦어진다. */ }
+      }
+      lastSavedWorkspace = readWorkspaceRecord();
+    }
+
+    function workspaceStoreFailureReason(error) {
+      return error?.name === "QuotaExceededError" || /quota/i.test(error?.message || "")
+        ? "브라우저 저장 공간이 부족합니다(용량 초과)"
+        : error?.message || "브라우저 저장소에 쓰지 못했습니다";
+    }
+
+    // persistState가 저장의 단일 진입점이다(묶음 저장도 결국 persistState를 부른다). 직렬화 규칙(stateJsonReplacer)이 있으면 그대로 따른다.
+    function persistWorkspaceToStore(payload) {
+      const replacer = typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined;
+      const split = workspaceStoreSplit(payload, workspaceStoreState.cache, replacer);
+      if (split.core === workspaceStoreState.lastCore) {
+        if (!workspaceStoreState.writing && !workspaceSaveFailed) updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        return true;
+      }
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!workspaceStoreState.force && stored !== lastSavedWorkspace) {
+        statePersistenceBlocked = true;
+        protectedStoredState = stored;
+        throw new Error("다른 창의 저장 자료가 변경되어 덮어쓰기를 중지했습니다.");
+      }
+      workspaceStoreState.cache = split.cache;
+      workspaceStoreState.lastCore = split.core;
+      workspaceStoreState.pending = { split, startupFlush: workspaceStartupFlush };
+      if (!workspaceStoreState.writing) {
+        workspaceStoreState.writing = flushWorkspaceStore().finally(() => { workspaceStoreState.writing = null; });
+      }
+      return true;
+    }
+
+    // 예약된 저장을 차례로 IndexedDB에 쓴다. 쓰는 동안 또 바뀌면 마지막 것만 이어서 쓴다.
+    async function flushWorkspaceStore() {
+      while (workspaceStoreState.pending) {
+        const job = workspaceStoreState.pending;
+        workspaceStoreState.pending = null;
+        try {
+          const result = await workspaceStoreWrite(job.split, {
+            expectedRev: workspaceStoreState.rev, known: workspaceStoreState.known, force: workspaceStoreState.force
+          });
+          workspaceStoreState.force = false;
+          workspaceStoreState.rev = result.rev;
+          workspaceStoreState.known = result.known;
+          writeWorkspaceStoreRecord(workspaceStoreRecord(job.split.core, result.rev, result.savedAt));
+          if (!job.startupFlush) {
+            try { localStorage.setItem(WORKSPACE_SAVED_AT_KEY, String(Date.now())); } catch { /* 시각 기록은 비교용이다. */ }
+          }
+          if (typeof scheduleWorkspaceFileSave === "function") scheduleWorkspaceFileSave();
+          if (!workspaceStoreState.pending) {
+            updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+            renderWorkspaceStorageUsage();
+          }
+        } catch (error) {
+          workspaceStoreState.pending = null;
+          workspaceStoreState.lastCore = null;
+          if (error?.name === "WorkspaceStoreConflict") {
+            statePersistenceBlocked = true;
+            protectedStoredState = readWorkspaceRecord();
+            updateWorkspaceSaveStatus(`자동 저장 실패: ${error.message}`, true);
+          } else {
+            // 브라우저 저장소가 가득 차도 연결된 PC 파일에는 지금 자료를 저장해 둔다.
+            const fileName = typeof scheduleWorkspaceFileSave === "function" ? scheduleWorkspaceFileSave() : "";
+            const reason = workspaceStoreFailureReason(error);
+            updateWorkspaceSaveStatus(`자동 저장 실패: ${fileName ? `${reason} · PC 파일 '${fileName}'에는 저장을 시도합니다` : reason}`, true);
+            renderWorkspaceStorageUsage();
+          }
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function workspaceStoreBusy() {
+      return Boolean(workspaceStoreState.writing || workspaceStoreState.pending);
+    }
+
+    // 시작할 때 저장 자료를 어디서 읽을지 정한다. null이면 예전처럼 localStorage 전체 자료를 바로 읽는다
+    // (그 자료는 시작이 끝난 뒤 새 저장소로 옮긴다). 아니면 IndexedDB를 읽기 시작하고, 읽는 동안 화면을 맞출 작은 설정을 돌려준다.
+    function beginWorkspaceStoreBoot() {
+      if (typeof workspaceStoreSupported !== "function" || !workspaceStoreSupported()) return null;
+      let raw;
+      try { raw = localStorage.getItem(STORAGE_KEY); } catch { return null; }
+      const record = workspaceStoreParseRecord(raw);
+      if (raw && !record) {
+        workspaceStoreState.migrate = true;
+        return null;
+      }
+      workspaceStoreState.boot = workspaceStoreRead();
+      workspaceStoreState.boot.catch(() => {});
+      let settingsRaw;
+      try { settingsRaw = record ? workspaceStoreSettingsRaw(record.core) : undefined; } catch { settingsRaw = undefined; }
+      return { record: raw, settingsRaw };
+    }
+
+    // IndexedDB에서 읽은 자료로 화면을 다시 만든다. 성공하면 true(검증 실패면 원본 보호 상태가 된다).
+    // hold: 시작할 때처럼 곧이어 renderWorkflowLayout이 그리면 복원 중 단계 그리기를 미룬다(view-keep.js holdStepRenders).
+    function applyStoredWorkspace(loaded, { hold = false } = {}) {
+      statePersistenceSuppressed++;
+      // 복원하며 그리는 동안 선택 그룹 등이 '원본 보호 중'으로 막히지 않게 한다(저장 예약은 statePersistenceSuppressed가 막는다).
+      statePersistenceReady = true;
+      statePersistenceBlocked = false;
+      try {
+        // 선택 그룹은 저장 자료를 읽기 전(빈 편제표)에 정리됐을 수 있어 이 학년도 설정을 먼저 다시 읽는다.
+        if (typeof reloadApplicationGroupData === "function") reloadApplicationGroupData(false);
+        const restore = () => restorePersistedState(loaded.raw);
+        if (hold && typeof holdStepRenders === "function") holdStepRenders(restore);
+        else restore();
+        if (!statePersistenceBlocked && typeof switchApplicationMenuGrade === "function") switchApplicationMenuGrade(state.applicationMenuGrade);
+      } finally {
+        statePersistenceSuppressed--;
+      }
+      if (statePersistenceBlocked) return false;
+      workspaceStoreState.active = true;
+      workspaceStoreState.rev = loaded.rev;
+      workspaceStoreState.known = loaded.known;
+      workspaceStoreState.lastCore = loaded.core;
+      const record = workspaceStoreParseRecord(readWorkspaceRecord());
+      if (record?.workspaceStore?.rev !== loaded.rev) writeWorkspaceStoreRecord(workspaceStoreRecord(loaded.core, loaded.rev, loaded.savedAt));
+      else lastSavedWorkspace = readWorkspaceRecord();
+      return true;
+    }
+
+    async function completeWorkspaceStoreBoot(boot) {
+      let loaded = null;
+      let failure = null;
+      try { loaded = await workspaceStoreState.boot; } catch (error) { failure = error; }
+      workspaceStoreState.boot = null;
+      // 다른 모듈의 시작 처리(DOMContentLoaded)가 모두 끝난 뒤 자료를 넣는다.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      if (failure && !boot.record) {
+        // 저장한 적이 없는데 IndexedDB를 열 수 없는 브라우저(사생활 보호 창 등): 예전처럼 localStorage에 저장한다.
+        updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        return;
+      }
+      if (failure || (!loaded && boot.record)) {
+        statePersistenceBlocked = true;
+        protectedStoredState = boot.record;
+        const reason = failure ? failure.message
+          : "새 저장소(IndexedDB)에서 작업 자료를 찾지 못했습니다. 브라우저의 사이트 데이터가 지워졌을 수 있습니다. 백업 파일이나 PC 파일에서 불러오세요";
+        updateWorkspaceSaveStatus(`복원 실패 · 기존 저장 원본 보호 중: ${reason}`, true);
+        return;
+      }
+      workspaceStoreState.active = true;
+      if (!loaded) {
+        // 처음 쓰는 브라우저(또는 전체 초기화 직후): 빈 자료로 시작한다.
+        workspaceStoreState.rev = "";
+        lastSavedWorkspace = readWorkspaceRecord();
+        updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        return;
+      }
+      applyStoredWorkspace(loaded, { hold: true });
+    }
+
+    // 저장·복원 재시도: 이 창의 미저장 변경 대신 새 저장소의 자료를 다시 읽는다.
+    async function reloadWorkspaceFromStore() {
+      let loaded;
+      try {
+        loaded = await workspaceStoreRead();
+      } catch (error) {
+        updateWorkspaceSaveStatus(`저장 원본 읽기 실패: ${error.message}`, true);
+        return false;
+      }
+      if (!loaded) {
+        updateWorkspaceSaveStatus("저장 원본 읽기 실패: 새 저장소에 작업 자료가 없습니다", true);
+        return false;
+      }
+      return applyStoredWorkspace(loaded);
+    }
+
+    // 예전 localStorage 자료를 새 저장소로 옮긴다. IndexedDB에 다 쓰고 다시 읽어 같은지 확인한 뒤에만 localStorage의 큰 자료를 작은 기록으로 바꾼다.
+    async function migrateLegacyWorkspace() {
+      workspaceStoreState.migrate = false;
+      if (statePersistenceBlocked || typeof workspaceStoreWrite !== "function") return false;
+      const localBefore = (readWorkspaceRecord() || "").length;
+      if (statePersistenceTimer !== null) {
+        window.clearTimeout(statePersistenceTimer);
+        statePersistenceTimer = null;
+      }
+      let payload;
+      statePersistenceSuppressed++;
+      try {
+        syncActiveRound();
+        syncActiveCurriculumCohort();
+        payload = workspacePayload();
+      } finally {
+        statePersistenceSuppressed--;
+      }
+      const replacer = typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined;
+      const expected = JSON.stringify(payload, replacer);
+      try {
+        const split = workspaceStoreSplit(payload, new Map(), replacer);
+        const result = await workspaceStoreWrite(split, { force: true });
+        const check = await workspaceStoreRead();
+        if (check?.raw !== expected) throw new Error("옮긴 자료를 다시 읽어 보니 원래 자료와 달랐습니다");
+        if (statePersistenceBlocked) return false;
+        workspaceStoreState.active = true;
+        workspaceStoreState.rev = result.rev;
+        workspaceStoreState.known = result.known;
+        workspaceStoreState.cache = split.cache;
+        workspaceStoreState.lastCore = split.core;
+        writeWorkspaceStoreRecord(workspaceStoreRecord(split.core, result.rev, result.savedAt));
+      } catch (error) {
+        workspaceStoreState.active = false;
+        showAppToast(`작업 자료를 새 저장소로 옮기지 못했습니다(${workspaceStoreFailureReason(error)}). 예전 저장 자료는 그대로 둡니다. 백업 파일을 받아 두세요.`, "error");
+        return false;
+      }
+      // 옮기는 동안 바뀐 내용이 있으면 이어서 저장한다.
+      persistState();
+      // 예전 저장소가 거의 찼다면 마지막 변경 일부가 저장되지 못했을 수 있다(용량 초과로 메모리에만 있던 자료).
+      if (localBefore >= WORKSPACE_LOCAL_LIMIT * 0.85) {
+        status.style.color = "#a44939";
+        status.textContent = "브라우저에 마지막으로 저장된 자료를 새 저장소로 옮겼습니다. 업데이트 전에 '자동 저장 실패(용량 초과)'가 났다면 그 뒤의 작업은 빠져 있을 수 있으니, 그때 받은 백업 파일이나 PC 자동 저장 파일을 '자료 관리 ▾'에서 불러오세요.";
+      }
+      showAppToast("작업 자료를 새 저장소(IndexedDB)로 옮겼습니다. 이제 용량 걱정 없이 저장됩니다.");
+      return true;
+    }
+
+    // 시작할 때 첫 화면을 그린 뒤 쉬는 시간에 할 일(정리용 저장·옮기기·원본 재변환·캐시 미리 계산).
+    function afterWorkspaceFirstPaint(task) {
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(task, { timeout: 1500 });
+      else window.setTimeout(task, 300);
+    }
+
+    // 시작 마무리: 다른 모듈이 모두 로드된 뒤 한 번 더 그리고, 새 저장소 읽기·옮기기를 끝낸다.
+    async function finishWorkspaceStartup(boot) {
+      try {
+        if (boot) await completeWorkspaceStoreBoot(boot);
+        if (boot) {
+          $("#teacherWorkspace").inert = false;
+          $("#teacherWorkspace").removeAttribute("aria-busy");
+        }
+        refreshCurriculumDerivedPlans();
+        // 보이는 단계만 그린다(집계는 4단계일 때 renderWorkflowLayout이 그림). 첫 화면이라 스크롤 보존은 건너뜀.
+        if (typeof withoutViewKeep === "function") withoutViewKeep(renderWorkflowLayout);
+        else renderWorkflowLayout();
+        if (boot) statePersistenceReady = true;
+        if (workspaceStoreState.migrate) {
+          // 예전 localStorage 자료를 새 저장소로 옮기기(4MB 직렬화·비교)는 첫 화면을 그린 뒤에 한다.
+          await new Promise((resolve) => afterWorkspaceFirstPaint(resolve));
+          await migrateLegacyWorkspace();
+        } else if (statePersistenceTimer !== null) {
+          // 예약된 200ms 저장 대신 첫 화면 뒤에 '시작 정리용'으로 한 번 저장한다(저장 시각은 바꾸지 않음).
+          window.clearTimeout(statePersistenceTimer);
+          statePersistenceTimer = null;
+          let userChanged = false;
+          const markUserChange = () => { userChanged = true; };
+          for (const type of ["input", "change", "drop"]) document.addEventListener(type, markUserChange, { capture: true, once: true });
+          afterWorkspaceFirstPaint(() => {
+            for (const type of ["input", "change", "drop"]) document.removeEventListener(type, markUserChange, { capture: true });
+            // 그 사이 사용자가 고쳤으면 보통 저장(저장 시각 갱신)이 이미 예약·실행되었으므로 시작 정리용 표시를 붙이지 않는다.
+            if (userChanged) { if (statePersistenceTimer !== null) persistState(); return; }
+            workspaceStartupFlush = true;
+            try { persistState(); } finally { workspaceStartupFlush = false; }
+          });
+        }
+        // 다른 단계를 처음 열 때 걸리는 큰 계산(위계 점검·신청 과목)을 쉬는 시간에 미리 해 둔다(같은 자료면 캐시를 씀).
+        afterWorkspaceFirstPaint(() => warmWorkflowCaches(afterWorkspaceFirstPaint));
+        // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js). 변환기 버전이 낮을 때만 돈다.
+        if (typeof reconvertCurriculumOriginals === "function") afterWorkspaceFirstPaint(() => reconvertCurriculumOriginals({ startup: true }).catch(() => {}));
+        afterWorkspaceFirstPaint(() => renderWorkspaceStorageUsage());
+      } finally {
+        resolveWorkspaceStartup?.();
+      }
+    }
+
+    // 자료 관리 메뉴의 저장 공간 사용량(navigator.storage.estimate). 80%를 넘으면 미리 알린다.
+    let workspaceStorageUsageAt = 0;
+    let workspaceStorageWarned = false;
+    async function renderWorkspaceStorageUsage(force = false) {
+      const label = document.getElementById("workspaceStorageUsage");
+      if (!label || typeof workspaceStorageEstimate !== "function") return;
+      if (!force && Date.now() - workspaceStorageUsageAt < 5000) return;
+      workspaceStorageUsageAt = Date.now();
+      const usage = workspaceStorageUsageText(await workspaceStorageEstimate());
+      const where = workspaceStoreState.active ? "새 저장소(IndexedDB)에 저장 중" : "기본 저장소(localStorage)에 저장 중";
+      label.textContent = `${usage.text} · ${where}${usage.warn ? " · 80%를 넘었습니다. 백업을 받아 두세요" : ""}`;
+      label.classList.toggle("is-warning", usage.warn);
+      if (usage.warn && !workspaceStorageWarned) {
+        workspaceStorageWarned = true;
+        showAppToast("브라우저 저장 공간을 80% 넘게 쓰고 있습니다. '자료 관리 ▾ → 파일로 백업하기'로 백업을 받아 두세요.", "error");
       }
     }
 
@@ -513,8 +884,11 @@
         }
         // 빈 자료가 연결된 PC 파일에 저장되지 않도록 먼저 연결을 끊는다(파일 자체는 지우지 않는다).
         if (typeof disconnectWorkspaceFile === "function") await disconnectWorkspaceFile();
+        // 새 저장소(IndexedDB)에 쓰던 것이 끝나기를 기다린 뒤 연결을 닫고 함께 지운다.
+        if (typeof workspaceStoreState !== "undefined") await workspaceStoreState.writing?.catch(() => {});
+        if (typeof workspaceStoreClose === "function") await workspaceStoreClose();
         clearWorkspaceStorage();
-        for (const name of ["curriculum-workspace-file", "curriculum-original-workbooks"]) {
+        for (const name of ["curriculum-workspace-file", "curriculum-original-workbooks", "curriculum-workspace-db"]) {
           await new Promise((resolve) => {
             if (typeof indexedDB === "undefined") { resolve(); return; }
             const request = indexedDB.deleteDatabase(name);
@@ -566,6 +940,8 @@
       if (!file) return false;
       const previous = new Map();
       const written = [];
+      let storeReplaced = false;
+      let blockedBeforeStore = null;
       try {
         const backup = JSON.parse(await file.text());
         if (backup.type !== "curriculum-workspace-backup" || !backup.groups ||
@@ -600,10 +976,26 @@
         }
         if (!confirmed && !window.confirm("백업에 포함된 편제표·차수·선택 그룹으로 이 브라우저의 자료를 교체합니다. 현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다.")) return false;
         entries.push([WORKSPACE_SAVED_AT_KEY, String(Date.now())]);
+        // 새 저장소를 쓰면 작업 자료는 IndexedDB에 통째로 바꿔 쓰고(한 번에), localStorage에는 그룹 설정과 작은 기록만 쓴다.
+        const useStore = typeof workspaceStoreState !== "undefined" && workspaceStoreState.active;
+        if (useStore) entries.shift();
         for (const [key] of entries) previous.set(key, localStorage.getItem(key));
         for (const [key, value] of entries) {
           localStorage.setItem(key, value);
           written.push(key);
+        }
+        if (useStore) {
+          // 바꿔 쓰는 동안 이 창의 자동 저장이 백업 자료를 덮어쓰지 않게 멈춘다(실패하면 아래에서 되돌린다).
+          blockedBeforeStore = statePersistenceBlocked;
+          statePersistenceBlocked = true;
+          workspaceStoreState.pending = null;
+          await workspaceStoreState.writing?.catch(() => {});
+          const split = workspaceStoreSplit(backup.workspace);
+          const result = await workspaceStoreWrite(split, { force: true });
+          // 작업 자료는 이미 바뀌었으므로 이 뒤의 실패는 그룹 설정만 되돌리지 않고 그대로 다시 연다.
+          storeReplaced = true;
+          workspaceStoreState.rev = result.rev;
+          writeWorkspaceStoreRecord(workspaceStoreRecord(split.core, result.rev, result.savedAt));
         }
         if (afterWrite) await afterWrite();
         statePersistenceReady = false;
@@ -612,6 +1004,14 @@
         window.location.reload();
         return true;
       } catch (error) {
+        if (storeReplaced) {
+          statePersistenceReady = false;
+          statePersistenceBlocked = true;
+          showAppToast(`백업 자료는 불러왔지만 마무리하지 못했습니다: ${error.message}`, "error");
+          window.location.reload();
+          return true;
+        }
+        if (blockedBeforeStore !== null) statePersistenceBlocked = blockedBeforeStore;
         const rollbackErrors = [];
         for (const key of written.reverse()) {
           try {
@@ -717,6 +1117,14 @@
 
     function renderWorkflowLayout() {
       const step = Number(state.workflowStep) || 3;
+      // 다른 단계에서 막 들어올 때는 지킬 스크롤·포커스가 없으므로 보존 도우미를 건너뛴다(view-keep.js).
+      if (typeof workflowStepEntering === "function" && workflowStepEntering(step) && typeof withoutViewKeep === "function") {
+        return withoutViewKeep(() => renderWorkflowLayoutSteps(step));
+      }
+      return renderWorkflowLayoutSteps(step);
+    }
+
+    function renderWorkflowLayoutSteps(step) {
       if (step === 1) renderCurriculumStep();
       renderRoundStatus();
       if (step === 2) renderApplicationSubjects();
@@ -741,10 +1149,28 @@
       if (step === 7 && typeof renderHoursStats === "function") renderHoursStats();
       // 3단계에 들어오면 목록의 첫 학생 확인서를 바로 보여 준다(이미 고른 학생이 목록에 있으면 그대로).
       if (step === 3 && typeof showFirstVisibleStudent === "function") showFirstVisibleStudent();
+      // 안 보일 때 미뤄 둔 이 단계의 그리기(view-keep.js). 위에서 직접 그린 것은 이미 빠져 있다.
+      if (typeof flushDeferredStepRenders === "function") flushDeferredStepRenders(step);
       if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
       if (typeof syncNextYearClassInputs === "function") syncNextYearClassInputs();
       renderWorkspaceContext();
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
+    }
+
+    // 첫 화면 뒤 쉬는 시간에 단계별 큰 계산을 하나씩 미리 해 둔다(캐시). 실패해도 화면에는 영향이 없다.
+    function warmWorkflowCaches(schedule) {
+      const tasks = [
+        () => { if (state.students.length && typeof courseCheckFlags === "function") courseCheckFlags(state.students); },
+        () => { for (const grade of ["1", "2"]) collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }); },
+        () => { collectApplicationSubjects(); }
+      ];
+      const next = () => {
+        const task = tasks.shift();
+        if (!task) return;
+        try { task(); } catch { /* 미리 계산은 선택 사항 */ }
+        if (tasks.length) schedule(next);
+      };
+      schedule(next);
     }
 
     // 내부 단계 번호 5·6(이동수업·시간표)은 보류 중이고 시수 통계는 7번으로 저장한다.
@@ -758,7 +1184,11 @@
       renderWorkflowLayout();
       $("#workflowMenuToggle").setAttribute("aria-expanded", "false");
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
-      if (!skipPersist) persistState();
+      if (!skipPersist) {
+        // 단계 이동은 화면 위치만 바꾸므로 다음 저장·창 닫기 때 함께 저장한다(persistStateSoon viewOnly).
+        if (typeof persistStateSoon === "function") persistStateSoon({ viewOnly: true });
+        else persistState();
+      }
     }
 
     function renderWorkspaceContext() {
@@ -1006,10 +1436,11 @@
       if (clearSaved) clearPersistedState();
     }
 
-    function restorePersistedState() {
+    // storedRaw: 새 저장소(IndexedDB)에서 읽은 작업 자료 JSON. 없으면 예전처럼 localStorage의 자료를 읽는다.
+    function restorePersistedState(storedRaw) {
       let raw = null;
       try {
-        raw = localStorage.getItem(STORAGE_KEY);
+        raw = storedRaw === undefined ? localStorage.getItem(STORAGE_KEY) : storedRaw;
         if (!raw) {
           resetWorkspace(false);
           statePersistenceBlocked = false;
@@ -1210,9 +1641,8 @@
         $("#studentCount").textContent = `${state.students.length} / ${state.students.length}명`;
         renderRoster();
         renderPreview();
-        renderCurriculumStep();
         renderSemesterClassifier();
-        renderAggregate();
+        // 편제표(1단계)·집계(4단계)는 renderWorkflowLayout이 보이는 단계만 그리고, 나머지는 그 단계를 열 때 그린다.
         renderWorkflowLayout();
         protectedStoredState = null;
         statePersistenceBlocked = false;
@@ -1293,6 +1723,9 @@
     function curriculumCellFill(layout, row, column) {
       const direct = layout.cellFills?.[`${row}:${column}`];
       if (direct) return direct;
+      // state 안의 편제표는 병합 칸 → 색 표를 한 번 만들어 조회한다(칸마다 병합 목록 전체를 다시 훑으면 제곱으로 느려짐).
+      const index = typeof curriculumMergedFillIndex === "function" ? curriculumMergedFillIndex(layout) : null;
+      if (index) return index.get(`${row}:${column}`) || "";
       for (const ref of layout.mergedRanges || []) {
         const [a,b=a] = ref.split(":");
         const r1=Number(a.match(/\d+/)[0])-1, r2=Number(b.match(/\d+/)[0])-1;
@@ -1300,6 +1733,35 @@
         if (row>=r1 && row<=r2 && column>=c1 && column<=c2) return layout.cellFills?.[`${r1}:${c1}`] || "";
       }
       return "";
+    }
+
+    // 병합 칸마다 그 병합의 왼쪽 위 칸 색. state를 거쳐 읽은 편제표만(바뀌면 stateRevision이 올라 다시 만든다).
+    const curriculumMergedFillIndexes = new WeakMap();
+    function curriculumMergedFillIndex(layout) {
+      if (typeof stateRawTargets === "undefined" || typeof stateRevision !== "number" || !stateRawTargets.has(layout)) return null;
+      const raw = stateRawTargets.get(layout);
+      const merged = raw.mergedRanges || [];
+      const cached = curriculumMergedFillIndexes.get(raw);
+      if (cached && cached.revision === stateRevision && cached.merged === merged && cached.length === merged.length && cached.fills === raw.cellFills) return cached.map;
+      const map = new Map();
+      let cells = 0;
+      for (const ref of merged) {
+        const [a, b = a] = String(ref).split(":");
+        const r1 = Number(a.match(/\d+/)?.[0]) - 1, r2 = Number(b.match(/\d+/)?.[0]) - 1;
+        const c1 = columnIndex(a), c2 = columnIndex(b);
+        if (![r1, r2, c1, c2].every(Number.isInteger)) continue;
+        cells += Math.max(0, r2 - r1 + 1) * Math.max(0, c2 - c1 + 1);
+        if (cells > 200000) return null;
+        const fill = raw.cellFills?.[`${r1}:${c1}`] || "";
+        for (let r = r1; r <= r2; r++) {
+          for (let c = c1; c <= c2; c++) {
+            const key = `${r}:${c}`;
+            if (!map.has(key)) map.set(key, fill);
+          }
+        }
+      }
+      curriculumMergedFillIndexes.set(raw, { revision: stateRevision, merged, length: merged.length, fills: raw.cellFills, map });
+      return map;
     }
 
     function isSelected(value) {
@@ -2111,8 +2573,11 @@
       // 데이터로 바꾼 편제표는 비교 기준도 데이터로 읽어 같은 규칙으로 비교한다.
       const signatures = layout.planData && typeof curriculumDataSignatures === "function"
         ? curriculumDataSignatures : curriculumSubjectSignatures;
-      const before = signatures(layout.changeBaseline, layout.changeBaseline.plan || null);
-      const after = signatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null);
+      // 공식 과목명 자동 수정(원래 이름 ↔ 고친 이름)은 같은 과목으로 본다(서식·자동 수정은 교사의 편성 변경이 아니다).
+      const nameKey = layout.planData && typeof curriculumDataCompareNameKey === "function"
+        ? curriculumDataCompareNameKey(layout, layout.changeBaseline) : undefined;
+      const before = signatures(layout.changeBaseline, layout.changeBaseline.plan || null, nameKey);
+      const after = signatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null, nameKey);
       for (const [key, subject] of after) {
         const previous = before.get(key);
         if (previous?.signature === subject.signature) continue;
@@ -2132,11 +2597,20 @@
     }
 
     async function ensureCurriculumChangeBaseline(layout) {
+      // 전학년 편제표는 3개년 편제표에서 자동으로 만들고 시점 저장도 하지 않으므로 변경 비교를 하지 않는다(예전에 올린 전학년 이력과 비교하지 않음).
+      if (layout?.derived) {
+        delete layout.changeBaseline;
+        delete layout.changeBaselineError;
+        return;
+      }
       if (typeof latestCurriculumSavedVersion === "function" && layout === state.curriculumImportedLayout) {
-        const latest = latestCurriculumSavedVersion();
+        // 비교 기준: 마지막 저장 시점(원본 다시 읽기 자동 기록만 뒤에 있으면 정규화된 그 앞 시점, curriculum-versions.js)
+        const latest = typeof curriculumComparisonVersion === "function" ? curriculumComparisonVersion() : latestCurriculumSavedVersion();
         if (latest) {
-          if (layout.changeBaseline?.versionId !== latest.id) {
+          const stamp = latest.normalized?.at || "";
+          if (layout.changeBaseline?.versionId !== latest.id || (layout.changeBaseline.normalizedAt || "") !== stamp) {
             layout.changeBaseline = curriculumSavedBaseline(latest.snapshot, latest.id, latest.savedAt);
+            if (stamp) layout.changeBaseline.normalizedAt = stamp;
           }
           return;
         }
@@ -2794,6 +3268,19 @@
       showAppToast("편제표 수정을 실행취소했습니다.");
     }
 
+    function curriculumUndoShortcutApplies(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
+      if (String(event.key || "").toLowerCase() !== "z" && event.code !== "KeyZ") return false;
+      if (Number(state.workflowStep) !== 1 || $("#workflowStep1Panel")?.classList.contains("hidden") || document.querySelector("dialog[open]")) return false;
+      if (!state.curriculumImportedLayout) return false;
+      const editable = event.target?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='']");
+      if (!editable) return true;
+      if (!editable.closest("#curriculumPlanWrap")) return false;
+      // 이 칸에 글자를 입력하기 시작했으면(입력 중) 글자 되돌리기는 브라우저에 맡긴다.
+      if (editable.matches("[contenteditable='true'], [contenteditable='']")) return !state.curriculumEditUndoRecorded;
+      return false;
+    }
+
     function curriculumFilterValues(layout) {
       const rows = expandCurriculumLayoutRows(layout);
       const columns = importedPlanColumnMap(layout);
@@ -2864,15 +3351,66 @@
       if (queryInput.value !== query) queryInput.value = query;
     }
 
+    // 표 위 변경 상태 문구: 비교 기준 시점(시각·이름)이 보이게. 0개면 '같습니다'. 마우스를 올리면 무엇을 세는지 설명한다.
+    function renderCurriculumChangeSummary(layout, changes) {
+      const box = $("#curriculumChangeSummary");
+      const baseline = layout.changeBaseline;
+      if (layout.derived) {
+        box.textContent = "전학년 편제표는 3개년 편제표에서 자동으로 만들어 변경 비교를 하지 않습니다";
+        box.title = "전학년 편제표는 직접 고치거나 시점으로 저장하지 않습니다. 바뀐 곳은 각 입학생 편제표의 변경 표시·변경 이력에서 확인하세요.";
+        return;
+      }
+      if (baseline?.version !== 2) {
+        box.textContent = layout.changeBaselineError ? `변경 비교 실패: ${layout.changeBaselineError}` : "비교 기준 준비 중";
+        box.removeAttribute("title");
+        return;
+      }
+      const removed = [...changes.values()].filter((change) => change.kind === "removed").length;
+      const changed = changes.size - removed;
+      const label = typeof curriculumBaselineLabel === "function" ? curriculumBaselineLabel(baseline) : { time: "", name: "" };
+      const detail = [label.time, label.name ? `'${label.name}'` : ""].filter(Boolean).join(", ");
+      const point = baseline.source === "saved" ? `마지막 저장 시점${detail ? `(${detail})` : ""}`
+        : baseline.source === "original" ? "최초 업로드(저장한 시점 없음)" : "처음 연 시점(저장한 시점 없음)";
+      const parts = [];
+      if (changed) parts.push(`바뀐 과목 ${changed}개`, "바뀐 과목명은 음영");
+      if (removed) parts.push(`삭제 ${removed}개`);
+      const text = parts.length ? `${point}보다 ${parts.join(" · ")}` : `${point}과 같습니다`;
+      const history = parts.length && baseline.source === "saved" && baseline.versionId
+        ? ` <button class="button button-quiet curriculum-change-history" type="button" data-change-history="${escapeHtml(baseline.versionId)}">이력 확인</button>` : "";
+      box.innerHTML = `<span>${escapeHtml(text)}</span>${history}`;
+      box.title = `비교 기준: ${baseline.source === "saved" ? `마지막으로 '새 시점으로 저장'한 시점${detail ? `(${detail})` : ""}` : point}. ` +
+        "그 뒤 학점·학기·선택과목군·교과(군)·과목 종류 등 편성이 바뀐 과목 수입니다. 표에서 바뀐 과목명은 노란 음영으로 표시합니다. " +
+        "서식·공식 과목명 자동 수정·원본 다시 읽기(변환기 갱신)는 바뀐 것으로 세지 않습니다." +
+        (removed ? " 삭제된 과목은 표에 없으므로 '이력 확인'에서 봅니다." : "") +
+        " 새 시점으로 저장하면 그 시점이 새 비교 기준이 됩니다.";
+    }
+
+    // 1단계 위쪽(학교·학년도 설정·편제표 카드·변경 이력)과 편제표 표 사이 경계선 가운데의 접기 손잡이.
+    // 접힌 상태 ▼ '학교·학년도·편제표 카드 펼치기', 펼친 상태 ▲ '접기'. 접근성 이름에는 예전 단추 이름(상단 펼치기/접기)도 남긴다.
+    function syncCurriculumTopToggle() {
+      const collapsed = Boolean(state.curriculumTopCollapsed);
+      $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", collapsed);
+      const toggle = $("#curriculumTopToggle");
+      if (!toggle) return;
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.setAttribute("aria-label", collapsed ? "학교·학년도·편제표 카드 펼치기 (상단 펼치기)" : "접기 · 학교·학년도·편제표 카드 접기 (상단 접기)");
+      const arrow = toggle.querySelector(".collapse-handle-arrow");
+      const label = toggle.querySelector(".collapse-handle-text");
+      if (arrow) arrow.textContent = collapsed ? "▼" : "▲";
+      if (label) label.textContent = collapsed ? "학교·학년도·편제표 카드 펼치기" : "접기";
+      if (!arrow && !label) toggle.textContent = collapsed ? "상단 펼치기" : "상단 접기";
+      $("#curriculumTopDivider")?.classList.toggle("is-collapsed", collapsed);
+    }
+
     function renderCurriculumStep() {
+      // 1단계가 안 보이면 그리지 않고 1단계를 열 때 그린다(view-keep.js, 첫 화면·다른 단계 조작이 빨라짐).
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(1, "renderCurriculumStep", renderCurriculumStep)) return;
       const emptyRows = typeof curriculumEmptySubjectRows === "function" ? curriculumEmptySubjectRows(state.curriculumImportedLayout) : [];
       const emptyRowsToggle = $("#curriculumEmptyRowsToggle");
       emptyRowsToggle.classList.toggle("hidden", !emptyRows.length);
       emptyRowsToggle.textContent = `빈 과목 행 ${emptyRows.length}개 ${state.curriculumImportedLayout?.showEmptySubjectRows ? "접기" : "표시"}`;
       emptyRowsToggle.setAttribute("aria-pressed", String(Boolean(state.curriculumImportedLayout?.showEmptySubjectRows)));
-      $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", state.curriculumTopCollapsed);
-      $("#curriculumTopToggle").setAttribute("aria-expanded", String(!state.curriculumTopCollapsed));
-      $("#curriculumTopToggle").textContent = state.curriculumTopCollapsed ? "상단 펼치기" : "상단 접기";
+      syncCurriculumTopToggle();
       curriculumCellSelection = null;
       curriculumSelectionAnchor = null;
       curriculumSelectionDragging = false;
@@ -2909,11 +3447,7 @@
       const importedLayout = state.curriculumImportedLayout;
       if (importedLayout) {
         ensureCurriculumChangeBaseline(importedLayout);
-        const changes = curriculumTableChanges(importedLayout);
-        const removedSubjects = [...changes.values()].filter((change) => change.kind === "removed").length;
-        $("#curriculumChangeSummary").textContent = importedLayout.changeBaseline?.version === 2
-          ? `${importedLayout.changeBaseline.source === "saved" ? "마지막 저장본" : importedLayout.changeBaseline.source === "original" ? "최초 업로드(저장본 없음)" : "비교 기준 설정 시점"} 대비 초안 변경 ${changes.size - removedSubjects}과목 · 과목명 음영${removedSubjects ? ` · 삭제 ${removedSubjects}과목(이력 확인)` : ""}`
-          : importedLayout.changeBaselineError ? `변경 비교 실패: ${importedLayout.changeBaselineError}` : "원본과 변경 내용 비교 준비 중";
+        renderCurriculumChangeSummary(importedLayout, curriculumTableChanges(importedLayout));
         const planRows = state.curriculumPlan.map((item, index) => ({ item, index }));
         $("#curriculumPlanWrap").innerHTML =
           `${curriculumBundleSummaryHtml(planRows.map(({ item }) => item), importedLayout)}` +
@@ -2922,6 +3456,7 @@
         if (typeof decoratePlanComplianceSheet === "function") decoratePlanComplianceSheet();
       } else {
         $("#curriculumChangeSummary").textContent = "";
+        $("#curriculumChangeSummary").removeAttribute("title");
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
         $("#curriculumFilterCount").textContent = "0개 과목 표시";
       }
@@ -2953,8 +3488,10 @@
           courses: new Set()
         });
       }
+      // 과목 행 정보는 묶음마다 다시 만들지 않고 한 번만 만든다.
+      const contexts = groups.size ? importedPlanCourseContexts(layout, columns) : [];
       for (const group of groups.values()) {
-        for (const context of importedPlanCourseContexts(layout, columns)) {
+        for (const context of contexts) {
           if (normalizeCurriculumDivision(context.division) !== "학생 선택 교육과정" ||
               !isSelectableDetail(context.selectionType || context.detail) ||
               curriculumCellFill(layout, context.rowIndex, semesterColumn).toUpperCase() !== group.fill.toUpperCase()) continue;
@@ -3130,6 +3667,7 @@
     }
 
     function renderRoster() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(3, "renderRoster", renderRoster)) return;
       const students = visibleStudents();
       $("#studentCount").textContent = `${students.length} / ${state.students.length}명`;
       const prereq = typeof courseCheckFlags === "function" ? courseCheckFlags(state.students) : null;
@@ -3234,6 +3772,7 @@
     }
 
     function renderPreview() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(3, "renderPreview", renderPreview)) return;
       renderCertificateInfoSummary();
       const student = currentStudent();
       const preview = $("#preview");
@@ -3487,84 +4026,41 @@
       return { courses, groups, count: courses.size + groups.size };
     }
 
-    function aggregateCourseRowMarkup({ report, semester, course, closures, round, locked, maxClassSize, prereq = null }) {
-      const { summary } = report;
-      const key = `${summary.grade}:${course.column}`;
-      const name = course.displayName || course.name;
-      const risk = course.atRisk;
-      const decision = aggregateClosureDecision(closures, key, risk);
-      const percent = summary.openingLimit > 0 ? Math.round(course.enrollment / summary.openingLimit * 100) : 0;
-      const width = Math.max(0, Math.min(100, percent));
-      const { over, overDivision } = aggregateCourseWarnings(course, summary, maxClassSize);
-      const badges = [
-        course.closed ? '<span class="at-risk-badge closed-badge">폐강</span>' : "",
-        risk ? '<span class="at-risk-badge">기준 미달</span>' : "",
-        over ? `<span class="at-risk-badge over-badge" title="학급당 ${course.averageClassSize.toFixed(1)}명이 최대 인원 ${maxClassSize}명을 넘습니다.">${maxClassSize}명 초과</span>` : "",
-        overDivision ? `<span class="at-risk-badge over-badge" title="학급당 ${course.averageClassSize.toFixed(1)}명이 분반 기준 ${summary.divisionLimit.toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.">분반기준 초과</span>` : ""
-      ].join("") || '<span class="aggregate-ok">충족</span>';
-      // 위계(선이수) 경고 학생 수 배지(누르면 학생 목록 팝업). 확인 불가는 학년 머리줄·팝업에만 둔다.
-      const prereqBadges = prereq && typeof courseCheckCourseBadges === "function" ? courseCheckCourseBadges(prereq, key, name) : "";
-      const inputLock = locked ? ' disabled title="확정된 차수입니다. 확정 해제 후 수정하세요."'
-        : course.closed ? ' disabled title="폐강으로 정한 과목은 0학급입니다. 교사 결정을 바꾸면 수정할 수 있습니다."' : "";
-      return `<tr class="aggregate-course-row${risk ? " at-risk" : ""}${course.closed ? " is-closed" : ""}${over || overDivision ? " is-over" : ""}" data-course-key="${escapeHtml(key)}">
-        <th scope="row" class="aggregate-subject">${escapeHtml(name)}</th>
-        <td class="aggregate-enrollment-cell"><span class="aggregate-enrollment"><span class="aggregate-enrollment-value">${course.enrollment}명</span><span class="aggregate-progress-track ${risk ? "below" : "met"}" role="img" aria-label="개설 기준의 ${percent}%"><span style="width:${width}%"></span></span></span></td>
-        <td>${course.enrollmentPerDivision.toFixed(2)}</td>
-        <td><input class="aggregate-class-input" type="number" min="0" step="1" value="${course.classCount}" aria-label="${escapeHtml(semester.name)} ${escapeHtml(name)} 개설 학급수${course.closed ? " (폐강)" : ""}" data-grade="${escapeHtml(summary.grade)}" data-course-column="${escapeHtml(course.column)}"${inputLock}></td>
-        <td class="aggregate-average${over || overDivision ? " is-over" : ""}">${course.averageClassSize.toFixed(2)}</td>
-        <td class="aggregate-status">${badges}${prereqBadges}</td>
-        <td><select class="closure-select" data-closure-round="${escapeHtml(round)}" data-closure-key="${escapeHtml(key)}" aria-label="${escapeHtml(name)} 교사 결정"${locked ? " disabled" : ""}>
-          <option value=""${decision === "" ? " selected" : ""}>미정</option>
-          <option value="open"${decision === "open" ? " selected" : ""}>개설</option>
-          <option value="closed"${decision === "closed" ? " selected" : ""}>폐강</option>
-        </select></td>
-      </tr>`;
-    }
-
-    function aggregateGradeSectionMarkup(report, { closures, round, locked, maxClassSize, attentionOnly, canUndo, prereq = null }) {
-      const { summary, semesters } = report;
-      const grade = String(summary.grade);
-      const displayGrade = Number(grade) + 1;
+    // 한 학년 집계표: 엑셀 시트와 같은 학교 양식(aggregateSheetModel → aggregateSheetHtml)에 학년 머리줄(위계·학점 요약,
+    // 학년 전체 자동 조정·조정 취소)만 붙인다. 학생 수·학급당·개설/분반 기준은 양식 2~3행에 있으므로 따로 요약하지 않는다.
+    function aggregateGradeSectionMarkup(report, { closures, round, locked, maxClassSize, attentionOnly, canUndo, prereq = null,
+      openingPercent, divisionPercent, undoGroups = null }) {
+      const grade = String(report.summary.grade);
       const attention = attentionOnly ? aggregateAttention(report, closures, maxClassSize, prereq) : null;
-      let shownRows = 0;
-      const body = semesters.map((semester) => semester.groups.map((group) => {
-        const rows = group.courses.filter((course) => !attention || attention.courses.has(`${grade}:${course.column}`))
-          .map((course) => aggregateCourseRowMarkup({ report, semester, course, closures, round, locked, maxClassSize, prereq }));
-        if (attention && !rows.length && !attention.groups.has(`${semester.name}\u0000${group.category}`)) return "";
-        shownRows += rows.length;
-        const target = aggregateGroupTarget(group, summary.classes);
-        const diff = target === null ? 0 : group.totalClasses - target;
-        const plan = target !== null && diff ? planGroupClassCounts(aggregatePlanCourses(report, group), target, maxClassSize) : null;
-        const statusText = target === null ? `총 ${group.totalClasses}학급`
-          : diff ? `총 ${group.totalClasses}학급 / 목표 ${target} (${diff > 0 ? "+" : ""}${diff})`
-            : `총 ${group.totalClasses}학급 / 목표 ${target} ✓`;
-        const label = aggregateGroupLabel(semester, group);
-        const button = target !== null
-          ? `<button class="button aggregate-adjust-button" type="button" data-aggregate-adjust="group" data-grade="${escapeHtml(grade)}" data-semester="${escapeHtml(semester.name)}" data-group="${escapeHtml(group.category)}"${locked ? ' disabled title="확정된 차수입니다."' : ""} aria-label="${escapeHtml(label)} 학급수 자동 조정">자동 조정</button>` : "";
-        return `<tr class="aggregate-group-row" data-group-status="${target === null ? "none" : diff ? "mismatch" : "ok"}"><th colspan="7" scope="rowgroup">
-            <span class="aggregate-group-name">${escapeHtml(label)}</span>
-            <span class="aggregate-group-total">${statusText}</span>
-            ${button}${plan && !plan.ok ? `<span class="aggregate-group-message">${escapeHtml(aggregatePlanMessage(plan))}</span>` : ""}
-          </th></tr>${rows.join("")}`;
-      }).join("")).join("");
+      const percent = (value, selector, fallback) => Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value)
+        : Number($(selector)?.value) || fallback;
+      const model = aggregateSheetModel(report, percent(openingPercent, "#openingPercent", 90), percent(divisionPercent, "#divisionPercent", 110));
+      const sheet = aggregateSheetHtml(model, { grade, closures, round, locked, maxClassSize, prereq, attention,
+        undoGroups: canUndo ? (undoGroups || new Set()) : null });
       const lockTitle = locked ? ' disabled title="확정된 차수입니다. 확정 해제 후 조정하세요."' : "";
-      return `<section class="aggregate-grade" data-aggregate-grade-section="${escapeHtml(grade)}">
+      return `<section class="aggregate-grade aggregate-form-grade" data-aggregate-grade-section="${escapeHtml(grade)}">
         <div class="aggregate-grade-head">
-          <h3 class="aggregate-grade-heading"><strong>${displayGrade}학년(현${escapeHtml(grade)}학년)</strong> · ${summary.students}명 · <span title="${summary.classSource === "planned" ? "내년도 편성 입력값" : "명단의 반 수"}">${summary.classes}학급</span> · 학급당 ${summary.averageClassSize.toFixed(2)} · 개설기준 ${summary.openingLimit.toFixed(2)} · 분반기준 ${summary.divisionLimit.toFixed(2)}</h3>
+          <span class="aggregate-form-hint">과목명을 누르면 개설·폐강·미정을 정하고, 개설 학급수 칸은 눌러서 바로 고칩니다.</span>
           ${typeof courseCheckAggregateNote === "function" ? courseCheckAggregateNote(grade, prereq) : ""}
           <div class="aggregate-grade-actions">
             <button class="button" type="button" data-aggregate-adjust="grade" data-grade="${escapeHtml(grade)}"${lockTitle}>학급수 자동 조정(학년 전체)</button>
             ${canUndo ? `<button class="button" type="button" data-aggregate-undo="${escapeHtml(grade)}"${lockTitle}>조정 취소</button>` : ""}
           </div>
         </div>
-        <div class="aggregate-sheet-wrap"><table class="aggregate-course-table">
-          <thead><tr><th scope="col">과목</th><th scope="col">신청 인원</th><th scope="col">인원/분반기준</th><th scope="col">개설 학급수</th><th scope="col">학급당</th><th scope="col">상태</th><th scope="col">교사 결정</th></tr></thead>
-          <tbody>${body || `<tr><td colspan="7" class="aggregate-empty">${attentionOnly ? "처리할 과목이 없습니다. 미정인 기준 미달 과목, 학급당 인원 초과, 위계 경고, 목표 학급수 불일치가 모두 없습니다." : "집계할 과목이 없습니다."}</td></tr>`}</tbody>
-        </table></div>
+        ${sheet}
       </section>`;
     }
 
+    // 4단계 집계 화면 그리기의 입구. 화면 내용은 renderAggregateView가 그린다(집계 화면을 다시 쓰더라도 이 입구는 그대로 둘 것).
+    // - 4단계가 안 보이면 그리지 않고 4단계를 열 때 그린다(view-keep.js deferRenderUntilStepVisible).
+    // - 값을 바꿔 다시 그려도 창·표 안 스크롤과 입력 포커스·커서를 그대로 둔다(view-keep.js preserveViewDuring).
     function renderAggregate() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(4, "renderAggregate", renderAggregate)) return;
+      if (typeof preserveViewDuring === "function") return preserveViewDuring(["#aggregatePanel", "#retakePanel"], renderAggregateView);
+      return renderAggregateView();
+    }
+
+    function renderAggregateView() {
       const gradeBar = $("#aggregateGradeBar");
       const settingsSummary = $("#aggregateSettingsSummary");
       const maxClassSize = aggregateMaxClassSize();
@@ -3634,9 +4130,11 @@
           <button type="button" class="button aggregate-risk-filter" data-aggregate-risk-filter aria-pressed="${aggregateAttentionOnly}" title="결정이 미정인 기준 미달 과목, 학급당 인원이 최대 인원·분반 기준을 넘는 과목, 위계(선이수) 경고 학생이 있는 과목, 목표 학급수와 맞지 않는 그룹만 봅니다.">처리할 것만(${attentionCount})</button>`;
       }
       const canUndo = !!aggregateAdjustUndo && aggregateAdjustUndo.round === round;
+      if (typeof closeAggregateCourseMenu === "function") closeAggregateCourseMenu();
       $("#aggregateContent").innerHTML = shownReports.map((report) => aggregateGradeSectionMarkup(report, {
-        closures, round, locked, maxClassSize, attentionOnly: aggregateAttentionOnly, prereq,
-        canUndo: canUndo && (!aggregateAdjustUndo.grade || aggregateAdjustUndo.grade === String(report.summary.grade))
+        closures, round, locked, maxClassSize, attentionOnly: aggregateAttentionOnly, prereq, openingPercent, divisionPercent,
+        canUndo: canUndo && (!aggregateAdjustUndo.grade || aggregateAdjustUndo.grade === String(report.summary.grade)),
+        undoGroups: canUndo ? aggregateAdjustUndo.groups : null
       })).join("");
       $("#aggregateDescription").textContent =
         `${round}차${locked ? " · 확정됨(수정 잠금)" : ""} · ${scope ? `${gradeLabel(scope)} 신청` : `${aggregate.reports.length}개 학년`} · 기준 미달 ${atRiskCount}과목(폐강 확정 아님)`;
@@ -3660,6 +4158,7 @@
       const previous = {};
       const changed = [];
       const problems = [];
+      const touchedGroups = new Set();
       for (const semester of report.semesters) {
         for (const group of semester.groups) {
           if (category && (semester.name !== semesterName || group.category !== category)) continue;
@@ -3689,10 +4188,12 @@
             state.classOverrides[key] = next;
             touched = true;
           }
+          if (touched) touchedGroups.add(`${semester.name}\u0000${group.category}`);
           if (touched) changed.push(group.totalClasses !== target ? `${label} ${group.totalClasses}→${target}` : `${label} ${target}학급 재배분`);
         }
       }
-      if (Object.keys(previous).length) aggregateAdjustUndo = { round, grade: String(grade), previous };
+      // 조정 취소는 마지막 조정 한 번만 기억한다. groups: 조정한 그룹(그 그룹의 총 학급수 칸에 '조정 취소'를 둔다).
+      if (Object.keys(previous).length) aggregateAdjustUndo = { round, grade: String(grade), previous, groups: touchedGroups };
       return { changed, problems };
     }
 
@@ -3705,6 +4206,92 @@
         else delete state.classOverrides[key];
       }
       aggregateAdjustUndo = null;
+      return true;
+    }
+
+    // 집계표 양식의 과목명 메뉴(개설·폐강·미정 + 상태 설명 + 위계 경고 학생 보기). 메뉴는 하나만 두고 집계표를 다시 그리면 닫는다.
+    function closeAggregateCourseMenu(restoreFocus = false) {
+      const menu = typeof document !== "undefined" ? document.getElementById("aggregateCourseMenu") : null;
+      if (!menu || menu.hidden) return;
+      menu.hidden = true;
+      const opener = menu.aggregateOpener;
+      menu.aggregateOpener = null;
+      menu.aggregateAnchor = null;
+      if (restoreFocus && opener?.isConnected) opener.focus({ preventScroll: true });
+    }
+
+    function openAggregateCourseMenu(head, anchor = head) {
+      let menu = document.getElementById("aggregateCourseMenu");
+      if (!menu) {
+        const holder = document.createElement("div");
+        holder.innerHTML = '<div class="aggregate-course-menu" id="aggregateCourseMenu" role="dialog" hidden></div>';
+        menu = holder.firstElementChild;
+        document.body.append(menu);
+        menu.addEventListener("click", (event) => {
+          const choice = event.target.closest("[data-closure-choice]");
+          if (choice) {
+            if (!choice.disabled) setAggregateClosure(menu.dataset.round, menu.dataset.key, choice.dataset.closureChoice);
+            return;
+          }
+          if (event.target.closest("[data-aggregate-menu-close]")) closeAggregateCourseMenu(true);
+          // 위계 경고 학생 보기: 팝업은 문서 공통 처리(data-open-dialog)가 연다. 메뉴만 닫는다.
+          else if (event.target.closest("[data-open-dialog]")) closeAggregateCourseMenu();
+        });
+        menu.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeAggregateCourseMenu(true);
+        });
+      }
+      const key = head.dataset.aggregateCourse || "";
+      const decision = head.dataset.decision || "";
+      const locked = head.hasAttribute("data-locked");
+      const label = head.dataset.courseLabel || "";
+      const prereqCount = Number(head.dataset.prereqCount) || 0;
+      const lines = String(head.dataset.courseStatus || "").split("\n").filter(Boolean);
+      const choices = [["open", "개설"], ["closed", "폐강"], ["", "미정"]].map(([value, text]) =>
+        `<button type="button" class="aggregate-course-choice${value === "closed" ? " is-closed" : ""}" data-closure-choice="${value}" aria-pressed="${value === decision}"${locked ? " disabled" : ""}>${text}</button>`).join("");
+      menu.dataset.key = key;
+      menu.dataset.round = head.dataset.closureRound || "";
+      menu.setAttribute("aria-label", `${label} 개설 결정`);
+      menu.innerHTML = `<div class="aggregate-course-menu-head"><strong>${escapeHtml(label)}</strong><button type="button" class="aggregate-course-menu-close" data-aggregate-menu-close aria-label="닫기">×</button></div>
+        <ul class="aggregate-course-menu-status">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
+        <div class="aggregate-course-choices" role="group" aria-label="교사 결정">${choices}</div>
+        ${locked ? '<p class="aggregate-course-menu-note">확정된 차수입니다. 확정 해제 후 바꾸세요.</p>' : '<p class="aggregate-course-menu-note">폐강이면 개설 학급수 0, 엑셀처럼 노란 칸·폐강으로 표시하고 재신청 대상이 됩니다.</p>'}
+        ${prereqCount ? `<button type="button" class="button aggregate-course-menu-prereq" data-open-dialog="prereqStudentsDialog" data-prereq-course="${escapeHtml(key)}" data-prereq-label="${escapeHtml(label)}">위계 경고 학생 ${prereqCount}명 보기</button>` : ""}`;
+      menu.hidden = false;
+      menu.aggregateOpener = head;
+      menu.aggregateAnchor = anchor;
+      // 누른 칸 바로 아래(화면 밖으로 나가면 위)에 붙인다. 문서 기준 위치라 화면을 굴려도 칸과 함께 움직인다.
+      const rect = anchor.getBoundingClientRect();
+      const width = menu.offsetWidth;
+      const height = menu.offsetHeight;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      const below = rect.bottom + 4;
+      const top = below + height > window.innerHeight - 8 && rect.top - height - 4 > 8 ? rect.top - height - 4 : below;
+      menu.style.left = `${Math.round(left + window.scrollX)}px`;
+      menu.style.top = `${Math.round(top + window.scrollY)}px`;
+      (menu.querySelector('[data-closure-choice][aria-pressed="true"]:not(:disabled)') ||
+        menu.querySelector("[data-closure-choice]:not(:disabled)") || menu.querySelector("[data-aggregate-menu-close]"))?.focus({ preventScroll: true });
+    }
+
+    // 교사 결정(개설·폐강·미정)을 저장하고 집계표·재신청 대상자를 다시 그린다. 확정된 차수는 바꾸지 않는다.
+    function setAggregateClosure(round, key, value) {
+      if (!key || !["", "open", "closed"].includes(value)) return false;
+      if (typeof isRoundLocked === "function" && isRoundLocked(round)) {
+        renderAggregate();
+        return false;
+      }
+      if (!state.roundClosures[round]) state.roundClosures[round] = {};
+      state.roundClosures[round][key] = value;
+      persistStateSoon();
+      renderAggregate();
+      if (Number(state.workflowStep) === 4) renderRetakePanel();
+      if (typeof updateRetakeReadiness === "function") updateRetakeReadiness();
+      // 다시 그린 뒤 같은 과목 칸으로 초점을 돌려 키보드로 이어서 고칠 수 있게 한다.
+      const head = [...document.querySelectorAll("[data-aggregate-course]")].find((item) => item.dataset.aggregateCourse === key);
+      head?.focus({ preventScroll: true });
       return true;
     }
 
@@ -3776,7 +4363,7 @@
       if (!list) return;
       const nextHasResult = !!state.rounds?.[nextRound]?.students?.some((student) => !grade || String(student.grade) === String(grade));
       const steps = [
-        { done: closedCount > 0, label: "폐강 확정", detail: data ? (closedCount ? `${closedCount}과목 폐강` : "위 집계표의 교사 결정 칸에서 개설/폐강을 정하세요") : `${sourceRound}차 결과 필요` },
+        { done: closedCount > 0, label: "폐강 확정", detail: data ? (closedCount ? `${closedCount}과목 폐강` : "위 집계표의 과목명을 눌러 개설/폐강을 정하세요") : `${sourceRound}차 결과 필요` },
         { done: closedCount > 0 && rows.length > 0, label: "재신청 대상 확인", detail: rows.length ? `대상 학생 ${rows.length}명 · 명단을 내려받거나 웹 수강신청에서 재신청 생성` : "폐강 과목을 신청한 학생이 없습니다" },
         { done: nextHasResult, label: `${nextRound}차 결과 반영`, detail: nextHasResult ? `${nextRound}차 결과 반영됨` : `2단계에서 ${nextRound}차를 추가해 결과 업로드` }
       ];
@@ -3807,7 +4394,7 @@
         return;
       }
       if (!closedCount) {
-        description.textContent = `${scopeLabel}폐강으로 정한 과목이 없습니다. 위 집계표의 교사 결정 칸에서 개설/폐강을 정하세요.`;
+        description.textContent = `${scopeLabel}폐강으로 정한 과목이 없습니다. 위 집계표의 과목명을 눌러 개설/폐강을 정하세요.`;
         content.innerHTML = "";
         return;
       }
@@ -4112,8 +4699,17 @@
       ? `annual:${state.curriculumCohortYear}`
       : String(state.curriculumCohortYear);
 
-    function collectApplicationSubjects({ includeExcluded = false, currentGrade: requestedCurrentGrade } = {}) {
+    // 편제표에서 신청 과목을 모으는 계산(약 40ms)은 집계·그룹·확인서·단계 표시가 여러 번 부르므로 자료(state)·학년도가 그대로면 캐시를 쓴다.
+    // 결과는 부르는 쪽이 고칠 수 있어 항상 복사본을 돌려준다(cloneApplicationSubjects).
+    function collectApplicationSubjects(options = {}) {
       if (typeof syncActiveCurriculumCohort === "function") syncActiveCurriculumCohort();
+      if (!options.fresh && typeof cachedByStateRevision === "function" && typeof cloneApplicationSubjects === "function") {
+        const schoolYear = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+        const key = [options.includeExcluded ? 1 : 0, options.currentGrade ?? state.applicationMenuGrade ?? "1", schoolYear].join("|");
+        return cloneApplicationSubjects(cachedByStateRevision("collectApplicationSubjects", key,
+          () => collectApplicationSubjects({ ...options, fresh: true })));
+      }
+      const { includeExcluded = false, currentGrade: requestedCurrentGrade } = options;
       const currentGrade = String(requestedCurrentGrade ?? state.applicationMenuGrade ?? "1");
       const schoolYear = Number(typeof $ === "function" ? $("#schoolYear")?.value || "2026" : "2026");
       const cohortYear = String(schoolYear - Number(currentGrade) + 1);
@@ -4245,6 +4841,15 @@
       return result;
     }
 
+    function cloneApplicationSubjects(result) {
+      if (!result) return result;
+      return Object.fromEntries(Object.entries(result).map(([grade, items]) => [grade, items.map((item) => ({
+        ...item,
+        semesterColors: { ...item.semesterColors },
+        semesterGroups: Object.fromEntries(Object.entries(item.semesterGroups || {}).map(([semester, group]) => [semester, { ...group }]))
+      }))]));
+    }
+
     function selectedApplicationSubjects() {
       return collectApplicationSubjects();
     }
@@ -4255,6 +4860,7 @@
     }
 
     function renderApplicationSubjects() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(2, "renderApplicationSubjects", renderApplicationSubjects)) return;
       const container = $("#applicationSubjectList");
       if (!container) return;
       const subjects = collectApplicationSubjects();
@@ -4595,8 +5201,9 @@
         `</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
     }
 
-    // sheets: [{ name, rows: [[셀]], widths, merges, freeze }]. 셀은 문자열·숫자·null 또는 { v, f, s }.
-    function createWorkbookBlob(sheets) {
+    // sheets: [{ name, rows: [[셀]], widths, merges, freeze, heights, orientation, fitToHeight }]. 셀은 문자열·숫자·null 또는 { v, f, s }.
+    // options.stylesXml: 보고서 공통 스타일(0~10번) 뒤에 스타일을 더 둔 styles.xml(5단계 교사시수표 양식).
+    function createWorkbookBlob(sheets, options = {}) {
       const usedNames = new Set();
       const safeSheetName = (name, index) => {
         let base = String(name || `시트${index + 1}`).replace(/[\[\]:*?\/\\]/g, " ").trim().slice(0, 31) || `시트${index + 1}`;
@@ -4625,7 +5232,7 @@
         "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
         "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((name, index) => `<sheet name="${xmlEscape(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
         "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-        "xl/styles.xml": createReportStylesXml()
+        "xl/styles.xml": options.stylesXml || createReportStylesXml()
       };
       sheets.forEach((sheet, index) => {
         const rowsXml = (sheet.rows || []).map((row, rowIndex) => {
@@ -4636,13 +5243,17 @@
         const cols = (sheet.widths || []).length
           ? `<cols>${sheet.widths.map((width, column) => `<col min="${column + 1}" max="${column + 1}" width="${width}" customWidth="1"/>`).join("")}</cols>`
           : "";
-        const freeze = sheet.freeze
-          ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${Number(sheet.freeze.match(/\d+/)[0]) - 1}" topLeftCell="${sheet.freeze}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`
+        // 틀 고정: "A5"는 위 4행, "D5"는 위 4행과 왼쪽 3열.
+        const freezeMatch = /^([A-Z]+)(\d+)$/.exec(sheet.freeze || "");
+        const freezeColumns = freezeMatch ? [...freezeMatch[1]].reduce((sum, letter) => sum * 26 + letter.charCodeAt(0) - 64, 0) - 1 : 0;
+        const freezeRows = freezeMatch ? Number(freezeMatch[2]) - 1 : 0;
+        const freeze = freezeMatch && (freezeColumns || freezeRows)
+          ? `<sheetViews><sheetView workbookViewId="0"><pane${freezeColumns ? ` xSplit="${freezeColumns}"` : ""}${freezeRows ? ` ySplit="${freezeRows}"` : ""} topLeftCell="${sheet.freeze}" activePane="${freezeColumns && freezeRows ? "bottomRight" : freezeRows ? "bottomLeft" : "topRight"}" state="frozen"/></sheetView></sheetViews>`
           : `<sheetViews><sheetView workbookViewId="0"/></sheetViews>`;
         const merges = (sheet.merges || []).length
           ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((reference) => `<mergeCell ref="${reference}"/>`).join("")}</mergeCells>`
           : "";
-        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`;
+        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="${Number(sheet.fitToHeight) || 0}"/></worksheet>`;
       });
       return createXlsxBlob(files);
     }
@@ -5272,14 +5883,11 @@
       return aggregateSheetStyles.cache;
     }
 
-    function createWorksheetXml(report, openingPercent, divisionPercent) {
+    // 집계표 한 학년 시트의 칸 모델. 엑셀(createWorksheetXml)과 4단계 화면(aggregateSheetHtml)이 같은 모델을 써서 어긋나지 않는다.
+    //   칸: { kind: "s"|"n"|"f"|"blank", value, expression, key(서식 이름), meta(화면용 역할·과목·그룹) }
+    //   행: { cells, height, kind: "head"|"semester"|"group", semesterIndex, groupIndex } — 화면의 '처리할 것만'이 그룹 단위로 행을 고른다.
+    function aggregateSheetModel(report, openingPercent, divisionPercent) {
       const { summary, semesters } = report;
-      const styles = aggregateSheetStyles();
-      const style = (key) => {
-        const id = styles.index.get(key);
-        if (id === undefined) throw new Error(`집계표 서식이 없습니다: ${key}`);
-        return id;
-      };
       const widths = aggregateSheetColumnWidths();
       const lastColumn = widths.length - 1;
       const UNIT_SIZE = 6;
@@ -5287,19 +5895,21 @@
       const merges = [];
       const rules = [];
       const chunks = [];
-      const addRow = (height) => { rows.push({ cells: [], height }); return rows.length; };
+      const groups = [];
+      let place = { kind: "head", semesterIndex: null, groupIndex: null };
+      const addRow = (height) => { rows.push({ cells: [], height, ...place }); return rows.length; };
       const put = (row, column, cell) => { rows[row - 1].cells[column] = cell; };
-      const text = (row, column, value, key) => put(row, column, { kind: "s", value, style: style(key) });
-      const number = (row, column, value, key) => put(row, column, { kind: "n", value, style: style(key) });
-      const formula = (row, column, expression, cached, key) => put(row, column, { kind: "f", expression, value: cached, style: style(key) });
-      const blank = (row, column, key) => put(row, column, { kind: "blank", style: style(key) });
+      const text = (row, column, value, key, meta) => put(row, column, { kind: "s", value, key, meta });
+      const number = (row, column, value, key, meta) => put(row, column, { kind: "n", value, key, meta });
+      const formula = (row, column, expression, cached, key, meta) => put(row, column, { kind: "f", expression, value: cached, key, meta });
+      const blank = (row, column, key, meta) => put(row, column, { kind: "blank", key, meta });
       const cellRef = (column, row) => `${columnName(column)}${row}`;
       const rangeRef = (firstColumn, firstRow, lastMergeColumn, lastRow) =>
         firstColumn === lastMergeColumn && firstRow === lastRow ? cellRef(firstColumn, firstRow)
           : `${cellRef(firstColumn, firstRow)}:${cellRef(lastMergeColumn, lastRow)}`;
       // 병합 범위의 나머지 칸에도 같은 서식을 넣어야 엑셀이 병합 칸 테두리를 빠짐없이 그린다.
       const merge = (firstColumn, firstRow, lastMergeColumn, lastRow, key) => {
-        merges.push(rangeRef(firstColumn, firstRow, lastMergeColumn, lastRow));
+        merges.push({ ref: rangeRef(firstColumn, firstRow, lastMergeColumn, lastRow), firstColumn, firstRow, lastColumn: lastMergeColumn, lastRow });
         for (let row = firstRow; row <= lastRow; row++) {
           for (let column = firstColumn; column <= lastMergeColumn; column++) {
             if (!rows[row - 1].cells[column]) blank(row, column, key);
@@ -5324,42 +5934,49 @@
       const openingRow = addRow(35.45);
       const divisionRow = addRow(35.45);
       text(openingRow, 1, "총학생수", "bold|general|none|c|1|mtmm");
-      number(openingRow, 2, students, "bold|general|none|c|1|ttmm");
+      number(openingRow, 2, students, "bold|general|none|c|1|ttmm", { role: "students" });
       text(openingRow, 3, "학급당 학생수", "bold|general|none|c|1|ttmm");
-      if (classes > 0) formula(openingRow, 4, `C2/${classes}`, students / classes, "bold|two|none|c|1|tmmm");
-      else number(openingRow, 4, 0, "bold|two|none|c|1|tmmm");
+      if (classes > 0) formula(openingRow, 4, `C2/${classes}`, students / classes, "bold|two|none|c|1|tmmm", { role: "perClass" });
+      else number(openingRow, 4, 0, "bold|two|none|c|1|tmmm", { role: "perClass" });
       text(openingRow, 5, `학급당 학생수의 ${openingPercent}%(개설기준)`, "bold|general|none|c|1|mtmm");
       merge(5, openingRow, 6, openingRow, "bold|general|none|c|1|ttmm");
-      if (classes > 0) formula(openingRow, 7, `C2/${classes}*${factor(openingPercent)}`, Number(summary.openingLimit) || 0, "bold|two|yellow|c|1|tmmm");
-      else number(openingRow, 7, 0, "bold|two|yellow|c|1|tmmm");
+      if (classes > 0) formula(openingRow, 7, `C2/${classes}*${factor(openingPercent)}`, Number(summary.openingLimit) || 0, "bold|two|yellow|c|1|tmmm", { role: "opening" });
+      else number(openingRow, 7, 0, "bold|two|yellow|c|1|tmmm", { role: "opening" });
       text(divisionRow, 5, `학급당 학생수의 ${divisionPercent}%(분반기준)`, "bold|general|none|c|1|mtmm");
       merge(5, divisionRow, 6, divisionRow, "bold|general|none|c|1|ttmm");
-      if (classes > 0) formula(divisionRow, 7, `C2/${classes}*${factor(divisionPercent)}`, divisionLimit, "bold|two|none|c|1|tmmm");
-      else number(divisionRow, 7, 0, "bold|two|none|c|1|tmmm");
+      if (classes > 0) formula(divisionRow, 7, `C2/${classes}*${factor(divisionPercent)}`, divisionLimit, "bold|two|none|c|1|tmmm", { role: "division" });
+      else number(divisionRow, 7, 0, "bold|two|none|c|1|tmmm", { role: "division" });
       text(openingRow, 8, "학급당 학생수는 개설기준과 분반기준의 사이가 되도록 조정", "small|general|none|c|1|----");
       merge(8, openingRow, 9, divisionRow, "small|general|none|c|1|----");
       const divisionCell = "$H$3";
 
       for (const [semesterIndex, semester] of semesters.entries()) {
+        place = { kind: "semester", semesterIndex, groupIndex: null };
         const semesterStart = semesterIndex > 0 ? addRow(18) : rows.length + 1;
         const semesterRow = addRow(36.6);
         text(semesterRow, 1, semester.name, "semester|general|none|c|0|mmmm");
         merge(1, semesterRow, 2, semesterRow, "semester|general|none|c|0|mmmm");
 
         for (const [groupIndex, group] of semester.groups.entries()) {
+          place = { kind: "group", semesterIndex, groupIndex };
           const chunkStart = groupIndex === 0 ? semesterStart : addRow(18);
           chunks.push({ start: chunkStart, semesterIndex, semesterStart: groupIndex === 0 });
           const groupLabel = typeof aggregateGroupLabel === "function" ? aggregateGroupLabel(semester, group) : group.category;
           const choiceCount = Number(group.choiceCount);
           const hasChoice = Number.isInteger(choiceCount) && choiceCount > 0;
           const target = hasChoice && Number.isInteger(classes) && classes > 0 ? choiceCount * classes : null;
+          const courses = group.courses;
+          const groupTotal = courses.reduce((total, course) => total + (Number(course.classCount) || 0), 0);
+          const enrollmentTotal = courses.reduce((total, course) => total + (Number(course.enrollment) || 0), 0);
+          const info = { semesterIndex, groupIndex, semester, group, label: groupLabel, target, choiceCount: hasChoice ? choiceCount : null,
+            total: groupTotal, enrollmentTotal };
+          groups.push(info);
           // 그룹 이름은 블록 위 소제목 줄에 한 번만 쓴다(묶음이 여러 개여도 머리 칸은 모두 '과목').
           const labelRow = addRow(22);
-          text(labelRow, 1, groupLabel, "bold|general|none|l|0|----");
-          if (target !== null) text(labelRow, 3, `목표 총 학급수 ${target} (택${choiceCount} × ${classes}학급)`, "note|general|none|l|0|----");
+          text(labelRow, 1, groupLabel, "bold|general|none|l|0|----", { role: "group-label", group: info });
+          if (target !== null) text(labelRow, 3, `목표 총 학급수 ${target} (택${choiceCount} × ${classes}학급)`, "note|general|none|l|0|----", { role: "group-note", group: info });
 
           // 과목이 6개를 넘으면 고르게 나눠 여러 묶음으로 이어 쓴다(8과목 → 4+4, 16과목 → 6+5+5).
-          const courses = group.courses;
           const unitCount = Math.max(1, Math.ceil(courses.length / UNIT_SIZE));
           const baseSize = Math.floor(courses.length / unitCount);
           const units = [];
@@ -5398,20 +6015,21 @@
                 closed: !!course && (course.closed || !course.classCount) };
               const key = (role) => aggregateBlockStyle(role, "subject", options);
               if (!course) {
-                for (const role of Object.keys(labels)) blank(rowOf[role], column, key(role));
+                for (const role of Object.keys(labels)) blank(rowOf[role], column, key(role), { role: "filler", group: info });
                 continue;
               }
+              const meta = (role) => ({ role, course, group: info });
               const enrollment = Number(course.enrollment) || 0;
               const classCount = Number(course.classCount) || 0;
-              text(head, column, course.displayName || course.name, key("head"));
-              number(metric.count, column, enrollment, key("count"));
-              if (course.closed) text(metric.division, column, "폐강", key("division"));
-              else if (divisionLimit > 0) formula(metric.division, column, `${cellRef(column, metric.count)}/${divisionCell}`, enrollment / divisionLimit, key("division"));
-              else number(metric.division, column, 0, key("division"));
+              text(head, column, course.displayName || course.name, key("head"), meta("head"));
+              number(metric.count, column, enrollment, key("count"), meta("count"));
+              if (course.closed) text(metric.division, column, "폐강", key("division"), meta("division"));
+              else if (divisionLimit > 0) formula(metric.division, column, `${cellRef(column, metric.count)}/${divisionCell}`, enrollment / divisionLimit, key("division"), meta("division"));
+              else number(metric.division, column, 0, key("division"), meta("division"));
               // 개설 학급수는 앱의 값(자동 조정·직접 입력 반영, 폐강 0)을 그대로 쓴다.
-              number(metric.classes, column, classCount, key("classes"));
-              if (classCount > 0) formula(metric.average, column, `${cellRef(column, metric.count)}/${cellRef(column, metric.classes)}`, enrollment / classCount, key("average"));
-              else blank(metric.average, column, key("average"));
+              number(metric.classes, column, classCount, key("classes"), meta("classes"));
+              if (classCount > 0) formula(metric.average, column, `${cellRef(column, metric.count)}/${cellRef(column, metric.classes)}`, enrollment / classCount, key("average"), meta("average"));
+              else blank(metric.average, column, key("average"), meta("average"));
             }
             classRanges.push(rangeRef(2, metric.classes, 1 + width, metric.classes));
             countRanges.push(rangeRef(2, metric.count, 1 + width, metric.count));
@@ -5422,13 +6040,11 @@
           });
           // 총 학급수·신청 합은 그룹의 첫 '인원 수' 줄부터 마지막 줄까지 한 칸으로 병합한다.
           const valueRow = groupFirstRow + 1;
-          const groupTotal = courses.reduce((total, course) => total + (Number(course.classCount) || 0), 0);
-          const enrollmentTotal = courses.reduce((total, course) => total + (Number(course.enrollment) || 0), 0);
-          formula(valueRow, totalColumn, `SUM(${classRanges.join(",")})`, groupTotal, aggregateBlockStyle("value", "total"));
+          formula(valueRow, totalColumn, `SUM(${classRanges.join(",")})`, groupTotal, aggregateBlockStyle("value", "total"), { role: "total", group: info });
           merge(totalColumn, valueRow, totalColumn, groupLastRow, aggregateBlockStyle("value", "total"));
           // 신청 합÷택n: 모든 학생이 그룹에서 n과목씩 신청했으면 총학생수와 같아 누락·중복을 확인할 수 있다.
           formula(valueRow, memoColumn, `SUM(${countRanges.join(",")})${hasChoice ? `/${choiceCount}` : ""}`,
-            hasChoice ? enrollmentTotal / choiceCount : enrollmentTotal, aggregateBlockStyle("value", "memo"));
+            hasChoice ? enrollmentTotal / choiceCount : enrollmentTotal, aggregateBlockStyle("value", "memo"), { role: "memo", group: info });
           merge(memoColumn, valueRow, memoColumn, groupLastRow, aggregateBlockStyle("value", "memo"));
           // 목표(택n × 학급 수)나 총학생수와 다르면 연한 경고색(엑셀에서 학급수를 고치면 따라 바뀐다).
           if (target !== null) rules.push({ ref: cellRef(totalColumn, valueRow), value: String(target) });
@@ -5456,7 +6072,18 @@
         if (breakHere) { breaks.push(chunk.start - 1); used = 0; }
         used += height;
       });
+      return { summary, widths, lastColumn, rows, merges, rules, breaks, groups };
+    }
 
+    function createWorksheetXml(report, openingPercent, divisionPercent) {
+      const { widths, lastColumn, rows, merges, rules, breaks } = aggregateSheetModel(report, openingPercent, divisionPercent);
+      const styles = aggregateSheetStyles();
+      const style = (key) => {
+        const id = styles.index.get(key);
+        if (id === undefined) throw new Error(`집계표 서식이 없습니다: ${key}`);
+        return id;
+      };
+      const cellRef = (column, row) => `${columnName(column)}${row}`;
       const numberText = (value) => {
         const numeric = Number(value);
         return Number.isFinite(numeric) ? String(Number(numeric.toPrecision(15))) : "0";
@@ -5467,17 +6094,18 @@
           const cell = row.cells[column];
           if (!cell) continue;
           const reference = cellRef(column, rowIndex + 1);
-          if (cell.kind === "blank") cells.push(`<c r="${reference}" s="${cell.style}"/>`);
-          else if (cell.kind === "n") cells.push(`<c r="${reference}" s="${cell.style}"><v>${numberText(cell.value)}</v></c>`);
-          else if (cell.kind === "f") cells.push(`<c r="${reference}" s="${cell.style}"><f>${xmlEscape(cell.expression)}</f><v>${numberText(cell.value)}</v></c>`);
-          else cells.push(`<c r="${reference}" s="${cell.style}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell.value)}</t></is></c>`);
+          const id = style(cell.key);
+          if (cell.kind === "blank") cells.push(`<c r="${reference}" s="${id}"/>`);
+          else if (cell.kind === "n") cells.push(`<c r="${reference}" s="${id}"><v>${numberText(cell.value)}</v></c>`);
+          else if (cell.kind === "f") cells.push(`<c r="${reference}" s="${id}"><f>${xmlEscape(cell.expression)}</f><v>${numberText(cell.value)}</v></c>`);
+          else cells.push(`<c r="${reference}" s="${id}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cell.value)}</t></is></c>`);
         }
         return `<row r="${rowIndex + 1}" ht="${row.height}" customHeight="1">${cells.join("")}</row>`;
       }).join("");
       const columns = widths.map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const mergeXml = merges.length
-        ? `<mergeCells count="${merges.length}">${merges.map((reference) => `<mergeCell ref="${reference}"/>`).join("")}</mergeCells>`
+        ? `<mergeCells count="${merges.length}">${merges.map((item) => `<mergeCell ref="${item.ref}"/>`).join("")}</mergeCells>`
         : "";
       const ruleXml = rules.map((rule, index) =>
         `<conditionalFormatting sqref="${rule.ref}"><cfRule type="cellIs" dxfId="0" priority="${index + 1}" operator="notEqual"><formula>${rule.value}</formula></cfRule></conditionalFormatting>`).join("");
@@ -5485,6 +6113,180 @@
         ? `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">${breaks.map((id) => `<brk id="${id}" max="16383" man="1"/>`).join("")}</rowBreaks>`
         : "";
       return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${cellRef(lastColumn, rows.length)}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="16.5"/><cols>${columns}</cols><sheetData>${rowsXml}</sheetData>${mergeXml}${ruleXml}<pageMargins left="0.71" right="0.71" top="0.75" bottom="0.75" header="0.31" footer="0.31"/><pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="0"/>${breakXml}</worksheet>`;
+    }
+
+    // 화면용 칸 서식: 엑셀 서식 이름 → CSS 클래스와 테두리(가는 선·굵은 선·이중선). 같은 이름은 한 번만 계산한다.
+    function aggregateSheetCellCss(key) {
+      const cache = aggregateSheetCellCss.cache || (aggregateSheetCellCss.cache = new Map());
+      if (cache.has(key)) return cache.get(key);
+      const [font, format, fill, align, wrap, border] = String(key).split("|");
+      const line = { t: "1px solid #3a3a3a", m: "2px solid #111", d: "3px double #111" };
+      const style = ["left", "right", "top", "bottom"].map((side, index) =>
+        line[border?.[index]] ? `border-${side}:${line[border[index]]}` : "").filter(Boolean).join(";");
+      const result = { className: `af-${font} af-${align}${wrap === "1" ? " af-wrap" : ""}${fill === "yellow" ? " af-yellow" : ""}`, style, format };
+      cache.set(key, result);
+      return result;
+    }
+
+    // 4단계 화면의 집계표: 엑셀 시트와 같은 모델(aggregateSheetModel)을 같은 열 너비·행 높이·병합·테두리로 그리고,
+    // 양식 안에서 개설 학급수 고치기(입력 칸), 과목명 메뉴(개설·폐강·미정), 그룹 총 학급수 칸의 자동 조정·조정 취소,
+    // 과목 칸 모서리 표시(기준 미달·인원 초과·위계 경고)를 붙인다. attention: aggregateAttention 결과('처리할 것만').
+    function aggregateSheetHtml(model, { grade = "", closures = {}, round = "", locked = false, maxClassSize = 34, prereq = null,
+      attention = null, undoGroups = null } = {}) {
+      const { summary, widths, lastColumn, rows, merges, groups } = model;
+      const esc = typeof escapeHtml === "function" ? escapeHtml : (value) => String(value ?? "");
+      const gradeKey = String(grade || summary.grade);
+      // A열(여백)은 화면에 그리지 않는다. 열 너비는 엑셀과 같은 비율(1 = 약 8px).
+      const columnPx = widths.map((width) => Math.floor(width * 8 + 5));
+      const tableWidth = columnPx.slice(1).reduce((total, value) => total + value, 0);
+      const anchors = new Map();
+      const covered = new Set();
+      for (const item of merges) {
+        anchors.set(`${item.firstRow}:${item.firstColumn}`, item);
+        for (let row = item.firstRow; row <= item.lastRow; row++) {
+          for (let column = item.firstColumn; column <= item.lastColumn; column++) {
+            if (row !== item.firstRow || column !== item.firstColumn) covered.add(`${row}:${column}`);
+          }
+        }
+      }
+      const groupId = (info) => `${info.semester.name}\u0000${info.group.category}`;
+      const courseKey = (course) => `${gradeKey}:${course.column}`;
+      const shown = new Set(groups.filter((info) => !attention || attention.groups.has(groupId(info)) ||
+        info.group.courses.some((course) => attention.courses.has(courseKey(course)))).map((info) => `${info.semesterIndex}:${info.groupIndex}`));
+      const semestersShown = new Set([...shown].map((id) => id.split(":")[0]));
+      const rowShown = (row) => row.kind === "group" ? shown.has(`${row.semesterIndex}:${row.groupIndex}`)
+        : row.kind === "semester" ? semestersShown.has(String(row.semesterIndex)) : true;
+      const statuses = new Map();
+      const statusOf = (course) => {
+        if (statuses.has(course)) return statuses.get(course);
+        const key = courseKey(course);
+        const decision = aggregateClosureDecision(closures, key, course.atRisk);
+        const { over, overDivision } = aggregateCourseWarnings(course, summary, maxClassSize);
+        const prereqCount = prereq?.courses?.get(key)?.violators?.size || 0;
+        const average = (Number(course.averageClassSize) || 0).toFixed(1);
+        const lines = [];
+        if (course.closed) lines.push("폐강으로 정한 과목입니다(개설 학급수 0, 다음 차수 재신청 대상).");
+        if (course.atRisk) lines.push(`기준 미달: 신청 ${course.enrollment}명이 개설기준 ${Number(summary.openingLimit || 0).toFixed(2)}명보다 적습니다(폐강 확정 아님).`);
+        if (over) lines.push(`${maxClassSize}명 초과: 학급당 ${average}명이 최대 인원 ${maxClassSize}명을 넘습니다.`);
+        if (overDivision) lines.push(`분반기준 초과: 학급당 ${average}명이 분반기준 ${Number(summary.divisionLimit || 0).toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.`);
+        if (prereqCount) lines.push(`위계 경고 ${prereqCount}명: 선이수 과목 없이 신청한 학생이 있습니다.`);
+        if (!course.closed && decision === "") lines.push("교사 결정이 미정입니다. 개설 또는 폐강을 고르세요.");
+        if (!lines.length) lines.push("충족: 개설기준 이상이고 학급당 인원이 기준 안에 있습니다.");
+        const status = { key, decision, over, overDivision, prereqCount, lines, focus: attention ? attention.courses.has(key) : null };
+        statuses.set(course, status);
+        return status;
+      };
+      const formatValue = (cell, format) => {
+        if (cell.kind === "blank") return "";
+        if (cell.kind === "s") return esc(cell.value);
+        const numeric = Number(cell.value);
+        if (!Number.isFinite(numeric)) return "";
+        return format === "two" ? numeric.toFixed(2) : format === "one" ? numeric.toFixed(1) : String(Number(numeric.toPrecision(15)));
+      };
+      const lockNote = locked ? "확정된 차수입니다. 확정 해제 후 수정하세요." : "";
+      // 모서리 표시가 있는 칸은 그만큼 안쪽 여백을 줘서 가운데 값과 겹치지 않게 한다(글자 수로 어림).
+      const cornerPad = (label) => Math.round([...String(label)].reduce((total, character) =>
+        total + (/[가-힣]/.test(character) ? 10.5 : 6.5), 0) + 14);
+      const cellContent = (cell, format, classes, attrs, styles) => {
+        const meta = cell.meta;
+        const value = formatValue(cell, format);
+        if (!meta) return value;
+        const { role, course, group: info } = meta;
+        if (role === "perClass") {
+          attrs.push(`title="${esc(`${summary.students}명 ÷ ${summary.classes}학급(${summary.classSource === "planned" ? "내년도 편성 입력값" : "명단의 반 수"})`)}"`);
+          return value;
+        }
+        if (role === "students") { attrs.push('title="이 차수 신청 결과의 학생 수"'); return value; }
+        if (role === "group-note" && info) {
+          const diff = info.target === null ? 0 : info.total - info.target;
+          const plan = diff && typeof planGroupClassCounts === "function"
+            ? planGroupClassCounts(aggregatePlanCourses({ summary }, info.group), info.target, maxClassSize) : null;
+          return `${value}${diff ? ` <span class="af-group-diff">· 현재 ${info.total}학급 (${diff > 0 ? "+" : ""}${diff})</span>` : ' <span class="af-group-ok">· 일치 ✓</span>'}${plan && !plan.ok ? ` <span class="af-plan-message">${esc(aggregatePlanMessage(plan))}</span>` : ""}`;
+        }
+        if (role === "total" && info) {
+          const diff = info.target === null ? 0 : info.total - info.target;
+          const crowded = info.group.courses.some((item) => aggregateCourseWarnings(item, summary, maxClassSize).over);
+          if (diff) classes.push("af-off");
+          if (attention?.groups.has(groupId(info))) classes.push("is-attention");
+          const parts = [`<span class="af-total-value">${value}</span>`];
+          if (info.target !== null) parts.push(`<span class="af-total-target">목표 ${info.target}${diff ? ` (${diff > 0 ? "+" : ""}${diff})` : " ✓"}</span>`);
+          const lock = locked ? ` disabled title="${lockNote}"` : "";
+          if (info.target !== null && (diff || crowded)) {
+            parts.push(`<button type="button" class="af-mini-button" data-aggregate-adjust="group" data-grade="${esc(gradeKey)}" data-semester="${esc(info.semester.name)}" data-group="${esc(info.group.category)}"${lock} aria-label="${esc(info.label)} 학급수 자동 조정"><span>학급수</span> <span>자동 조정</span></button>`);
+          }
+          if (undoGroups?.has(groupId(info))) {
+            parts.push(`<button type="button" class="af-mini-button" data-aggregate-undo="${esc(gradeKey)}"${lock} aria-label="${esc(info.label)} 학급수 조정 취소">조정 취소</button>`);
+          }
+          return parts.join("");
+        }
+        if (role === "memo" && info) {
+          if (info.choiceCount && info.enrollmentTotal !== info.choiceCount * (Number(summary.students) || 0)) {
+            classes.push("af-off");
+            attrs.push(`title="${esc(`신청 합 ${info.enrollmentTotal} ÷ 택${info.choiceCount}이 총학생수 ${summary.students}명과 다릅니다(신청 누락·중복 확인).`)}"`);
+          }
+          return value;
+        }
+        if (!course) return value;
+        const status = statusOf(course);
+        const name = course.displayName || course.name;
+        if (status.focus === true) classes.push("is-attention");
+        else if (status.focus === false) classes.push("is-dimmed");
+        if (course.closed) classes.push("is-closed");
+        const infoButton = (label, className, title) =>
+          `<button type="button" class="af-tag ${className}" data-aggregate-course-info="${esc(status.key)}" title="${esc(title)}">${label}</button>`;
+        if (role === "head") {
+          const undecided = !course.closed && status.decision === "";
+          if (undecided) classes.push("is-undecided");
+          if (course.atRisk && !course.closed) classes.push("is-risk");
+          return `<button type="button" class="af-course" data-aggregate-course="${esc(status.key)}" data-closure-round="${esc(round)}" data-decision="${esc(status.decision)}" data-course-label="${esc(name)}" data-group-label="${esc(info.label)}" data-course-status="${esc(status.lines.join("\n"))}" data-prereq-count="${status.prereqCount}"${locked ? " data-locked" : ""} aria-haspopup="dialog" aria-label="${esc(`${name} — 개설/폐강/미정 결정(지금 ${status.decision === "open" ? "개설" : status.decision === "closed" ? "폐강" : "미정"})`)}">${value}</button>`;
+        }
+        if (role === "count") {
+          if (course.atRisk && !course.closed) classes.push("is-risk");
+          const tagLabel = course.closed ? "" : course.atRisk ? "미달" : status.decision === "" ? "미정" : "";
+          const tag = tagLabel ? infoButton(tagLabel, course.atRisk ? "is-risk" : "is-undecided", status.lines.join("\n")) : "";
+          const badge = status.prereqCount && typeof courseCheckCourseBadges === "function" ? courseCheckCourseBadges(prereq, status.key, name) : "";
+          if (tag) styles.push(`padding-left:${cornerPad(tagLabel)}px`);
+          if (badge) styles.push(`padding-right:${cornerPad(`위계 경고 ${status.prereqCount}`)}px`);
+          return `${tag ? `<span class="af-corner af-corner-left">${tag}</span>` : ""}${value}${badge ? `<span class="af-corner af-corner-right">${badge}</span>` : ""}`;
+        }
+        if (role === "classes") {
+          const lock = locked ? ` disabled title="${lockNote}"`
+            : course.closed ? ' disabled title="폐강으로 정한 과목은 0학급입니다. 과목명을 눌러 결정을 바꾸면 수정할 수 있습니다."' : "";
+          return `<input class="aggregate-class-input af-class-input" type="number" min="0" step="1" value="${esc(course.classCount)}" aria-label="${esc(info.semester.name)} ${esc(name)} 개설 학급수${course.closed ? " (폐강)" : ""}" data-grade="${esc(gradeKey)}" data-course-column="${esc(course.column)}" data-focus-key="aggregate-class:${esc(gradeKey)}:${esc(course.column)}"${lock}>`;
+        }
+        if (role === "average" && (status.over || status.overDivision)) {
+          classes.push("is-over");
+          const label = status.over ? `${maxClassSize}명 초과` : "분반기준 초과";
+          styles.push(`padding-right:${cornerPad(label)}px`);
+          return `${value}<span class="af-corner af-corner-right">${infoButton(label, "is-over", status.lines.join("\n"))}</span>`;
+        }
+        return value;
+      };
+      const body = [];
+      rows.forEach((row, rowIndex) => {
+        if (!rowShown(row)) return;
+        const rowNumber = rowIndex + 1;
+        const cells = [];
+        for (let column = 1; column <= lastColumn; column++) {
+          if (covered.has(`${rowNumber}:${column}`)) continue;
+          const span = anchors.get(`${rowNumber}:${column}`);
+          const spanAttrs = span ? `${span.lastColumn > span.firstColumn ? ` colspan="${span.lastColumn - span.firstColumn + 1}"` : ""}${span.lastRow > span.firstRow ? ` rowspan="${span.lastRow - span.firstRow + 1}"` : ""}` : "";
+          const cell = row.cells[column];
+          if (!cell) { cells.push(`<td${spanAttrs}></td>`); continue; }
+          const css = aggregateSheetCellCss(cell.key);
+          const classes = [css.className];
+          const attrs = [];
+          const styles = css.style ? [css.style] : [];
+          if (cell.meta?.role) attrs.push(`data-af-role="${cell.meta.role}"`);
+          const content = cellContent(cell, css.format, classes, attrs, styles);
+          cells.push(`<td class="${classes.join(" ")}"${styles.length ? ` style="${styles.join(";")}"` : ""}${spanAttrs}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${content}</td>`);
+        }
+        body.push(`<tr style="height:${Math.round(row.height * 1.2)}px">${cells.join("")}</tr>`);
+      });
+      const columns = columnPx.slice(1).map((value) => `<col style="width:${(value / tableWidth * 100).toFixed(3)}%">`).join("");
+      const empty = !groups.length ? '<p class="aggregate-empty">집계할 과목이 없습니다.</p>'
+        : attention && !shown.size ? '<p class="aggregate-empty">처리할 과목이 없습니다. 미정인 기준 미달 과목, 학급당 인원 초과, 위계 경고, 목표 학급수 불일치가 모두 없습니다.</p>' : "";
+      return `<div class="aggregate-sheet-wrap aggregate-form-wrap"><table class="aggregate-form${attention ? " is-attention-mode" : ""}" data-aggregate-form="${esc(gradeKey)}" style="max-width:${tableWidth}px"><colgroup>${columns}</colgroup><tbody>${body.join("")}</tbody></table>${empty}</div>`;
     }
 
     // 4단계 집계표 엑셀의 학년 시트 이름(양식처럼 신청 학년만: '2학년', '3학년')과 인쇄 설정.
@@ -5681,7 +6483,8 @@
       renderPreview();
       renderSemesterClassifier();
       renderAggregate();
-      persistState();
+      // 글자를 칠 때마다 4MB를 직렬화하지 않고 묶어서 저장한다.
+      if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
     }
 
     function resultImportOptions(grade) {
@@ -6209,6 +7012,17 @@
       if (button.dataset.cohortUpload) curriculumPlanInput.click();
     });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
+    // Ctrl+Z(맥 ⌘+Z): 1단계 편제표 편집 실행취소. 편제표 칸에 글자를 입력하는 중이면 브라우저 기본(글자 되돌리기)을 그대로 두고,
+    // 칸 밖(고른 상태·포커스 없음)일 때만 편제표를 되돌린다. 다른 단계나 편제표 밖 입력칸에서는 가로채지 않는다.
+    document.addEventListener("keydown", (event) => {
+      if (!curriculumUndoShortcutApplies(event)) return;
+      event.preventDefault();
+      if (state.curriculumUndoStack.length) undoCurriculumEdit();
+      else {
+        status.style.color = "#596780";
+        status.textContent = "되돌릴 편제표 변경이 없습니다.";
+      }
+    });
     $("#addCurriculumPlanRow").addEventListener("click", appendBlankImportedPlanRow);
     $("#curriculumPlanFilters").addEventListener("change", (event) => {
       const filter = event.target.closest("select[id^='curriculumFilter']");
@@ -6440,12 +7254,25 @@
     }, true);
     $("#curriculumTopToggle").addEventListener("click", () => {
       state.curriculumTopCollapsed = !state.curriculumTopCollapsed;
-      $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", state.curriculumTopCollapsed);
-      $("#curriculumTopToggle").setAttribute("aria-expanded", String(!state.curriculumTopCollapsed));
-      $("#curriculumTopToggle").textContent = state.curriculumTopCollapsed ? "상단 펼치기" : "상단 접기";
+      syncCurriculumTopToggle();
       renderCurriculumStep();
       persistState();
       scheduleCurriculumTableSize();
+    });
+    // 변경 상태 문구의 '이력 확인': 위쪽을 펼치고 변경 이력에서 비교 기준 시점 → 현재 편제표 비교를 연다(삭제된 과목도 보인다).
+    $("#curriculumChangeSummary").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-change-history]");
+      if (!button) return;
+      if (state.curriculumTopCollapsed) $("#curriculumTopToggle").click();
+      const panel = $("#curriculumVersionsPanel");
+      panel.open = true;
+      panel.querySelector(`[data-version-compare="${CSS.escape(button.dataset.changeHistory)}"][data-version-mode="current"]`)?.click();
+      panel.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    // 손잡이뿐 아니라 경계선 어디를 눌러도 접고 펼친다(Enter·Space는 손잡이 단추가 받는다).
+    $("#curriculumTopDivider")?.addEventListener("click", (event) => {
+      if (event.target.closest("#curriculumTopToggle")) return;
+      $("#curriculumTopToggle").click();
     });
     window.addEventListener("resize", scheduleCurriculumTableSize);
     $("#teacherWorkspace").addEventListener("toggle", scheduleCurriculumTableSize, true);
@@ -6602,29 +7429,6 @@
     document.addEventListener("pointerup", stopCurriculumRangeSelection);
     document.addEventListener("pointercancel", stopCurriculumRangeSelection);
     window.addEventListener("blur", stopCurriculumRangeSelection);
-    $("#curriculumPlanWrap").addEventListener("keydown", (event) => {
-      const cell = event.target.closest("[data-choice-selectable]");
-      if (!curriculumCellSelectionMode || !cell) return;
-      if (event.key === " " || event.key === "Enter") {
-        event.preventDefault();
-        selectCurriculumCellRange(cell, event.shiftKey);
-        if (state.curriculumImportedLayout?.planData && typeof showCurriculumSelectionActions === "function") showCurriculumSelectionActions(curriculumCellSelection);
-      } else if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
-        event.preventDefault();
-        const row = event.key === "ArrowUp" ? Number(cell.dataset.choiceStart ?? cell.dataset.sourceRow) - 1 :
-          event.key === "ArrowDown" ? Number(cell.dataset.choiceEnd ?? cell.dataset.sourceRow) + 1 : Number(cell.dataset.displayRow ?? cell.dataset.sourceRow);
-        const column = event.key === "ArrowLeft" ? Number(cell.dataset.sourceColumn) - 1 :
-          event.key === "ArrowRight" ? Number(cell.dataset.choiceEndColumn ?? cell.dataset.sourceColumn) + 1 : Number(cell.dataset.sourceColumn);
-        const next = [...$("#curriculumPlanWrap").querySelectorAll("[data-choice-selectable]")].find((item) =>
-          row >= Number(item.dataset.choiceStart ?? item.dataset.sourceRow) && row <= Number(item.dataset.choiceEnd ?? item.dataset.sourceRow) &&
-          column >= Number(item.dataset.sourceColumn) && column <= Number(item.dataset.choiceEndColumn ?? item.dataset.sourceColumn));
-        if (next) {
-          if (!curriculumSelectionAnchor) selectCurriculumCellRange(cell, false);
-          selectCurriculumCellRange(next, event.shiftKey);
-          next.focus();
-        }
-      }
-    });
     function applyCurriculumCellSelection(release = false, insertion = "") {
       try {
         if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) throw new Error("저장 원본을 먼저 복원하세요.");
@@ -6790,9 +7594,13 @@
       const button = event.target.closest("[data-student-id]");
       if (!button) return;
       state.selectedId = button.dataset.studentId;
-      renderRoster();
-      renderPreview();
-      persistState();
+      // 목록을 다시 그려도 목록 스크롤과 누른 학생 단추의 포커스를 그대로 둔다(view-keep.js).
+      preserveViewDuring("#studentList", () => {
+        renderRoster();
+        renderPreview();
+      });
+      // 고른 학생은 화면 위치일 뿐이라 4MB 전체 저장을 바로 하지 않는다(다음 저장·창 닫기 때 함께 저장).
+      persistStateSoon({ viewOnly: true });
     });
     function openCertificateInfoDialog() {
       const dialog = document.getElementById("certificateInfoDialog");
@@ -6835,7 +7643,7 @@
         // 집계표 안에 개설/폐강 결정 칸이 함께 있으므로 집계표만 다시 그리면 결정 기본값도 함께 갱신된다.
         if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
         renderAggregate();
-        persistState();
+        persistStateSoon();
       });
     }
     $("#openAggregateSettings").addEventListener("click", () => {
@@ -6865,6 +7673,18 @@
       }
     });
     $("#aggregateContent").addEventListener("click", (event) => {
+      // 과목명(또는 그 과목 칸의 모서리 표시)을 누르면 개설·폐강·미정 메뉴를 연다. 같은 칸을 다시 누르면 닫는다.
+      const courseHead = event.target.closest("[data-aggregate-course]");
+      const courseInfo = event.target.closest("[data-aggregate-course-info]");
+      if (courseHead || courseInfo) {
+        const anchor = courseHead || courseInfo;
+        const head = courseHead || [...$("#aggregateContent").querySelectorAll("[data-aggregate-course]")]
+          .find((item) => item.dataset.aggregateCourse === courseInfo.dataset.aggregateCourseInfo);
+        const menu = document.getElementById("aggregateCourseMenu");
+        if (menu && !menu.hidden && menu.aggregateAnchor === anchor) closeAggregateCourseMenu();
+        else if (head) openAggregateCourseMenu(head, anchor);
+        return;
+      }
       const adjust = event.target.closest("[data-aggregate-adjust]");
       const undo = event.target.closest("[data-aggregate-undo]");
       if (!adjust && !undo) return;
@@ -6891,25 +7711,18 @@
         return;
       }
       renderAggregate();
-      persistState();
+      persistStateSoon();
+    });
+    // 과목 메뉴 밖을 누르거나 Esc를 누르면 메뉴를 닫는다.
+    document.addEventListener("pointerdown", (event) => {
+      const menu = document.getElementById("aggregateCourseMenu");
+      if (!menu || menu.hidden || menu.contains(event.target) || event.target.closest?.("[data-aggregate-course], [data-aggregate-course-info]")) return;
+      closeAggregateCourseMenu();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeAggregateCourseMenu(true);
     });
     $("#aggregateContent").addEventListener("change", (event) => {
-      const select = event.target.closest("[data-closure-key]");
-      if (select) {
-        const round = select.dataset.closureRound;
-        const key = select.dataset.closureKey;
-        if (typeof isRoundLocked === "function" && isRoundLocked(round)) {
-          renderAggregate();
-          return;
-        }
-        if (!state.roundClosures[round]) state.roundClosures[round] = {};
-        state.roundClosures[round][key] = select.value;
-        persistState();
-        renderAggregate();
-        if (Number(state.workflowStep) === 4) renderRetakePanel();
-        if (typeof updateRetakeReadiness === "function") updateRetakeReadiness();
-        return;
-      }
       const input = event.target.closest(".aggregate-class-input");
       if (!input) return;
       if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
@@ -6928,7 +7741,7 @@
       if (value === null) delete state.classOverrides[key];
       else state.classOverrides[key] = value;
       renderAggregate();
-      persistState();
+      persistStateSoon();
     });
     document.addEventListener("scroll", (event) => {
       const wrap = event.target.closest?.(".aggregate-sheet-wrap");
@@ -7106,6 +7919,8 @@
       }
     });
     $("#downloadWorkspaceBackup").addEventListener("click", downloadWorkspaceBackup);
+    $("#workspaceFailureBackup").addEventListener("click", downloadWorkspaceBackup);
+    $("#workspaceDataMenu").addEventListener("toggle", (event) => { if (event.currentTarget.open) renderWorkspaceStorageUsage(true); });
     $("#resetWorkspaceAll").addEventListener("click", resetWorkspaceAll);
     document.addEventListener("click", (event) => {
       const menu = $("#workspaceDataMenu");
@@ -7119,6 +7934,10 @@
     $("#retryWorkspaceSave").addEventListener("click", () => {
       if (statePersistenceBlocked) {
         if (!window.confirm("현재 화면의 미저장 변경 대신 브라우저 저장 원본을 다시 읽습니다. 필요한 자료를 먼저 백업했나요?")) return;
+        if (workspaceStoreState.active || (typeof workspaceStoreParseRecord === "function" && workspaceStoreParseRecord(readWorkspaceRecord()))) {
+          reloadWorkspaceFromStore();
+          return;
+        }
         statePersistenceSuppressed++;
         try {
           restorePersistedState();
@@ -7135,6 +7954,12 @@
     $("#resumeWorkspaceSave").addEventListener("click", () => {
       if (!window.confirm("보호 중인 기존 저장 원본을 현재 화면의 자료로 교체합니다. 기존 자료가 사라질 수 있습니다. 작업 자료 백업을 먼저 내려받았나요?")) return;
       statePersistenceBlocked = false;
+      if (workspaceStoreState.active) {
+        // 새 저장소는 저장 번호 확인 없이 지금 자료로 모두 다시 쓴다.
+        workspaceStoreState.force = true;
+        workspaceStoreState.known = new Set();
+        workspaceStoreState.lastCore = null;
+      }
       try {
         lastSavedWorkspace = localStorage.getItem(STORAGE_KEY);
       } catch (error) {
@@ -7202,14 +8027,16 @@
     window.addEventListener("beforeunload", (event) => {
       if (workspaceResetting || !statePersistenceReady) return;
       if (!statePersistenceBlocked) persistState();
-      if (workspaceSaveFailed || statePersistenceBlocked ||
+      // 새 저장소에 아직 쓰는 중이면(보통 0.1초 안에 끝난다) 닫기 전에 한 번 묻는다.
+      if (workspaceSaveFailed || statePersistenceBlocked || workspaceStoreBusy() ||
           (typeof getApplicationGroupStorageIssue === "function" && getApplicationGroupStorageIssue())) {
         event.preventDefault();
         event.returnValue = "";
       }
     });
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden" && statePersistenceReady && statePersistenceTimer !== null) persistState();
+      // 미뤄 둔 화면 위치(단계·고른 학생)도 창을 숨길 때 저장한다.
+      if (document.visibilityState === "hidden" && statePersistenceReady && (statePersistenceTimer !== null || stateViewOnlyDirty)) persistState();
     });
     document.addEventListener("keydown", (event) => {
       const label = event.target.closest('label[for][role="button"]');
@@ -7219,24 +8046,31 @@
       if (input && !input.disabled) input.click();
     });
     window.addEventListener("hashchange", () => window.location.reload());
+    let workspaceStartupBoot = null;
     const studentApplicationRoute = showStudentApplicationEntry();
     if (!studentApplicationRoute) {
       $("#teacherWorkspace").classList.remove("hidden");
       // 확인 날짜는 저장된 값이 없으면 오늘 날짜로 채운다(저장된 값이 있으면 복원이 덮어쓴다).
       if (!String($("#confirmDate").value || "").trim()) $("#confirmDate").value = certificateTodayLabel();
-      restorePersistedState();
+      // 새 저장소(IndexedDB)에 저장된 자료면 작은 설정만 먼저 맞추고, 큰 자료는 읽는 대로 다시 그린다(그동안 화면 잠금).
+      workspaceStartupBoot = beginWorkspaceStoreBoot();
+      // 다른 모듈이 아직 안 읽혀 DOMContentLoaded에서 다시 그리므로, 복원 중에는 단계 화면을 그리지 않고 미뤄 둔다(view-keep.js).
+      const restoreStartup = () => restorePersistedState(workspaceStartupBoot?.settingsRaw);
+      if (typeof holdStepRenders === "function") holdStepRenders(restoreStartup);
+      else restoreStartup();
+      if (workspaceStartupBoot) {
+        $("#teacherWorkspace").inert = true;
+        $("#teacherWorkspace").setAttribute("aria-busy", "true");
+        updateWorkspaceSaveStatus("저장된 자료를 불러오는 중");
+      }
       $("#certificateSchoolName").value = $("#schoolName").value;
       // 결과 검증·차수 확정·시수 통계 모듈은 app.js 다음에 로드되므로 모두 로드된 뒤 한 번 더 그린다.
       document.addEventListener("DOMContentLoaded", () => {
-        refreshCurriculumDerivedPlans();
-        renderAggregate();
-        renderWorkflowLayout();
-        if (statePersistenceTimer !== null) {
-          workspaceStartupFlush = true;
-          try { persistState(); } finally { workspaceStartupFlush = false; }
-        }
-        // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js).
-        if (typeof reconvertCurriculumOriginals === "function") reconvertCurriculumOriginals({ startup: true }).catch(() => {});
+        finishWorkspaceStartup(workspaceStartupBoot).catch((error) => {
+          updateWorkspaceSaveStatus(`복원 실패 · 기존 저장 원본 보호 중: ${error?.message || error}`, true);
+        });
       }, { once: true });
+    } else {
+      resolveWorkspaceStartup?.();
     }
-    statePersistenceReady = !studentApplicationRoute;
+    statePersistenceReady = !studentApplicationRoute && !workspaceStartupBoot;

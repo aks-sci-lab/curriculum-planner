@@ -386,7 +386,39 @@ function curriculumReconvertStillCurrent(target) {
     !(state.curriculumPlanType !== "annual" && String(state.curriculumCohortYear) === target.year && state.curriculumImportedLayout !== target.layout);
 }
 
-function curriculumReconvertCommit(target, data, template, basis) {
+// 같은 원본으로 저장한 예전 이력(예전 변환기)도 새 변환기로 다시 읽은 값으로 맞춘다: 각 시점의 '업로드 뒤 고친 곳'을
+// 새로 읽은 데이터(fresh)에 다시 적용한다. 원본 재변환은 교사의 편집이 아니므로 그 시점과의 비교에 서식·자동 수정·교차집중 표기
+// 차이가 변경으로 잡히지 않게 한다. 다시 적용할 수 없는 곳(충돌)이 있거나 업로드 시점 데이터(base)가 없으면 그 시점은 그대로 둔다.
+// 돌려주는 값: 정규화한 이력 수
+function curriculumReconvertNormalizeVersions(year, archiveId, base, fresh) {
+  if (typeof state === "undefined" || !archiveId || !base?.data || !fresh?.data) return 0;
+  let count = 0;
+  for (const version of state.curriculumVersions?.[String(year)] || []) {
+    const saved = version?.snapshot?.layout;
+    if (!saved?.rows || saved.archiveId !== archiveId || saved.derived) continue;
+    let source = saved.planData ? saved : null;
+    if (!source && typeof curriculumLayoutData === "function") source = curriculumLayoutData(saved);
+    if (!source?.planData || !source.planTemplate) continue;
+    if ((Number(source.planData.converter) || 0) >= PLAN_DATA_CONVERTER) continue;
+    let result;
+    try {
+      const edits = planReconvertEdits(base, { data: source.planData, template: source.planTemplate });
+      result = planReconvertApply(base, fresh, edits);
+    } catch { continue; }
+    if (result.conflicts.length) continue;
+    const next = planDataClone({ ...saved, planData: undefined, planTemplate: undefined });
+    applyCurriculumData(next, result.data, result.template);
+    version.snapshot.layout = next;
+    if (typeof compactCurriculumEntries === "function") {
+      try { version.plan = compactCurriculumEntries(next, version.snapshot.plan || []); } catch { /* 요약은 예전 값 유지 */ }
+    }
+    version.normalized = { converter: PLAN_DATA_CONVERTER, from: Number(source.planData.converter) || 1, at: new Date().toISOString() };
+    count++;
+  }
+  return count;
+}
+
+function curriculumReconvertCommit(target, data, template, basis, { base = null, fresh = null } = {}) {
   const next = planDataClone({ ...target.layout, changeBaseline: undefined, changeBaselineError: undefined });
   delete next.reconvertPending;
   delete next.reconvertNotice;
@@ -405,9 +437,11 @@ function curriculumReconvertCommit(target, data, template, basis) {
     item.plan = curriculumPlanFromLayout(next, item.fileName, item.plan);
     item.templateRows = item.plan.map((row) => normalizeCurriculumPlanRow(row));
   }
+  // 예전 이력도 같은 변환기로 맞춘 뒤 재변환을 이력에 남긴다(비교 기준은 curriculumComparisonVersion: 정규화된 마지막 저장 시점).
+  curriculumReconvertNormalizeVersions(target.year, target.layout.archiveId, base, fresh);
   if (typeof recordCurriculumVersion === "function") {
     const fileName = target.active ? state.curriculumPlanFileName : state.curriculumCohorts?.[target.year]?.fileName;
-    recordCurriculumVersion(target.year, next, { reason: "원본 다시 읽기(변환기 갱신)", basis, fileName, auto: true });
+    recordCurriculumVersion(target.year, next, { reason: "원본 다시 읽기(변환기 갱신)", basis, fileName, auto: true, reconvert: true });
   }
   return next;
 }
@@ -487,7 +521,7 @@ async function reconvertCurriculumLayout(target, { ask = true } = {}) {
   const summary = planReconvertSummaryText(planReconvertSummary(base || current, { data, template }));
   const replay = kept.length && !unknown ? ` · 업로드 뒤 고친 ${kept.length}곳 다시 적용` : "";
   const dropped = lost.length ? ` · 고친 곳 ${lost.length}곳은 원본 값으로` : "";
-  curriculumReconvertCommit(target, data, template, `${summary}${replay}${dropped}`);
+  curriculumReconvertCommit(target, data, template, `${summary}${replay}${dropped}`, { base, fresh });
   try { await storeCurriculumOrigin({ archiveId: target.layout.archiveId, planData: fresh.data, planTemplate: fresh.template }); } catch { /* 다음 갱신 때 이력에서 찾는다 */ }
   return { status: "done", text: `${label}를 원본으로 다시 읽었습니다(${summary}${replay}${dropped})` };
 }

@@ -1,34 +1,37 @@
 "use strict";
 // 내년도 교과별 시수 통계: 입학연도별 편제표와 확정된 수강신청 결과로 교과(담당 교과)별 학기 시수와
 // 교사 1인당 평균 시수를 계산한다. 내년도 G학년은 (내년도 − G + 1)학년도 입학생 편제표를 쓴다.
+// form: 원래 양식(학교 교과별 시수표)의 세부 칸 이름, staff: 메모 '○○학년도 ⇒ … 증/감'에 쓰는 이름.
 var HOURS_DEPARTMENTS = [
-  { id: "국어", group: "국어", label: "" },
-  { id: "수학", group: "수학", label: "" },
-  { id: "영어", group: "영어", label: "" },
-  { id: "과학-공통", group: "과학", label: "공통", common: true },
-  { id: "과학-물리", group: "과학", label: "물리" },
-  { id: "과학-화학", group: "과학", label: "화학" },
-  { id: "과학-생명", group: "과학", label: "생명" },
-  { id: "과학-지구", group: "과학", label: "지구" },
-  { id: "사회-공통", group: "사회", label: "공통", common: true },
-  { id: "사회-한국사", group: "사회", label: "한국사·역사" },
-  { id: "사회-지리", group: "사회", label: "지리" },
-  { id: "사회-일사", group: "사회", label: "일반사회" },
-  { id: "사회-윤리", group: "사회", label: "윤리" },
-  { id: "체육", group: "체육·예술", label: "체육" },
-  { id: "음악", group: "체육·예술", label: "음악" },
-  { id: "미술", group: "체육·예술", label: "미술" },
-  { id: "정보", group: "생활·교양", label: "정보" },
-  { id: "기술가정", group: "생활·교양", label: "기술·가정" },
-  { id: "제2외국어", group: "생활·교양", label: "제2외국어" },
-  { id: "교양", group: "생활·교양", label: "교양" },
-  { id: "진로", group: "생활·교양", label: "진로", excluded: true },
-  { id: "기타", group: "기타", label: "" }
+  { id: "국어", group: "국어", label: "", staff: "국어과" },
+  { id: "수학", group: "수학", label: "", staff: "수학과" },
+  { id: "영어", group: "영어", label: "", staff: "영어과" },
+  { id: "과학-공통", group: "과학", label: "공통", common: true, staff: "과학(공통)" },
+  { id: "과학-물리", group: "과학", label: "물리", staff: "물리" },
+  { id: "과학-화학", group: "과학", label: "화학", staff: "화학" },
+  { id: "과학-생명", group: "과학", label: "생명", staff: "생명과학" },
+  { id: "과학-지구", group: "과학", label: "지구", staff: "지구과학" },
+  { id: "사회-공통", group: "사회", label: "공통", common: true, staff: "사회(공통)" },
+  { id: "사회-한국사", group: "사회", label: "한국사·역사", form: "한국사", staff: "역사과" },
+  { id: "사회-지리", group: "사회", label: "지리", staff: "지리" },
+  { id: "사회-일사", group: "사회", label: "일반사회", form: "일사", staff: "일반사회" },
+  { id: "사회-윤리", group: "사회", label: "윤리", staff: "윤리" },
+  { id: "체육", group: "체육·예술", label: "체육", staff: "체육과" },
+  { id: "음악", group: "체육·예술", label: "음악", staff: "음악과" },
+  { id: "미술", group: "체육·예술", label: "미술", staff: "미술과" },
+  { id: "정보", group: "생활·교양", label: "정보", staff: "정보과" },
+  { id: "기술가정", group: "생활·교양", label: "기술·가정", form: "기술가정", staff: "기술가정과" },
+  { id: "제2외국어", group: "생활·교양", label: "제2외국어", staff: "제2외국어과" },
+  { id: "교양", group: "생활·교양", label: "교양", staff: "교양" },
+  { id: "진로", group: "생활·교양", label: "진로", form: "교양", excluded: true, staff: "진로" },
+  { id: "기타", group: "기타", label: "", staff: "기타" }
 ];
 // 교과 외(비교과) 교사. 교과 평균 시수에는 넣지 않고, 맡은 수업(상세 표에서 과목 지정 또는 직접 입력)이 있으면 1인당 시수를 따로 보인다.
+// 순서는 원래 양식 메모('비교과 교사 : 특수2, 영양1, 보건2, 사서1')를 따른다.
 var HOURS_NON_TEACHING = [
-  { id: "보건", label: "보건교사" },
+  { id: "특수", label: "특수교사" },
   { id: "영양", label: "영양교사" },
+  { id: "보건", label: "보건교사" },
   { id: "사서", label: "사서교사" },
   { id: "상담", label: "전문상담교사" }
 ];
@@ -53,7 +56,7 @@ function hoursSettings(year = hoursTargetYear(), create = false) {
     if (create && /^\d{4}$/.test(year)) state.hoursStats[year] = entry;
   }
   for (const key of ["classCounts", "teachers", "departmentOverrides", "classOverrides", "allocations", "previousAverages", "sourceRounds", "lastAverages",
-    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes"]) {
+    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative"]) {
     if (!hoursPlainObject(entry[key])) entry[key] = {};
   }
   return entry;
@@ -65,6 +68,17 @@ function hoursNumber(value, { integer = false, max = 1000 } = {}) {
   if (!Number.isFinite(number) || number < 0 || number > max) return null;
   if (integer && !Number.isInteger(number)) return null;
   return number;
+}
+
+// 창체 학급당 학기 시수: 원래 양식처럼 자율·진로로 나눠 적는다(창체 행의 학점 칸). 예전 자료(창체 시수 하나)는 진로 1 + 나머지 자율로 본다.
+var HOURS_CREATIVE_PARTS = ["자율", "진로"];
+function hoursCreativeParts(settings) {
+  const parts = hoursPlainObject(settings?.creative) ? settings.creative : {};
+  const stored = HOURS_CREATIVE_PARTS.map((part) => hoursNumber(parts[part], { max: 10 }));
+  if (stored.some((value) => value !== null)) return Object.fromEntries(HOURS_CREATIVE_PARTS.map((part, index) => [part, stored[index] ?? 0]));
+  const total = hoursNumber(settings?.creativeHours, { max: 10 }) ?? 2;
+  const career = Math.min(1, total);
+  return { 자율: total - career, 진로: career };
 }
 
 function nextYearClassBases() {
@@ -93,7 +107,21 @@ function hoursDepartmentName(id) {
   const role = hoursNonTeachingId(id);
   if (role) return `${HOURS_NON_TEACHING.find((item) => item.id === role).label}(비교과)`;
   const department = hoursDepartment(id);
-  return department.label && department.label !== department.group ? `${department.group}·${department.label}` : department.group;
+  if (!department.label || department.label === department.group) return department.group;
+  // '체육·예술', '생활·교양'은 여러 교과(군)을 묶은 이름이라 세부 교과 이름만 쓴다(체육·음악·정보·기술·가정 …).
+  if (department.group.includes("·")) return department.label;
+  return `${department.group}(${department.label})`;
+}
+
+// 원래 양식 세부 칸 이름: 한국사·일사·기술가정처럼 양식에 쓰는 이름, 제2외국어는 개설하는 과목이 한 언어뿐이면 그 언어(일본어).
+var HOURS_LANGUAGE_PATTERN = /^(일본어|중국어|프랑스어|독일어|스페인어|러시아어|아랍어|베트남어|한문)/;
+function hoursFormLabel(definition, items = []) {
+  if (definition.id === "제2외국어") {
+    const opened = items.filter((item) => item.classes > 0 || item.manual);
+    const languages = new Set((opened.length ? opened : items).map((item) => String(item.subject).replace(/\s+/g, "").match(HOURS_LANGUAGE_PATTERN)?.[1] || "제2외국어"));
+    return languages.size === 1 ? [...languages][0] : "제2외국어";
+  }
+  return definition.form ?? definition.label;
 }
 
 function hoursDefaultDepartment(subject, area = "") {
@@ -328,6 +356,37 @@ function hoursPerTeacherRange(list) {
   return values.length ? [Math.min(...values), Math.max(...values)] : null;
 }
 
+// 배분 메모에 쓰는 줄인 과목명(원래 양식: 통과·과탐실·융과·기환·통사·사문탐·기후지속). 목록에 없으면 낱말 첫 글자로 줄인다.
+var HOURS_SHORT_SUBJECTS = [
+  [/^통합과학/, "통과"], [/^과학탐구실험/, "과탐실"], [/^융합과학/, "융과"], [/^기후변화와환경생태/, "기환"],
+  [/^통합사회/, "통사"], [/^사회문제탐구/, "사문탐"], [/^기후변화와지속가능/, "기후지속"], [/^과학의역사/, "과역"], [/^과학과제/, "과과탐"]
+];
+function hoursShortSubject(subject) {
+  const compact = String(subject ?? "").replace(/\s+/g, "");
+  const known = HOURS_SHORT_SUBJECTS.find(([pattern]) => pattern.test(compact));
+  if (known) return known[1];
+  const words = String(subject ?? "").replace(/[0-9ⅠⅡⅢ]+$/u, "").trim().split(/\s+/).filter(Boolean);
+  return words.length > 1 ? words.map((word) => word[0]).join("") : (words[0] || "").slice(0, 3);
+}
+
+// 메모 '◈ 2027학년도 ⇒ 국어과, 기술가정과 각1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증'.
+// rows: [{ name, previous, current }] (교과 순서). 전년도 교사 수가 하나도 없으면 빈 문자열.
+function hoursTeacherChangeLine(year, rows) {
+  const list = (rows || []).filter((row) => Number.isFinite(row.previous) || Number.isFinite(row.current));
+  if (!list.some((row) => Number.isFinite(row.previous))) return "";
+  const groups = [];
+  for (const sign of [-1, 1]) {
+    const changes = list.map((row) => ({ name: row.name, delta: Math.round(((Number(row.current) || 0) - (Number(row.previous) || 0)) * 100) / 100 }))
+      .filter((row) => Math.sign(row.delta) === sign);
+    const sizes = [...new Set(changes.map((row) => Math.abs(row.delta)))].sort((a, b) => a - b);
+    for (const size of sizes) {
+      const names = changes.filter((row) => Math.abs(row.delta) === size).map((row) => row.name);
+      groups.push(`${names.join(", ")} ${names.length > 1 ? "각" : ""}${size}명 ${sign < 0 ? "감" : "증"}`);
+    }
+  }
+  return `◈ ${year}학년도 ⇒ ${groups.length ? groups.join(", ") : "교과 교사 수 변동 없음"}`;
+}
+
 // 과학·사회 공통 과목 시수를 세부 교과에 반 단위(한 반 = 그 과목 학점만큼)로 나눈다.
 // 큰 덩어리부터, 맡은 뒤 1인당 시수가 가장 적은 세부 교과에 준다(교사 수가 있는 세부 교과만). 학기마다 따로 나눈다.
 function hoursBalanceCommonAllocation(members, items) {
@@ -350,9 +409,11 @@ function hoursBalanceCommonAllocation(members, items) {
       load.set(best.member.id, load.get(best.member.id) + chunk.size);
       allocations[best.member.id][semester] += chunk.size;
       const subjects = given.get(best.member.id);
-      subjects.set(chunk.subject, (subjects.get(chunk.subject) || 0) + 1);
+      const short = hoursShortSubject(chunk.subject);
+      subjects.set(short, (subjects.get(short) || 0) + chunk.size);
     }
-    for (const [id, subjects] of given) notes[id][semester] = [...subjects].map(([subject, count]) => `${subject} ${count}반`).join(" · ");
+    // 원래 양식의 배분 메모처럼 '통과8 · 과탐실2'(줄인 과목명 + 시수)로 적는다.
+    for (const [id, subjects] of given) notes[id][semester] = [...subjects].map(([subject, hours]) => `${subject}${hours}`).join(" · ");
   }
   return { ok: true, allocations, notes };
 }
@@ -364,7 +425,8 @@ function computeHoursStats(year = hoursTargetYear()) {
   const issues = [];
   const classCounts = Object.fromEntries(["1", "2", "3"].map((grade) =>
     [grade, hoursNumber(settings.classCounts[grade], { integer: true, max: 99 })]));
-  const creativeHours = hoursNumber(settings.creativeHours, { max: 10 }) ?? 2;
+  const creativeParts = hoursCreativeParts(settings);
+  const creativeHours = creativeParts.자율 + creativeParts.진로;
   const grades = [];
   const items = [];
   const seen = new Set();
@@ -508,7 +570,9 @@ function computeHoursStats(year = hoursTargetYear()) {
     return {
       ...definition, items: own, hours, allocation, totals, teachers, averages,
       yearAverage: averages ? (averages["1"] + averages["2"]) / 2 : null,
-      previous: hoursNumber(settings.previousAverages[definition.id], { max: 100 })
+      previous: hoursNumber(settings.previousAverages[definition.id], { max: 100 }),
+      previousTeachers: hoursNumber(settings.previousTeachers[definition.id], { max: 200 }),
+      formLabel: hoursFormLabel(definition, own)
     };
   });
   for (const common of departments.filter((department) => department.common)) {
@@ -525,6 +589,11 @@ function computeHoursStats(year = hoursTargetYear()) {
     const groupTeachers = groupMembers.reduce((sum, department) => sum + (department.teachers || 0), 0);
     const groupHours = groupMembers.reduce((sum, department) => sum + department.hours["1"] + department.hours["2"], 0);
     common.groupAverage = groupTeachers > 0 ? groupHours / groupTeachers / 2 : null;
+    // 원래 양식의 과학·사회 비고(1학기·2학기 교과군 평균)와 교과군 전년도 평균(교과군 이름으로 저장).
+    common.groupTeachers = groupTeachers;
+    common.groupSemester = groupTeachers > 0 ? Object.fromEntries(["1", "2"].map((semester) =>
+      [semester, groupMembers.reduce((sum, department) => sum + department.hours[semester], 0) / groupTeachers])) : null;
+    common.groupPrevious = hoursNumber(settings.previousAverages[common.group], { max: 100 });
   }
   const included = departments.filter((department) => !department.excluded);
   const totalClasses = ["1", "2", "3"].reduce((sum, grade) => sum + (classCounts[grade] || 0), 0);
@@ -563,7 +632,7 @@ function computeHoursStats(year = hoursTargetYear()) {
   const nonTeaching = hoursNonTeachingStats(items, settings, issues);
   const staff = hoursStaffStats(departments, totals, nonTeaching, settings, issues);
   const recommendation = hoursTeacherRecommendation(departments, staff, settings);
-  return { year, settings, classCounts, totalClasses, creativeHours, grades, items, departments, totals, nonTeaching, staff, recommendation, issues };
+  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, issues };
 }
 
 // 비교과 교사(보건·영양·사서·상담): 교사 수, 맡은 수업 시수(상세 표에서 담당을 비교과로 지정한 과목 + 직접 입력), 1인당 시수.
@@ -679,7 +748,7 @@ function hoursFormat(value, digits = 2) {
 function hoursStatsReadiness() {
   let stats;
   try {
-    stats = computeHoursStats();
+    stats = hoursStatsCached();
   } catch (error) {
     return { message: error.message, actionLabel: "1단계로", nextStep: "1" };
   }
@@ -766,14 +835,6 @@ function hoursStaffFormula(stats) {
   return `${head} = ${parts.join(" + ")}${staff.over ? ` <span class="hours-staff-over">합이 총 교사 수보다 ${count(-staff.other)}명 많음</span>` : ""}`;
 }
 
-function hoursStaffSummary(stats) {
-  return `<p class="hours-summary-line hours-staff-summary">
-    <span class="hours-summary-label">교원 구성</span>
-    <span class="hours-staff-formula">${hoursStaffFormula(stats)}</span>
-    <button class="button button-quiet" type="button" data-open-dialog="hoursSettingsDialog" aria-haspopup="dialog">교원 구성 입력</button>
-  </p>`;
-}
-
 // 시수 설정 팝업의 교원 구성 입력: 총 교사 수와 비교과 교사(교사 수·맡은 수업 시수).
 function hoursStaffSettings(stats) {
   const settings = stats.settings;
@@ -802,7 +863,7 @@ function hoursStaffSettings(stats) {
   </section>`;
 }
 
-// 교과별 교사 수 추천(시수 균형): 추천만 보이고, '추천 적용'을 눌러야 교사 수가 바뀐다.
+// 교과별 교사 수 추천(시수 균형, '교사 수 추천' 팝업): 추천만 보이고, '추천 적용'을 눌러야 교사 수가 바뀐다.
 function hoursRecommendationSection(stats) {
   const recommendation = stats.recommendation;
   const settings = stats.settings;
@@ -826,8 +887,8 @@ function hoursRecommendationSection(stats) {
     </tr>`;
   }).join("");
   const undo = hoursPlainObject(settings.undo) ? settings.undo : null;
-  return `<details class="hours-detail hours-recommend" data-hours-details="recommend">
-    <summary>교과별 교사 수 추천 (시수 균형) · ${escapeHtml(headline)}</summary>
+  return `<section class="hours-recommend">
+    <p class="hours-staff-line"><b>${escapeHtml(headline)}</b></p>
     <div class="hours-settings-row hours-recommend-tools">
       <label class="hours-classes">기준 교과 교사 수 <input id="hoursRecommendTotal" data-hours-recommend-total="1" data-focus-key="recommend-total" type="number" min="0" max="500" step="1" value="${settings.recommendTeachers ?? ""}" placeholder="${hoursFormat(recommendation.basis, 1)}"></label>
       <span class="hours-note">비우면 ${escapeHtml(recommendation.basisText)} = ${hoursFormat(recommendation.basis, 1)}명</span>
@@ -841,25 +902,57 @@ function hoursRecommendationSection(stats) {
       <thead><tr><th scope="col">교과</th><th scope="col">1학기 시수</th><th scope="col">2학기 시수</th><th scope="col">고정</th><th scope="col">현재 교사 수</th><th scope="col">추천</th><th scope="col">차이</th><th scope="col">현재 1인당<br>(1학기 / 2학기)</th><th scope="col">추천 시 1인당<br>(1학기 / 2학기)</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>` : ""}
-  </details>`;
+    ${!rows && Object.keys(settings.teacherLocks || {}).length ? `<p class="hours-settings-row"><span class="hours-summary-label">고정한 교과</span>
+      ${Object.keys(settings.teacherLocks).map((id) => `<label class="hours-zero-toggle"><input type="checkbox" checked data-hours-lock="${escapeHtml(id)}" data-focus-key="lock-${escapeHtml(id)}"> ${escapeHtml(hoursDepartmentName(id))}</label>`).join("")}
+      <span class="hours-note">추천을 계산하지 못할 때도 여기서 고정을 풀 수 있습니다.</span></p>` : ""}
+  </section>`;
 }
 
+// 같은 자료면 계산을 다시 하지 않는다: 화면 그리기와 상단 안내(hoursStatsReadiness)가 한 번의 변경에 같은 결과를 쓴다.
+// 열쇠는 그 해 시수 설정 전체와 학교명이고, 다른 단계 자료(편제표·결과·확정)가 바뀌는 것은 다음 작업 차례에서 버려서 막는다.
+var hoursStatsMemo = null;
+function hoursStatsCached(year = hoursTargetYear()) {
+  let key = "";
+  try { key = `${year}|${JSON.stringify(state.hoursStats?.[year] ?? null)}|${$("#schoolName")?.value ?? ""}`; } catch { key = ""; }
+  if (key && hoursStatsMemo?.key === key) return hoursStatsMemo.stats;
+  const stats = computeHoursStats(year);
+  let after = key;
+  try { after = `${year}|${JSON.stringify(state.hoursStats?.[year] ?? null)}|${$("#schoolName")?.value ?? ""}`; } catch { after = ""; }
+  hoursStatsMemo = after ? { key: after, stats } : null;
+  setTimeout(() => { if (hoursStatsMemo?.stats === stats) hoursStatsMemo = null; }, 0);
+  return stats;
+}
+
+// 5단계 시수 통계 그리기의 입구(하나). 화면 내용은 renderHoursStatsView가 그린다(화면을 다시 쓰더라도 이 입구는 그대로 둘 것).
+// 값을 바꿔 다시 그려도 창·표(data-hours-scroll) 안 스크롤, 열린 팝업(설정·교사 수 추천·확인 항목)의 스크롤과
+// 입력 포커스·커서를 그대로 둔다(view-keep.js preserveViewDuring — 공통 도우미 하나로 보존).
+// 5단계가 숨겨져 있으면 renderHoursStatsView가 계산·그리기를 하지 않고, 단계를 열 때(renderWorkflowLayout) 그린다.
 function renderHoursStats() {
+  if (typeof preserveViewDuring === "function") {
+    return preserveViewDuring(["#workflowStep7Panel", "#hoursSettingsBody", "#hoursRecommendBody", "#hoursIssuesBody"], renderHoursStatsView);
+  }
+  return renderHoursStatsView();
+}
+
+function renderHoursStatsView() {
   const content = document.getElementById("hoursStatsContent");
   if (!content) return;
+  const panel = document.getElementById("workflowStep7Panel");
+  if (panel?.classList?.contains("hidden")) return;
   const year = hoursTargetYear();
   document.getElementById("hoursTargetYear").textContent = year ? `${year}학년도` : "";
   syncNextYearClassInputs();
   const download = document.getElementById("downloadHoursStats");
   let stats;
   try {
-    stats = computeHoursStats(year);
+    stats = hoursStatsCached(year);
   } catch (error) {
     content.innerHTML = `<p class="storage-warning">${escapeHtml(error.message)}</p>`;
     download.disabled = true;
     return;
   }
   download.disabled = !stats.items.length;
+  ensureHoursFormStyles();
   const settings = stats.settings;
   const rounds = applicationRoundNumbers().filter((round) => roundStatusData(round)?.students?.length || state.roundStatuses?.[round]?.snapshot);
   const gradeCards = stats.grades.map((info) => {
@@ -876,59 +969,29 @@ function renderHoursStats() {
       ${sourceSelect}
     </article>`;
   }).join("");
-  const average = stats.totals.average;
-  const overview = `<div class="aggregate-overview" aria-label="시수 통계 요약">
-    <div class="aggregate-overview-card"><span>총 학급</span><strong>${stats.totalClasses}학급</strong></div>
-    <div class="aggregate-overview-card"><span>교과 시수 (1학기 / 2학기)</span><strong>${stats.totals["1"]} / ${stats.totals["2"]}</strong></div>
-    <div class="aggregate-overview-card"><span>총 교사 수${stats.staff.entered === null ? " (제안값)" : ""}</span><strong>${stats.staff.total === null ? "입력" : `${hoursFormat(stats.staff.total, 1)}명`}</strong></div>
-    <div class="aggregate-overview-card"><span>교과 교사 수 (진로 제외)</span><strong>${hoursFormat(stats.totals.teachers, 1)}명</strong></div>
-    <div class="aggregate-overview-card"><span>교과 1인당 평균 (창체 포함)</span><strong>${average ? `${hoursFormat(average.year)} (${hoursFormat(average.creativeYear)})` : "교사 수 입력"}</strong></div>
-  </div>`;
-  const departmentRows = stats.departments.filter((department) => department.id !== "기타" || department.items.length).map((department) => {
-    const groupStart = stats.departments.find((item) => item.group === department.group) === department;
-    const allocation = ["과학", "사회"].includes(department.group) && !department.common
-      ? ["1", "2"].map((semester) => `<input class="hours-small-input"${semester === "1" && stats.departments.find((item) => item.group === department.group && !item.common) === department ? ` id="hoursAllocation-${department.group}"` : ""} data-hours-allocation="${department.id}|${semester}" data-focus-key="alloc-${department.id}-${semester}" type="number" min="0" max="999" step="1" value="${settings.allocations[department.id]?.[semester] ?? ""}" aria-label="${escapeHtml(hoursDepartmentName(department.id))} ${semester}학기 공통 과목 배분 시수" placeholder="0">`).join(" ")
-      : department.common && department.items.length
-        ? `<span class="hours-note">미배분 ${department.unallocated["1"]} / ${department.unallocated["2"]}</span>`
-        : "";
-    const allocationNote = ["1", "2"].map((semester) => settings.allocationNotes[department.id]?.[semester] ? `${semester}학기 ${settings.allocationNotes[department.id][semester]}` : "")
-      .filter(Boolean).join(" / ");
-    const delta = department.yearAverage !== null && department.previous !== null ? department.yearAverage - department.previous : null;
-    return `<tr class="${groupStart ? "hours-group-start" : ""}${department.excluded ? " is-excluded" : ""}">
-      <th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(department.id))}${department.excluded ? ' <span class="hours-note">합계 제외</span>' : ""}</th>
-      <td>${department.hours["1"] || ""}</td><td>${department.hours["2"] || ""}</td>
-      <td class="hours-allocation">${allocation}${allocationNote ? `<br><span class="hours-note">${escapeHtml(allocationNote)}</span>` : ""}</td>
-      <td><input class="hours-small-input" id="hoursTeachers-${department.id}" data-hours-teachers="${department.id}" data-focus-key="teachers-${department.id}" type="number" min="0" max="200" step="0.5" value="${department.teachers ?? ""}" aria-label="${escapeHtml(hoursDepartmentName(department.id))} 교사 수"${department.common ? ' placeholder="배분"' : ""}></td>
-      <td>${department.averages ? hoursFormat(department.averages["1"]) : "-"}</td>
-      <td>${department.averages ? hoursFormat(department.averages["2"]) : "-"}</td>
-      <td><b>${hoursFormat(department.yearAverage)}</b>${department.common && department.groupAverage !== null ? `<br><span class="hours-note">${department.group} 전체 ${hoursFormat(department.groupAverage)}</span>` : ""}</td>
-      <td><input class="hours-small-input" data-hours-previous="${department.id}" data-focus-key="previous-${department.id}" type="number" min="0" max="100" step="0.01" value="${settings.previousAverages[department.id] ?? ""}" aria-label="${escapeHtml(hoursDepartmentName(department.id))} 전년도 평균 시수"></td>
-      <td class="${delta > 0 ? "hours-up" : delta < 0 ? "hours-down" : ""}">${delta === null ? "" : `${delta > 0 ? "+" : ""}${hoursFormat(delta)}`}</td>
-    </tr>`;
-  }).join("");
-  const gradeMap = `<p class="note hours-grade-map">${stats.grades.map((info) => `내년도 ${escapeHtml(info.label)}`).join(" · ")}</p>`;
-  const summaryTable = `<div class="aggregate-sheet-wrap"><table class="closure-table hours-summary-table">
-    <thead><tr><th scope="col">교과</th><th scope="col">1학기 시수</th><th scope="col">2학기 시수</th><th scope="col">공통 과목 배분<br>(1학기 / 2학기)</th><th scope="col">교사 수</th><th scope="col">평균<br>1학기</th><th scope="col">평균<br>2학기</th><th scope="col">평균<br>1년</th><th scope="col">전년도<br>평균</th><th scope="col">증감</th></tr></thead>
-    <tbody>${departmentRows}</tbody>
-    <tfoot><tr><th scope="row">교과 합계 · 교과 교사 평균 (진로 제외)</th><td>${stats.totals["1"]}</td><td>${stats.totals["2"]}</td><td></td><td>${hoursFormat(stats.totals.teachers, 1)}</td>
-      <td>${average ? hoursFormat(average["1"]) : "-"}</td><td>${average ? hoursFormat(average["2"]) : "-"}</td><td><b>${average ? hoursFormat(average.year) : "-"}</b></td><td></td><td></td></tr>
-      <tr><th scope="row">창체 포함 평균</th><td colspan="3" class="hours-note">창체 ${stats.creativeHours}시간 × ${stats.totalClasses}학급 = 학기당 ${stats.totals.creative}시간</td><td></td>
-      <td>${average ? hoursFormat(average.creative1) : "-"}</td><td>${average ? hoursFormat(average.creative2) : "-"}</td><td><b>${average ? hoursFormat(average.creativeYear) : "-"}</b></td><td></td><td></td></tr>
-      <tr class="hours-reference-row"><th scope="row">전체 교원 기준 평균 (참고)</th><td>${stats.staff.allHours["1"]}</td><td>${stats.staff.allHours["2"]}</td><td class="hours-note">교과 + 진로 + 비교과 수업 시수 ÷ 총 교사 수</td><td>${stats.staff.total === null ? "-" : hoursFormat(stats.staff.total, 1)}</td>
-      <td>${stats.staff.average ? hoursFormat(stats.staff.average["1"]) : "-"}</td><td>${stats.staff.average ? hoursFormat(stats.staff.average["2"]) : "-"}</td><td>${stats.staff.average ? hoursFormat(stats.staff.average.year) : "-"}</td><td></td><td></td></tr></tfoot>
-  </table></div>`;
+  const model = hoursFormModel(stats, { schoolName: $("#schoolName")?.value || "" });
+  const recommendation = stats.recommendation;
+  const recommendLabel = recommendation.ok
+    ? `교사 수 추천${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}`
+    : "교사 수 추천";
   const allocateTools = stats.departments.filter((department) => department.common && department.items.length).map((department) =>
-    `<button class="button button-quiet" type="button" data-hours-auto-allocate="${department.group}">${department.group} 공통 시수 자동 배분</button>`).join("");
-  const tableTools = allocateTools ? `<p class="hours-summary-line hours-table-tools"><span class="hours-summary-label">공통 과목</span>${allocateTools}
-    <span class="hours-note">세부 교과 교사 수를 기준으로 공통 과목을 반 단위로 나눠 세부 교과 1인당 시수가 비슷해지게 배분 칸을 채웁니다.</span>
-    ${hoursPlainObject(settings.undo) ? `<button class="button button-quiet" type="button" data-hours-action="undo">되돌리기 (${escapeHtml(settings.undo.label)})</button>` : ""}</p>` : "";
+    `<button class="button button-quiet" type="button" data-hours-auto-allocate="${department.group}" title="세부 교과 교사 수를 기준으로 공통 과목을 반 단위로 나눠 세부 교과 1인당 시수가 비슷해지게 배분 칸(오른쪽 파란 칸)을 채웁니다.">${department.group} 공통 시수 자동 배분</button>`).join("");
+  const tools = `<p class="hours-summary-line hours-table-tools">
+    <button class="button" type="button" data-open-dialog="hoursRecommendDialog" aria-haspopup="dialog">${escapeHtml(recommendLabel)}</button>
+    ${allocateTools}
+    ${hoursPlainObject(settings.undo) ? `<button class="button button-quiet" type="button" data-hours-action="undo">되돌리기 (${escapeHtml(settings.undo.label)})</button>` : ""}
+    <label class="hours-zero-toggle"><input type="checkbox" data-hours-show-zero="1" data-focus-key="show-zero"${settings.showZeroClasses ? " checked" : ""}> 개설반 0 과목도 보기</label>
+    <span class="hours-note">흰 칸(개설반·교사수·전년도 평균·배분·창체 학점·메모)은 표에서 바로 고칩니다. <span class="hours-legend-red">빨간 개설반</span>은 신청 결과, 흐린 칸은 직접 입력입니다.</span>
+  </p>`;
   const departmentOptions = (selected) => HOURS_DEPARTMENTS.map((department) =>
     `<option value="${department.id}"${department.id === selected ? " selected" : ""}>${escapeHtml(hoursDepartmentName(department.id))}</option>`).join("") +
     `<optgroup label="비교과 교사 (교과 평균에서 뺌)">${HOURS_NON_TEACHING.map((role) => {
       const value = HOURS_NON_TEACHING_PREFIX + role.id;
       return `<option value="${value}"${value === selected ? " selected" : ""}>${escapeHtml(hoursDepartmentName(value))}</option>`;
     }).join("")}</optgroup>`;
-  const detailRows = stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) ||
+  // 과목별 상세는 펼쳤을 때만 그린다(과목마다 담당 교과 선택 상자가 있어 무겁다).
+  const detailOpen = content.querySelector('details[data-hours-details="detail"]')?.open ?? stats.items.some((item) => item.department === "기타");
+  const detailRows = !detailOpen ? "" : stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) ||
     hoursDepartmentOrder(a.department) - hoursDepartmentOrder(b.department) ||
     a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}">
       <td>${item.grade}</td><td>${item.cohortYear}</td><td>${item.currentGrade ? `현 ${item.currentGrade}` : "신입"}</td><td>${item.semester}</td><th scope="row" class="closure-subject">${escapeHtml(item.subject)}</th>
@@ -936,56 +999,73 @@ function renderHoursStats() {
       <td><select data-hours-department="${escapeHtml(normalizeResultCourseName(item.subject))}" data-default-department="${item.defaultDepartment}" data-focus-key="dept-${escapeHtml(item.key)}" aria-label="${escapeHtml(item.subject)} 담당 교과">${departmentOptions(item.department)}</select></td>
       <td>${hoursFormat(item.credit)}</td>
       <td>${item.enrollment ?? ""}</td>
-      <td><input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-focus-key="item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반"></td>
+      <td><input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-hours-auto="${item.autoClasses}" data-focus-key="detail-item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반"></td>
       <td>${item.hours}</td>
       <td>${escapeHtml(item.sourceRound)}</td>
       <td class="closure-subject hours-note">${escapeHtml(item.basis)}</td>
     </tr>`).join("");
-  const detail = `<details class="hours-detail" data-hours-details="detail"${stats.items.some((item) => item.department === "기타") ? " open" : ""}>
-    <summary>과목별 상세 (${stats.items.length}개 항목) · 담당 교과와 개설반 수정</summary>
+  const detail = `<details class="hours-detail" data-hours-details="detail"${detailOpen ? " open" : ""}>
+    <summary>과목별 상세 (${stats.items.length}개 항목) · 담당 교과(비교과 교사 포함)와 개설반 근거</summary>
     <p class="note">개설반 칸을 비워 두면 자동 값(흐린 숫자)을 씁니다. 담당 교과를 바꾸면 같은 이름의 과목 전체에 적용됩니다.</p>
-    <div class="aggregate-sheet-wrap"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">내년도<br>학년</th><th scope="col">입학<br>연도</th><th scope="col">신청<br>학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">시수</th><th scope="col">근거 차수</th><th scope="col">근거</th></tr></thead>
+    ${detailOpen ? "" : '<p class="note">펼치면 표를 그립니다.</p>'}
+    <div class="aggregate-sheet-wrap${detailOpen ? "" : " hidden"}" data-hours-scroll="detail"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">내년도<br>학년</th><th scope="col">입학<br>연도</th><th scope="col">신청<br>학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">시수</th><th scope="col">근거 차수</th><th scope="col">근거</th></tr></thead>
     <tbody>${detailRows}</tbody></table></div>
   </details>`;
-  // 설정 입력과 확인 항목 전체는 팝업에 두고, 화면에는 한 줄 요약과 버튼만 남겨 표가 위에서 바로 보이게 한다.
+  // 설정 입력·교사 수 추천·확인 항목 전체는 팝업에 두고, 화면에는 한 줄 요약과 원래 양식 표를 둔다.
   const settingsBody = document.getElementById("hoursSettingsBody");
   if (settingsBody) {
     settingsBody.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
-    <div class="hours-settings-row">
-      <label class="hours-classes">창체 시수 (학급당·학기) <input id="hoursCreative" data-hours-creative="1" data-focus-key="creative" type="number" min="0" max="10" step="0.5" value="${settings.creativeHours ?? ""}" placeholder="2"></label>
-      <span class="hours-note">교과별 교사 수는 표에서 입력하며 소수(0.5 등)도 됩니다. 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</span>
-    </div>
-    ${hoursStaffSettings(stats)}`;
+    <p class="note">창체 시수(학급당 학기 자율·진로)는 시수표 맨 아래 창체 행의 학점 칸에서 고칩니다. 교과별 교사 수·전년도 평균·공통 과목 배분도 시수표 칸에서 바로 입력합니다(소수 0.5도 됨). 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</p>
+    ${hoursStaffSettings(stats)}
+    ${hoursPreviousTeachersSettings(stats)}`;
   }
+  const recommendBody = document.getElementById("hoursRecommendBody");
+  if (recommendBody) recommendBody.innerHTML = hoursRecommendationSection(stats);
   const issuesBody = document.getElementById("hoursIssuesBody");
   if (issuesBody) issuesBody.innerHTML = hoursIssueList(stats.issues);
-  // 다시 그려도 사용자가 펼친 상세·추천 칸은 펼친 채로 둔다.
   const opened = new Map([...content.querySelectorAll("details[data-hours-details]")].map((element) => [element.dataset.hoursDetails, element.open]));
   content.innerHTML = `${hoursSettingsSummary(stats)}
-    ${hoursStaffSummary(stats)}
     ${hoursIssueSummary(stats.issues)}
-    ${overview}
-    ${gradeMap}
-    ${tableTools}
-    ${summaryTable}
-    ${hoursRecommendationSection(stats)}
+    ${tools}
+    <div class="aggregate-sheet-wrap hours-form-wrap" data-hours-scroll="form">${hoursFormHtml(model)}</div>
     ${detail}`;
   for (const element of content.querySelectorAll("details[data-hours-details]")) {
     if (opened.has(element.dataset.hoursDetails)) element.open = opened.get(element.dataset.hoursDetails);
   }
+  // 고정 머리글 둘째 줄(세부과목·학점…)은 첫째 줄 높이만큼 내려 붙인다.
+  const form = content.querySelector(".hours-form");
+  const headTop = form?.rows?.[2]?.offsetHeight;
+  if (headTop) for (const cell of form.rows[3].cells) cell.style.top = `${headTop}px`;
+}
+
+// 전년도 교과별 교사 수: 메모 '○○학년도 ⇒ …과 n명 증/감'을 자동으로 쓰는 데만 쓴다. '전년도 설정 불러오기'가 채운다.
+function hoursPreviousTeachersSettings(stats) {
+  const rows = stats.departments.filter((department) => department.id !== "기타" && (department.items.length || department.teachers > 0 || department.previousTeachers !== null))
+    .map((department) => {
+      const delta = department.previousTeachers === null ? null : Math.round(((department.teachers || 0) - department.previousTeachers) * 100) / 100;
+      return `<tr><th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(department.id))}</th>
+        <td><input class="hours-small-input" data-hours-previous-teachers="${department.id}" data-focus-key="previous-teachers-${department.id}" type="number" min="0" max="200" step="0.5" value="${department.previousTeachers ?? ""}" aria-label="${escapeHtml(hoursDepartmentName(department.id))} 전년도 교사 수"></td>
+        <td>${department.teachers ?? "-"}</td>
+        <td class="${delta > 0 ? "hours-up" : delta < 0 ? "hours-down" : ""}">${delta ? `${delta > 0 ? "+" : ""}${hoursFormat(delta, 1)}` : ""}</td></tr>`;
+    }).join("");
+  const memo = hoursFormMemo(stats);
+  return `<section class="hours-staff-settings" aria-labelledby="hoursPreviousTeachersTitle">
+    <h4 id="hoursPreviousTeachersTitle">전년도(${Number(stats.year) - 1}학년도) 교과별 교사 수</h4>
+    <p class="note">시수표 아래 메모의 '◈ ${stats.year}학년도 ⇒ …과 n명 증/감' 줄을 자동으로 씁니다. 메모는 시수표에서 직접 고칠 수 있습니다.</p>
+    <p class="hours-staff-line">${escapeHtml(memo.changeLine || "전년도 교사 수가 없어 증감 줄을 비워 둡니다.")}</p>
+    ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-staff-table">
+      <thead><tr><th scope="col">교과</th><th scope="col">전년도 교사 수</th><th scope="col">올해 교사 수</th><th scope="col">증감</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : ""}
+  </section>`;
 }
 
 function scheduleHoursRerender() {
   if (hoursRenderTimer !== null) clearTimeout(hoursRenderTimer);
   hoursRenderTimer = setTimeout(() => {
     hoursRenderTimer = null;
-    const focusKey = document.activeElement?.dataset?.focusKey;
+    // 스크롤·포커스 보존은 renderHoursStats(preserveViewDuring)가 한다.
     renderHoursStats();
     renderWorkspaceContext();
-    if (focusKey) {
-      const target = [...document.querySelectorAll("[data-focus-key]")].find((element) => element.dataset.focusKey === focusKey);
-      target?.focus();
-    }
   }, 0);
 }
 
@@ -1003,7 +1083,23 @@ function updateHoursSetting(target) {
     return "classes";
   }
   if (target.dataset.hoursCreative) set(settings, "creativeHours", hoursNumber(target.value, { max: 10 }));
-  else if (target.dataset.hoursTotalTeachers) set(settings, "totalTeachers", hoursNumber(target.value, { max: 500 }));
+  else if (target.dataset.hoursCreativePart) {
+    // 창체 행 학점 칸: 처음 고치면 지금 값(예전 '창체 시수' 포함)을 자율·진로로 옮겨 적고 고친 칸만 바꾼다.
+    if (!Object.keys(settings.creative).length) Object.assign(settings.creative, hoursCreativeParts(settings));
+    set(settings.creative, target.dataset.hoursCreativePart, hoursNumber(target.value, { max: 10 }) ?? 0);
+    settings.creativeHours = HOURS_CREATIVE_PARTS.reduce((sum, part) => sum + (Number(settings.creative[part]) || 0), 0);
+  } else if (target.dataset.hoursShowZero) set(settings, "showZeroClasses", target.checked ? true : null);
+  else if (target.dataset.hoursStaffMemo) {
+    // 자동 문구와 같으면 저장하지 않아 교사 수가 바뀔 때 자동 문구가 따라 바뀌게 한다.
+    const value = String(target.value ?? "").replace(/\r\n/g, "\n");
+    set(settings, "staffMemo", value.trim() === String(target.dataset.hoursAutoMemo ?? "").trim() ? null : value);
+  } else if (target.dataset.hoursPreviousTeachers) set(settings.previousTeachers, target.dataset.hoursPreviousTeachers, hoursNumber(target.value, { max: 200 }));
+  else if (target.dataset.hoursAllocationNote) {
+    const [department, semester] = target.dataset.hoursAllocationNote.split("|");
+    settings.allocationNotes[department] ||= {};
+    const note = String(target.value ?? "").trim();
+    set(settings.allocationNotes[department], semester, note || null);
+  } else if (target.dataset.hoursTotalTeachers) set(settings, "totalTeachers", hoursNumber(target.value, { max: 500 }));
   else if (target.dataset.hoursNonTeaching) set(settings.nonTeaching, target.dataset.hoursNonTeaching, hoursNumber(target.value, { max: 50 }));
   else if (target.dataset.hoursNonTeachingHours) {
     const [role, semester] = target.dataset.hoursNonTeachingHours.split("|");
@@ -1015,7 +1111,12 @@ function updateHoursSetting(target) {
   else if (target.dataset.hoursSource) set(settings.sourceRounds, target.dataset.hoursSource, target.value || null);
   else if (target.dataset.hoursTeachers) set(settings.teachers, target.dataset.hoursTeachers, hoursNumber(target.value, { max: 200 }));
   else if (target.dataset.hoursPrevious) set(settings.previousAverages, target.dataset.hoursPrevious, hoursNumber(target.value, { max: 100 }));
-  else if (target.dataset.hoursItemClasses) set(settings.classOverrides, target.dataset.hoursItemClasses, hoursNumber(target.value, { integer: true, max: 99 }));
+  else if (target.dataset.hoursItemClasses) {
+    // 자동 값과 같게 적거나 비우면 직접 입력을 지운다(시수표 칸은 자동 값을 미리 채워 보인다).
+    const value = hoursNumber(target.value, { integer: true, max: 99 });
+    const auto = hoursNumber(target.dataset.hoursAuto, { integer: true, max: 99 });
+    set(settings.classOverrides, target.dataset.hoursItemClasses, value !== null && value === auto ? null : value);
+  }
   else if (target.dataset.hoursDepartment) {
     set(settings.departmentOverrides, target.dataset.hoursDepartment,
       target.value === target.dataset.defaultDepartment ? null : target.value);
@@ -1050,6 +1151,18 @@ function loadPreviousHoursSettings() {
     if (source[key] !== undefined) settings[key] = source[key];
   }
   settings.previousAverages = { ...source.lastAverages };
+  // 메모 '○○학년도 ⇒ … 증/감': 올해 줄은 전년도 교사 수와 비교해 자동으로 쓰고, 전년도 메모의 증감 줄은 앞줄로 이어 둔다.
+  settings.previousTeachers = { ...source.teachers };
+  if (Object.keys(source.creative || {}).length) settings.creative = { ...source.creative };
+  const sourceLine = hoursTeacherChangeLine(previousYear, HOURS_DEPARTMENTS.map((department) => ({
+    name: department.staff,
+    previous: hoursNumber(source.previousTeachers?.[department.id], { max: 200 }) ?? NaN,
+    current: hoursNumber(source.teachers?.[department.id], { max: 200 }) ?? NaN
+  })));
+  settings.memoHistory = typeof source.staffMemo === "string"
+    ? source.staffMemo.split("\n").filter((line) => line.trim())
+    : [...(Array.isArray(source.memoHistory) ? source.memoHistory : []), sourceLine].filter(Boolean);
+  delete settings.staffMemo;
   persistState();
   renderHoursStats();
   renderWorkspaceContext();
@@ -1130,159 +1243,514 @@ function undoHoursChange() {
   hoursFinishChange(`'${undo.label}' 이전 값으로 되돌렸습니다.`);
 }
 
-function buildHoursWorkbookSheets(stats) {
-  const rows = [];
+// ---- 원래 양식(학교 교과별 시수표) ----
+// 화면 표와 엑셀 첫 시트가 같은 모델(hoursFormModel)에서 나온다. 행·열·병합·색·수식이 학교 교과별 시수표와 같다:
+// A 교과군 · B 세부 · C 학기 · D~G/H~K/L~O 학년별(세부과목·학점·개설반·시수) · P~R 총시수(1학기·2학기·합계) · S 교사수 ·
+// T 학기별 · U 1년 · V 비고 · W 전년도 평균 · X~AA 공통 과목 배분 메모 · AB 배분 합계, 맨 아래 창체 행과 요약 상자(교과·전체 평균·창체 포함 평균).
+var HOURS_FORM_GROUPS = [
+  { label: "국어", ids: ["국어"] },
+  { label: "수학", ids: ["수학"] },
+  { label: "영어", ids: ["영어"] },
+  { label: "과학", ids: ["과학-공통", "과학-물리", "과학-화학", "과학-생명", "과학-지구"], pooled: true },
+  { label: "사회", ids: ["사회-공통", "사회-한국사", "사회-지리", "사회-일사", "사회-윤리"], pooled: true },
+  { label: "체육\n예술", ids: ["체육", "음악", "미술"] },
+  { label: "생활\n교양", ids: ["정보", "기술가정", "제2외국어", "진로", "교양"] },
+  { label: "기타", ids: ["기타"] }
+];
+var HOURS_FORM_COLUMNS = 28;
+// 엑셀 열 너비(원래 양식 A~AB)와 화면 열 너비(px).
+var HOURS_FORM_WIDTHS = [5.5, 7.5, 4.75, 14.75, 6.63, 4.88, 6.5, 15.63, 6.63, 4.88, 6.5, 15.38, 6.63, 4.88, 6.5, 7.63, 7.63, 7.63, 6.13, 9, 8.5, 6.5, 8.38, 8.5, 8.5, 8.5, 8.5, 7.5];
+var HOURS_FORM_PIXELS = [38, 46, 30, 124, 32, 42, 36, 124, 32, 42, 36, 124, 32, 42, 36, 44, 44, 46, 50, 52, 52, 54, 56, 40, 40, 40, 40, 50];
+// 칸 종류별 글꼴·채움(원래 양식의 색: 머리 연노랑, 학년 칸 연파랑, 1학기 연분홍, 2학기 분홍, 합계 노랑+빨간 글자, 창체 연초록, 요약 상자).
+var HOURS_FORM_KINDS = {
+  title: { sz: 20, b: true }, school: { sz: 11, b: true, h: "right" },
+  head: { sz: 12, b: true, fill: "FFF2CC", wrap: true }, headSmall: { sz: 10, b: true, fill: "FFF2CC", wrap: true }, headClass: { sz: 9, b: true, fill: "FFF2CC" },
+  headTiny: { sz: 9, b: true, fill: "FFF2CC", wrap: true }, headMemo: { sz: 10, b: true, fill: "DAE3F3", wrap: true },
+  group: { sz: 11, b: true, wrap: true }, sub: { sz: 10, b: true, wrap: true },
+  sem: { sz: 12, b: true, fill: "DEEBF7" },
+  subject: { sz: 11, b: true, fill: "DEEBF7", wrap: true }, subjectSmall: { sz: 9, b: true, fill: "DEEBF7", wrap: true },
+  cell: { sz: 12, b: true, fill: "DEEBF7" }, cellRed: { sz: 12, b: true, fill: "DEEBF7", red: true },
+  p: { sz: 12, b: true, fill: "FBE5D6" }, q: { sz: 12, b: true, fill: "F8CBAD" }, r: { sz: 12, b: true, fill: "FFFF00", red: true },
+  s: { sz: 14, b: true }, t: { sz: 12, b: true, fill: "FBE5D6", fmt: "0.00" }, u: { sz: 12, b: true, fmt: "0.00" },
+  v: { sz: 10, wrap: true }, vLabel: { sz: 11 }, vNum: { sz: 12, b: true, fmt: "0.00" }, w: { sz: 11, b: true },
+  memo: { sz: 10, fill: "DAE3F3" }, ab: { sz: 11, b: true, fill: "DAE3F3" },
+  cGroup: { sz: 11, b: true, fill: "E2EFDA", wrap: true }, cCell: { sz: 12, b: true, fill: "E2EFDA" },
+  cR: { sz: 12, b: true, fill: "E2EFDA", red: true }, cS: { sz: 14, fill: "E2EFDA" }, cT: { sz: 12, b: true, fill: "E2EFDA", fmt: "0.00" },
+  box: { sz: 10, b: true, h: "left", wrap: true },
+  sum1: { sz: 14, b: true, fill: "F1FD7B", wrap: true }, sum1Red: { sz: 14, b: true, fill: "F1FD7B", red: true }, sum1Teacher: { sz: 16, b: true, fill: "F1FD7B" },
+  sum2: { sz: 12, b: true, fill: "FFFF00", wrap: true }, sum2Num: { sz: 14, b: true, fill: "FFFF00", fmt: "0.0" }, sum2Red: { sz: 14, b: true, fill: "FFFF00", red: true, fmt: "0.0" },
+  sum3: { sz: 11, b: true, fill: "99FF33", wrap: true }, sum3Num: { sz: 14, b: true, fill: "99FF33", fmt: "0.0" }, sum3Red: { sz: 14, b: true, fill: "99FF33", red: true, fmt: "0.0" },
+  noteRed: { sz: 10, b: true, red: true, h: "left", wrap: true }, note: { sz: 10, h: "left", wrap: true }, blank: { sz: 11 }
+};
+// 세로선 굵기(열 왼쪽): 학년 묶음·총시수·교사수·평균·전년도 칸 경계는 굵게, 학년 안쪽은 가는 점선.
+var HOURS_FORM_COL_EDGES = (() => {
+  const edges = Array(HOURS_FORM_COLUMNS + 1).fill("hair");
+  for (const column of [0, 3, 7, 11, 15, 17, 18, 19, 20, 21, 22, 23]) edges[column] = "medium";
+  for (const column of [1, 2, 16, 28]) edges[column] = "thin";
+  for (const column of [24, 25, 26]) edges[column] = null;
+  return edges;
+})();
+
+function hoursColumnLetter(index) {
+  let name = "";
+  for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) name = String.fromCharCode(65 + ((value - 1) % 26)) + name;
+  return name;
+}
+
+// 학년 머리글: 원래 양식의 'N학년'에 입학연도와 선택과목 근거(현 N−1학년 결과)를 덧붙인다(현 N학년 → N+1학년 과목).
+function hoursFormGradeHead(info) {
+  if (info.grade === "1") return `1학년 (${info.cohortYear} 입학 · 신입생)`;
+  const current = `현 ${Number(info.grade) - 1}학년`;
+  return `${info.grade}학년 (${info.cohortYear} 입학 · ${current}${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : " 결과 없음"})`;
+}
+
+function hoursStaffName(department) {
+  if (department.id === "제2외국어" && department.formLabel && department.formLabel !== "제2외국어") return `${department.formLabel}과`;
+  return department.staff || hoursDepartmentName(department.id);
+}
+
+// 요약 상자 왼쪽 메모: 비교과 교사·창체 포함 평균 계산법(자동)과 교사 증감(자동 문구, 교사가 고쳐 쓸 수 있음).
+function hoursFormMemo(stats) {
+  const settings = stats.settings || {};
+  const count = (value) => hoursFormat(value || 0, 1);
+  const roles = stats.nonTeaching.filter((row) => row.teachers > 0).map((row) => `${row.id}${count(row.teachers)}`);
+  const fixed = [
+    `◈ ${stats.year}학년도 비교과 교사 : ${roles.join(", ") || "없음"}`,
+    "",
+    "◈ 창체포함평균값",
+    `   ⇒ (교과시간총합 + 창체${count(stats.totals.creative)}시간) / ${count(stats.totals.teachers)}명`
+  ].join("\n");
+  const changeRows = stats.departments.filter((department) => department.id !== "기타")
+    .map((department) => ({ name: hoursStaffName(department), previous: department.previousTeachers ?? NaN, current: department.teachers ?? NaN }));
+  const changeLine = hoursTeacherChangeLine(stats.year, changeRows);
+  const history = Array.isArray(settings.memoHistory) ? settings.memoHistory.filter((line) => typeof line === "string" && line.trim()) : [];
+  const auto = [...history, changeLine].filter(Boolean).join("\n");
+  const edited = typeof settings.staffMemo === "string";
+  const changes = edited ? settings.staffMemo : auto;
+  return { fixed, changeLine, auto, changes, edited, text: [fixed, changes].filter(Boolean).join("\n\n") };
+}
+
+// 진로와 직업 시수 안내(요약 상자 오른쪽 빨간 글씨).
+function hoursCareerNote(stats) {
+  const hours = stats.staff.careerHours;
+  if (!(hours["1"] || hours["2"] || stats.staff.career)) return " * 창체제외한 교과시수";
+  const text = hours["1"] === hours["2"] ? String(hours["1"]) : `1학기 ${hours["1"]}·2학기 ${hours["2"]}`;
+  return ` * 창체제외한 교과시수\n(진로와 직업 시수 ${text}, 진로교사 제외)`;
+}
+
+function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
+  const L = hoursColumnLetter;
+  const settings = stats.settings || {};
+  const showZero = Boolean(settings.showZeroClasses);
+  const cells = new Map();
   const merges = [];
-  const title = `${stats.year}학년도 교과별 시수 통계 (총${stats.totalClasses}학급)`;
-  const now = new Date();
-  const schoolName = $("#schoolName")?.value || "";
-  rows.push([{ v: title, s: 1 }]);
-  rows.push([{ v: `${schoolName} (${String(now.getFullYear()).slice(2)}.${String(now.getMonth() + 1).padStart(2, "0")}.)`, s: 0 }]);
-  merges.push("A1:X1", "A2:X2");
-  const header = (value) => ({ v: value, s: 2 });
-  rows.push([header("교과군"), header(""), header("학기"), ...stats.grades.flatMap((info) => [header(`${info.grade}학년\n(${info.cohortYear} 입학${info.grade === "1" ? " · 신입생" : ` · 현 ${Number(info.grade) - 1}학년${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : " 결과 없음"}`})`), header(""), header(""), header("")]),
-    header("총시수"), header(""), header(""), header("교사 수"), header(`평균시수(${stats.year})`), header(""), header("비고"), header(`${Number(stats.year) - 1}\n평균시수(1년)`), header("공통 배분")]);
-  rows.push([header(""), header(""), header(""), ...["세부과목", "학점", "개설반", "시수", "세부과목", "학점", "개설반", "시수", "세부과목", "학점", "개설반", "시수"].map(header),
-    header("1학기"), header("2학기"), header("합계"), header(""), header("학기별"), header("1년"), header(""), header(""), header("")]);
-  merges.push("A3:B4", "C3:C4", "D3:G3", "H3:K3", "L3:O3", "P3:R3", "S3:S4", "T3:U3", "V3:V4", "W3:W4", "X3:X4");
-  const firstSemesterRows = [];
-  const blockFirstRows = { "1": [], "2": [] };
-  const visible = stats.departments.filter((department) => department.items.length || department.teachers > 0);
-  let groupStart = null;
-  visible.forEach((department, index) => {
-    const departmentStart = rows.length + 1;
-    if (groupStart === null) groupStart = departmentStart;
-    const firstInGroup = groupStart === departmentStart;
-    const blockStarts = {};
-    for (const semester of ["1", "2"]) {
-      const byGrade = ["1", "2", "3"].map((grade) => department.items
-        .filter((item) => item.grade === grade && item.semester === semester)
-        .sort((a, b) => a.subject.localeCompare(b.subject, "ko")));
-      const height = Math.max(1, ...byGrade.map((list) => list.length));
-      const start = rows.length + 1;
-      blockStarts[semester] = start;
-      const end = start + height - 1;
-      for (let offset = 0; offset < height; offset++) {
-        const rowNumber = start + offset;
-        const row = [{ v: "", s: 4 }, { v: "", s: 4 }, { v: offset === 0 ? Number(semester) : "", s: 4 }];
-        byGrade.forEach((list, gradeIndex) => {
-          const item = list[offset];
-          const creditColumn = columnName(4 + gradeIndex * 4);
-          const classColumn = columnName(5 + gradeIndex * 4);
-          row.push(item ? { v: item.subject, s: 3 } : { v: "", s: 3 });
-          row.push(item ? { v: item.credit, s: 4 } : { v: "", s: 4 });
-          row.push(item ? { v: item.classes, s: 4 } : { v: "", s: 4 });
-          row.push(item ? { f: `${creditColumn}${rowNumber}*${classColumn}${rowNumber}`, v: item.hours, s: 4 } : { v: "", s: 4 });
-        });
-        rows.push(row);
-      }
-      const sumFormula = `SUM(G${start}:G${end},K${start}:K${end},O${start}:O${end})`;
-      const semesterHours = department.hours[semester];
-      const first = rows[start - 1];
-      first[15] = semester === "1" ? { f: sumFormula, v: semesterHours, s: 4 } : { v: "", s: 4 };
-      first[16] = semester === "2" ? { f: sumFormula, v: semesterHours, s: 4 } : { v: "", s: 4 };
-      first[17] = { f: `SUM(P${start}:Q${start})+X${start}`, v: department.totals[semester], s: 4 };
-      first[23] = { v: department.allocation[semester] || "", s: 4 };
-      for (let column = 15; column < 24; column++) {
-        for (let rowNumber = start + 1; rowNumber <= end; rowNumber++) rows[rowNumber - 1][column] = { v: "", s: 4 };
-      }
-      for (const column of ["C", "P", "Q", "R", "T", "X"]) if (end > start) merges.push(`${column}${start}:${column}${end}`);
-      blockFirstRows[semester].push({ row: start, department });
-    }
-    const departmentEnd = rows.length;
-    const teacherRow = rows[departmentStart - 1];
-    const notes = [];
-    if (department.excluded) notes.push("합계 제외");
-    if (department.common && department.items.length) notes.push(`미배분 ${department.unallocated["1"]}/${department.unallocated["2"]}`);
-    if (department.common && department.groupAverage !== null) notes.push(`${department.group} 전체 평균 ${hoursFormat(department.groupAverage)}`);
-    for (const semester of ["1", "2"]) {
-      const allocationNote = stats.settings?.allocationNotes?.[department.id]?.[semester];
-      if (allocationNote) notes.push(`공통 배분 ${semester}학기: ${allocationNote}`);
-    }
-    teacherRow[0] = { v: firstInGroup ? department.group : "", s: 6 };
-    teacherRow[1] = { v: department.label === department.group ? "" : department.label, s: 6 };
-    teacherRow[18] = department.teachers === null ? { v: "", s: 4 } : { v: department.teachers, s: 4 };
-    for (const semester of ["1", "2"]) {
-      const start = blockStarts[semester];
-      rows[start - 1][19] = { f: `IF(S${departmentStart}>0,R${start}/S${departmentStart},"")`, v: department.averages ? department.averages[semester] : "", s: 5 };
-    }
-    teacherRow[20] = { f: `IF(S${departmentStart}>0,AVERAGE(T${blockStarts["1"]},T${blockStarts["2"]}),"")`, v: department.yearAverage ?? "", s: 5 };
-    teacherRow[21] = { v: notes.join("\n"), s: 3 };
-    teacherRow[22] = department.previous === null ? { v: "", s: 4 } : { v: department.previous, s: 5 };
-    for (const column of ["B", "S", "U", "V", "W"]) if (departmentEnd > departmentStart) merges.push(`${column}${departmentStart}:${column}${departmentEnd}`);
-    if (!department.excluded) firstSemesterRows.push(departmentStart);
-    const next = visible[index + 1];
-    if (!next || next.group !== department.group) {
-      if (departmentEnd > groupStart) merges.push(`A${groupStart}:A${departmentEnd}`);
-      groupStart = null;
-    }
+  const rowEdges = new Map();
+  const heights = { 1: 31.5, 2: 17.25, 3: 30, 4: 18 };
+  const put = (row, column, cell) => { cells.set(`${row}:${column}`, cell); return cell; };
+  const merge = (r1, c1, r2, c2) => { if (r2 > r1 || c2 > c1) merges.push([r1, c1, r2, c2]); };
+  const weight = { hair: 1, thin: 2, medium: 3 };
+  const edge = (row, value) => { if (!rowEdges.has(row) || weight[value] > weight[rowEdges.get(row)]) rowEdges.set(row, value); };
+  const number = (value) => Number.isFinite(value) ? value : "";
+  const year = stats.year;
+  put(1, 0, { v: `${year}학년도 교과별 시수 통계 (총${stats.totalClasses}학급)`, k: "title" }); merge(1, 0, 1, 22);
+  const stamp = `${String(date.getFullYear()).slice(2)}.${String(date.getMonth() + 1).padStart(2, "0")}.`;
+  put(2, 0, { v: `${schoolName ? `${schoolName} ` : ""}(${stamp})`, k: "school" }); merge(2, 0, 2, 22);
+  put(3, 0, { v: "교과군", k: "head" }); merge(3, 0, 4, 1);
+  put(3, 2, { v: "학기", k: "head" }); merge(3, 2, 4, 2);
+  stats.grades.forEach((info, index) => {
+    const column = 3 + index * 4;
+    put(3, column, { v: hoursFormGradeHead(info), k: "headSmall" }); merge(3, column, 3, column + 3);
+    ["세부과목", "학점", "개설반", "시수"].forEach((label, offset) => put(4, column + offset, { v: label, k: offset === 2 ? "headClass" : "head" }));
   });
-  const includedBlocks = (semester) => blockFirstRows[semester].filter(({ department }) => !department.excluded).map(({ row }) => `${semester === "1" ? "P" : "Q"}${row}`);
-  const totalRow = rows.length + 1;
-  const averageRow = totalRow + 1;
-  const creativeRow = totalRow + 2;
+  put(3, 15, { v: "총시수", k: "head" }); merge(3, 15, 3, 17);
+  ["1학기", "2학기", "합계"].forEach((label, offset) => put(4, 15 + offset, { v: label, k: "head" }));
+  put(3, 18, { v: "교사수", k: "head" }); merge(3, 18, 4, 18);
+  put(3, 19, { v: `평균시수(${year})`, k: "head" }); merge(3, 19, 3, 21);
+  put(4, 19, { v: "학기별", k: "head" }); put(4, 20, { v: "1년", k: "head" }); put(4, 21, { v: "비고", k: "head" });
+  put(3, 22, { v: `${Number(year) - 1}\n평균시수\n(1년)`, k: "headTiny" }); merge(3, 22, 4, 22);
+  put(3, 23, { v: "공통 과목 배분", k: "headMemo" }); merge(3, 23, 3, 27);
+  put(4, 23, { v: "메모", k: "headMemo" }); merge(4, 23, 4, 26); put(4, 27, { v: "합계", k: "headMemo" });
+  edge(3, "medium"); edge(4, "thin"); edge(5, "medium");
+
+  const shown = (item) => item.classes > 0 || item.manual || showZero;
+  const byId = new Map(stats.departments.map((department) => [department.id, department]));
+  const refs = { bodyStart: 5, bodyEnd: 4, career: null, creative: { "1": [], "2": [] }, departments: {}, groups: {} };
+  let row = 5;
+  for (const group of HOURS_FORM_GROUPS) {
+    const departments = group.ids.map((id) => byId.get(id)).filter(Boolean)
+      .filter((department) => department.items.some(shown) || department.teachers > 0 || (department.common && department.items.length));
+    if (!departments.length) continue;
+    const groupStart = row;
+    edge(groupStart, "medium");
+    const placed = [];
+    for (const department of departments) {
+      const start = row;
+      edge(start, "thin");
+      const blocks = {};
+      for (const semester of ["1", "2"]) {
+        const lists = ["1", "2", "3"].map((grade) => department.items.filter((item) => item.grade === grade && item.semester === semester && shown(item)));
+        const height = Math.max(1, ...lists.map((list) => list.length));
+        const blockStart = row;
+        if (semester === "2") edge(blockStart, "thin");
+        put(blockStart, 2, { v: Number(semester), k: "sem" }); merge(blockStart, 2, blockStart + height - 1, 2);
+        for (let offset = 0; offset < height; offset++, row++) {
+          let rowHours = 0;
+          lists.forEach((list, gradeIndex) => {
+            const item = list[offset];
+            if (!item) return;
+            const column = 3 + gradeIndex * 4;
+            const credit = `${L(column + 1)}${row}`, classes = `${L(column + 2)}${row}`;
+            put(row, column, { v: item.subject, k: String(item.subject).length > 9 ? "subjectSmall" : "subject" });
+            put(row, column + 1, { v: item.credit, k: "cell" });
+            put(row, column + 2, {
+              v: item.classes, k: item.kind !== "지정" && item.grade !== "1" ? "cellRed" : "cell", item,
+              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
+                attrs: { "data-hours-item-classes": item.key, "data-hours-auto": item.autoClasses, "data-focus-key": `item-${item.key}`, min: 0, max: 99, step: 1,
+                  "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반` } }
+            });
+            put(row, column + 3, { v: item.hours || "", f: `IF(PRODUCT(${credit},${classes})=0,"",PRODUCT(${credit},${classes}))`, k: "cell" });
+            rowHours += item.hours;
+          });
+          put(row, semester === "1" ? 15 : 16, { v: rowHours || "", f: `IF(SUM(G${row},K${row},O${row})=0,"",SUM(G${row},K${row},O${row}))`, k: semester === "1" ? "p" : "q" });
+        }
+        blocks[semester] = { start: blockStart, end: row - 1 };
+      }
+      placed.push({ department, start, end: row - 1, blocks });
+      refs.departments[department.id] = { start, end: row - 1, blocks };
+      if (department.excluded) refs.career = { start, end: row - 1 };
+    }
+    const groupEnd = row - 1;
+    refs.groups[group.label] = { start: groupStart, end: groupEnd };
+    // 교과군·세부 칸: 세부 이름이 없는 교과(국어·수학·영어)는 A:B를 합친다. 같은 세부 이름(교양: 진로와 직업 + 교양)은 하나로 합친다.
+    const labeled = placed.some(({ department }) => department.formLabel);
+    put(groupStart, 0, { v: group.label, k: "group" });
+    merge(groupStart, 0, groupEnd, labeled ? 0 : 1);
+    if (labeled) {
+      for (let index = 0; index < placed.length;) {
+        let last = index;
+        while (last + 1 < placed.length && placed[last + 1].department.formLabel === placed[index].department.formLabel) last++;
+        put(placed[index].start, 1, { v: placed[index].department.formLabel, k: "sub" });
+        merge(placed[index].start, 1, placed[last].end, 1);
+        index = last + 1;
+      }
+    }
+    const memberAllocations = (semester) => placed.filter(({ department }) => group.pooled && !department.common)
+      .map(({ blocks }) => `N(AB${blocks[semester].start})`);
+    for (const { department, start, end, blocks } of placed) {
+      for (const semester of ["1", "2"]) {
+        const { start: blockStart, end: blockEnd } = blocks[semester];
+        const sum = `SUM(P${blockStart}:Q${blockEnd})`;
+        let formula = sum;
+        if (group.pooled && department.common) {
+          const others = memberAllocations(semester);
+          const expression = others.length ? `${sum}-${others.join("-")}` : sum;
+          formula = `IF(${expression}=0,"",${expression})`;
+        } else if (group.pooled) formula = `${sum}+N(AB${blockStart})`;
+        const total = department.totals[semester];
+        put(blockStart, 17, { v: department.common && !total ? "" : total, f: formula, k: "r" }); merge(blockStart, 17, blockEnd, 17);
+        put(blockStart, 19, { v: number(department.averages?.[semester]), f: `IF(N(S${start})>0,R${blockStart}/S${start},"")`, k: "t" });
+        merge(blockStart, 19, blockEnd, 19);
+        if (group.pooled && !department.common) {
+          const note = settings.allocationNotes?.[department.id]?.[semester] ?? "";
+          const allocation = settings.allocations?.[department.id]?.[semester];
+          const firstMember = placed.find((item) => !item.department.common)?.department === department && semester === "1";
+          put(blockStart, 23, { v: note, k: "memo", split: true, input: { type: "text", value: note,
+            attrs: { "data-hours-allocation-note": `${department.id}|${semester}`, "data-focus-key": `alloc-note-${department.id}-${semester}`,
+              "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 메모`, placeholder: "통과10 · 과탐실3" } } });
+          merge(blockStart, 23, blockEnd, 26);
+          put(blockStart, 27, { v: number(hoursNumber(allocation)), k: "ab", input: { type: "number", value: allocation ?? "",
+            attrs: { ...(firstMember ? { id: `hoursAllocation-${department.group}` } : {}), "data-hours-allocation": `${department.id}|${semester}`,
+              "data-focus-key": `alloc-${department.id}-${semester}`, min: 0, max: 999, step: 1, placeholder: "0",
+              "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 시수` } } });
+          merge(blockStart, 27, blockEnd, 27);
+        }
+      }
+      put(start, 18, { v: number(department.teachers), k: "s", input: { type: "number", value: department.teachers ?? "",
+        attrs: { id: `hoursTeachers-${department.id}`, "data-hours-teachers": department.id, "data-focus-key": `teachers-${department.id}`, min: 0, max: 200, step: 0.5,
+          "aria-label": `${hoursDepartmentName(department.id)} 교사 수` } } });
+      merge(start, 18, end, 18);
+      if (!group.pooled) {
+        put(start, 20, { v: number(department.yearAverage), f: `IF(N(S${start})>0,AVERAGE(T${blocks["1"].start},T${blocks["2"].start}),"")`, k: "u" });
+        merge(start, 20, end, 20);
+        put(start, 21, { v: department.excluded ? "합계·평균\n제외" : department.id === "기타" ? "담당 교과\n미정" : "", k: "v" });
+        merge(start, 21, end, 21);
+        put(start, 22, { v: number(department.previous), k: "w", input: previousInput(department.id, hoursDepartmentName(department.id), department.previous) });
+        merge(start, 22, end, 22);
+      }
+    }
+    if (group.pooled) {
+      const common = placed.find(({ department }) => department.common)?.department || byId.get(group.ids[0]);
+      const S = `SUM(S${groupStart}:S${groupEnd})`;
+      put(groupStart, 20, { v: number(common.groupAverage), f: `IF(${S}>0,SUM(R${groupStart}:R${groupEnd})/${S}/2,"")`, k: "u" });
+      merge(groupStart, 20, groupEnd, 20);
+      const semesterValue = (semester, column) => ({ v: number(common.groupSemester?.[semester]), f: `IF(${S}>0,SUM(${column}${groupStart}:${column}${groupEnd})/${S},"")`, k: "vNum" });
+      const size = groupEnd - groupStart + 1;
+      if (size >= 4) {
+        const half = Math.floor(size / 2);
+        put(groupStart, 21, { v: "1학기", k: "vLabel" });
+        put(groupStart + 1, 21, semesterValue("1", "P")); merge(groupStart + 1, 21, groupStart + half - 1, 21);
+        put(groupStart + half, 21, { v: "2학기", k: "vLabel" });
+        put(groupStart + half + 1, 21, semesterValue("2", "Q")); merge(groupStart + half + 1, 21, groupEnd, 21);
+      } else {
+        const pair = (semester) => common.groupSemester ? hoursFormat(common.groupSemester[semester]) : "-";
+        put(groupStart, 21, { v: `1학기 ${pair("1")}\n2학기 ${pair("2")}`, k: "v" }); merge(groupStart, 21, groupEnd, 21);
+      }
+      put(groupStart, 22, { v: number(common.groupPrevious), k: "w", input: previousInput(group.label, `${group.label} 교과군`, common.groupPrevious) });
+      merge(groupStart, 22, groupEnd, 22);
+    }
+  }
+  refs.bodyEnd = row - 1;
+  // 창체: 학기마다 자율·진로 한 줄씩, 개설반은 학년별 학급 수. 교과 합계·평균에는 넣지 않고 '창체 포함 평균'에만 더한다.
+  const creativeStart = row;
+  edge(creativeStart, "medium");
+  put(creativeStart, 0, { v: "창체", k: "cGroup" });
+  for (const semester of ["1", "2"]) {
+    const blockStart = row;
+    if (semester === "2") edge(blockStart, "thin");
+    put(blockStart, 2, { v: Number(semester), k: "cCell" }); merge(blockStart, 2, blockStart + HOURS_CREATIVE_PARTS.length - 1, 2);
+    for (const part of HOURS_CREATIVE_PARTS) {
+      const credit = stats.creativeParts?.[part] ?? 0;
+      let total = 0;
+      ["1", "2", "3"].forEach((grade, index) => {
+        const column = 3 + index * 4;
+        const classes = stats.classCounts?.[grade] || 0;
+        total += credit * classes;
+        put(row, column, { v: part, k: "cCell" });
+        put(row, column + 1, { v: credit, k: "cCell", input: index === 0 && semester === "1" ? { type: "number", value: credit,
+          attrs: { "data-hours-creative-part": part, "data-focus-key": `creative-${part}`, min: 0, max: 10, step: 0.5, "aria-label": `창체 ${part} 학급당 학기 시수` } } : null });
+        put(row, column + 2, { v: classes, k: "cCell" });
+        put(row, column + 3, { v: credit * classes, f: `PRODUCT(${L(column + 1)}${row},${L(column + 2)}${row})`, k: "cCell" });
+      });
+      put(row, 15, { v: total, f: `SUM(G${row},K${row},O${row})`, k: "cCell" });
+      put(row, 16, { v: total, f: `SUM(G${row},K${row},O${row})`, k: "cCell" });
+      put(row, 17, { v: "", k: "cR" });
+      put(row, 18, { v: 0, k: "cS" });
+      put(row, 19, { v: total, f: `SUM(G${row},K${row},O${row})`, k: "cT" });
+      refs.creative[semester].push(row);
+      row++;
+    }
+  }
+  const creativeEnd = row - 1;
+  merge(creativeStart, 0, creativeEnd, 1);
+  edge(row, "medium");
+  // 요약 상자: 교과 합계(진로 제외) · 전체 평균(창체 제외) · 창체 포함 평균, 왼쪽은 메모.
+  const [s1, s2, s3] = [row, row + 1, row + 2];
+  for (const line of [s1, s2, s3]) heights[line] = 41.25;
+  const memo = hoursFormMemo(stats);
+  const medium = { l: "medium", r: "medium", t: "medium", b: "medium" };
+  put(s1, 3, { v: memo.text, k: "box", memo, border: { t: "medium" } }); merge(s1, 3, s3, 12);
+  const hasBody = refs.bodyEnd >= refs.bodyStart;
+  const career = refs.career;
+  const columnSum = (column) => hasBody ? `SUM(${column}${refs.bodyStart}:${column}${refs.bodyEnd})${career ? `-SUM(${column}${career.start}:${column}${career.end})` : ""}` : "0";
   const totals = stats.totals;
   const average = totals.average;
-  const label = (value) => ({ v: value, s: 6 });
-  const blankLabels = () => Array.from({ length: 14 }, () => label(""));
-  rows.push([label(`교과 합계 (진로 제외${totals.excludedHours ? ` · 진로 ${totals.excludedHours}시간` : ""})`), ...blankLabels(),
-    { f: `SUM(${includedBlocks("1").join(",") || 0})`, v: totals["1"], s: 6 },
-    { f: `SUM(${includedBlocks("2").join(",") || 0})`, v: totals["2"], s: 6 },
-    { f: `P${totalRow}+Q${totalRow}`, v: totals["1"] + totals["2"], s: 6 },
-    { f: `SUM(${firstSemesterRows.map((row) => `S${row}`).join(",") || 0})`, v: totals.teachers, s: 6 }]);
-  rows.push([label("교과 교사 1인당 평균 (창체 제외)"), ...blankLabels(),
-    { f: `IF(S${totalRow}>0,P${totalRow}/S${totalRow},"")`, v: average ? average["1"] : "", s: 7 },
-    { f: `IF(S${totalRow}>0,Q${totalRow}/S${totalRow},"")`, v: average ? average["2"] : "", s: 7 },
-    { f: `IF(S${totalRow}>0,R${totalRow}/S${totalRow}/2,"")`, v: average ? average.year : "", s: 7 }]);
-  rows.push([label(`창체 포함 평균 (창체 ${stats.creativeHours}시간 × ${stats.totalClasses}학급 = 학기당 ${totals.creative}시간)`), ...blankLabels(),
-    { f: `IF(S${totalRow}>0,(P${totalRow}+${totals.creative})/S${totalRow},"")`, v: average ? average.creative1 : "", s: 7 },
-    { f: `IF(S${totalRow}>0,(Q${totalRow}+${totals.creative})/S${totalRow},"")`, v: average ? average.creative2 : "", s: 7 },
-    { f: `IF(S${totalRow}>0,(R${totalRow}+${totals.creative * 2})/S${totalRow}/2,"")`, v: average ? average.creativeYear : "", s: 7 }]);
-  merges.push(`A${totalRow}:O${totalRow}`, `A${averageRow}:O${averageRow}`, `A${creativeRow}:O${creativeRow}`);
-  // 전체 교원 기준 평균(참고)과 교원 구성 표. 교과 평균은 위 줄(교과 시수 ÷ 교과 교사)이고 이 값은 참고용이다.
-  const staff = stats.staff;
-  const referenceRow = creativeRow + 1;
-  const staffHead = referenceRow + 2;
-  const staffRows = {
-    total: staffHead + 1, subject: staffHead + 2, career: staffHead + 3,
-    firstRole: staffHead + 4, lastRole: staffHead + 3 + stats.nonTeaching.length, other: staffHead + 4 + stats.nonTeaching.length
-  };
-  const staffTotal = staff.total ?? 0;
-  rows.push([label(`전체 교원 기준 평균 (참고) = (교과 + 진로 + 비교과 수업 시수) ÷ 총 교사 ${hoursFormat(staffTotal, 1)}명`), ...blankLabels(),
-    { f: `IF(D${staffRows.total}>0,SUM(E${staffRows.subject}:E${staffRows.lastRole})/D${staffRows.total},"")`, v: staff.average ? staff.average["1"] : "", s: 7 },
-    { f: `IF(D${staffRows.total}>0,SUM(F${staffRows.subject}:F${staffRows.lastRole})/D${staffRows.total},"")`, v: staff.average ? staff.average["2"] : "", s: 7 },
-    { f: `IF(D${staffRows.total}>0,(SUM(E${staffRows.subject}:E${staffRows.lastRole})+SUM(F${staffRows.subject}:F${staffRows.lastRole}))/D${staffRows.total}/2,"")`, v: staff.average ? staff.average.year : "", s: 7 }]);
-  merges.push(`A${referenceRow}:O${referenceRow}`);
-  rows.push([]);
-  const perYear = (row) => ({ f: `IF(D${row}>0,(E${row}+F${row})/D${row}/2,"")`, v: "", s: 5 });
-  const staffLine = (name, teachers, hours, note, style = 3) => [{ v: name, s: style }, { v: "", s: style }, { v: "", s: style }, teachers, hours[0], hours[1], null, { v: note, s: 3 }];
-  rows.push([header("교원 구성"), header(""), header(""), header("교사 수"), header("1학기\n수업 시수"), header("2학기\n수업 시수"), header("1인당 시수\n(1년)"), header("비고")]);
-  rows.push(staffLine("총 교사 수", { v: staffTotal, s: 6 }, [{ v: "", s: 4 }, { v: "", s: 4 }],
-    staff.entered === null ? "제안값(교과 + 진로 + 비교과 합) · 시수 설정에서 총 교사 수를 입력하세요" : "직접 입력(학교 교원 정원)", 6));
-  rows.push(staffLine("교과 교사 (진로 제외)", { f: `S${totalRow}`, v: totals.teachers, s: 4 }, [{ f: `P${totalRow}`, v: totals["1"], s: 4 }, { f: `Q${totalRow}`, v: totals["2"], s: 4 }],
-    "교과 평균 시수 = 교과 시수 ÷ 교과 교사 수"));
-  rows.push(staffLine("진로 (평균 제외)", { v: staff.career, s: 4 }, [{ v: staff.careerHours["1"], s: 4 }, { v: staff.careerHours["2"], s: 4 }], "진로와 직업 · 교과 합계·평균에서 뺌"));
-  for (const role of stats.nonTeaching) {
-    const subjects = role.items.map((item) => `${item.grade}-${item.semester} ${item.subject} ${item.hours}시간`);
-    const extra = role.extra["1"] || role.extra["2"] ? `직접 입력 ${role.extra["1"]}/${role.extra["2"]}시간` : "";
-    rows.push(staffLine(`비교과 · ${role.label}`, { v: role.teachers ?? 0, s: 4 }, [{ v: role.hours["1"], s: 4 }, { v: role.hours["2"], s: 4 }],
-      [subjects.length ? `맡은 과목: ${subjects.join(", ")}` : "", extra, "교과 평균에서 뺌"].filter(Boolean).join(" · ")));
+  put(s1, 13, { v: "교과", k: "sum1", border: medium }); merge(s1, 13, s1, 14);
+  put(s1, 15, { v: totals["1"], f: columnSum("P"), k: "sum1", border: medium });
+  put(s1, 16, { v: totals["2"], f: columnSum("Q"), k: "sum1", border: medium });
+  put(s1, 17, { v: totals["1"] + totals["2"], f: columnSum("R"), k: "sum1Red", border: medium });
+  put(s1, 18, { v: totals.teachers, f: hasBody ? `SUM(S${refs.bodyStart}:S${refs.bodyEnd})${career ? `-N(S${career.start})` : ""}` : "0", k: "sum1Teacher", border: medium });
+  put(s1, 19, { v: hoursCareerNote(stats), k: "noteRed", border: { t: "medium", l: "medium" } }); merge(s1, 19, s1, 22);
+  const guard = (expression) => `IF(N(S${s1})>0,${expression},"")`;
+  const creative1 = refs.creative["1"].length ? `SUM(P${refs.creative["1"][0]}:P${refs.creative["1"].at(-1)})` : "0";
+  const creative2 = refs.creative["2"].length ? `SUM(Q${refs.creative["2"][0]}:Q${refs.creative["2"].at(-1)})` : "0";
+  put(s2, 13, { v: "전체\n평균", k: "sum2", border: medium }); merge(s2, 13, s2, 14);
+  put(s2, 15, { v: number(average?.["1"]), f: guard(`P${s1}/S${s1}`), k: "sum2Num", border: medium });
+  put(s2, 16, { v: number(average?.["2"]), f: guard(`Q${s1}/S${s1}`), k: "sum2Num", border: medium });
+  put(s2, 17, { v: number(average?.year), f: guard(`R${s1}/S${s1}/2`), k: "sum2Red", border: medium });
+  put(s2, 19, { v: "⇒ 창체제외 교과시수만 평균냄", k: "note", border: { l: "medium" } }); merge(s2, 19, s2, 22);
+  put(s3, 13, { v: "창체 포함\n평균", k: "sum3", border: medium }); merge(s3, 13, s3, 14);
+  put(s3, 15, { v: number(average?.creative1), f: guard(`(P${s1}+${creative1})/S${s1}`), k: "sum3Num", border: medium });
+  put(s3, 16, { v: number(average?.creative2), f: guard(`(Q${s1}+${creative2})/S${s1}`), k: "sum3Num", border: medium });
+  put(s3, 17, { v: number(average?.creativeYear), f: guard(`(R${s1}+${creative1}+${creative2})/S${s1}/2`), k: "sum3Red", border: medium });
+  put(s3, 19, { v: "⇒ 창체포함 교과시수 평균냄", k: "note", border: { l: "medium" } }); merge(s3, 19, s3, 22);
+  return { year, title: `${year}학년도 교과별 시수 통계`, lastRow: s3, tableEnd: creativeEnd, creativeStart, creativeEnd, summaryRows: [s1, s2, s3], cells, merges, rowEdges, heights, refs, memo, freeze: "D5" };
+
+  function previousInput(key, label, value) {
+    return { type: "number", value: value ?? "", attrs: { "data-hours-previous": key, "data-focus-key": `previous-${key}`, min: 0, max: 100, step: 0.01,
+      "aria-label": `${label} ${Number(year) - 1}학년도 평균 시수` } };
   }
-  rows.push(staffLine("기타 (교과 미배정)", { f: `D${staffRows.total}-SUM(D${staffRows.subject}:D${staffRows.lastRole})`, v: staff.other ?? 0, s: 4 }, [{ v: "", s: 4 }, { v: "", s: 4 }],
-    staff.over ? `교과 + 진로 + 비교과가 총 교사 수보다 ${hoursFormat(-staff.other, 1)}명 많습니다` : "총 교사 수 − 교과 − 진로 − 비교과"));
-  for (let row = staffRows.total; row <= staffRows.other; row++) {
-    merges.push(`A${row}:C${row}`);
-    rows[row - 1][6] = row === staffRows.total || row === staffRows.other ? { v: "", s: 4 } : perYear(row);
+}
+
+// 병합을 알고 칸마다 테두리를 정한다. 표 영역은 열·행 경계 규칙, 요약 상자는 칸에 적은 테두리를 쓴다.
+function hoursFormLayout(model) {
+  const owner = new Map();
+  for (const merge of model.merges) {
+    const [r1, c1, r2, c2] = merge;
+    for (let row = r1; row <= r2; row++) for (let column = c1; column <= c2; column++) owner.set(`${row}:${column}`, merge);
   }
-  merges.push(`A${staffHead}:C${staffHead}`);
-  const summary = {
-    name: "시수 통계",
-    rows,
-    merges,
-    freeze: "A5",
-    widths: [8, 9, 5, 16, 5, 6, 6, 16, 5, 6, 6, 16, 5, 6, 6, 7, 7, 7, 6, 7, 7, 16, 9, 8],
-    heights: { 2: 30, 3: 44 }
+  const inTable = (row, column) => row >= 3 && row <= model.tableEnd && column <= 22;
+  const blankKind = (row, column) => {
+    if (row >= model.creativeStart && row <= model.creativeEnd && column <= 19) return column === 17 ? "cR" : "cCell";
+    return ["group", "sub", "sem"][column] || (column <= 14 ? "cell" : { 15: "p", 16: "q", 17: "r", 18: "s", 19: "t", 20: "u", 21: "v", 22: "w" }[column] || "blank");
   };
+  const rowEdge = (row) => model.rowEdges.get(row) || "hair";
+  const border = (cell, [r1, c1, r2, c2], row, column) => {
+    const explicit = cell?.border;
+    const sides = explicit
+      ? { l: explicit.l || null, r: explicit.r || null, t: explicit.t || null, b: explicit.b || null }
+      : inTable(r1, c1) || (cell && r1 >= 3 && r1 <= model.tableEnd)
+        ? { l: HOURS_FORM_COL_EDGES[c1], r: HOURS_FORM_COL_EDGES[c2 + 1], t: rowEdge(r1), b: rowEdge(r2 + 1) }
+        : { l: null, r: null, t: null, b: null };
+    return {
+      l: column === c1 ? sides.l : null, r: column === c2 ? sides.r : null,
+      t: row === r1 ? sides.t : null, b: row === r2 ? sides.b : null
+    };
+  };
+  return { owner, inTable, blankKind, border };
+}
+
+function hoursFormDisplay(cell) {
+  const value = cell?.v;
+  if (value === "" || value === null || value === undefined) return "";
+  if (typeof value === "number") {
+    const format = HOURS_FORM_KINDS[cell.k]?.fmt;
+    return format === "0.00" ? value.toFixed(2) : format === "0.0" ? value.toFixed(1) : hoursFormat(value);
+  }
+  return String(value);
+}
+
+// 화면 표: 같은 행·열·병합·색. 입력할 칸(개설반·교사수·전년도 평균·배분 메모·배분 합계·창체 학점·메모)은 그 칸 안에 입력 상자를 둔다.
+function hoursFormHtml(model) {
+  const layout = hoursFormLayout(model);
+  const attrs = (map) => Object.entries(map || {}).map(([key, value]) => ` ${key}="${escapeHtml(String(value))}"`).join("");
+  const input = (spec) => spec.type === "textarea"
+    ? `<textarea class="hf-input hf-textarea${spec.cls || ""}"${attrs(spec.attrs)}>${escapeHtml(String(spec.value ?? ""))}</textarea>`
+    : `<input class="hf-input${spec.cls || ""}" type="${spec.type}"${spec.type === "number" ? ' inputmode="decimal"' : ""} value="${escapeHtml(String(spec.value ?? ""))}"${spec.title ? ` title="${escapeHtml(spec.title)}"` : ""}${attrs(spec.attrs)}>`;
+  const sideClass = (sides) => ["l", "r", "t", "b"].filter((side) => sides[side]).map((side) => `hb-${side}${sides[side][0]}`).join(" ");
+  const lines = [`<colgroup>${HOURS_FORM_PIXELS.map((width) => `<col style="width:${width}px">`).join("")}</colgroup>`];
+  for (let row = 1; row <= model.lastRow; row++) {
+    let html = "";
+    for (let column = 0; column < HOURS_FORM_COLUMNS; column++) {
+      const merge = layout.owner.get(`${row}:${column}`);
+      if (merge && (merge[0] !== row || merge[1] !== column)) continue;
+      const cell = model.cells.get(`${row}:${column}`);
+      if (!cell && !layout.inTable(row, column)) { html += "<td></td>"; continue; }
+      const extent = merge || [row, column, row, column];
+      const kind = cell?.k || layout.blankKind(row, column);
+      const span = `${extent[2] > extent[0] ? ` rowspan="${extent[2] - extent[0] + 1}"` : ""}${extent[3] > extent[1] ? ` colspan="${extent[3] - extent[1] + 1}"` : ""}`;
+      // 병합 칸의 테두리는 바깥 네 변만 필요하다(오른쪽 아래 끝 칸 기준으로 다시 계산).
+      const outer = layout.border(cell, extent, row, column);
+      const far = layout.border(cell, extent, extent[2], extent[3]);
+      const sides = { l: outer.l, t: outer.t, r: far.r, b: far.b };
+      let content;
+      if (cell?.memo) {
+        content = `<div class="hf-memo-fixed">${escapeHtml(cell.memo.fixed)}</div>
+          <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 (전년도 교사 수를 시수 설정에 넣으면 자동으로 적습니다)">${escapeHtml(cell.memo.changes)}</textarea>
+          ${cell.memo.edited ? '<button class="button button-quiet hf-memo-reset" type="button" data-hours-action="reset-memo">자동 문구로</button>' : ""}`;
+      } else if (cell?.input) content = input(cell.input);
+      else content = escapeHtml(hoursFormDisplay(cell));
+      html += `<td${span} class="hf-${kind}${sides.l || sides.r || sides.t || sides.b ? ` ${sideClass(sides)}` : ""}">${content}</td>`;
+    }
+    const rowClass = row <= 2 ? " hf-title-row" : row === 3 ? " hf-head-row hf-head-top" : row === 4 ? " hf-head-row hf-head-bottom" : model.summaryRows.includes(row) ? " hf-summary-row" : "";
+    lines.push(`<tr class="hf-row${rowClass}">${html}</tr>`);
+  }
+  return `<table class="hours-form" aria-label="${escapeHtml(model.title || "교과별 시수")}">${lines.join("")}</table>`;
+}
+
+// 칸 종류별 글꼴·채움 CSS를 한 번 만든다(엑셀과 같은 HOURS_FORM_KINDS 기준).
+function ensureHoursFormStyles() {
+  if (typeof document === "undefined" || !document.head || document.head.querySelector("style[data-hours-form-styles]")) return;
+  const style = document.createElement("style");
+  style.dataset.hoursFormStyles = "1";
+  style.textContent = Object.entries(HOURS_FORM_KINDS).map(([kind, spec]) =>
+    `.hours-form .hf-${kind}{${spec.fill ? `background:#${spec.fill};` : ""}${spec.b ? "font-weight:700;" : ""}font-size:${Math.round(Math.max(9, spec.sz * (spec.sz >= 16 ? 0.9 : 1)))}px;${spec.red ? "color:#e00000;" : ""}${spec.h ? `text-align:${spec.h};` : ""}}`).join("\n");
+  document.head.appendChild(style);
+}
+
+// 엑셀 스타일 목록: 앞 11개는 보고서 공통 스타일(createReportStylesXml과 같은 번호), 뒤는 시수표 양식 칸.
+function hoursWorkbookStyles() {
+  const fonts = [], fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'], borders = [], formats = [], xfs = [];
+  const indexOf = (list, xml) => { let index = list.indexOf(xml); if (index < 0) { list.push(xml); index = list.length - 1; } return index; };
+  const known = new Map();
+  const add = (spec) => {
+    const font = `<font>${spec.b ? "<b/>" : ""}<sz val="${spec.sz || 10}"/>${spec.color ? `<color rgb="${spec.color}"/>` : ""}<name val="맑은 고딕"/><family val="2"/></font>`;
+    const fill = spec.fill ? `<fill><patternFill patternType="solid"><fgColor rgb="FF${spec.fill}"/><bgColor indexed="64"/></patternFill></fill>` : fills[0];
+    const side = (name, value) => value ? `<${name} style="${value}"><color rgb="${spec.borderColor || "FF000000"}"/></${name}>` : `<${name}/>`;
+    const sides = spec.border || {};
+    const border = `<border>${side("left", sides.l)}${side("right", sides.r)}${side("top", sides.t)}${side("bottom", sides.b)}<diagonal/></border>`;
+    const numFmtId = spec.fmt ? 164 + indexOf(formats, spec.fmt) : 0;
+    const alignment = spec.h || spec.v || spec.wrap
+      ? `<alignment${spec.h ? ` horizontal="${spec.h}"` : ""}${spec.v ? ` vertical="${spec.v}"` : ""}${spec.wrap ? ' wrapText="1"' : ""}/>` : "";
+    const xf = `<xf numFmtId="${numFmtId}" fontId="${indexOf(fonts, font)}" fillId="${indexOf(fills, fill)}" borderId="${indexOf(borders, border)}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ""}${alignment ? ` applyAlignment="1">${alignment}</xf>` : "/>"}`;
+    if (!known.has(xf)) { known.set(xf, xfs.length); xfs.push(xf); }
+    return known.get(xf);
+  };
+  const thin = { l: "thin", r: "thin", t: "thin", b: "thin" };
+  const grey = "FF555555";
+  [
+    { sz: 10 }, { sz: 14, b: true, h: "center", v: "center" },
+    { sz: 10, b: true, fill: "E9EEF6", border: thin, borderColor: grey, h: "center", v: "center", wrap: true },
+    { sz: 10, border: thin, borderColor: grey, h: "left", v: "center", wrap: true },
+    { sz: 10, border: thin, borderColor: grey, h: "center", v: "center", wrap: true },
+    { sz: 10, fmt: "0.00", border: thin, borderColor: grey, h: "center", v: "center" },
+    { sz: 10, b: true, fill: "F4F6F9", border: thin, borderColor: grey, h: "center", v: "center", wrap: true },
+    { sz: 10, b: true, fmt: "0.00", fill: "F4F6F9", border: thin, borderColor: grey, h: "center", v: "center" },
+    { sz: 9, color: "FF8A3B12", h: "left", v: "center", wrap: true },
+    { sz: 10, b: true, fill: "FFF3B0", border: thin, borderColor: grey, h: "center", v: "center", wrap: true },
+    { sz: 10, fmt: "0.0", border: thin, borderColor: grey, h: "center", v: "center" }
+  ].forEach(add);
+  const form = new Map();
+  return {
+    form(kind, sides) {
+      const key = `${kind}|${sides.l || ""}|${sides.r || ""}|${sides.t || ""}|${sides.b || ""}`;
+      if (!form.has(key)) {
+        const spec = HOURS_FORM_KINDS[kind] || HOURS_FORM_KINDS.blank;
+        form.set(key, add({ sz: spec.sz, b: spec.b, color: spec.red ? "FFFF0000" : "", fill: spec.fill, border: sides, h: spec.h || "center", v: "center", wrap: spec.wrap, fmt: spec.fmt }));
+      }
+      return form.get(key);
+    },
+    xml() {
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+        (formats.length ? `<numFmts count="${formats.length}">${formats.map((code, index) => `<numFmt numFmtId="${164 + index}" formatCode="${code}"/>`).join("")}</numFmts>` : "") +
+        `<fonts count="${fonts.length}">${fonts.join("")}</fonts><fills count="${fills.length}">${fills.join("")}</fills><borders count="${borders.length}">${borders.join("")}</borders>` +
+        `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs>` +
+        `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+    }
+  };
+}
+
+// 엑셀 첫 시트('2027 교사시수표'): 화면과 같은 모델, 수식은 원래 양식과 같은 꼴(PRODUCT·SUM·평균·창체 포함 평균).
+function hoursFormSheet(model, styles, name) {
+  const layout = hoursFormLayout(model);
+  const rows = [];
+  const merges = [];
+  for (const merge of model.merges) {
+    const cell = model.cells.get(`${merge[0]}:${merge[1]}`);
+    if (cell?.split) continue;
+    merges.push(`${hoursColumnLetter(merge[1])}${merge[0]}:${hoursColumnLetter(merge[3])}${merge[2]}`);
+  }
+  for (let row = 1; row <= model.lastRow; row++) {
+    const line = [];
+    for (let column = 0; column < HOURS_FORM_COLUMNS; column++) {
+      const merge = layout.owner.get(`${row}:${column}`);
+      const top = merge ? model.cells.get(`${merge[0]}:${merge[1]}`) : model.cells.get(`${row}:${column}`);
+      if (!top && !layout.inTable(row, column)) { line.push(null); continue; }
+      const extent = merge || [row, column, row, column];
+      const s = styles.form(top?.k || layout.blankKind(row, column), layout.border(top, extent, row, column));
+      if (top?.split) {
+        // 배분 메모 '통과10 · 과탐실3 · 융과4'는 원래 양식처럼 X·Y·Z·AA 칸에 하나씩 나눠 적는다(넘치면 AA에 이어 적음).
+        const parts = String(top.v || "").split(/\s*[·,]\s*|\s{2,}/).filter(Boolean);
+        const index = column - merge[1];
+        const value = row !== merge[0] ? "" : index < 3 ? parts[index] || "" : parts.slice(3).join(" · ");
+        line.push({ v: value, s });
+        continue;
+      }
+      if (merge && (merge[0] !== row || merge[1] !== column)) { line.push({ v: "", s }); continue; }
+      line.push(top?.f ? { f: top.f, v: top.v, s } : { v: top?.v ?? "", s });
+    }
+    rows.push(line);
+  }
+  const heights = Object.fromEntries(Object.entries(model.heights).map(([row, height]) => [Number(row) - 1, height]));
+  for (let row = 5; row <= model.tableEnd; row++) if (!(row - 1 in heights)) heights[row - 1] = 17.25;
+  return { name, rows, merges, freeze: model.freeze, widths: HOURS_FORM_WIDTHS, heights, orientation: "portrait", fitToHeight: 1 };
+}
+
+// 엑셀: 1) 원래 양식 시트 '2027 교사시수표' 2) 과목별 상세 3) 교원 구성 4) 교사 수 추천 5) 확인 필요.
+// 스타일 목록은 sheets.stylesXml에 실어 createWorkbookBlob(sheets, { stylesXml })로 넘긴다.
+function buildHoursWorkbookSheets(stats, { schoolName = typeof $ === "function" ? $("#schoolName")?.value || "" : "", date = new Date() } = {}) {
+  const styles = hoursWorkbookStyles();
+  const model = hoursFormModel(stats, { schoolName, date });
+  const form = hoursFormSheet(model, styles, `${stats.year} 교사시수표`);
   const detail = {
     name: "과목별 상세",
     freeze: "A2",
@@ -1298,7 +1766,42 @@ function buildHoursWorkbookSheets(stats) {
         ])
     ]
   };
-  const sheets = [summary, detail];
+  // 교원 구성(원래 양식에는 메모 한 줄뿐이라 따로 둔다): 총 교사 수 = 교과 + 진로 + 비교과 + 기타, 전체 교원 기준 평균(참고).
+  const staff = stats.staff;
+  const totals = stats.totals;
+  const header = (value) => ({ v: value, s: 2 });
+  const staffRows = [
+    [{ v: `${stats.year}학년도 교원 구성`, s: 1 }],
+    [header("구분"), header("교사 수"), header("1학기\n수업 시수"), header("2학기\n수업 시수"), header("1인당 시수\n(1년)"), header("비고")]
+  ];
+  const perYear = (row) => ({ f: `IF(B${row}>0,(C${row}+D${row})/B${row}/2,"")`, v: "", s: 5 });
+  const line = (name, teachers, hours, note, style = 3) => {
+    const row = staffRows.length + 1;
+    staffRows.push([{ v: name, s: style }, teachers, hours[0], hours[1], perYear(row), { v: note, s: 3 }]);
+    return row;
+  };
+  const totalRow = line("총 교사 수", { v: staff.total ?? 0, s: 6 }, [{ v: "", s: 4 }, { v: "", s: 4 }],
+    staff.entered === null ? "제안값(교과 + 진로 + 비교과 합) · 시수 설정에서 총 교사 수를 입력하세요" : "직접 입력(학교 교원 정원)", 6);
+  staffRows[totalRow - 1][4] = { v: "", s: 4 };
+  const subjectRow = line("교과 교사 (진로 제외)", { v: totals.teachers, s: 4 }, [{ v: totals["1"], s: 4 }, { v: totals["2"], s: 4 }], "교과 평균 시수 = 교과 시수 ÷ 교과 교사 수 (시수표 '교과' 줄)");
+  line("진로 (평균 제외)", { v: staff.career, s: 4 }, [{ v: staff.careerHours["1"], s: 4 }, { v: staff.careerHours["2"], s: 4 }], "진로와 직업 · 교과 합계·평균에서 뺌");
+  let lastRole = subjectRow + 1;
+  for (const role of stats.nonTeaching) {
+    const subjects = role.items.map((item) => `${item.grade}-${item.semester} ${item.subject} ${item.hours}시간`);
+    const extra = role.extra["1"] || role.extra["2"] ? `직접 입력 ${role.extra["1"]}/${role.extra["2"]}시간` : "";
+    lastRole = line(`비교과 · ${role.label}`, { v: role.teachers ?? 0, s: 4 }, [{ v: role.hours["1"], s: 4 }, { v: role.hours["2"], s: 4 }],
+      [subjects.length ? `맡은 과목: ${subjects.join(", ")}` : "", extra, "교과 평균에서 뺌"].filter(Boolean).join(" · "));
+  }
+  const otherRow = line("기타 (교과 미배정)", { f: `B${totalRow}-SUM(B${subjectRow}:B${lastRole})`, v: staff.other ?? 0, s: 4 }, [{ v: "", s: 4 }, { v: "", s: 4 }],
+    staff.over ? `교과 + 진로 + 비교과가 총 교사 수보다 ${hoursFormat(-staff.other, 1)}명 많습니다` : "총 교사 수 − 교과 − 진로 − 비교과");
+  staffRows[otherRow - 1][4] = { v: "", s: 4 };
+  const all = `SUM(C${subjectRow}:C${lastRole})`, all2 = `SUM(D${subjectRow}:D${lastRole})`;
+  staffRows.push([{ v: "전체 교원 기준 평균 (참고) = (교과 + 진로 + 비교과 수업 시수) ÷ 총 교사 수", s: 6 }, { v: "", s: 6 },
+    { f: `IF(B${totalRow}>0,${all}/B${totalRow},"")`, v: staff.average ? staff.average["1"] : "", s: 7 },
+    { f: `IF(B${totalRow}>0,${all2}/B${totalRow},"")`, v: staff.average ? staff.average["2"] : "", s: 7 },
+    { f: `IF(B${totalRow}>0,(${all}+${all2})/B${totalRow}/2,"")`, v: staff.average ? staff.average.year : "", s: 7 }, { v: "참고 값(교과 평균은 시수표 '전체 평균' 줄)", s: 3 }]);
+  const staffSheet = { name: "교원 구성", rows: staffRows, merges: ["A1:F1"], widths: [34, 9, 10, 10, 10, 60], freeze: "A3" };
+  const sheets = [form, detail, staffSheet];
   const recommendation = stats.recommendation;
   if (recommendation?.ok && recommendation.rows.length) {
     const range = (value) => value ? `${hoursFormat(value[0], 1)}~${hoursFormat(value[1], 1)}` : "-";
@@ -1334,6 +1837,8 @@ function buildHoursWorkbookSheets(stats) {
       rows: [[{ v: "구분", s: 2 }, { v: "내용", s: 2 }], ...stats.issues.map((issue) => [{ v: labels[issue.level], s: 4 }, { v: issue.text, s: 3 }])]
     });
   }
+  sheets.stylesXml = styles.xml();
+  sheets.model = model;
   return sheets;
 }
 
@@ -1350,12 +1855,17 @@ function downloadHoursStats() {
   const errors = stats.issues.filter((issue) => issue.level === "error");
   if (errors.length && !window.confirm(`필수 확인 항목이 ${errors.length}개 있습니다(예: ${errors[0].text}). 그래도 엑셀을 내려받을까요?`)) return;
   const settings = hoursSettings(stats.year, true);
-  settings.lastAverages = Object.fromEntries(stats.departments
-    .filter((department) => department.yearAverage !== null)
-    .map((department) => [department.id, Math.round(department.yearAverage * 100) / 100]));
+  // 다음 해 '전년도 평균'(W열)으로 쓸 값: 교과별 1년 평균, 과학·사회는 원래 양식처럼 교과군 평균(교과군 이름으로)도 둔다.
+  settings.lastAverages = Object.fromEntries([
+    ...stats.departments.filter((department) => department.yearAverage !== null)
+      .map((department) => [department.id, Math.round(department.yearAverage * 100) / 100]),
+    ...stats.departments.filter((department) => department.common && department.groupAverage !== null)
+      .map((department) => [department.group, Math.round(department.groupAverage * 100) / 100])
+  ]);
   settings.lastExportedAt = new Date().toISOString();
   persistState();
-  downloadBlob(createWorkbookBlob(buildHoursWorkbookSheets(stats)), `${stats.year}학년도_교과별_시수통계.xlsx`);
+  const sheets = buildHoursWorkbookSheets(stats);
+  downloadBlob(createWorkbookBlob(sheets, { stylesXml: sheets.stylesXml }), `${stats.year}학년도_교과별_시수통계.xlsx`);
   status.style.color = "#287956";
   status.textContent = `${stats.year}학년도 교과별 시수 통계를 내려받았습니다. 교과별 평균은 다음 해 '전년도 평균'으로 불러올 수 있습니다.`;
 }
@@ -1367,7 +1877,8 @@ function initHoursStats() {
     const target = event.target;
     const changed = updateHoursSetting(target);
     if (!changed) return;
-    persistState();
+    // 4MB 자료를 칸마다 바로 직렬화하지 않고 묶어서 저장(app.js persistStateSoon).
+    if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
     if (changed === "classes") {
       syncNextYearClassInputs();
       renderAggregate();
@@ -1383,19 +1894,31 @@ function initHoursStats() {
     switchWorkflowStep("1");
     switchCurriculumCohort(cohort.dataset.hoursCohort);
   };
-  content.addEventListener("change", handleChange);
-  content.addEventListener("click", openCohort);
-  content.addEventListener("click", (event) => {
+  const handleAction = (event) => {
     const button = event.target.closest("[data-hours-action], [data-hours-auto-allocate]");
     if (!button) return;
     if (button.dataset.hoursAutoAllocate) autoAllocateHoursCommon(button.dataset.hoursAutoAllocate);
     else if (button.dataset.hoursAction === "apply-recommendation") applyHoursRecommendation();
     else if (button.dataset.hoursAction === "undo") undoHoursChange();
-  });
-  // 학급 수·근거 차수·창체 시수는 '시수 설정' 팝업 안에 있다.
+    else if (button.dataset.hoursAction === "reset-memo") {
+      const settings = hoursSettings(hoursTargetYear(), true);
+      delete settings.staffMemo;
+      hoursFinishChange("교사 증감 메모를 자동 문구로 되돌렸습니다.");
+    }
+  };
+  content.addEventListener("change", handleChange);
+  content.addEventListener("click", openCohort);
+  content.addEventListener("toggle", (event) => {
+    if (event.target.matches?.('details[data-hours-details="detail"]') && event.target.open && !event.target.querySelector("tbody tr")) scheduleHoursRerender();
+  }, true);
+  content.addEventListener("click", handleAction);
+  // 학급 수·근거 차수·교원 구성·전년도 교사 수는 '시수 설정' 팝업, 교사 수 추천·고정은 '교사 수 추천' 팝업 안에 있다.
   const settingsBody = document.getElementById("hoursSettingsBody");
   settingsBody?.addEventListener("change", handleChange);
   settingsBody?.addEventListener("click", openCohort);
+  const recommendBody = document.getElementById("hoursRecommendBody");
+  recommendBody?.addEventListener("change", handleChange);
+  recommendBody?.addEventListener("click", handleAction);
   for (const input of document.querySelectorAll(".next-year-class-input")) input.addEventListener("change", handleChange);
   document.getElementById("downloadHoursStats").addEventListener("click", downloadHoursStats);
   document.getElementById("hoursLoadPrevious").addEventListener("click", loadPreviousHoursSettings);

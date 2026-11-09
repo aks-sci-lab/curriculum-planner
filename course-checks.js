@@ -193,10 +193,15 @@ function courseCheckApplicableDefaults(models) {
 // selections: [{ name, semester: "1"|"2"|"" }] (신청 학년 targetGrade의 과목), prior: 이전 학년 이수 과목명 배열 또는 null(자료 없음)
 // 근거: ① 편제표 이전 학기 지정(단독) 과목 ② 같은 신청의 앞 학기 선택 ③ 이전 학년 이수 결과. 같은 학기 선택은 인정하지 않는다.
 // 판단할 근거가 없으면 'unknown'(확인 불가)으로 두고 위반으로 세지 않는다.
-function courseCheckPrerequisites(model, rules, { targetGrade, selections = [], prior = null } = {}) {
+// 나이스 수강학생 편성 자료(priorSource "neis"): priorMissing은 이 학생 기록이 없는 학기 칸(전입생, ["sem21", …]).
+// 선이수 과목이 편제표에서 나오는 학기에 이 학교 기록이 없으면 위반 대신 'unknown'(reason "transfer", 이전 학교 기록 확인)으로 둔다.
+// priorFields: 나이스 자료가 다루는 학기 칸. 선이수 과목이 고를 수 있는 이전 학기 칸 중 자료에 없는 칸(그 학기 파일을 안 올림)이 있으면 'unknown'(prior).
+function courseCheckPrerequisites(model, rules, { targetGrade, selections = [], prior = null, priorMissing = null, priorSource = "", priorFields = null } = {}) {
   const grade = String(targetGrade);
   const picked = selections.map((item) => ({ ...item, key: courseCheckKey(item.name), semester: ["1", "2"].includes(String(item.semester)) ? String(item.semester) : "" }));
   const priorKeys = Array.isArray(prior) ? new Set(prior.map(courseCheckKey)) : null;
+  const absent = new Set(Array.isArray(priorMissing) ? priorMissing : []);
+  const covered = Array.isArray(priorFields) ? new Set(priorFields) : null;
   const byAfter = new Map();
   for (const rule of rules || []) {
     if (!rule || rule.off) continue;
@@ -210,7 +215,8 @@ function courseCheckPrerequisites(model, rules, { targetGrade, selections = [], 
       const needKey = courseCheckKey(rule.before);
       const at = course.semester ? courseCheckFieldIndex(grade, course.semester) : -1;
       const places = model?.places?.get(needKey) || [];
-      const base = { course: course.name, semester: course.semester, requires: rule.before, rule: rule.key || courseCheckRuleKey(rule.before, rule.after) };
+      const base = { course: course.name, semester: course.semester, requires: rule.before, rule: rule.key || courseCheckRuleKey(rule.before, rule.after),
+        ...(priorSource ? { priorSource } : {}) };
       const earliestThisGrade = courseCheckFieldIndex(grade, 1);
       let status = "", evidence = "";
       // ① 편제표 지정 과목
@@ -231,13 +237,16 @@ function courseCheckPrerequisites(model, rules, { targetGrade, selections = [], 
         const later = sameApp.find((item) => item.semester && at >= 0 && courseCheckFieldIndex(grade, item.semester) > at);
         const designatedLater = places.find((item) => item.kind === "designated" && at >= 0 && COURSE_CHECK_FIELDS.indexOf(item.field) >= at);
         const priorChoice = places.some((item) => item.kind === "choice" && COURSE_CHECK_FIELDS.indexOf(item.field) < earliestThisGrade);
+        const uncovered = covered && places.some((item) => item.kind === "choice" && COURSE_CHECK_FIELDS.indexOf(item.field) < earliestThisGrade &&
+          !covered.has(item.field) && !absent.has(item.field));
         const designatedThisGrade = places.some((item) => item.kind === "designated" && item.field.slice(3, 4) === grade);
         if (same) { status = "violation"; evidence = "same"; }
         else if (later) { status = "violation"; evidence = `later:${grade}-${later.semester}`; }
         else if (designatedLater) { status = "violation"; evidence = `designated-later:${courseCheckFieldLabel(designatedLater.field)}`; }
-        else if (priorChoice && !priorKeys) { status = "unknown"; evidence = "prior"; }
+        else if (priorChoice && (!priorKeys || uncovered)) { status = "unknown"; evidence = "prior"; }
         else if (!course.semester && (designatedThisGrade || sameApp.length)) { status = "unknown"; evidence = "semester"; }
         else if (sameApp.length && sameApp.some((item) => !item.semester)) { status = "unknown"; evidence = "semester"; }
+        else if (absent.size && places.some((item) => absent.has(item.field))) { status = "unknown"; evidence = "transfer"; }
         else { status = "violation"; evidence = "missing"; }
       }
       if (status === "met") continue;
@@ -255,6 +264,8 @@ function courseCheckIssueText(issue, { student = false } = {}) {
   const course = issue.course, need = issue.requires;
   const head = `${courseCheckJosa(course, "은/는")} ${courseCheckJosa(need, "을/를")} 먼저 이수해야 합니다`;
   if (issue.status === "unknown") {
+    if (issue.reason === "transfer") return `${head} — 전입생이라 이 학교 기록이 없는 학기가 있어 확인 불가(이전 학교 이수 기록을 확인하세요)`;
+    if (issue.reason === "prior" && issue.priorSource === "neis") return `${head} — 올린 나이스 자료에 그 학기가 없어 확인 불가(그 학기 수강학생 편성 파일도 올리세요)`;
     return issue.reason === "semester"
       ? `${head} — 학기를 알 수 없어 확인 불가`
       : `${head} — 이전 학년 이수 결과가 없어 확인 불가${student ? "(이전 학년에 이수하지 않았다면 담당 선생님과 상의하세요)" : ""}`;
@@ -262,16 +273,18 @@ function courseCheckIssueText(issue, { student = false } = {}) {
   const why = issue.reason === "same" ? `같은 학기(${issue.semester}학기)에 함께 고른 ${courseCheckJosa(need, "은/는")} 선이수로 인정되지 않습니다`
     : issue.reason.startsWith("later:") ? `${courseCheckJosa(need, "을/를")} 더 뒤 학기(${issue.reason.slice(6)})에 골랐습니다`
       : issue.reason.startsWith("designated-later:") ? `${courseCheckJosa(need, "은/는")} 편제표에서 ${issue.reason.slice(17)} 지정 과목입니다`
-        : `${courseCheckJosa(need, "을/를")} 이수한 근거가 없습니다`;
+        : issue.priorSource === "neis" ? `나이스 이수 기록에 ${courseCheckJosa(need, "이/가")} 없습니다` : `${courseCheckJosa(need, "을/를")} 이수한 근거가 없습니다`;
   const advice = issue.offeredEarlier ? `${issue.offeredEarlier}에 ${courseCheckJosa(need, "을/를")} 고르거나 담당 선생님과 상의하세요` : "담당 선생님과 상의하세요";
   return `${head} — ${why}. ${advice}.`;
 }
 
 // 신청 학년이 아닌 선택과목군(뒤 학년, 그리고 결과가 없으면 이전 학년)의 교과(군) 학점. certain은 earned에 더하고 possible을 돌려준다.
+// priorKnown: 이전 학년 선택을 아는지(true/false, 또는 학기 칸마다 판단하는 함수).
 function courseCheckOpenGroupFamilies(model, grade, priorKnown, certain) {
+  const known = typeof priorKnown === "function" ? priorKnown : () => Boolean(priorKnown);
   const possible = {};
   for (const group of model.groups) {
-    const fields = group.fields.filter((field) => field.slice(3, 4) !== String(grade) && (field.slice(3, 4) > String(grade) || !priorKnown));
+    const fields = group.fields.filter((field) => field.slice(3, 4) !== String(grade) && (field.slice(3, 4) > String(grade) || !known(field)));
     if (!fields.length) continue;
     const credits = group.pick * group.credit * fields.length;
     const families = [...new Set(group.families.values())];
@@ -310,7 +323,9 @@ function courseCheckRequiredValue(required, family) {
 // limits: { subjects, creative, kemLimit, kemExtraRatio } (편제 점검 기준 설정과 같은 값)
 // kem: 국어·수학·영어 3년 누계(이전 학년 지정 + 이전 학년 결과(있으면) + 이번 신청 + 지정·같은 교과(군)만 있는 뒤 학년 묶음).
 //      상한을 넘으면 경고만 한다(웹 학생 화면에는 보이지 않는다).
-function courseCheckCredits(model, { targetGrade, selections = [], prior = null, required = {}, limits = null } = {}) {
+// priorRecords: 나이스 실제 이수 기록 [{ grade, semester, family(편제명), name, credit }]. 기록이 있는 이전 학년 학기 칸은
+//      편제표 대신 기록의 학점·교과(군)(편제명으로 판단)을 쓴다. 기록이 없는 학기 칸(전입생)은 편제표 기준으로 둔다.
+function courseCheckCredits(model, { targetGrade, selections = [], prior = null, priorRecords = null, required = {}, limits = null } = {}) {
   const limit = courseCheckNormalizeLimits(limits);
   const grade = String(targetGrade);
   const fieldsOf = (g) => [`sem${g}1`, `sem${g}2`];
@@ -352,17 +367,41 @@ function courseCheckCredits(model, { targetGrade, selections = [], prior = null,
   const unplaced = extras.filter((extra) => !extra.semester).reduce((sum, extra) => sum + extra.credit, 0);
   // 3년 누계: 이전 학년은 지정 + (이전 학년 결과가 있으면 그 선택, 없으면 편제표 기준 가정), 뒤 학년은 편제표 기준(예정).
   const priorKeys = Array.isArray(prior) ? new Set(prior.map(courseCheckKey)) : null;
+  const recordFields = new Map();
+  for (const record of Array.isArray(priorRecords) ? priorRecords : []) {
+    const field = `sem${Number(record?.grade)}${Number(record?.semester)}`;
+    if (!COURSE_CHECK_FIELDS.includes(field) || field.slice(3, 4) >= grade) continue;
+    if (!recordFields.has(field)) recordFields.set(field, []);
+    recordFields.get(field).push(record);
+  }
+  const fieldKnown = (field) => recordFields.size ? recordFields.has(field) : Boolean(priorKeys);
   let before = 0, beforeEstimated = false, after = 0;
+  const actual = [];
   for (const field of COURSE_CHECK_FIELDS) {
     const g = field.slice(3, 4);
     if (g === grade) continue;
     const plan = model.fields[field];
     if (g > grade) { after += plan.target; continue; }
+    if (recordFields.has(field)) {
+      // 실제 이수 기록(학점을 못 읽은 과목은 편제표 같은 학기 학점)
+      let earned = 0;
+      for (const record of recordFields.get(field)) {
+        const key = courseCheckKey(record.name);
+        const credit = Number(record.credit) > 0 ? Number(record.credit)
+          : Number((model.places.get(key) || []).find((place) => place.field === field)?.credit) || 0;
+        const family = courseCheckFamily(record.family, record.name);
+        familyEarned[family] = (familyEarned[family] || 0) + credit;
+        earned += credit;
+      }
+      before += earned;
+      actual.push({ field, label: courseCheckFieldLabel(field), earned, target: plan.target });
+      continue;
+    }
     for (const id of plan.designatedRows) {
       const subject = model.subjects.find((item) => item.id === id);
       familyEarned[subject.family] += subject.designated[field];
     }
-    if (!priorKeys) {
+    if (!fieldKnown(field)) {
       before += plan.target;
       if (plan.target > plan.designated) beforeEstimated = true;
       continue;
@@ -384,9 +423,9 @@ function courseCheckCredits(model, { targetGrade, selections = [], prior = null,
   }
   // 아직 모르는 선택(뒤 학년, 결과 없는 이전 학년): 구성 과목이 모두 같은 교과(군)이면 그 학점은 확실하고,
   // 섞여 있으면 그 교과(군)에 들어올 수도 있는 학점(possible)으로만 센다.
-  const possible = courseCheckOpenGroupFamilies(model, grade, Boolean(priorKeys), familyEarned);
+  const possible = courseCheckOpenGroupFamilies(model, grade, fieldKnown, familyEarned);
   const futureUnknown = model.groups.some((group) => group.fields.some((field) => field.slice(3, 4) > grade));
-  const priorUnknown = !priorKeys && model.groups.some((group) => group.fields.some((field) => field.slice(3, 4) < grade));
+  const priorUnknown = model.groups.some((group) => group.fields.some((field) => field.slice(3, 4) < grade && !fieldKnown(field)));
   const families = COURSE_CHECK_FAMILIES.map((family) => {
     const custom = courseCheckRequiredValue(required, family);
     const need = custom !== null ? custom : Number(model.required?.[family]) > 0 ? Number(model.required[family]) : COURSE_CHECK_REQUIRED_DEFAULTS[family];
@@ -402,7 +441,7 @@ function courseCheckCredits(model, { targetGrade, selections = [], prior = null,
   // 더 고를 수 있는 국수영 학점은 kemPossible(참고)로 둔다. 한 교과(군)만 있는 묶음은 familyEarned에 이미 들어 있다.
   let kemForced = 0, kemPossible = 0;
   for (const group of model.groups) {
-    const open = group.fields.filter((field) => field.slice(3, 4) !== grade && (field.slice(3, 4) > grade || !priorKeys));
+    const open = group.fields.filter((field) => field.slice(3, 4) !== grade && (field.slice(3, 4) > grade || !fieldKnown(field)));
     if (!open.length || new Set(group.families.values()).size < 2) continue;
     const inside = [...group.families.values()].filter((family) => COURSE_CHECK_KEM.includes(family)).length;
     const forced = Math.max(0, group.pick - (group.families.size - inside));
@@ -418,7 +457,7 @@ function courseCheckCredits(model, { targetGrade, selections = [], prior = null,
     targetGrade: grade, semesters, groups: groupRows, extras, unplaced,
     grade: { earned: gradeEarned, target: gradeTarget, diff: gradeEarned - gradeTarget },
     cumulative: { before, beforeEstimated, after, earned: total, target: limit.subjects,
-      creative: limit.creative, total: limit.subjects + limit.creative },
+      creative: limit.creative, total: limit.subjects + limit.creative, ...(actual.length ? { actual } : {}) },
     families, kem, futureUnknown, priorUnknown,
     short: semesters.filter((row) => row.diff < 0), over: semesters.filter((row) => row.diff > 0)
   };
@@ -562,12 +601,14 @@ function courseCheckApplicationState(application, selected = []) {
 function courseCheckIssueBrief(issue, { grade = "", offered = [] } = {}) {
   const need = issue.requires;
   if (issue.status === "unknown") {
+    if (issue.reason === "transfer") return `${need} 이수 확인 불가(전입생 · 이전 학교 기록 확인)`;
     return issue.reason === "semester" ? `${need} 이수 확인 불가(학기를 알 수 없음)` : `${need} 이수 확인 불가(이전 학년 이수 결과 없음)`;
   }
   if (issue.reason === "same") return `${need} 같은 학기 선택(${grade ? `${grade}-` : ""}${issue.semester}학기, 선이수 불인정)`;
   if (String(issue.reason).startsWith("later:")) return `${need} 뒤 학기(${issue.reason.slice(6)})에 선택`;
   if (String(issue.reason).startsWith("designated-later:")) return `${courseCheckJosa(need, "은/는")} ${issue.reason.slice(17)} 지정 과목(뒤 학기)`;
   const labels = [...new Set(offered)].sort();
+  if (issue.priorSource === "neis" && !labels.length) return `${need} 미이수(나이스 이수 기록에 없음)`;
   return `${need} 미이수(${labels.length ? `${labels.join("·")}에 ${need} 없음` : "이수 근거 없음"})`;
 }
 
@@ -671,7 +712,9 @@ function courseCheckNormalizeSettings(value) {
       }))
     };
   }
-  return { removed: strings(source.removed), off: strings(source.off), custom, prior };
+  // 나이스 수강학생 편성 자료(학생 키·학년도·학기·편제명·과목명·학점만, neis-enrollment.js)
+  const neis = typeof neisEnrollmentNormalize === "function" ? neisEnrollmentNormalize(source.neis) : null;
+  return { removed: strings(source.removed), off: strings(source.off), custom, prior, ...(neis ? { neis } : {}) };
 }
 
 let courseCheckContextCache = null;
@@ -777,6 +820,22 @@ function courseCheckSelectionSemester(selection, currentGrade, model) {
   return semesters.size === 1 ? [...semesters][0] : "";
 }
 
+// 나이스 수강학생 편성 저장분(이 학년도 자료만 쓴다. 학년도가 바뀌면 학생 자리(학년-반-번호)가 달라지므로 쓰지 않는다).
+function courseCheckNeisStore(context = courseCheckContext()) {
+  if (!("neisStore" in context)) {
+    const store = context.settings.neis || null;
+    context.neisStore = store && store.currentYear === context.schoolYear ? store : null;
+  }
+  return context.neisStore;
+}
+
+// 학생 한 명의 나이스 기록({ records, missing, terms }) 또는 null(자료 없음·찾지 못함).
+function courseCheckNeisFor(student, context = courseCheckContext()) {
+  const store = courseCheckNeisStore(context);
+  if (!store || !student || typeof neisEnrollmentStudent !== "function") return null;
+  return neisEnrollmentStudent(store, student.grade, student.classroom, student.number);
+}
+
 // 결과 학생 한 명의 점검. exclude: 빼고 볼 과목명(폐강 과목).
 function courseCheckStudentReport(student, context = courseCheckContext(), { exclude = null } = {}) {
   if (!student) return null;
@@ -790,11 +849,15 @@ function courseCheckStudentReport(student, context = courseCheckContext(), { exc
     const removed = exclude ? new Set(exclude.map(courseCheckKey)) : null;
     const selections = (student.selections || []).filter((item) => !removed || !removed.has(courseCheckKey(item.name)))
       .map((item) => ({ name: item.name, semester: courseCheckSelectionSemester(item, grade, model), credit: item.credits, area: item.applicationSubject?.area || "" }));
-    const prior = courseCheckPriorIndex(context, year, grade)?.find(student) || null;
+    // 나이스 수강학생 편성 자료가 있으면 실제 이수 기록을 먼저 쓰고, 없으면 예전 '이전 학년 이수 결과' 엑셀.
+    const neis = courseCheckNeisFor(student, context);
+    const prior = neis ? neis.records.map((record) => record.name) : courseCheckPriorIndex(context, year, grade)?.find(student) || null;
     report = {
-      year, targetGrade, model, priorFound: Boolean(prior),
-      prerequisites: courseCheckPrerequisites(model, context.active, { targetGrade, selections, prior }),
-      credits: courseCheckCredits(model, { targetGrade, selections, prior, required: context.limits.required, limits: context.limits })
+      year, targetGrade, model, priorFound: Boolean(prior), neis: neis ? { terms: neis.terms, missing: neis.missing } : null,
+      prerequisites: courseCheckPrerequisites(model, context.active, { targetGrade, selections, prior,
+        ...(neis ? { priorMissing: neis.missing, priorSource: "neis", priorFields: neis.fields || null } : {}) }),
+      credits: courseCheckCredits(model, { targetGrade, selections, prior, priorRecords: neis ? neis.records : null,
+        required: context.limits.required, limits: context.limits })
     };
   }
   if (!exclude) context.reports.set(student, report);
@@ -819,15 +882,20 @@ function courseCheckList(items, limit = 5) {
 
 // 학생 묶음 요약(2단계 결과 검증·대화상자·4단계 요약이 함께 쓴다).
 function courseCheckSummary(students, context = courseCheckContext()) {
-  const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], kemOver: [], byCourse: new Map(), unknownByCourse: new Map(), priorMissing: 0, priorAvailable: false };
+  const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], kemOver: [], byCourse: new Map(), unknownByCourse: new Map(),
+    priorMissing: 0, priorAvailable: false, neis: Boolean(courseCheckNeisStore(context)), neisFound: 0, transfers: 0 };
   for (const student of students) {
     if (!(student.selections || []).length) continue;
     const report = courseCheckStudentReport(student, context);
     if (!report) { summary.noPlan++; continue; }
     summary.checked++;
-    if (courseCheckPriorIndex(context, report.year, String(student.grade))) {
+    if (summary.neis || courseCheckPriorIndex(context, report.year, String(student.grade))) {
       summary.priorAvailable = true;
       if (!report.priorFound) summary.priorMissing++;
+    }
+    if (report.neis) {
+      summary.neisFound++;
+      if (report.neis.missing.length) summary.transfers++;
     }
     const { violations, unknowns } = report.prerequisites;
     if (violations.length) {
@@ -882,9 +950,11 @@ function courseCheckResultIssues(students, { grade } = {}) {
     result.warnings.push(`교과(군) 필수 이수 학점 미달 학생 ${summary.familyShort.length}명: ${courseCheckList(summary.familyShort.map(({ student, report }) => `${courseCheckSeat(student)} ${report.credits.families.filter((family) => !family.ok).map((family) => `${family.family} ${family.earned}/${family.required}`).join("·")}`), 3)}.`);
   }
   if (summary.unknowns.length) {
-    result.info.push(`위계 확인 불가 학생 ${summary.unknowns.length}명(이전 학년 이수 결과가 없어 판단하지 않음 · 과목별 ${courseCheckCountText(summary.unknownByCourse)}). '위계·학점 점검'에서 이전 학년 이수 결과를 올리면 판단합니다.`);
+    result.info.push(summary.neis
+      ? `위계 확인 불가 학생 ${summary.unknowns.length}명(전입생 ${summary.transfers}명 · 나이스 자료에서 찾지 못한 학생 ${summary.priorMissing}명 중 해당 학생 · 과목별 ${courseCheckCountText(summary.unknownByCourse)}).`
+      : `위계 확인 불가 학생 ${summary.unknowns.length}명(이전 학년 이수 결과가 없어 판단하지 않음 · 과목별 ${courseCheckCountText(summary.unknownByCourse)}). '위계·학점 점검'에서 이전 학년 이수 결과(나이스 수강학생 편성 엑셀 그대로)를 올리면 판단합니다.`);
   }
-  if (summary.priorAvailable && summary.priorMissing) result.info.push(`이전 학년 이수 결과에서 찾지 못한 학생 ${summary.priorMissing}명은 확인 불가로 둡니다.`);
+  if (summary.priorAvailable && summary.priorMissing) result.info.push(`${summary.neis ? "나이스 수강학생 편성 자료" : "이전 학년 이수 결과"}에서 찾지 못한 학생 ${summary.priorMissing}명은 확인 불가로 둡니다.`);
   if (!summary.violators.length && !credit.length && !summary.familyShort.length && !summary.kemOver.length) {
     result.info.push(`위계·이수학점 점검: ${summary.checked}명 모두 이상 없음${summary.unknowns.length ? "(확인 불가 제외)" : ""}.`);
   }
@@ -1023,7 +1093,7 @@ function courseCheckStudentsDialogHtml(violations, unknowns, { title = "", limit
       : '<p class="note">위계(선이수) 경고 학생이 없습니다.</p>'}
     <p class="note">위계는 경고만 합니다(신청은 그대로 유지됩니다). 학생과 상담해 과목을 바꿀지 정하세요.</p>
     ${sortedUnknowns.length ? `<details class="prereq-unknown-details"><summary>확인 불가 ${count(sortedUnknowns)}명 — 위반이 아니라 판단할 근거가 없는 학생</summary>
-      <p class="note">이전 학년 이수 결과가 없어 판단하지 않았습니다. 2단계 '위계·학점 점검'에서 이전 학년 이수 결과를 올리면 판단합니다.</p>
+      <p class="note">판단할 근거가 없는 학생입니다. 이전 학년 이수 결과가 없으면 2단계 '위계·학점 점검'에서 나이스 수강학생 편성 엑셀을 올리면 판단하고, 전입생(이 학교 기록이 없는 학기가 있는 학생)은 이전 학교 이수 기록을 확인하세요.</p>
       <ul class="prereq-student-list is-unknown">${sortedUnknowns.slice(0, limit).map(line).join("")}</ul>${sortedUnknowns.length > limit ? `<p class="note">앞 ${limit}건만 표시했습니다.</p>` : ""}</details>` : ""}`;
 }
 
@@ -1249,7 +1319,8 @@ function courseCheckRenderDialog() {
     if (!students.length) return "";
     if (!courseCheckModel(courseCheckCohortYear(currentGrade))) return `<p class="note">현 ${currentGrade}학년: ${esc(courseCheckCohortYear(currentGrade))}학년도 입학생 편제표가 없어 점검할 수 없습니다.</p>`;
     const summary = courseCheckSummary(students, context);
-    return `<p class="course-check-result-line"><b>현 ${currentGrade}학년 → ${Number(currentGrade) + 1}학년 과목</b> ${summary.checked}명 점검 · 위계 미충족 ${summary.violators.length}명 · 학기 학점 부족 ${summary.short.length}명 · 초과 ${summary.over.length}명 · 교과(군) 미달 ${summary.familyShort.length}명 · 국수영 기준 초과 ${summary.kemOver.length}명 · 확인 불가 ${summary.unknowns.length}명</p>
+    const neisLine = summary.neis ? ` · 나이스 기록 연결 ${summary.neisFound}/${summary.checked}명${summary.transfers ? `(전입 ${summary.transfers}명)` : ""}` : "";
+    return `<p class="course-check-result-line"><b>현 ${currentGrade}학년 → ${Number(currentGrade) + 1}학년 과목</b> ${summary.checked}명 점검 · 위계 미충족 ${summary.violators.length}명 · 학기 학점 부족 ${summary.short.length}명 · 초과 ${summary.over.length}명 · 교과(군) 미달 ${summary.familyShort.length}명 · 국수영 기준 초과 ${summary.kemOver.length}명 · 확인 불가 ${summary.unknowns.length}명${neisLine}</p>
       ${courseCheckStudentTableHtml(summary, { grade: currentGrade })}`;
   }).join("");
   body.innerHTML = `
@@ -1273,10 +1344,13 @@ function courseCheckRenderDialog() {
     </section>
     <section class="course-check-section" aria-labelledby="courseCheckPriorTitle">
       <h3 id="courseCheckPriorTitle">이전 학년 이수 결과 (현 ${esc(grade)}학년 · ${esc(year)}학년도 입학생, 선택)</h3>
-      <p class="note">이전 학년에 고른 선택 과목을 알아야 판단할 수 있는 위계(예: 3학년 물질과 에너지 ← 2학년 화학)는 이 자료가 없으면 '확인 불가'로 둡니다. 2단계 결과 엑셀과 같은 형식(학년·반·번호·성명 + 과목 열, 또는 차수·학년·반·번호·성명·선택과목)을 올리세요. 학년이 현재 학년이면 반·번호로, 지난해 학년이면 이름으로 학생을 찾습니다.</p>
-      <p id="courseCheckPriorStatus" role="status">${prior ? esc(`${prior.fileName || "이전 학년 결과"} · ${prior.students.length}명${prior.uploadedAt ? ` · ${prior.uploadedAt}` : ""}`) : "올린 자료 없음"}</p>
-      <label class="file-button" for="courseCheckPriorInput" tabindex="0" role="button">이전 학년 이수 결과 엑셀 선택</label>
-      <input class="hidden" id="courseCheckPriorInput" type="file" accept=".xlsx">
+      <p class="note">이전 학년에 고른 선택 과목을 알아야 판단할 수 있는 위계(예: 3학년 물질과 에너지 ← 2학년 화학)는 이 자료가 없으면 '확인 불가'로 둡니다.
+        <b>나이스 '수강학생 편성' 엑셀을 내려받은 그대로</b> 올리면 됩니다(지난 학년도·이번 학년도 파일을 함께 골라도 되고, 겹치는 행은 한 번만 셉니다). 이번 학년도 행은 학년·반·번호로, 지난 학년도 행은 성명으로 지금 학생을 찾습니다.
+        성명은 연결에만 쓰고 저장하지 않습니다(학생 자리·학년도·학기·편제명·과목명·학점만 이 PC에 저장). 2단계 결과 엑셀과 같은 형식(학년·반·번호·성명 + 과목 열)도 올릴 수 있습니다.</p>
+      ${courseCheckNeisSectionHtml(context)}
+      <p id="courseCheckPriorStatus" role="status">${prior ? esc(`${prior.fileName || "이전 학년 결과"} · ${prior.students.length}명${prior.uploadedAt ? ` · ${prior.uploadedAt}` : ""}`) : context.settings.neis ? "" : "올린 자료 없음"}</p>
+      <label class="file-button" for="courseCheckPriorInput" tabindex="0" role="button">이전 학년 이수 결과 선택(나이스 엑셀 가능)</label>
+      <input class="hidden" id="courseCheckPriorInput" type="file" accept=".xlsx,.csv" multiple>
       ${prior ? '<button class="button button-quiet" type="button" id="courseCheckPriorDelete">이전 학년 자료 삭제</button>' : ""}
     </section>
     <section class="course-check-section" aria-labelledby="courseCheckRequiredTitle">
@@ -1351,21 +1425,152 @@ function courseCheckPriorStudents(sheets, currentGrade) {
   throw new Error(`현 ${currentGrade}학년(또는 지난해 ${Number(currentGrade) - 1}학년) 학생 결과를 찾지 못했습니다. 학년·반·번호·성명 열과 과목 열을 확인하세요.`);
 }
 
-async function courseCheckUploadPrior(file) {
+// ---- 나이스 수강학생 편성 자료(neis-enrollment.js) 연결
+// 올린 행(성명 포함)은 페이지를 새로 고치기 전까지만 메모리에 둔다(여러 파일 누적·동명이인 고르기).
+// 저장은 neisEnrollmentStore의 최소 형식(학생 자리·학년도·학기·학년·편제명·과목명·학점)만 한다.
+let courseCheckNeisSession = null;
+
+function courseCheckNeisKeepGrade(person, currentYear) {
+  const now = Number(person.grade) + Number(currentYear) - Number(person.year);
+  return now === 1 || now === 2;
+}
+
+// "2025-1·2025-2·2026-1·2026-2(이수 중)": 이번 학년도 마지막 학기가 지금 학기면 이수 중으로 적는다.
+function courseCheckNeisTermsText(store, today = new Date()) {
+  const latest = store.terms.at(-1) || "";
+  const [year, semester] = latest.split("-");
+  const month = today.getMonth() + 1;
+  const inProgress = year === store.currentYear && (semester === "2" ? month >= 8 || month <= 2 : month >= 3 && month <= 7);
+  return store.terms.map((term) => `${term}${inProgress && term === latest ? "(이수 중)" : ""}`).join("·");
+}
+
+// 팝업 '이전 학년 이수 결과' 칸의 나이스 요약·동명이인 고르기·안내.
+function courseCheckNeisSectionHtml(context) {
+  const raw = context.settings.neis;
+  if (!raw) return "";
+  const esc = courseCheckEscape;
+  const counts = raw.counts;
+  const unlinked = counts.unlinked + counts.masked + counts.ambiguous;
+  const lines = [`<p class="course-check-neis-status" id="courseCheckNeisStatus" role="status"><b>나이스 자료: ${esc(courseCheckNeisTermsText(raw))}</b> · 연결 ${esc(counts.linked)}명 · 미재학 ${esc(counts.withdrawn)}명 · 전입 ${esc(counts.transfers)}명 · 연결 안 됨 ${esc(unlinked)}명
+    <button class="button button-quiet" type="button" id="courseCheckNeisDelete">나이스 자료 삭제</button></p>`];
+  if (raw.currentYear !== context.schoolYear) {
+    lines.push(`<p class="note course-check-differs">나이스 자료는 ${esc(raw.currentYear)}학년도 기준이라 지금 학년도(${esc(context.schoolYear)})에는 쓰지 않습니다. ${esc(context.schoolYear)}학년도 파일을 다시 올리세요.</p>`);
+  }
+  if (counts.masked) lines.push(`<p class="note">성명이 가려진 자료(예: 김00)라 지난 학년도 기록 ${esc(counts.masked)}명은 이름으로 잇지 않았습니다. 나이스에서 성명이 보이게 내려받은 파일을 올리면 연결됩니다.</p>`);
+  if (raw.kept?.length) lines.push(`<p class="note">${esc(raw.kept.join("·"))} 기록은 예전에 올린 자료입니다(성명을 저장하지 않아 이번에 다시 잇지 않았습니다).</p>`);
+  const link = courseCheckNeisSession?.link;
+  if (link) {
+    const ambiguous = link.ambiguous.filter((item) => courseCheckNeisKeepGrade(item.person, link.currentYear));
+    if (ambiguous.length) {
+      const seatText = (seat) => {
+        const [g, c, n] = seat.split("-");
+        const student = (state.students || []).find((item) => String(item.grade) === g && String(Number(item.classroom)) === c && String(Number(item.number)) === n);
+        return `현 ${g}학년 ${c}반 ${n}번${student ? ` ${student.name}` : ""}`;
+      };
+      lines.push(`<details class="course-check-neis-choices" open><summary>동명이인 ${ambiguous.length}명 — 지금 학생을 직접 고르세요</summary>
+        <ul>${ambiguous.map((item) => {
+          const person = item.person;
+          const terms = [...new Set(person.records.map((record) => `${record.year}-${record.semester}`))].sort().join("·");
+          return `<li><label>${esc(`${person.year}학년도 ${person.grade}학년 ${person.classroom}반 ${person.number}번 ${person.name} (${terms}, ${person.records.length}과목)`)}
+            <select data-cc-neis-choice="${esc(item.id)}"><option value="">고르세요</option>${item.candidates.map((seat) => `<option value="${esc(seat)}">${esc(seatText(seat))}</option>`).join("")}<option value="none">연결 안 함</option></select></label></li>`;
+        }).join("")}</ul></details>`);
+    }
+    const others = link.unlinked.filter((item) => item.reason === "no-match" && courseCheckNeisKeepGrade(item.person, link.currentYear));
+    const withdrawn = link.withdrawn.filter((person) => courseCheckNeisKeepGrade(person, link.currentYear));
+    if (others.length || withdrawn.length) {
+      const label = (person) => `${person.year}학년도 ${person.grade}학년 ${person.classroom}반 ${person.number}번 ${person.name}`;
+      lines.push(`<details class="course-check-neis-unlinked"><summary>연결하지 않은 기록 보기(미재학 ${withdrawn.length}건 · 지금 학생을 찾지 못함 ${others.length}건)</summary>
+        ${withdrawn.length ? `<p class="note">미재학(학적 변동) — 점검에서 뺍니다: ${esc(withdrawn.slice(0, 30).map(label).join(", "))}${withdrawn.length > 30 ? ` 외 ${withdrawn.length - 30}건` : ""}</p>` : ""}
+        ${others.length ? `<p class="note">지난 학년도 기록과 같은 이름의 지금 학생이 없음(이름 변경·전출 등): ${esc(others.slice(0, 30).map((item) => label(item.person)).join(", "))}${others.length > 30 ? ` 외 ${others.length - 30}건` : ""}</p>` : ""}
+      </details>`);
+    }
+  } else if (counts.ambiguous) {
+    lines.push(`<p class="note">동명이인 ${esc(counts.ambiguous)}명은 아직 연결하지 않았습니다. 같은 파일들을 다시 올리면 직접 고를 수 있습니다(성명은 저장하지 않습니다).</p>`);
+  }
+  if (!raw.terms.some((term) => term.startsWith(`${raw.currentYear}-`))) {
+    lines.push(`<p class="note">${esc(raw.currentYear)}학년도 파일이 없어 지난 학년도 기록을 지금 학생에게 잇지 못했습니다. 두 학년도 파일을 함께 올리세요.</p>`);
+  }
+  return lines.join("");
+}
+
+// 세션에 쌓인 나이스 행으로 다시 연결해 저장한다.
+function courseCheckNeisRelink(files = []) {
+  const session = courseCheckNeisSession;
+  const context = courseCheckContext();
+  const link = neisEnrollmentLink(session.records, { currentYear: context.schoolYear, keyOf: courseCheckKey, rules: context.active, choices: session.choices });
+  session.link = link;
+  const store = neisEnrollmentStore(link, { files, previous: context.settings.neis || null });
+  courseCheckSaveSettings((settings) => { settings.neis = store; });
+  return { link, store };
+}
+
+function courseCheckApplyNeis(items) {
+  if (typeof neisEnrollmentLink !== "function") throw new Error("나이스 자료 읽기 기능을 불러오지 못했습니다.");
+  // 저장분이 없으면(전체 초기화·삭제 뒤) 메모리의 예전 행도 버린다.
+  if (!courseCheckContext().settings.neis || !courseCheckNeisSession) courseCheckNeisSession = { records: [], choices: {}, link: null };
+  const session = courseCheckNeisSession;
+  const uploadedAt = new Date().toLocaleString("ko-KR");
+  for (const { parsed } of items) session.records.push(...parsed.records);
+  session.records = neisEnrollmentDedupe(session.records, courseCheckKey);
+  const { link, store } = courseCheckNeisRelink(items.map(({ file, parsed }) => ({ name: file.name, uploadedAt, terms: parsed.terms })));
+  const rows = items.reduce((sum, { parsed }) => sum + parsed.records.length, 0);
+  const counts = store.counts;
+  const notes = [];
+  if (!link.students.size) notes.push(`${link.currentYear}학년도 행이 없어 학생과 잇지 못했습니다. ${link.currentYear}학년도 파일도 함께 올리세요.`);
+  if (counts.masked) notes.push(`성명이 가려져 지난 학년도 기록 ${counts.masked}명은 잇지 않았습니다.`);
+  if (counts.ambiguous) notes.push(`동명이인 ${counts.ambiguous}명은 아래에서 직접 고르세요.`);
+  const other = items.reduce((sum, { parsed }) => sum + (parsed.skipped?.other || 0), 0);
+  const garbled = items.reduce((sum, { parsed }) => sum + (parsed.garbled || 0), 0);
+  if (other) notes.push(`반이 숫자가 아닌 ${other}행(예: 공동교육과정반 — 다른 학교 학생)은 뺐습니다.`);
+  if (garbled) notes.push(`성명 칸이 '('로 시작하는 ${garbled}행은 성명을 가리며 '(미재학)' 표시가 깨진 것으로 보고 미재학으로 셌습니다.`);
+  return `나이스 수강학생 편성 ${items.length}개 파일(${rows}행, ${store.terms.join("·")})을 반영했습니다. 현 1·2학년 연결 ${counts.linked}명 · 미재학 ${counts.withdrawn}명 · 전입 ${counts.transfers}명.${notes.length ? ` ${notes.join(" ")}` : ""}`;
+}
+
+async function courseCheckReadUpload(file) {
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".csv")) {
+    if (typeof neisEnrollmentCsvRows !== "function") throw new Error("CSV 읽기 기능을 불러오지 못했습니다.");
+    return [{ name: file.name, rows: neisEnrollmentCsvRows(neisEnrollmentDecode(await file.arrayBuffer())) }];
+  }
+  if (!lower.endsWith(".xlsx")) throw new Error(`${file.name}: .xlsx 또는 .csv 파일만 올릴 수 있습니다.`);
+  if (typeof parseWorkbook !== "function") throw new Error("엑셀 읽기 기능을 불러오지 못했습니다.");
+  return parseWorkbook(await file.arrayBuffer());
+}
+
+// 이전 학년 이수 결과 올리기: 나이스 수강학생 편성 파일은 자동으로 알아보고(여러 개 누적), 그 밖의 파일은 2단계 결과 형식으로 읽는다.
+async function courseCheckUploadPrior(fileList) {
+  const files = [...(fileList || [])];
   const grade = String(state.applicationMenuGrade || "1");
   const year = courseCheckCohortYear(grade);
   try {
-    if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error(".xlsx 파일만 올릴 수 있습니다.");
-    if (typeof parseWorkbook !== "function") throw new Error("엑셀 읽기 기능을 불러오지 못했습니다.");
-    const students = courseCheckPriorStudents(await parseWorkbook(await file.arrayBuffer()), grade);
-    courseCheckSaveSettings((settings) => {
-      settings.prior[year] = { fileName: file.name, uploadedAt: new Date().toLocaleString("ko-KR"), students };
-    });
-    courseCheckContextCache = null;
-    const current = (state.students || []).filter((student) => String(student.grade) === grade);
-    const index = courseCheckPriorIndex(courseCheckContext(), year, grade);
-    const found = current.filter((student) => index?.find(student)).length;
-    courseCheckSettingsChanged(`이전 학년 이수 결과 ${students.length}명을 반영했습니다.${current.length ? ` 현재 결과 ${current.length}명 중 ${found}명과 연결했습니다.` : ""}`);
+    const neis = [], others = [];
+    for (const file of files) {
+      const sheets = await courseCheckReadUpload(file);
+      const parsed = typeof neisEnrollmentParse === "function" ? neisEnrollmentParse(sheets) : null;
+      if (parsed?.records.length) neis.push({ file, parsed });
+      else others.push({ file, sheets });
+    }
+    const messages = [];
+    if (neis.length) messages.push(courseCheckApplyNeis(neis));
+    if (others.length) {
+      const { file, sheets } = others[0];
+      let students;
+      try { students = courseCheckPriorStudents(sheets, grade); }
+      catch (error) {
+        if (!messages.length) throw error;
+        courseCheckSettingsChanged(`${messages.join(" ")} ${file.name}: ${error?.message || error}`);
+        return;
+      }
+      courseCheckSaveSettings((settings) => {
+        settings.prior[year] = { fileName: file.name, uploadedAt: new Date().toLocaleString("ko-KR"), students };
+      });
+      courseCheckContextCache = null;
+      const current = (state.students || []).filter((student) => String(student.grade) === grade);
+      const index = courseCheckPriorIndex(courseCheckContext(), year, grade);
+      const found = current.filter((student) => index?.find(student)).length;
+      messages.push(`이전 학년 이수 결과 ${students.length}명을 반영했습니다.${current.length ? ` 현재 결과 ${current.length}명 중 ${found}명과 연결했습니다.` : ""}${others.length > 1 ? ` (결과 형식 파일은 첫 파일 ${file.name}만 읽었습니다.)` : ""}`);
+    }
+    courseCheckSettingsChanged(messages.join(" "));
   } catch (error) {
     courseCheckDialogMessage(`이전 학년 결과를 읽지 못했습니다: ${error?.message || error}`, true);
   }
@@ -1411,6 +1616,10 @@ function initCourseChecks() {
     } else if (event.target.closest("[data-cc-open-settings]")) {
       // 기준값은 1단계 '편제 점검 기준 설정' 한 곳에서 고친다(이 팝업 위에 그 설정 팝업을 연다).
       if (typeof openPlanComplianceSettings === "function") openPlanComplianceSettings();
+    } else if (event.target.closest("#courseCheckNeisDelete")) {
+      courseCheckNeisSession = null;
+      courseCheckSaveSettings((settings) => { delete settings.neis; });
+      courseCheckSettingsChanged("나이스 수강학생 편성 자료를 삭제했습니다.");
     } else if (event.target.closest("#courseCheckPriorDelete")) {
       const year = courseCheckCohortYear(String(state.applicationMenuGrade || "1"));
       courseCheckSaveSettings((settings) => { delete settings.prior[year]; });
@@ -1427,9 +1636,15 @@ function initCourseChecks() {
       });
       courseCheckSettingsChanged(toggle.checked ? "위계 규칙을 켰습니다." : "위계 규칙을 껐습니다.");
     } else if (event.target.id === "courseCheckPriorInput") {
-      const file = event.target.files?.[0];
+      const files = [...(event.target.files || [])];
       event.target.value = "";
-      if (file) courseCheckUploadPrior(file);
+      if (files.length) courseCheckUploadPrior(files);
+    } else if (event.target.closest("[data-cc-neis-choice]")) {
+      const select = event.target.closest("[data-cc-neis-choice]");
+      if (!courseCheckNeisSession || !select.value) return;
+      courseCheckNeisSession.choices[select.dataset.ccNeisChoice] = select.value;
+      const { store } = courseCheckNeisRelink();
+      courseCheckSettingsChanged(`동명이인 연결을 반영했습니다. 남은 동명이인 ${store.counts.ambiguous}명.`);
     }
   });
 }

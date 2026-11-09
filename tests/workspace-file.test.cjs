@@ -343,7 +343,7 @@ test("full reset disconnects the PC file, says the file itself is kept, and neve
   assert.equal(reloaded, 1);
   assert.equal(stored.handle, null, "the saved link is forgotten");
   assert.equal(ctx.workspaceFileHandle, null);
-  assert.deepEqual(deleted, ["curriculum-workspace-file", "curriculum-original-workbooks"]);
+  assert.deepEqual(deleted, ["curriculum-workspace-file", "curriculum-original-workbooks", "curriculum-workspace-db"]);
   assert.deepEqual([...storage.map.keys()], ["curriculum-teacher-session-v1"]);
   ctx.buildWorkspaceBackup = () => ({ type: "curriculum-workspace-backup", backupVersion: 1, createdAt: "", workspace: {} });
   assert.equal(await ctx.saveWorkspaceFileNow({ force: true }), false);
@@ -385,7 +385,7 @@ function persistContext({ failStorage }) {
   };
   vm.runInContext(`var STORAGE_KEY = "course-certificate-studio-v1", WORKSPACE_SAVED_AT_KEY = "course-certificate-studio-saved-at";
     var statePersistenceTimer = null, statePersistenceBlocked = false, statePersistenceSuppressed = 0, protectedStoredState = null;
-    var lastSavedWorkspace = null, workspaceStartupFlush = false;`, ctx);
+    var lastSavedWorkspace = null, workspaceStartupFlush = false, workspaceStoreState = { active: false };`, ctx);
   vm.runInContext(functionSource(app, "function persistState(", "const BACKUP_TIME_KEY"), ctx);
   return { ctx, storage, statuses, timers, toasts };
 }

@@ -35,7 +35,9 @@ test("static UI bindings refer to unique shipped or dynamically generated IDs", 
   assert.equal(new Set(ids).size, ids.length, "HTML IDs must be unique");
   const filenames = ["app.js", "course-groups.js", "supabase-client.js", "result-import.js", "round-status.js",
     "curriculum-versions.js", "hours-stats.js", "curriculum-subject-actions.js", "curriculum-choice-blocks.js", "curriculum-data.js", "curriculum-data-view.js",
-    "curriculum-subject-list.js", "curriculum-annual.js", "workspace-file.js", "app-version.js", "course-checks.js", "curriculum-compliance.js"];
+    "curriculum-subject-list.js", "curriculum-annual.js", "workspace-file.js", "app-version.js", "course-checks.js", "curriculum-compliance.js",
+    "workspace-store.js", "view-keep.js", "workspace-header.js", "neis-enrollment.js", "curriculum-reconvert.js", "curriculum-office-format.js",
+    "curriculum-data-export.js", "curriculum-workbook.js"];
   const sources = filenames.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
   const declared = new Set([...ids, ...sources.flatMap((source) =>
     [...source.matchAll(/\bid="([^"$]+)"/g)].map((match) => match[1]))]);
@@ -45,4 +47,20 @@ test("static UI bindings refer to unique shipped or dynamically generated IDs", 
       assert.ok(declared.has(id), `${filenames[index]} binds a missing control: ${id}`);
     }
   }
+});
+
+test("index.html loads every app script once, the shared helpers before app.js, with one cache version", () => {
+  const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"?]+)(?:\?v=([^"]+))?"/g)].map((match) => ({ file: match[1], version: match[2] || "" }));
+  const files = scripts.map((item) => item.file);
+  assert.equal(new Set(files).size, files.length, "each script once");
+  const at = (file) => files.indexOf(file);
+  for (const file of ["view-keep.js", "workspace-store.js", "neis-enrollment.js", "workspace-header.js"]) assert.ok(at(file) >= 0, `${file} is loaded`);
+  // 순수 모듈·공통 도우미는 app.js보다 먼저, 나이스 파서는 course-checks.js보다 먼저.
+  for (const file of ["view-keep.js", "workspace-store.js", "course-checks.js", "curriculum-annual.js"]) assert.ok(at(file) < at("app.js"), `${file} before app.js`);
+  assert.ok(at("neis-enrollment.js") < at("course-checks.js"), "neis-enrollment.js before course-checks.js");
+  assert.ok(at("workspace-header.js") > at("app.js"), "workspace-header.js after app.js");
+  const versions = new Set(scripts.filter((item) => item.version).map((item) => item.version));
+  assert.equal(versions.size, 1, `one cache version: ${[...versions].join(", ")}`);
+  const testBot = fs.readFileSync(path.join(root, "test-bot.html"), "utf8");
+  for (const match of testBot.matchAll(/\?v=([^"]+)"/g)) assert.ok(versions.has(match[1]), `test-bot.html uses the same cache version (${match[1]})`);
 });
