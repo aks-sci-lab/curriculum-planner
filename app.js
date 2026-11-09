@@ -4595,8 +4595,9 @@
         `</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
     }
 
-    // sheets: [{ name, rows: [[셀]], widths, merges, freeze }]. 셀은 문자열·숫자·null 또는 { v, f, s }.
-    function createWorkbookBlob(sheets) {
+    // sheets: [{ name, rows: [[셀]], widths, merges, freeze, heights, orientation, fitToHeight }]. 셀은 문자열·숫자·null 또는 { v, f, s }.
+    // options.stylesXml: 보고서 공통 스타일(0~10번) 뒤에 스타일을 더 둔 styles.xml(5단계 교사시수표 양식).
+    function createWorkbookBlob(sheets, options = {}) {
       const usedNames = new Set();
       const safeSheetName = (name, index) => {
         let base = String(name || `시트${index + 1}`).replace(/[\[\]:*?\/\\]/g, " ").trim().slice(0, 31) || `시트${index + 1}`;
@@ -4625,7 +4626,7 @@
         "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
         "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((name, index) => `<sheet name="${xmlEscape(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
         "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-        "xl/styles.xml": createReportStylesXml()
+        "xl/styles.xml": options.stylesXml || createReportStylesXml()
       };
       sheets.forEach((sheet, index) => {
         const rowsXml = (sheet.rows || []).map((row, rowIndex) => {
@@ -4636,13 +4637,17 @@
         const cols = (sheet.widths || []).length
           ? `<cols>${sheet.widths.map((width, column) => `<col min="${column + 1}" max="${column + 1}" width="${width}" customWidth="1"/>`).join("")}</cols>`
           : "";
-        const freeze = sheet.freeze
-          ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${Number(sheet.freeze.match(/\d+/)[0]) - 1}" topLeftCell="${sheet.freeze}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`
+        // 틀 고정: "A5"는 위 4행, "D5"는 위 4행과 왼쪽 3열.
+        const freezeMatch = /^([A-Z]+)(\d+)$/.exec(sheet.freeze || "");
+        const freezeColumns = freezeMatch ? [...freezeMatch[1]].reduce((sum, letter) => sum * 26 + letter.charCodeAt(0) - 64, 0) - 1 : 0;
+        const freezeRows = freezeMatch ? Number(freezeMatch[2]) - 1 : 0;
+        const freeze = freezeMatch && (freezeColumns || freezeRows)
+          ? `<sheetViews><sheetView workbookViewId="0"><pane${freezeColumns ? ` xSplit="${freezeColumns}"` : ""}${freezeRows ? ` ySplit="${freezeRows}"` : ""} topLeftCell="${sheet.freeze}" activePane="${freezeColumns && freezeRows ? "bottomRight" : freezeRows ? "bottomLeft" : "topRight"}" state="frozen"/></sheetView></sheetViews>`
           : `<sheetViews><sheetView workbookViewId="0"/></sheetViews>`;
         const merges = (sheet.merges || []).length
           ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((reference) => `<mergeCell ref="${reference}"/>`).join("")}</mergeCells>`
           : "";
-        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`;
+        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="${Number(sheet.fitToHeight) || 0}"/></worksheet>`;
       });
       return createXlsxBlob(files);
     }
