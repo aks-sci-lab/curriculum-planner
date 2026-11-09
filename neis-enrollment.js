@@ -17,9 +17,14 @@ var NEIS_ENROLLMENT_HEADERS = {
   number: ["번호"],
   name: ["성명", "이름", "학생명"]
 };
-var NEIS_ENROLLMENT_REQUIRED = ["year", "semester", "grade", "subject", "classroom", "number", "name"];
+// 성명 열은 없어도 된다(사용자가 성명 열을 지우거나 비워서 올린 경우). 이번 학년도 행은 학년·반·번호만으로 잇는다.
+var NEIS_ENROLLMENT_REQUIRED = ["year", "semester", "grade", "subject", "classroom", "number"];
 // 성명 앞 학적 변동 표시. '(미재학) 홍길동'처럼 붙는다. 이 표시가 있으면 지금 재학생이 아니다.
 var NEIS_ENROLLMENT_LEFT = /^\s*[(（\[]\s*(미재학|전출|자퇴|퇴학|제적|면제|유예|휴학|졸업)\s*[)）\]]\s*/;
+// 성명을 가리면서 학적 변동 표시가 깨진 경우('(미재학) 홍길동' → '(00'): 성명은 여는 괄호로 시작하지 않으므로 학적 변동으로 본다.
+var NEIS_ENROLLMENT_LEFT_GARBLED = /^\s*[(（\[]/;
+// 과목명 앞 운영 표시('(공동)물리학 실험(3)', '(소인수)경제(3)'): 과목명에서 떼어 낸다(숫자만 든 괄호는 아니다).
+var NEIS_ENROLLMENT_SUBJECT_LABEL = /^\s*[(（]\s*([^()（）\d][^()（）]*?)\s*[)）]\s*/;
 // 창의적 체험활동 행은 교과 학점에 넣지 않는다.
 var NEIS_ENROLLMENT_CREATIVE = /창의적|체험활동|자율활동|자치활동|동아리활동|진로활동|봉사활동/;
 
@@ -61,11 +66,16 @@ function neisEnrollmentNumber(value) {
 }
 
 // "공통국어2(4)" → { name: "공통국어2", credit: 4 }. 끝 괄호의 숫자만 학점으로 본다(과목명 안의 괄호는 그대로 둔다).
+// 앞의 운영 표시는 떼어 label로 둔다: "(공동)물리학 실험(3)" → { name: "물리학 실험", credit: 3, label: "공동" }.
 function neisEnrollmentSubject(value) {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  let text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const head = text.match(NEIS_ENROLLMENT_SUBJECT_LABEL);
+  const label = head && text.slice(head[0].length).trim() ? head[1].trim() : "";
+  if (label) text = text.slice(head[0].length).trim();
+  const extra = label ? { label } : {};
   const match = text.match(/^(.*\S)\s*[(（]\s*(\d+(?:\.\d+)?)\s*(?:학점)?\s*[)）]$/);
-  if (match && !/^[(（]/.test(match[1].trim())) return { name: match[1].trim(), credit: Number(match[2]) };
-  return { name: text, credit: null };
+  if (match && !/^[(（]/.test(match[1].trim())) return { name: match[1].trim(), credit: Number(match[2]), ...extra };
+  return { name: text, credit: null, ...extra };
 }
 
 // 이름이 가려진 자료: 김00, rkd00, 김OO, 김○○, 김*수, 홍**.
@@ -76,9 +86,11 @@ function neisEnrollmentMasked(name) {
 }
 
 // "(미재학) 홍길동" → { name: "홍길동", enrolled: false, status: "미재학" }
+// 성명을 가려 표시가 깨진 "(00"·"(미재"도 학적 변동으로 본다(status "학적 변동", garbled). 빈 성명은 가려진 이름으로 본다.
 function neisEnrollmentName(value) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   const left = text.match(NEIS_ENROLLMENT_LEFT);
+  if (!left && NEIS_ENROLLMENT_LEFT_GARBLED.test(text)) return { name: text, enrolled: false, status: "학적 변동", garbled: true, masked: true };
   const name = left ? text.slice(left[0].length).trim() : text;
   return { name, enrolled: !left, status: left ? left[1] : "", masked: neisEnrollmentMasked(name) };
 }
@@ -89,7 +101,9 @@ function neisEnrollmentParseRows(rows, { sheetName = "" } = {}) {
   if (!detected) return null;
   const { headerRow, columns } = detected;
   const records = [];
-  const skipped = { empty: 0, invalid: 0, creative: 0, header: 0 };
+  // other: 반이 숫자가 아닌 행(예: '12반(공동교육과정반)' — 다른 학교 학생). garbled: 학적 변동 표시가 가려진 행.
+  const skipped = { empty: 0, invalid: 0, creative: 0, header: 0, other: 0 };
+  let garbled = 0;
   for (const row of (rows || []).slice(headerRow + 1)) {
     const cell = (field) => columns[field] === undefined ? "" : String(row?.[columns[field]] ?? "").trim();
     if (!row || !row.some((value) => String(value ?? "").trim())) { skipped.empty++; continue; }
@@ -100,12 +114,16 @@ function neisEnrollmentParseRows(rows, { sheetName = "" } = {}) {
     const subject = neisEnrollmentSubject(cell("subject"));
     const person = neisEnrollmentName(cell("name"));
     const family = cell("family").replace(/\s+/g, " ");
-    if (!/^\d{4}$/.test(year) || !["1", "2"].includes(semester) || !/^[1-9]$/.test(grade) || !subject.name || !person.name) { skipped.invalid++; continue; }
+    const classroom = neisEnrollmentNumber(cell("classroom"));
+    const number = neisEnrollmentNumber(cell("number"));
+    if (!/^\d{4}$/.test(year) || !["1", "2"].includes(semester) || !/^[1-9]$/.test(grade) || !subject.name || !/^\d+$/.test(number)) { skipped.invalid++; continue; }
+    if (!/^\d+$/.test(classroom)) { skipped.other++; continue; }
     if (NEIS_ENROLLMENT_CREATIVE.test(`${family} ${subject.name}`)) { skipped.creative++; continue; }
-    records.push({ year, semester, grade, classroom: neisEnrollmentNumber(cell("classroom")), number: neisEnrollmentNumber(cell("number")),
+    if (person.garbled) garbled++;
+    records.push({ year, semester, grade, classroom, number,
       name: person.name, enrolled: person.enrolled, status: person.status, masked: person.masked, family, subject: subject.name, credit: subject.credit });
   }
-  return { sheetName, headerRow, records, skipped };
+  return { sheetName, headerRow, records, skipped, garbled };
 }
 
 // 통합 문서(시트 목록)에서 나이스 형식 시트를 모두 읽는다. 하나도 없으면 null(기존 결과 양식으로 넘긴다).
@@ -114,7 +132,7 @@ function neisEnrollmentParse(sheets) {
   if (!parts.length) return null;
   const records = parts.flatMap((part) => part.records);
   const terms = [...new Set(records.map((record) => `${record.year}-${record.semester}`))].sort();
-  return { records, terms, sheets: parts.map((part) => part.sheetName), skipped: parts.reduce((sum, part) => {
+  return { records, terms, sheets: parts.map((part) => part.sheetName), garbled: parts.reduce((sum, part) => sum + part.garbled, 0), skipped: parts.reduce((sum, part) => {
     for (const [key, value] of Object.entries(part.skipped)) sum[key] = (sum[key] || 0) + value;
     return sum;
   }, {}) };
@@ -416,6 +434,7 @@ function neisEnrollmentNormalize(value) {
 
 // 저장분에서 학생 한 명의 기록. 없으면 null.
 //  records: [{ year, semester, grade, family, name, credit }], missing: 기록이 없는 학기 칸(["sem11", …]), terms: ["2025-1", …]
+//  fields: 이 자료가 다루는 학기 칸(기록이 있는 칸 + missing). 여기 없는 칸(올리지 않은 학기)은 이수 여부를 모른다.
 function neisEnrollmentStudent(store, grade, classroom, number) {
   const entry = store?.students?.[neisEnrollmentSeat(grade, classroom, number)];
   if (!entry) return null;
@@ -431,5 +450,11 @@ function neisEnrollmentStudent(store, grade, classroom, number) {
     const [, semester, gradeThen] = termKey.split("-");
     return `sem${gradeThen}${semester}`;
   });
-  return { records, missing: [...new Set(missing)], terms: [...new Set(Object.keys(entry).map((termKey) => termKey.split("-").slice(0, 2).join("-")))].sort() };
+  const fields = new Set(missing);
+  for (const termKey of Object.keys(entry)) {
+    const [, semester, gradeThen] = termKey.split("-");
+    fields.add(`sem${gradeThen}${semester}`);
+  }
+  return { records, missing: [...new Set(missing)], fields: [...fields].sort(),
+    terms: [...new Set(Object.keys(entry).map((termKey) => termKey.split("-").slice(0, 2).join("-")))].sort() };
 }

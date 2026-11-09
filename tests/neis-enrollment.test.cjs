@@ -171,6 +171,49 @@ test("neis link: twins narrowed by course continuity (prerequisite rules) and ma
   assert.equal(store.counts.masked, 1);
 });
 
+// 실제 내보내기에서 본 모양(합성 행): 성명을 가린 파일(김00)·성명을 지운 파일(빈 칸, 성명 열 삭제),
+// 가리면서 깨진 '(미재학)' 표시('(00'), 다른 학교 학생의 '12반(공동교육과정반)', 과목명 앞 '(공동)' 표시.
+test("neis parser: names removed or masked, garbled withdrawn mark, joint-course class and '(공동)' subject label", () => {
+  const ctx = neisContext();
+  const sem1 = [...HEAD,
+    row("2026", "1", "2", "국어", "문학(4)", 1, "1", ""),
+    row("2026", "1", "2", "과학", "화학(4)", 1, "1", ""),
+    row("2026", "1", "2", "과학", "(공동)물리학 실험(3)", 1, "2", "김00"),
+    ["2026", "1", "2", "과학", "(공동)물리학 실험(3)", "1(2학년 1반)", "2학년", "12반(공동교육과정반)", "1", "이00"],
+    ["2026", "1", "2", "과학", "(공동)물리학 실험(3)", "1(2학년 1반)", "2학년", "12반(공동교육과정반)", "2", "박00"],
+    row("2026", "1", "2", "국어", "문학(4)", 1, "2", "김00")];
+  const parsed1 = plain(ctx.neisEnrollmentParse([{ rows: sem1 }]));
+  assert.equal(parsed1.records.length, 4, "빈 성명도 이번 학년도 행으로 읽는다");
+  assert.equal(parsed1.skipped.other, 2, "반이 숫자가 아닌 공동교육과정반 행은 뺀다");
+  assert.deepEqual([parsed1.records[0].name, parsed1.records[0].masked, parsed1.records[0].enrolled], ["", true, true]);
+  assert.deepEqual([parsed1.records[2].subject, parsed1.records[2].credit], ["물리학 실험", 3], "'(공동)' 표시를 떼고 학점을 읽는다");
+  assert.deepEqual(plain(ctx.neisEnrollmentSubject("(공동)물리학 실험(3)")), { name: "물리학 실험", credit: 3, label: "공동" });
+  assert.deepEqual(plain(ctx.neisEnrollmentSubject("융합과학 탐구(1학기)(3)")), { name: "융합과학 탐구(1학기)", credit: 3 });
+  // 성명 열을 아예 지운 파일
+  const noName = [HEAD[0].slice(0, 9), HEAD[1].slice(0, 9), row("2026", "1", "2", "수학", "대수(4)", 3, "5", "").slice(0, 9)];
+  const parsedNoName = plain(ctx.neisEnrollmentParse([{ rows: noName }]));
+  assert.deepEqual([parsedNoName.records.length, parsedNoName.records[0].classroom, parsedNoName.records[0].number, parsedNoName.records[0].masked], [1, "3", "5", true]);
+  // 2학기 파일: 1반 2번은 가린 미재학 표시('(00')
+  const sem2 = [...HEAD,
+    row("2026", "2", "2", "국어", "독서와 작문(4)", 1, "1", ""),
+    row("2026", "2", "2", "국어", "독서와 작문(4)", 1, "2", "김00"),
+    row("2026", "2", "2", "국어", "독서와 작문(4)", 1, "3", "(00"),
+    row("2026", "2", "2", "수학", "확률과 통계(4)", 1, "3", "(00")];
+  const parsed2 = plain(ctx.neisEnrollmentParse([{ rows: sem2 }]));
+  assert.equal(parsed2.garbled, 2);
+  assert.deepEqual([parsed2.records[2].enrolled, parsed2.records[2].status], [false, "학적 변동"]);
+  assert.equal(ctx.neisEnrollmentName("(미재학) 홍길동").status, "미재학", "온전한 표시는 그대로");
+  const link = ctx.neisEnrollmentLink([...parsed1.records, ...parsed2.records], { currentYear: "2026" });
+  assert.deepEqual([...link.students.keys()].sort(), ["2-1-1", "2-1-2"], "이름 없이 반·번호로 잇고, 공동교육과정반·미재학은 학생으로 두지 않는다");
+  assert.equal(link.students.get("2-1-1").records.length, 3);
+  assert.equal(link.counts.withdrawn, 1);
+  assert.equal(link.counts.transfers, 0, "가린 미재학 학생을 전입생으로 세지 않는다");
+  const store = ctx.neisEnrollmentStore(link, {});
+  assert.equal(store.counts.linked, 2);
+  assert.deepEqual(plain(ctx.neisEnrollmentStudent(ctx.neisEnrollmentNormalize(JSON.parse(JSON.stringify(store))), "2", "1", "2").records.map((record) => [record.name, record.credit])),
+    [["물리학 실험", 3], ["문학", 4], ["독서와 작문", 4]]);
+});
+
 test("neis store: minimal fields only (no names), normalize round trip, per-student lookup and keeping older terms", () => {
   const ctx = neisContext();
   const link = ctx.neisEnrollmentLink(sampleRecords(), { currentYear: "2026" });
@@ -253,6 +296,14 @@ test("neis checks: prerequisites use real records, transfers stay 'unknown' only
   const lateTransfer = ctx.courseCheckPrerequisites(model, rules, { targetGrade: "3", selections: pick("물질과 에너지"), prior: ["물리학"],
     priorMissing: ["sem11", "sem12"], priorSource: "neis" });
   assert.equal(lateTransfer.violations.length, 1);
+  // 2학기 파일만 올린 경우(priorFields에 sem21 없음): 화학을 고르는 2-1 자료가 없으니 위반이 아니라 확인 불가.
+  const only22 = ctx.courseCheckPrerequisites(model, rules, { targetGrade: "3", selections: pick("물질과 에너지"), prior: ["확률과 통계"],
+    priorMissing: [], priorSource: "neis", priorFields: ["sem22"] });
+  assert.deepEqual([only22.violations.length, only22.unknowns[0]?.reason], [0, "prior"]);
+  assert.match(ctx.courseCheckIssueText(only22.unknowns[0]), /올린 나이스 자료에 그 학기가 없어 확인 불가/);
+  const both = ctx.courseCheckPrerequisites(model, rules, { targetGrade: "3", selections: pick("물질과 에너지"), prior: ["물리학"],
+    priorMissing: [], priorSource: "neis", priorFields: ["sem21", "sem22"] });
+  assert.equal(both.violations.length, 1, "2-1 자료가 있으면 위반");
 });
 
 test("neis checks: credits use the records (편제명 decides the family, current semester included)", () => {
