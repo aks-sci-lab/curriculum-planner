@@ -23,6 +23,7 @@
       curriculumPlanFileName: "",
       curriculumImportedLayout: null,
       curriculumTopCollapsed: true,
+      curriculumShowMarks: false,
       curriculumTemplateRows: [],
       curriculumPlan: [],
       curriculumCohortYear: "2026",
@@ -359,6 +360,7 @@
           curriculumPlanFileName: state.curriculumPlanFileName,
           curriculumImportedLayout: state.curriculumImportedLayout,
           curriculumTopCollapsed: state.curriculumTopCollapsed,
+          curriculumShowMarks: Boolean(state.curriculumShowMarks),
           curriculumTemplateRows: state.curriculumTemplateRows,
           curriculumPlan: state.curriculumPlan,
           curriculumCohortYear: state.curriculumCohortYear,
@@ -1098,6 +1100,7 @@
           : {};
         state.curriculumPlanFileName = String(saved.curriculumPlanFileName || "");
         state.curriculumTopCollapsed = saved.curriculumTopCollapsed !== false;
+        state.curriculumShowMarks = saved.curriculumShowMarks === true;
         state.curriculumImportedLayout = saved.curriculumImportedLayout &&
           Array.isArray(saved.curriculumImportedLayout.rows)
           ? saved.curriculumImportedLayout
@@ -4033,7 +4036,9 @@
         };
       }
       return Object.fromEntries(Object.entries(cohorts).filter(([year]) => /^\d{4}$/.test(year)).map(([year, cohort]) =>
-        [year, { fileName: cohort?.fileName || "", plan: annualResolvedPlanRows(year, cohort) }]));
+        [year, { fileName: cohort?.fileName || "", plan: annualResolvedPlanRows(year, cohort),
+          // 학교 양식 전학년 편제표(curriculum-annual.js buildAnnualCurriculumDataLayout)는 입학생 편제표 데이터·양식을 쓴다.
+          ...(cohort?.importedLayout?.planData ? { layout: cohort.importedLayout } : {}) }]));
     }
 
     function isDerivedAnnualPlan() {
@@ -6005,8 +6010,26 @@
         rowHeights: Object.fromEntries(Object.entries(sheet.layout?.rowHeights || {})
           .filter(([row]) => Number(row) >= minRow && Number(row) <= maxRow)
           .map(([row, height]) => [Number(row) - minRow, height])),
-        hiddenRows: (sheet.layout?.hiddenRows || []).filter((row) => row >= minRow && row <= maxRow).map((row) => row - minRow)
+        hiddenRows: (sheet.layout?.hiddenRows || []).filter((row) => row >= minRow && row <= maxRow).map((row) => row - minRow),
+        ...(typeof cropCurriculumSheetFormats === "function" ? cropCurriculumSheetFormats(sheet.layout, minRow, maxRow, minColumn, maxColumn) : {})
       };
+    }
+
+    // 원본 양식 서식(글꼴·정렬·테두리 번호, 서식 있는 글자)을 자른 범위 기준으로 옮긴다. 칸이 없으면 행·열 서식을 쓴다.
+    function cropCurriculumSheetFormats(source, minRow, maxRow, minColumn, maxColumn) {
+      if (!Array.isArray(source?.styleTable)) return {};
+      const cellStyles = {};
+      const cellRich = {};
+      for (let row = minRow; row <= maxRow; row++) {
+        for (let column = minColumn; column <= maxColumn; column++) {
+          const key = `${row}:${column}`;
+          const style = source.cellStyles?.[key] ?? source.rowStyles?.[row] ?? source.columnStyles?.[column];
+          if (Number.isInteger(style) && style >= 0) cellStyles[`${row - minRow}:${column - minColumn}`] = style;
+          if (source.cellRich?.[key]) cellRich[`${row - minRow}:${column - minColumn}`] = source.cellRich[key];
+        }
+      }
+      return { cellStyles, cellRich, styleTable: source.styleTable, baseFont: source.baseFont || null,
+        sheetZoom: source.sheetZoom || 100, defaultColumnWidth: source.defaultColumnWidth || 8.43, defaultRowHeight: source.defaultRowHeight || 15 };
     }
 
     function expandCurriculumLayoutRows(layout) {
@@ -6437,7 +6460,8 @@
       renderCurriculumStep();
     });
     function selectCurriculumCellRange(cell, extend, end = Number(cell.dataset.choiceEnd ?? cell.dataset.sourceRow)) {
-      const row = Number(cell.dataset.sourceRow);
+      // 여러 행에 걸친 과목(원본 양식의 택n·학점 칸)은 과목 행 전체(choiceStart~choiceEnd)를 고른다.
+      const row = Number(cell.dataset.choiceStart ?? cell.dataset.sourceRow);
       const column = Number(cell.dataset.sourceColumn);
       const cellEndColumn = Number(cell.dataset.choiceEndColumn ?? column);
       if (!extend || !curriculumSelectionAnchor) {
@@ -6450,7 +6474,7 @@
       curriculumCellSelection = { column: startColumn, startRow, endRow, ...(endColumn !== startColumn ? { endColumn } : {}) };
       $("#curriculumPlanWrap").querySelectorAll("[data-choice-selectable]").forEach((item) => {
         const selected = Number(item.dataset.sourceColumn) >= startColumn && Number(item.dataset.sourceColumn) <= endColumn &&
-          Number(item.dataset.sourceRow) >= startRow && Number(item.dataset.sourceRow) <= endRow;
+          Number(item.dataset.choiceStart ?? item.dataset.sourceRow) >= startRow && Number(item.dataset.choiceEnd ?? item.dataset.sourceRow) <= endRow;
         item.classList.toggle("curriculum-cell-selected", selected);
         item.setAttribute("aria-pressed", String(selected));
       });

@@ -1,7 +1,7 @@
 "use strict";
 // 1단계 편제표 화면(데이터 기반).
-// 표는 과목·선택과목군 데이터에서 그린다. 과목 하나가 화면의 한 행이고, 선택과목군은 병합 대신 묶음 띠·테두리로 보인다.
-// 머리글·소계 행은 내보내기 양식(planTemplate)에서 가져와 그대로 보여 준다.
+// 표는 과목·선택과목군 데이터에서 다시 만든 칸(layout.rows·병합, 엑셀 내보내기와 같은 칸)을 원본 양식 서식 그대로 그린다.
+// 선택과목군은 원본처럼 '택n' 칸 + 학점 숫자 칸, 교차집중은 '교차집중(↔)' 칸 + 학기별 학점 칸이다(앱이 덧붙이는 띠·태그 없음).
 // 이 파일의 화면 함수는 app.js의 렌더링에서 실행 시점에 불리므로 app.js보다 먼저 로드해도 된다.
 
 function planViewEscape(value) {
@@ -9,69 +9,88 @@ function planViewEscape(value) {
     : String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
 
-function planViewFillStyle(layout, row, column) {
-  const fill = layout.cellFills?.[`${row}:${column}`];
-  return /^#[0-9A-F]{6}$/i.test(String(fill || "")) ? `background-color:${fill}` : "";
+// ---- 원본 양식 서식(글꼴·정렬·테두리·채움색·열 너비·행 높이). 서식 정보가 없는 편제표(울산 파일 등)는 기본 양식 규칙으로 그린다.
+const PLAN_VIEW_BORDER = {
+  thin: "1px solid", hair: "1px solid", medium: "2px solid", thick: "3px solid", double: "3px double",
+  dashed: "1px dashed", dotted: "1px dotted", mediumDashed: "2px dashed", dashDot: "1px dashed", mediumDashDot: "2px dashed",
+  dashDotDot: "1px dotted", mediumDashDotDot: "2px dotted", slantDashDot: "2px dashed"
+};
+
+// 기본 양식(원본 서식이 없을 때): 모든 칸 가는 테두리, 가운데 정렬, 머리글·소계 굵게, 과목명 왼쪽 정렬.
+function planViewDefaultDescriptor(type, column, columns) {
+  const descriptor = { bd: { l: "thin", r: "thin", t: "thin", b: "thin" }, h: "center", v: "center", w: 1, sz: 10 };
+  if (type === "header" || type === "footer") descriptor.b = 1;
+  if (type === "subject" && column === columns?.name) descriptor.h = "left";
+  return descriptor;
 }
 
-function planViewStyleAttribute(...parts) {
-  const style = parts.filter(Boolean).join(";");
-  return style ? ` style="${style}"` : "";
-}
-
-// 표의 병합 목록에서 열마다 세로 병합 구간(시작 행 → 끝 행)을 만든다.
-function planViewVerticalSegments(layout) {
-  const byColumn = new Map();
-  for (const reference of layout.mergedRanges || []) {
-    const range = planDataRange(reference);
-    if (!range || range.startColumn !== range.endColumn || range.endRow <= range.startRow) continue;
-    if (!byColumn.has(range.startColumn)) byColumn.set(range.startColumn, []);
-    byColumn.get(range.startColumn).push(range);
-  }
+function planViewFormat(layout) {
+  const template = layout.planTemplate || {};
+  const format = template.format || null;
+  const table = format?.styleTable || layout.styleTable || null;
+  const baseFont = format?.baseFont || layout.baseFont || null;
+  const zoom = Math.max(0.3, Math.min(2, (Number(format?.zoom || layout.sheetZoom) || 100) / 100));
+  const fontName = String(baseFont?.fn || "");
+  const digit = /맑은|malgun|굴림|돋움|바탕|궁서|gulim|dotum|batang|나눔|nanum/i.test(fontName) ? 8 : 7;
   return {
-    at(row, column) {
-      const found = (byColumn.get(column) || []).find((range) => range.startRow <= row && range.endRow >= row);
-      return found ? { start: found.startRow, end: found.endRow } : { start: row, end: row };
-    }
+    original: Array.isArray(table), table: table || [], zoom, digit, baseSize: Number(baseFont?.sz) || 11, fontName,
+    defaultWidth: Number(format?.defaultColumnWidth) || 8.43, defaultHeight: Number(format?.defaultRowHeight) || 15,
+    tagFill: format?.tagFill || "", crossFill: format?.crossFill || ""
   };
 }
 
-// 머리글·소계처럼 양식에서 온 행을 그린다. 보이는 행만 남기고 병합은 남은 행 기준으로 다시 맞춘다.
-function planViewStaticRows(layout, rowIndexes, width, options = {}) {
-  const visible = new Set(rowIndexes);
-  const ranges = (layout.mergedRanges || []).map(planDataRange).filter(Boolean)
-    .filter((range) => rowIndexes.some((row) => row >= range.startRow && row <= range.endRow));
-  const anchor = new Map();
-  const covered = new Set();
-  for (const range of ranges) {
-    const rows = rowIndexes.filter((row) => row >= range.startRow && row <= range.endRow);
-    for (const row of rows) for (let column = range.startColumn; column <= range.endColumn; column++) covered.add(`${row}:${column}`);
-    if (!rows.length) continue;
-    covered.delete(`${rows[0]}:${range.startColumn}`);
-    anchor.set(`${rows[0]}:${range.startColumn}`, { rowSpan: rows.length, colSpan: range.endColumn - range.startColumn + 1, source: range.startRow });
+function planViewColumnPixels(layout, format, column) {
+  const width = Number(layout.columnWidths?.[column]);
+  const chars = Number.isFinite(width) && width > 0 ? width : format.defaultWidth;
+  return Math.max(4, Math.round((chars * format.digit + 5) * format.zoom));
+}
+
+function planViewFontCss(descriptor, format, plainFont = false) {
+  const parts = [];
+  const size = Number(descriptor.sz) || format.baseSize;
+  parts.push(`font-size:${Math.round(size * 4 / 3 * format.zoom * 10) / 10}px`);
+  parts.push(`font-weight:${descriptor.b ? 700 : 400}`);
+  if (descriptor.i) parts.push("font-style:italic");
+  const decoration = [descriptor.u ? "underline" : "", descriptor.s ? "line-through" : ""].filter(Boolean).join(" ");
+  if (decoration) parts.push(`text-decoration:${decoration}`);
+  if (descriptor.fc && !plainFont) parts.push(`color:${descriptor.fc}`);
+  return parts;
+}
+
+// 칸 하나의 CSS. edges: 병합 칸이면 오른쪽·아래 테두리를 가져올 칸의 서식(엑셀처럼 병합 범위 끝 칸의 테두리).
+function planViewCellCss(format, descriptor, options = {}) {
+  const parts = planViewFontCss(descriptor, format, options.plainFont);
+  const horizontal = { left: "left", center: "center", centerContinuous: "center", right: "right", justify: "justify", distributed: "justify", fill: "left" }[descriptor.h] ||
+    (options.numeric ? "right" : "left");
+  parts.push(`text-align:${horizontal}`);
+  parts.push(`vertical-align:${{ top: "top", center: "middle", justify: "middle", distributed: "middle" }[descriptor.v] || "bottom"}`);
+  parts.push(`white-space:${descriptor.w ? "pre-wrap" : "pre"}`);
+  if (descriptor.rot === 255) parts.push("writing-mode:vertical-rl;text-orientation:upright");
+  if (descriptor.ind) parts.push(`padding-left:${Math.round(descriptor.ind * 9 * format.zoom)}px`);
+  const edges = options.edges || {};
+  for (const [side, css] of [["l", "left"], ["r", "right"], ["t", "top"], ["b", "bottom"]]) {
+    const source = edges[side] || descriptor;
+    const style = source.bd?.[side];
+    parts.push(style ? `border-${css}:${PLAN_VIEW_BORDER[style] || "1px solid"} ${source.bd[`${side}c`] || (style === "hair" ? "#9aa3b2" : "#000")}` : `border-${css}:0 none`);
   }
-  return rowIndexes.filter((row) => visible.has(row)).map((row) => {
-    const cells = [];
-    for (let column = 0; column < width; column++) {
-      const merge = anchor.get(`${row}:${column}`);
-      if (!merge && covered.has(`${row}:${column}`)) continue;
-      const source = merge ? merge.source : row;
-      const value = String(layout.rows[source]?.[column] ?? "");
-      const span = merge ? `${merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : ""}${merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : ""}` : "";
-      const fill = planViewFillStyle(layout, source, column);
-      const editable = options.editable?.(source, column);
-      if (editable) {
-        cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${source}" data-source-column="${column}" data-plan-footer="${editable}"${span}${planViewStyleAttribute(fill)}>${planViewEscape(value)}</td>`);
-      } else {
-        cells.push(`<td aria-readonly="true" data-source-row="${source}" data-source-column="${column}"${span}${planViewStyleAttribute(fill)}>${planViewEscape(value)}</td>`);
-      }
-    }
-    const tools = options.tools ? '<td class="curriculum-row-tools" aria-hidden="true"></td>' : "";
-    return `<tr class="${options.className || ""}">${cells.join("")}${tools}</tr>`;
+  if (options.fill) parts.push(`background-color:${options.fill}`);
+  return parts.join(";");
+}
+
+function planViewEscapeStyle(css) {
+  return css ? ` style="${planViewEscape(css)}"` : "";
+}
+
+// 서식 있는 글자(글자 조각마다 색·굵기) → span. inherit 조각은 칸 서식을 그대로 쓴다.
+function planViewRichHtml(runs, format, plainFont = false) {
+  return runs.map((run) => {
+    const text = planViewEscape(run.t);
+    if (run.inherit) return text;
+    const css = planViewFontCss(run, format, plainFont).filter((part) => !/^font-weight:400$/.test(part)).join(";");
+    return `<span${planViewEscapeStyle(css)}>${text}</span>`;
   }).join("");
 }
 
-// 화면 필터(학년·구분·교과군·선택 유형·검색어)에 맞는 과목인지 본다.
 function planViewMatchesFilter(subject, layout, filters, entriesById) {
   const entries = entriesById.get(subject.id) || [];
   if (filters.grade && !entries.some((entry) => entry.grade === filters.grade)) return false;
@@ -91,21 +110,41 @@ function planViewMatchesFilter(subject, layout, filters, entriesById) {
   return true;
 }
 
-function planViewSubjectNamesHtml(subject, changes) {
-  const names = typeof curriculumSubjectNames === "function" ? curriculumSubjectNames(subject.name) : planDataSubjectNames(subject.name);
-  if (!names.length) return planViewEscape(subject.name);
-  return names.map((name) => {
+// 점검 표시(편성 영역 태그·자동 수정·학점 범위 경고·과목명 확인 필요)를 표에 덧그릴지. 기본은 원본 양식만(꺼짐).
+function planViewShowMarks() {
+  return typeof state !== "undefined" && Boolean(state.curriculumShowMarks);
+}
+
+// 과목명 칸: 원본 글자(표기 기호 *·★·☆·■, 쉼표·띄어쓰기)를 그대로 보이고, 과목마다 누르면 편성 변경 팝업이 열리는 단추로 감싼다.
+function planViewSubjectNamesHtml(subject, changes, format) {
+  const raw = String(subject.name ?? "");
+  const runStyles = planDataNameRunStyles(subject);
+  const originalParts = subject.originalName !== undefined
+    ? String(subject.originalName).split(/[,，、]/).map((part) => part.trim()) : [];
+  const marks = planViewShowMarks();
+  let nameIndex = -1;
+  return raw.split(/([,，、])/).map((part, index) => {
+    if (index % 2) return planViewEscape(part);
+    const lead = part.match(/^\s*/)[0], tail = part.slice(lead.length).match(/\s*$/)[0];
+    const core = part.trim();
+    if (!core) return planViewEscape(part);
+    nameIndex += 1;
+    const name = planDataSubjectNames(core)[0] || core;
     const key = typeof curriculumChoiceSubjectKey === "function" ? curriculumChoiceSubjectKey(name) : planDataNameKey(name);
     const change = changes?.get?.(key);
     const changeAttributes = change && typeof curriculumChangeAttributes === "function" ? curriculumChangeAttributes([change]) : "";
-    const check = typeof curriculumOfficialTypeCheck === "function" ? curriculumOfficialTypeCheck(name, subject.kind || "") : { ok: true };
+    const check = marks && typeof curriculumOfficialTypeCheck === "function" ? curriculumOfficialTypeCheck(name, subject.kind || "") : { ok: true };
     const flag = check.ok ? "" : " is-unverified";
     const title = check.ok ? "" : ` title="확인 필요: ${planViewEscape(check.reason)}"`;
-    return `<button class="curriculum-subject-name${flag}" ${changeAttributes}${title} type="button" data-curriculum-subject="${planViewEscape(name)}" aria-label="${planViewEscape(name)} 편성 변경${check.ok ? "" : ` (확인 필요: ${planViewEscape(check.reason)})`}">${planViewEscape(name)}</button>`;
-  }).join(", ");
+    const run = runStyles ? planDataNameRunFor(runStyles, core, originalParts[nameIndex]) : null;
+    const css = run && format ? planViewFontCss(run, format, subject.plainFont).join(";") : "";
+    return `${planViewEscape(lead)}<button class="curriculum-subject-name${flag}" ${changeAttributes}${title} type="button" data-curriculum-subject="${planViewEscape(name)}"${planViewEscapeStyle(css)} aria-label="${planViewEscape(name)} 편성 변경${check.ok ? "" : ` (확인 필요: ${planViewEscape(check.reason)})`}">${planViewEscape(core)}</button>${planViewEscape(tail)}`;
+  }).join("");
 }
 
 // 데이터 기반 편제표 표 HTML. app.js의 curriculumImportedSheetHtml이 데이터가 있는 편제표에서 부른다.
+// 원본 양식 그대로: 데이터로 다시 만든 표(layout.rows·병합 = 내보내기와 같은 칸)를 원본 서식으로 그린다.
+// 선택과목군은 학기 열의 '택n' 칸 + 그 아래 학점 숫자 칸, 교차집중은 두 학기에 걸친 '교차집중(↔)' 칸 + 학기별 학점 칸이다.
 function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, compactView = false, changes = new Map()) {
   const data = layout.planData;
   const template = layout.planTemplate;
@@ -114,15 +153,15 @@ function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, co
   const width = template.width;
   const meta = layout.planRowMeta || [];
   const readOnly = Boolean(layout.derived);
+  const format = planViewFormat(layout);
   const semesterColumns = columns.semesters;
   const usedSemesters = semesterColumns.filter((column) => column >= 0);
-  const firstSemester = Math.min(...usedSemesters), lastSemester = Math.max(...usedSemesters);
-  const semestersContiguous = lastSemester - firstSemester + 1 === usedSemesters.length;
+  const firstSemester = Math.min(...usedSemesters);
   const hiddenRows = new Set(layout.hiddenRows || []);
-  const segments = planViewVerticalSegments(layout);
   const entries = curriculumDataPlanEntries(layout).entries;
   const entriesById = new Map();
   const subjects = planDataSubjects(data);
+  const byId = new Map(data.subjects.map((item) => [item.id, item]));
   const idByRow = new Map(subjects.map((subject) => [subject.row, subject.id]));
   for (const entry of entries) {
     const id = idByRow.get(entry.rowIndex);
@@ -140,160 +179,192 @@ function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, co
   }
   const headerRows = meta.flatMap((item, index) => item.type === "header" && !hiddenRows.has(index) ? [index] : []);
   const footerRows = meta.flatMap((item, index) => item.type === "footer" && !hiddenRows.has(index) ? [index] : []);
-  const headerStart = compactView ? Math.max(0, headerRows.findIndex((row) =>
-    (layout.rows[row] || []).some((value) => /세부과목|과목명/.test(String(value))))) : 0;
-  const shownHeader = headerRows.slice(headerStart);
-  const groups = data.groups || [];
-  const groupCell = new Map();
-  for (const group of groups) {
-    const members = group.members.map((id) => data.subjects.find((item) => item.id === id)).filter(Boolean);
-    const visibleMembers = members.filter((member) => visibleItems.includes(member));
-    group.fields.forEach((field) => {
-      visibleMembers.forEach((member, index) => groupCell.set(`${member.id}:${field}`, {
-        group, first: index === 0, last: index === visibleMembers.length - 1, members
-      }));
-    });
+  // 원본 양식 그대로: 상단을 접어도(compactView) 제목·학교명 행을 함께 보인다.
+  const shownHeader = headerRows;
+  const bodyRows = visibleItems.flatMap((item) => {
+    const rows = [];
+    for (let row = item.row; row <= (item.rowEnd ?? item.row); row++) if (!hiddenRows.has(row)) rows.push(row);
+    return rows;
+  });
+  const rowsShown = [...shownHeader, ...bodyRows, ...footerRows];
+  const shownSet = new Set(rowsShown);
+
+  // 선택과목군: 칸(행:열) → 묶음 역할(택n 칸 / 학점 칸 / 빈 칸)
+  const groupRole = new Map();
+  for (const group of data.groups || []) {
+    const members = group.members.map((id) => byId.get(id)).filter(Boolean);
+    if (!members.length) continue;
+    const start = members[0].row, end = members.at(-1).rowEnd;
+    const groupColumns = group.fields.map((field) => semesterColumns[PLAN_DATA_FIELDS.indexOf(field)]).filter((column) => column >= 0).sort((a, b) => a - b);
+    for (let row = start; row <= end; row++) {
+      for (const column of groupColumns) {
+        const role = row === start ? "tag" : row - start <= group.pick ? "credit" : "slot";
+        groupRole.set(`${row}:${column}`, { group, role, start, end, groupColumns, members });
+      }
+    }
   }
   const blocks = typeof curriculumDataChoiceBlocks === "function" ? curriculumDataChoiceBlocks(layout) : [];
   const blockKey = new Map(blocks.map((block) => [`${block.groupId}:${block.field}`, block.key]));
-  const verticalColumns = [];
-  for (let column = 0; column < width; column++) {
-    if (semesterColumns.includes(column) || column === columns.name || column === columns.base || column === columns.op) continue;
-    verticalColumns.push(column);
+
+  // 병합: 보이는 행만으로 rowspan을 다시 센다(필터로 가려진 행은 빠진다).
+  const ranges = (layout.mergedRanges || []).map(planDataRange).filter(Boolean);
+  const anchor = new Map();
+  const covered = new Set();
+  for (const range of ranges) {
+    const rows = rowsShown.filter((row) => row >= range.startRow && row <= range.endRow);
+    if (!rows.length) continue;
+    for (const row of rows) for (let column = range.startColumn; column <= range.endColumn; column++) covered.add(`${row}:${column}`);
+    covered.delete(`${rows[0]}:${range.startColumn}`);
+    anchor.set(`${rows[0]}:${range.startColumn}`, { rowSpan: rows.length, colSpan: range.endColumn - range.startColumn + 1, range, source: range.startRow, last: rows.at(-1) });
   }
+  const descriptorAt = (row, column) => {
+    if (!format.original) return planViewDefaultDescriptor(meta[row]?.type, column, columns);
+    const index = layout.cellStyles?.[`${row}:${column}`];
+    return format.table[index] || {};
+  };
+  const footerFirst = meta.findIndex((item) => item.type === "footer");
+  const footerEditable = (row, column) => {
+    if (readOnly || Object.hasOwn(layout.formulas || {}, `${row}:${column}`)) return "";
+    return footerFirst >= 0 ? `${row - footerFirst}:${column}` : "";
+  };
   const editableColumn = (column) => {
     if (column === columns.required) return "required";
     if ([columns.category, columns.domain, columns.area, columns.kind, columns.completion].includes(column)) return "";
     return `extra:${column}`;
   };
-  // 세로로 이어진 칸(구분·교과(군)·과목 종류·이수학점 등)은 보이는 과목 행만으로 rowspan을 다시 센다.
-  const segmentCells = new Map();
-  for (const column of verticalColumns) {
-    let current = null;
-    for (const item of visibleItems) {
-      if (item.fixed) { current = null; continue; }
-      const segment = segments.at(item.row, column);
-      if (current && current.start === segment.start && current.end === segment.end) {
-        current.count += 1;
-        segmentCells.set(`${item.id}:${column}`, null);
-        continue;
-      }
-      current = { ...segment, count: 1, item };
-      segmentCells.set(`${item.id}:${column}`, current);
+  const marks = planViewShowMarks();
+
+  const cellHtml = (row, column, merge) => {
+    const info = meta[row] || {};
+    const source = merge ? merge.source : row;
+    const item = info.id ? byId.get(info.id) : null;
+    const value = String(layout.rows[source]?.[column] ?? "");
+    const descriptor = descriptorAt(source, column);
+    let fill = layout.cellFills?.[`${source}:${column}`] || "";
+    const edges = {};
+    if (merge && format.original) {
+      edges.r = descriptorAt(merge.range.startRow, merge.range.endColumn);
+      edges.b = descriptorAt(merge.range.endRow, merge.range.startColumn);
     }
-  }
-  const colGroup = Array.from({ length: width }, (_, column) => {
-    const excelWidth = Number(layout.columnWidths?.[column]);
-    const pixels = Number.isFinite(excelWidth) && excelWidth > 0 ? `${Math.max(44, Math.min(360, Math.round(excelWidth * 7 + 12)))}px` : "100px";
-    return `<col style="width:${pixels}">`;
-  }).join("") + (readOnly ? "" : '<col class="curriculum-row-tools-column" style="width:40px">');
-  const bodyRows = visibleItems.map((item) => {
-    if (item.fixed) {
-      const cells = Array.from({ length: width }, (_, column) =>
-        `<td aria-readonly="true"${planViewStyleAttribute(planViewFillStyle(layout, item.row, column))}>${planViewEscape(layout.rows[item.row]?.[column] ?? "")}</td>`).join("");
-      return `<tr class="curriculum-fixed-row">${cells}${readOnly ? "" : '<td class="curriculum-row-tools"></td>'}</tr>`;
+    const span = merge ? `${merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : ""}${merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : ""}` : "";
+    const numeric = value.trim() !== "" && Number.isFinite(Number(value));
+    const plainFont = Boolean(item?.plainFont);
+    const css = (extraFill) => planViewCellCss(format, descriptor, { edges, fill: extraFill === undefined ? fill : extraFill, numeric, plainFont });
+    const storedRuns = layout.cellRich?.[`${source}:${column}`];
+    // 서식 있는 글자는 칸 값이 원본 글자와 같을 때만(고친 칸은 칸 서식만) 쓴다.
+    const richRuns = storedRuns && storedRuns.map((run) => run.t).join("") === value ? storedRuns : null;
+    const text = (content = value) => richRuns && content === value ? planViewRichHtml(richRuns, format, plainFont) : planViewEscape(content);
+    const base = `data-source-row="${source}" data-source-column="${column}"${span}`;
+    if (info.type === "header" || info.type === "footer" || info.type === "fixed" || !item) {
+      const editable = info.type === "footer" ? footerEditable(source, column) : "";
+      if (editable) return `<td contenteditable="true" spellcheck="false" ${base} data-plan-footer="${editable}"${planViewEscapeStyle(css())}>${text()}</td>`;
+      return `<td aria-readonly="true" ${base}${planViewEscapeStyle(css())}>${text()}</td>`;
     }
-    const cells = [];
-    const rowAttributes = `data-source-row="${item.row}" data-plan-id="${planViewEscape(item.id)}"`;
-    const editableCell = (column, field, value, extraClass = "", extraAttributes = "") => {
-      const fill = planViewFillStyle(layout, item.row, column);
-      const classes = extraClass ? ` class="${extraClass}"` : "";
-      if (readOnly) return `<td aria-readonly="true"${classes} data-source-row="${item.row}" data-source-column="${column}"${extraAttributes}${planViewStyleAttribute(fill)}>${planViewEscape(value)}</td>`;
-      return `<td contenteditable="true" spellcheck="false"${classes} data-source-row="${item.row}" data-source-column="${column}" data-plan-id="${planViewEscape(item.id)}" data-plan-field="${field}"${extraAttributes}${planViewStyleAttribute(fill)}>${planViewEscape(value)}</td>`;
-    };
-    for (let column = 0; column < width; column++) {
-      if (column === columns.name) {
-        cells.push(`<td class="curriculum-subject-cell" ${rowAttributes} data-source-column="${column}"${planViewStyleAttribute(planViewFillStyle(layout, item.row, column))}>${planViewSubjectNamesHtml(item, changes)}</td>`);
-        continue;
-      }
-      if (column === columns.base || column === columns.op) {
-        const value = column === columns.op && item.opFormula ? layout.rows[item.row]?.[column] ?? "" : item[column === columns.base ? "base" : "op"];
-        cells.push(editableCell(column, column === columns.base ? "base" : "op", value));
-        continue;
-      }
-      if (semesterColumns.includes(column)) {
-        const field = PLAN_DATA_FIELDS[semesterColumns.indexOf(column)];
-        if (item.note && semestersContiguous) {
-          if (column !== firstSemester) continue;
-          const span = lastSemester - firstSemester + 1;
-          const cell = editableCell(column, "note", item.note, "curriculum-note-cell", ` colspan="${span}"`);
-          cells.push(cell);
-          continue;
-        }
-        const group = groupCell.get(`${item.id}:${field}`);
-        const selectable = !readOnly
-          ? ` data-choice-column="${column}" data-choice-start="${item.row}" data-choice-end="${item.rowEnd}" data-choice-end-column="${column}" data-display-row="${item.row}"`
-          : "";
-        if (selectionMode && !readOnly) {
-          const label = group ? (group.first ? `택${group.group.pick} · ${planDataNumberText(planDataGroupCredit(data, group.group))}학점` : "")
-            : Object.hasOwn(item.credits || {}, field) ? planDataNumberText(item.credits[field]) : item.texts?.[field] || "";
-          const groupClass = group ? ` curriculum-group-cell${group.first ? " is-group-first" : ""}${group.last ? " is-group-last" : ""}` : "";
-          cells.push(`<td tabindex="0" role="button" aria-pressed="false" class="curriculum-selectable-cell${groupClass}" data-choice-selectable data-source-row="${item.row}" data-source-column="${column}"${selectable} aria-label="${planViewEscape(item.name)} ${field.slice(3, 4)}-${field.slice(4, 5)} 칸 선택">${planViewEscape(label) || "&nbsp;"}</td>`);
-          continue;
-        }
-        if (group) {
-          const classes = `curriculum-group-cell${group.first ? " is-group-first" : ""}${group.last ? " is-group-last" : ""}`;
-          const info = planDataGroupCreditInfo(data, group.group);
-          const label = `${planDataFieldLabel(group.group.fields)} 택${group.group.pick} · ${planDataNumberText(info.credit)}학점`;
-          const key = blockKey.get(`${group.group.id}:${field}`) || "";
-          const creditHint = info.from === "op"
-            ? ` · 학기 칸에 학점이 없어 계산에는 구성 과목 운영학점 ${planDataNumberText(info.credit)}을(를) 씁니다${info.note ? `(${info.note})` : ""}` : "";
-          const check = info.note ? ' <span class="curriculum-group-check" aria-label="학점 확인 필요">확인</span>' : "";
-          const band = group.first
-            ? `<button type="button" class="curriculum-group-band${info.note ? " is-credit-check" : ""}${info.from === "op" ? " is-credit-fallback" : ""}" data-plan-group="${planViewEscape(group.group.id)}" title="${planViewEscape(label)}: ${planViewEscape(group.members.map((member) => member.name).join(" / "))}${planViewEscape(creditHint)} · 누르면 택 수·학점 변경·교차집중으로 바꾸기·묶음 풀기"${readOnly ? " disabled" : ""}>택${group.group.pick} · ${planViewEscape(planDataNumberText(info.credit))}학점${check}</button>`
-            : "";
-          // 띠의 위·아래 끝 손잡이: 끌어서 묶음 범위(구성 과목)를 늘리거나 줄인다.
-          const handle = (edge) => readOnly ? "" : `<span class="curriculum-group-handle is-${edge}" data-group-handle="${edge}" data-group-id="${planViewEscape(group.group.id)}" title="${edge === "top" ? "위" : "아래"} 끝을 끌어 묶음 범위 늘리기·줄이기"></span>`;
-          cells.push(`<td class="${classes}" data-source-row="${item.row}" data-source-column="${column}"${selectable} data-plan-group-cell="${planViewEscape(group.group.id)}"${group.first ? ` data-choice-block="${planViewEscape(key)}"` : ""} title="${planViewEscape(label)}">${group.first ? handle("top") : ""}${band}${group.last ? handle("bottom") : ""}</td>`);
-          continue;
-        }
-        const crossFields = PLAN_DATA_FIELDS.filter((item2) => item.cross?.includes(item2));
-        if (crossFields.includes(field)) {
-          // 교차집중: 두 학기에 걸친 띠 하나(학생이 고르는 묶음이 아니라 반마다 학기를 엇갈려 이수).
-          const crossColumns = crossFields.map((item2) => semesterColumns[PLAN_DATA_FIELDS.indexOf(item2)]);
-          const adjacent = crossColumns.every((item2, index) => index === 0 || item2 === crossColumns[index - 1] + 1) &&
-            crossColumns.every((item2) => !groupCell.has(`${item.id}:${PLAN_DATA_FIELDS[semesterColumns.indexOf(item2)]}`));
-          if (adjacent && column !== crossColumns[0]) continue;
-          const label = planDataCrossLabel(item);
-          const names = planDataSubjectNames(item.name);
-          const title = `${label}: 학생이 고르는 과목이 아니라 반마다 한 학기는 ${names[0] || ""}, 다른 학기는 ${names.slice(1).join("·")}을(를) 이수합니다. 과목당 ${planDataNumberText(item.credits?.[crossFields[0]] || 0)}학점(학기당 한 번만 셉니다).${readOnly ? "" : " 누르면 학기당 학점 변경·선택과목군으로 바꾸기"}`;
-          const span = adjacent && crossColumns.length > 1 ? ` colspan="${crossColumns.length}"` : "";
-          const band = `<button type="button" class="curriculum-cross-band" data-plan-cross="${planViewEscape(item.id)}" title="${planViewEscape(title)}"${readOnly ? " disabled" : ""}>${planViewEscape(label)}</button>`;
-          cells.push(`<td class="curriculum-cross-cell is-cross" data-source-row="${item.row}" data-source-column="${column}"${span}${selectable} title="${planViewEscape(title)}">${band}</td>`);
-          continue;
-        }
-        const value = Object.hasOwn(item.credits || {}, field) ? planDataNumberText(item.credits[field]) : item.texts?.[field] || "";
-        cells.push(editableCell(column, field, value, "", selectable));
-        continue;
-      }
-      const segment = segmentCells.get(`${item.id}:${column}`);
-      if (segment === null) continue;
-      const span = segment && segment.count > 1 ? ` rowspan="${segment.count}"` : "";
-      const sourceRow = segment ? segment.start : item.row;
-      const value = layout.rows[sourceRow]?.[column] ?? "";
-      const field = editableColumn(column);
-      const formula = Object.hasOwn(layout.formulas || {}, `${sourceRow}:${column}`);
-      if (field && !formula && !readOnly) {
-        cells.push(`<td contenteditable="true" spellcheck="false" data-source-row="${item.row}" data-source-column="${column}" data-plan-id="${planViewEscape(item.id)}" data-plan-field="${field}"${span}${planViewStyleAttribute(planViewFillStyle(layout, sourceRow, column))}>${planViewEscape(value)}</td>`);
-      } else {
-        const hint = column === columns.kind ? ' title="과목 종류는 2022 개정 교육과정 과목 목록의 고정 분류이므로 수정할 수 없습니다."'
-          : column === columns.completion ? ' title="이수학점은 학기 학점 합계 수식입니다."'
-            : [columns.category, columns.domain, columns.area].includes(column) ? ' title="구분·교과(군)은 과목명을 눌러 바꿀 수 있습니다."' : "";
-        cells.push(`<td aria-readonly="true" data-source-row="${sourceRow}" data-source-column="${column}"${span}${hint}${planViewStyleAttribute(planViewFillStyle(layout, sourceRow, column))}>${planViewEscape(value)}</td>`);
-      }
+    const idAttribute = `data-plan-id="${planViewEscape(item.id)}"`;
+    const editable = (field, content, extra = "", classes = "") =>
+      readOnly ? `<td aria-readonly="true"${classes ? ` class="${classes}"` : ""} ${base}${extra}${planViewEscapeStyle(css())}>${planViewEscape(content)}</td>`
+        : `<td contenteditable="true" spellcheck="false"${classes ? ` class="${classes}"` : ""} ${base} ${idAttribute} data-plan-field="${field}"${extra}${planViewEscapeStyle(css())}>${planViewEscape(content)}</td>`;
+    if (column === columns.name) {
+      if (row !== item.row) return `<td aria-readonly="true" ${base}${planViewEscapeStyle(css())}></td>`;
+      const tools = readOnly ? "" : `<button type="button" class="curriculum-row-menu-button" data-plan-row-menu="${planViewEscape(item.id)}" aria-haspopup="menu" title="위에 과목 추가 · 위/아래로 이동 · 삭제 · 편성 영역(행에서 우클릭해도 열립니다)" aria-label="${planViewEscape(item.name)} 행 메뉴">⋯</button>`;
+      return `<td class="curriculum-subject-cell" ${base} data-plan-id="${planViewEscape(item.id)}"${planViewEscapeStyle(css())}>${planViewSubjectNamesHtml(item, changes, format)}${tools}</td>`;
     }
-    const tools = readOnly ? "" : `<td class="curriculum-row-tools"><button type="button" class="curriculum-row-menu-button" data-plan-row-menu="${planViewEscape(item.id)}" aria-haspopup="menu" title="위에 과목 추가 · 위/아래로 이동 · 삭제" aria-label="${planViewEscape(item.name)} 행 메뉴">⋯</button></td>`;
-    return `<tr class="curriculum-data-row${item.added ? " is-added" : ""}" data-plan-row="${planViewEscape(item.id)}">${cells.join("")}${tools}</tr>`;
-  }).join("");
-  if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
-  const footerEditable = readOnly ? null : (row, column) => {
-    if (Object.hasOwn(layout.formulas || {}, `${row}:${column}`)) return "";
-    const first = meta.findIndex((item) => item.type === "footer");
-    return first >= 0 ? `${row - first}:${column}` : "";
+    if ((column === columns.base || column === columns.op) && row === item.row) {
+      if (column === columns.op && item.opFormula) return `<td aria-readonly="true" ${base} title="운영학점은 학기 학점 합계 수식입니다."${planViewEscapeStyle(css())}>${planViewEscape(value)}</td>`;
+      return editable(column === columns.base ? "base" : "op", item[column === columns.base ? "base" : "op"]);
+    }
+    if (semesterColumns.includes(column)) {
+      const field = PLAN_DATA_FIELDS[semesterColumns.indexOf(column)];
+      const choice = readOnly ? "" : ` data-choice-column="${column}" data-choice-start="${item.row}" data-choice-end="${item.rowEnd}" data-choice-end-column="${merge ? merge.range.endColumn : column}" data-display-row="${row}"`;
+      const selectable = selectionMode && !readOnly
+        ? ` tabindex="0" role="button" aria-pressed="false" data-choice-selectable aria-label="${planViewEscape(item.name)} ${field.slice(3, 4)}-${field.slice(4, 5)} 칸 선택"` : "";
+      const selectableClass = selectionMode && !readOnly ? "curriculum-selectable-cell" : "";
+      const group = groupRole.get(`${row}:${column}`);
+      if (item.note && column === firstSemester && row === item.row) {
+        if (selectionMode && !readOnly) return `<td class="curriculum-note-cell ${selectableClass}" ${base}${choice}${selectable}${planViewEscapeStyle(css())}>${planViewEscape(item.note)}</td>`;
+        return editable("note", item.note, choice, "curriculum-note-cell");
+      }
+      if (group) {
+        const { role } = group;
+        const groupId = planViewEscape(group.group.id);
+        const info2 = planDataGroupCreditInfo(data, group.group);
+        const label = `${planDataFieldLabel(group.group.fields)} 택${group.group.pick} · ${planDataNumberText(info2.credit)}학점`;
+        const memberNames = group.members.map((member) => member.name).join(" / ");
+        if (role === "tag") fill = format.tagFill || fill;
+        else if (format.tagFill && fill === format.tagFill) fill = "";
+        const handle = (edge) => readOnly ? "" : `<span class="curriculum-group-handle is-${edge}" data-group-handle="${edge}" data-group-id="${groupId}" title="${edge === "top" ? "위" : "아래"} 끝을 끌어 묶음 범위 늘리기·줄이기"></span>`;
+        const bottom = row === group.end || (merge && merge.last >= group.end) ? handle("bottom") : "";
+        const classes = ["curriculum-group-cell", `is-group-${role}`, selectableClass].filter(Boolean).join(" ");
+        const groupAttributes = ` data-plan-group-cell="${groupId}"${role === "tag" ? ` data-choice-block="${planViewEscape(blockKey.get(`${group.group.id}:${field}`) || "")}"` : ""}`;
+        if (role === "tag") {
+          const creditHint = info2.from === "op"
+            ? ` · 학기 칸에 학점이 없어 계산에는 구성 과목 운영학점 ${planDataNumberText(info2.credit)}을(를) 씁니다${info2.note ? `(${info2.note})` : ""}` : "";
+          const check = info2.note && marks ? ' <span class="curriculum-group-check" aria-label="학점 확인 필요">확인</span>' : "";
+          const tag = `<button type="button" class="curriculum-group-band${info2.note ? " is-credit-check" : ""}${info2.from === "op" ? " is-credit-fallback" : ""}" data-plan-group="${groupId}" title="${planViewEscape(label)}: ${planViewEscape(memberNames)}${planViewEscape(creditHint)}${readOnly ? "" : " · 누르면 택 수·학점 변경·교차집중으로 바꾸기·묶음 풀기"}"${readOnly ? " disabled" : ""}>${text()}${check}</button>`;
+          return `<td class="${classes}" ${base}${choice}${selectable}${groupAttributes} title="${planViewEscape(label)}"${planViewEscapeStyle(css())}>${handle("top")}${tag}${bottom}</td>`;
+        }
+        if (role === "credit" && !readOnly && !selectionMode) {
+          return `<td contenteditable="true" spellcheck="false" class="${classes}" ${base}${choice}${groupAttributes} data-plan-group-credit="${groupId}" title="${planViewEscape(label)} · 학점을 고치면 묶음 학점이 바뀝니다"${planViewEscapeStyle(css())}>${text()}${bottom}</td>`;
+        }
+        return `<td class="${classes}" ${base}${choice}${selectable}${groupAttributes} title="${planViewEscape(label)}"${planViewEscapeStyle(css())}>${text()}${bottom}</td>`;
+      }
+      const crossFields = PLAN_DATA_FIELDS.filter((key) => item.cross?.includes(key));
+      if (crossFields.includes(field)) {
+        const names = planDataSubjectNames(item.name);
+        const title = `${planDataCrossLabel(item)}: 학생이 고르는 과목이 아니라 반마다 한 학기는 ${names[0] || ""}, 다른 학기는 ${names.slice(1).join("·")}을(를) 이수합니다. 과목당 ${planDataNumberText(item.credits?.[crossFields[0]] || 0)}학점(학기당 한 번만 셉니다).${readOnly ? "" : " 누르면 학기당 학점 변경·선택과목군으로 바꾸기"}`;
+        const classes = ["curriculum-cross-cell", selectableClass].filter(Boolean).join(" ");
+        if (row === item.row) {
+          if (format.crossFill) fill = format.crossFill;
+          const band = `<button type="button" class="curriculum-cross-band" data-plan-cross="${planViewEscape(item.id)}" title="${planViewEscape(title)}"${readOnly ? " disabled" : ""}>${text()}</button>`;
+          return `<td class="${classes} is-cross-label" ${base}${choice}${selectable} title="${planViewEscape(title)}"${planViewEscapeStyle(css())}>${band}</td>`;
+        }
+        if (format.crossFill && fill === format.crossFill) fill = "";
+        if (row === item.row + 1 && !readOnly && !selectionMode) {
+          return `<td contenteditable="true" spellcheck="false" class="${classes}" ${base}${choice} data-plan-cross-credit="${planViewEscape(item.id)}" title="${planViewEscape(title)} · 학점을 고치면 두 학기 학점이 함께 바뀝니다"${planViewEscapeStyle(css())}>${text()}</td>`;
+        }
+        return `<td class="${classes}" ${base}${choice}${selectable} title="${planViewEscape(title)}"${planViewEscapeStyle(css())}>${text()}</td>`;
+      }
+      if (format.tagFill && fill === format.tagFill) fill = "";
+      if (row !== item.row) return `<td class="${selectableClass}" ${base}${choice}${selectable}${planViewEscapeStyle(css())}>${text()}</td>`;
+      const content = Object.hasOwn(item.credits || {}, field) ? planDataNumberText(item.credits[field]) : item.texts?.[field] || "";
+      if (selectionMode && !readOnly) return `<td class="${selectableClass}" ${base}${choice}${selectable}${planViewEscapeStyle(css())}>${planViewEscape(content)}</td>`;
+      return editable(field, content, choice);
+    }
+    const field = editableColumn(column);
+    const formula = Object.hasOwn(layout.formulas || {}, `${source}:${column}`);
+    if (field && !formula && !readOnly && row === item.row) return editable(field, value);
+    const hint = column === columns.kind ? ' title="과목 종류는 2022 개정 교육과정 과목 목록의 고정 분류이므로 수정할 수 없습니다."'
+      : column === columns.completion ? ' title="이수학점은 학기 학점 합계 수식입니다."'
+        : [columns.category, columns.domain, columns.area].includes(column) ? ' title="구분·교과(군)은 과목명을 눌러 바꿀 수 있습니다."' : "";
+    return `<td aria-readonly="true" ${base}${hint}${planViewEscapeStyle(css())}>${text()}</td>`;
   };
-  const header = planViewStaticRows(layout, shownHeader, width, { className: "curriculum-data-header", tools: !readOnly });
-  const footer = planViewStaticRows(layout, footerRows, width, { className: "curriculum-footer-row", tools: !readOnly, editable: footerEditable });
-  return `<div class="curriculum-imported-sheet curriculum-data-sheet" aria-label="${planViewEscape(layout.sheetName || "불러온 편제표")}"><table class="curriculum-source-table"><colgroup>${colGroup}</colgroup><thead class="curriculum-data-head">${header}</thead><tbody>${bodyRows}${footer}</tbody></table></div>`;
+
+  const rowHtml = (row) => {
+    const info = meta[row] || {};
+    const cells = [];
+    for (let column = 0; column < width; column++) {
+      const key = `${row}:${column}`;
+      const merge = anchor.get(key);
+      if (!merge && covered.has(key)) continue;
+      cells.push(cellHtml(row, column, merge));
+    }
+    const height = Number(layout.rowHeights?.[row]) || format.defaultHeight;
+    const style = ` style="height:${Math.round(height * 4 / 3 * format.zoom)}px"`;
+    if (info.type === "header") return `<tr class="curriculum-data-header"${style}>${cells.join("")}</tr>`;
+    if (info.type === "footer") return `<tr class="curriculum-footer-row"${style}>${cells.join("")}</tr>`;
+    if (info.type === "fixed") return `<tr class="curriculum-fixed-row"${style}>${cells.join("")}</tr>`;
+    const item = byId.get(info.id);
+    const part = row === item?.row ? "" : " is-subject-part";
+    return `<tr class="curriculum-data-row${item?.added ? " is-added" : ""}${part}" data-plan-row="${planViewEscape(info.id || "")}"${style}>${cells.join("")}</tr>`;
+  };
+  if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
+  const colGroup = Array.from({ length: width }, (_, column) => `<col style="width:${planViewColumnPixels(layout, format, column)}px">`).join("");
+  const tableWidth = Array.from({ length: width }, (_, column) => planViewColumnPixels(layout, format, column)).reduce((sum, value) => sum + value, 0);
+  const family = format.fontName ? `font-family:'${format.fontName.replace(/'/g, "")}', 'Malgun Gothic', '맑은 고딕', 'Noto Sans KR', 'Noto Sans CJK KR', sans-serif;` : "";
+  const header = shownHeader.filter((row) => shownSet.has(row)).map(rowHtml).join("");
+  const body = [...bodyRows, ...footerRows].map(rowHtml).join("");
+  const classes = ["curriculum-source-table", "is-original-form", format.original ? "has-original-format" : "is-basic-format", marks ? "show-plan-marks" : ""].filter(Boolean).join(" ");
+  return `<div class="curriculum-imported-sheet curriculum-data-sheet" aria-label="${planViewEscape(layout.sheetName || "불러온 편제표")}"><table class="${classes}" style="${family}width:${tableWidth}px"><colgroup>${colGroup}</colgroup><thead class="curriculum-data-head">${header}</thead><tbody>${body}</tbody></table></div>`;
 }
 
 // ---- 편집 동작: 모든 편집은 데이터를 바꾸고 표를 다시 그린다. 실행취소·자동 저장·변경 음영은 기존 흐름을 그대로 쓴다.
@@ -349,10 +420,23 @@ function applyCurriculumDataCellEdit(cell, nextCell = null) {
   const layout = state.curriculumImportedLayout;
   if (!layout?.planData || !cell) return false;
   const text = cell.innerText.replace(/\r\n?/g, "\n").trim();
-  const target = cell.dataset.planFooter ? { footer: cell.dataset.planFooter } : { id: cell.dataset.planId, field: cell.dataset.planField };
-  if (!target.footer && (!target.id || !target.field)) return false;
   const focus = nextCell && nextCell !== cell
     ? `[contenteditable='true'][data-source-row="${nextCell.dataset.sourceRow}"][data-source-column="${nextCell.dataset.sourceColumn}"]` : null;
+  // 원본 양식의 학점 숫자 칸: 선택과목군(택n 아래 학점) → 묶음 학점, 교차집중(↔ 아래 학점) → 학기당 학점.
+  if (cell.dataset.planGroupCredit) {
+    const group = layout.planData.groups.find((item) => item.id === cell.dataset.planGroupCredit);
+    if (!group) return false;
+    commitCurriculumDataEdit((current) => curriculumDataUpdateGroup(current, group.id, { pick: group.pick, credit: text }),
+      `${planDataFieldLabel(group.fields)} 택${group.pick} 묶음 학점을 ${text}학점으로 바꿨습니다.`, { undoRecorded: true, rerenderOnError: true, focus, toast: false });
+    return true;
+  }
+  if (cell.dataset.planCrossCredit) {
+    commitCurriculumDataEdit((current) => curriculumDataSetCrossCredit(current, cell.dataset.planCrossCredit, text),
+      `교차집중 학기당 학점을 ${text}학점으로 바꿨습니다.`, { undoRecorded: true, rerenderOnError: true, focus, toast: false });
+    return true;
+  }
+  const target = cell.dataset.planFooter ? { footer: cell.dataset.planFooter } : { id: cell.dataset.planId, field: cell.dataset.planField };
+  if (!target.footer && (!target.id || !target.field)) return false;
   commitCurriculumDataEdit((current) => curriculumDataSetCell(current, target, text),
     "편제표 수정 내용과 소계를 반영해 저장했습니다.", { undoRecorded: true, rerenderOnError: true, focus, toast: false });
   return true;

@@ -65,7 +65,8 @@ test("division and area labels appear once per group and the header keeps the pl
   assert.equal(layout.rows[1][12], "이수 학점");
   assert.equal(layout.rows[2][6], "1학기");
   assert.ok(layout.mergedRanges.includes("G2:H2") && layout.mergedRanges.includes("K2:L2"));
-  assert.ok(layout.mergedRanges.includes("A1:M1"), "the title spans the whole table");
+  assert.equal(layout.rows[1][13], "필수이수 학점", "기본 양식도 학교 편제표와 같은 열 구성(필수이수학점 열 포함)");
+  assert.ok(layout.mergedRanges.includes("A1:N1"), "the title spans the whole table");
   const divisions = layout.rows.slice(3, -1).map((r) => r[0]).filter(Boolean);
   assert.deepEqual(plain(divisions), ["학교 지정 교육과정", "학생 선택 교육과정"]);
 });

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261109-cross-credit2">
+  <link rel="stylesheet" href="styles.css?v=20261109-teachers">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -183,6 +183,7 @@
             <div class="curriculum-plan-drop">
               <div class="curriculum-merge-toolbar">
                 <button class="button" id="curriculumMergeToggle" type="button" aria-pressed="false" aria-controls="curriculumMergeControls" title="표 전체에서 셀 병합·삽입. 학기 세로 병합은 선택과목군, 같은 학년 1·2학기 병합은 교차집중으로 연결됩니다.">셀 선택·병합·삽입</button>
+                <button class="button button-quiet" id="planMarksToggle" type="button" aria-pressed="false" title="기본 화면은 원본 편제표 양식 그대로입니다. 켜면 편성 영역(지정·선택·교차·공동)·자동 수정·학점 범위 경고·과목명 확인 표시를 표 위에 덧그립니다.">점검 표시 보기</button>
                 <span id="curriculumChangeSummary" class="curriculum-change-summary" role="status"></span>
                 <span id="planWarnLegend" class="plan-warn-legend hidden" title="편제 점검 3번(과목별 기준 학점·증감 범위)에서 확인이 필요한 과목입니다. 주황 칸에 마우스를 올리면 계산한 학점과 기준 범위가 보입니다."><span class="plan-warn-swatch" aria-hidden="true"></span><span id="planWarnLegendText">주황 테두리 = 학점 범위 확인(칸에 마우스를 올리면 이유)</span></span>
                 <span id="planAutoNameNotice" class="plan-autoname-notice hidden"><span id="planAutoNameNoticeText"></span> <button class="button button-quiet" type="button" id="planAutoNameOpen">보기·되돌리기</button></span>
@@ -972,31 +973,31 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-data.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-data-view.js?v=20261109-cross-credit2" defer></script>
-  <script src="app-version.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-annual.js?v=20261109-cross-credit2" defer></script>
-  <script src="course-checks.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-compliance.js?v=20261109-cross-credit2" defer></script>
-  <script defer src="app.js?v=20261109-cross-credit2"></script>
-  <script src="xlsx-parser.js?v=20261109-cross-credit2" defer></script>
-  <script src="course-groups.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-workbook.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-data-export.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-office-format.js?v=20261109-cross-credit2" defer></script>
-  <script src="result-import.js?v=20261109-cross-credit2" defer></script>
-  <script src="round-status.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-versions.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-reconvert.js?v=20261109-cross-credit2" defer></script>
-  <script src="hours-stats.js?v=20261109-cross-credit2" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261109-cross-credit2" defer></script>
-  <script src="workspace-file.js?v=20261109-cross-credit2" defer></script>
+  <script src="curriculum-subject-list.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-data.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-data-view.js?v=20261109-teachers" defer></script>
+  <script src="app-version.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-annual.js?v=20261109-teachers" defer></script>
+  <script src="course-checks.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-compliance.js?v=20261109-teachers" defer></script>
+  <script defer src="app.js?v=20261109-teachers"></script>
+  <script src="xlsx-parser.js?v=20261109-teachers" defer></script>
+  <script src="course-groups.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-workbook.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-data-export.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-office-format.js?v=20261109-teachers" defer></script>
+  <script src="result-import.js?v=20261109-teachers" defer></script>
+  <script src="round-status.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-versions.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-reconvert.js?v=20261109-teachers" defer></script>
+  <script src="hours-stats.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261109-teachers" defer></script>
+  <script src="workspace-file.js?v=20261109-teachers" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261109-cross-credit2" defer></script>
-  <script src="test-bot-bridge.js?v=20261109-cross-credit2" defer></script>
-  <script src="supabase-client.js?v=20261109-cross-credit2" defer></script>
+  <script src="supabase-config.js?v=20261109-teachers" defer></script>
+  <script src="test-bot-bridge.js?v=20261109-teachers" defer></script>
+  <script src="supabase-client.js?v=20261109-teachers" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

@@ -1408,7 +1408,7 @@ function planComplianceGoto(key, itemId) {
   const wrap = document.getElementById("curriculumPlanWrap");
   if (!wrap) return;
   const find = () => targets.footer ? [...wrap.querySelectorAll("tr.curriculum-footer-row")].slice(0, 1)
-    : targets.rows.map((id) => wrap.querySelector(`tr[data-plan-row="${CSS.escape(id)}"]`)).filter(Boolean);
+    : targets.rows.flatMap((id) => [...wrap.querySelectorAll(`tr[data-plan-row="${CSS.escape(id)}"]`)]);
   let found = find();
   if (found.length < Math.max(1, targets.rows.length) && Object.values(state.curriculumPlanFilters || {}).some(Boolean)) {
     state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
@@ -1475,7 +1475,7 @@ function applyPlanSectionDialog() {
 
 // ---- 편제표 표에 영역 표시·학점/과목명 경고(app.js renderCurriculumStep에서 표를 그린 뒤 부른다)
 // ---- 공식 과목명 자동 수정 표시·되돌리기(curriculum-data.js curriculumDataAutoNames)
-function planAutoNameDecorate(wrap) {
+function planAutoNameDecorate(wrap, marks = true) {
   const layout = typeof state !== "undefined" ? state.curriculumImportedLayout : null;
   const notice = document.getElementById("planAutoNameNotice");
   const list = typeof curriculumAutoNameList === "function" ? curriculumAutoNameList(layout) : [];
@@ -1484,6 +1484,7 @@ function planAutoNameDecorate(wrap) {
     notice.classList.toggle("hidden", !list.length && !off);
     document.getElementById("planAutoNameNoticeText").textContent = list.length ? `공식 과목명으로 ${list.length}곳 자동 수정` : off ? "공식 과목명 자동 수정 꺼짐" : "";
   }
+  if (!marks) return;
   for (const item of list) {
     const cell = wrap.querySelector(`tr[data-plan-row="${CSS.escape(item.id)}"] .curriculum-subject-cell`);
     if (!cell || cell.querySelector(".plan-autoname-mark")) continue;
@@ -1509,13 +1510,25 @@ function openPlanAutoNameDialog() {
   if (!dialog.open) dialog.showModal();
 }
 
+// 기본 화면은 원본 편제표 양식만 보인다. 표 위 '점검 표시 보기'를 켰을 때만 편성 영역·자동 수정·학점 범위 경고·과목명 경고를 덧그린다.
+function planComplianceMarksOn() {
+  return typeof state !== "undefined" && Boolean(state.curriculumShowMarks);
+}
+
 function decoratePlanComplianceSheet() {
   const wrap = document.getElementById("curriculumPlanWrap");
   const legend = document.getElementById("planWarnLegend");
+  const marks = planComplianceMarksOn();
+  const toggle = document.getElementById("planMarksToggle");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", String(marks));
+    toggle.textContent = marks ? "점검 표시 숨기기" : "점검 표시 보기";
+    toggle.classList.toggle("hidden", !state.curriculumImportedLayout?.planData);
+  }
   legend?.classList.add("hidden");
-  if (wrap) planAutoNameDecorate(wrap);
+  if (wrap) planAutoNameDecorate(wrap, marks);
   const key = planComplianceActiveKey();
-  if (!wrap || !key) return;
+  if (!wrap || !key || !marks) return;
   let result = null;
   try { result = planComplianceFor(key); } catch { result = null; }
   if (!result) return;
@@ -1638,6 +1651,12 @@ function initPlanCompliance() {
     if (typeof courseCheckSharedSettingsChanged === "function") courseCheckSharedSettingsChanged();
   });
   document.getElementById("planAutoNameOpen")?.addEventListener("click", openPlanAutoNameDialog);
+  document.getElementById("planMarksToggle")?.addEventListener("click", () => {
+    state.curriculumShowMarks = !planComplianceMarksOn();
+    if (typeof persistState === "function") persistState();
+    if (typeof renderCurriculumStep === "function") renderCurriculumStep();
+    else decoratePlanComplianceSheet();
+  });
   const autoDialog = document.getElementById("planAutoNameDialog");
   autoDialog.addEventListener("click", (event) => {
     const revert = event.target.closest("[data-autoname-revert]");
