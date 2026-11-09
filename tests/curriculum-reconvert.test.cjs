@@ -426,7 +426,171 @@ test("앱 연결: 모드 없이 끌기, 놓으면 떠 있는 단추, 터치 길�
   assert.ok(html.indexOf('src="app.js') < html.indexOf('src="curriculum-reconvert.js'));
   for (const id of ["curriculumCrossSplitField", "curriculumCrossSplitOptions", "planAutoNameNotice", "planAutoNameOpen"]) assert.match(html, new RegExp(`id="${id}"`), id);
   const view = read("curriculum-data-view.js");
-  assert.match(view, /set\("curriculumMergeToggle", "키보드로 칸 고르기"\)/);
-  assert.match(view, /data-selection-action="cross">교차집중으로 묶기/);
+  // 키보드로 칸 고르기 모드는 없앴다(데이터 편제표에서는 단추를 숨기고, 묶기는 떠 있는 단추·Ctrl+M)
+  assert.doesNotMatch(view + app, /키보드로 칸 고르기/);
+  assert.match(view, /getElementById\("curriculumMergeToggle"\)\?\.classList\.toggle\("hidden", dataMode\)/);
+  assert.match(view, /cross: "교차집중으로 묶기"/);
   assert.match(view, /data-group-handle="\$\{edge\}"/);
+});
+
+// 원본 재변환 뒤 1단계 표 위 '변경 표시'의 비교 기준(마지막 저장 시점)
+function changeContext() {
+  const ctx = context({
+    state: { curriculumPlanType: "cohort", curriculumCohortYear: "2026", curriculumCohorts: {}, curriculumVersions: {}, curriculumMutationRevision: 0,
+      curriculumUndoStack: [], curriculumPlan: [], curriculumTemplateRows: [], curriculumPlanFileName: "2026.xlsx" },
+    document: undefined
+  });
+  vm.runInContext("function syncActiveCurriculumCohort() {} function persistState() { return true; }", ctx);
+  for (const name of ["curriculumSubjectSignatures", "curriculumTableChanges"]) vm.runInContext(appFunction(name), ctx);
+  vm.runInContext(`async ${appFunction("ensureCurriculumChangeBaseline")}`, ctx);
+  return ctx;
+}
+
+test("변경 표시: 예전 변환기로 저장한 시점도 원본 재변환 때 같은 변환기로 맞춰 '0과목', 학점 하나 고치면 1과목", async () => {
+  const ctx = changeContext();
+  const old = legacy(ctx);
+  ctx.state.curriculumImportedLayout = old;
+  const saved = ctx.recordCurriculumVersion("2026", old, { reason: "2026 확정" });
+  const legacySnapshot = plain(saved.snapshot);
+  await ctx.ensureCurriculumChangeBaseline(old);
+  assert.equal(ctx.curriculumTableChanges(old).size, 0, "재변환 전: 저장 시점과 같다");
+  const fresh = upload(ctx);
+  ctx.curriculumArchiveStore = async (operation, key) => key.startsWith("origin:") ? null : "buffer";
+  ctx.curriculumReconvertFresh = async () => ({ data: plain(fresh.planData), template: plain(fresh.planTemplate) });
+  ctx.curriculumReconvertAsk = async () => true;
+  const result = await ctx.reconvertCurriculumLayout(ctx.curriculumReconvertTargets()[0]);
+  assert.equal(result.status, "done");
+  const versions = ctx.state.curriculumVersions["2026"];
+  assert.equal(versions.length, 2);
+  assert.equal(versions[1].reconvert, true, "재변환 기록은 교사의 저장 시점이 아니다");
+  assert.equal(versions[0].normalized.converter, vm.runInContext("PLAN_DATA_CONVERTER", ctx), "예전 저장 시점도 새 변환기로 정규화");
+  assert.equal(versions[0].snapshot.layout.planData.converter, vm.runInContext("PLAN_DATA_CONVERTER", ctx));
+  assert.equal(ctx.curriculumComparisonVersion().id, saved.id, "비교 기준은 교사가 저장한 마지막 시점");
+  const layout = ctx.state.curriculumImportedLayout;
+  await ctx.ensureCurriculumChangeBaseline(layout);
+  assert.equal(layout.changeBaseline.versionId, saved.id);
+  assert.deepEqual([...ctx.curriculumTableChanges(layout).keys()], [], "재변환 직후 변경 0과목");
+  // 정규화하지 않은 예전 저장본과 그대로 비교하면 교차집중 표기·묶음 학점 차이가 변경으로 잡힌다(고치기 전 현상)
+  const raw = { ...layout, changeBaseline: ctx.curriculumSavedBaseline(legacySnapshot, saved.id, saved.savedAt) };
+  assert.ok(ctx.curriculumTableChanges(raw).size > 0, "예전 변환기 저장본과 그대로 비교하면 변경으로 보인다");
+  // 학점 하나를 고치면 1과목
+  const edited = ctx.curriculumDataSetCell(layout, { id: byName(layout, "공통국어1").id, field: "sem11" }, "5").layout;
+  edited.changeBaseline = layout.changeBaseline;
+  ctx.state.curriculumImportedLayout = edited;
+  assert.deepEqual([...ctx.curriculumTableChanges(edited).entries()].map(([key, change]) => `${change.kind}:${key}`), ["changed:공통국어1"]);
+  // 다시 새 시점으로 저장하면 그 시점이 기준
+  const next = ctx.saveCurriculumDraftVersion({ reason: "학점 수정" });
+  await ctx.ensureCurriculumChangeBaseline(edited);
+  assert.equal(edited.changeBaseline.versionId, next.id);
+  assert.equal(ctx.curriculumTableChanges(edited).size, 0);
+});
+
+test("변경 표시: 정규화하지 못한 예전 시점 뒤의 재변환 기록은 그 기록을 기준으로, 자동 수정 전 이름은 같은 과목으로 본다", () => {
+  const ctx = changeContext();
+  const version = (id, reason, converter) => ({ id, reason, plan: [], snapshot: { layout: { rows: [[]], planData: { converter, subjects: [], groups: [] } } } });
+  ctx.state.curriculumVersions["2026"] = [version("p", "2026 확정", 2), version("r", "원본 다시 읽기(변환기 갱신)", 3)];
+  assert.equal(ctx.curriculumComparisonVersion().id, "r", "예전 기록(reconvert 표시 없음)도 이름으로 재변환 기록을 알아본다");
+  ctx.state.curriculumVersions["2026"][0].snapshot.layout.planData.converter = 3;
+  assert.equal(ctx.curriculumComparisonVersion().id, "p");
+  ctx.state.curriculumVersions["2026"].push(version("u", "학점 수정", 3));
+  assert.equal(ctx.curriculumComparisonVersion().id, "u", "교사가 저장한 시점이 맨 뒤면 그 시점");
+  const key = ctx.curriculumDataCompareNameKey({ planData: { subjects: [{ id: "s1", name: "미적분Ⅱ, 기하", originalName: "미적분2, 기하" }] } });
+  assert.equal(key("미적분2"), key("미적분Ⅱ"));
+  assert.equal(key("기하"), "기하");
+  assert.notEqual(key("미적분1"), key("미적분Ⅱ"));
+  assert.equal(ctx.curriculumBaselineLabel({ versionId: "u" }, "2026").name, "학점 수정");
+});
+
+test("Ctrl+M 기본 동작: 한 학기 → 선택과목군, 같은 학년 두 학기·두 과목 → 교차집중(셋 이상은 선택과목군), 이미 묶음 칸 → 풀기", () => {
+  const ctx = context();
+  const layout = upload(ctx);
+  const columns = layout.planTemplate.columns.semesters;
+  const a = byName(layout, "공통국어1"), b = byName(layout, "지구시스템과학");
+  const grouped = byName(layout, "주제 탐구 독서");
+  const one = ctx.curriculumSelectionOptions(layout, { column: columns[2], startRow: b.row, endRow: b.row });
+  assert.equal(one.primary, "group");
+  const pair = ctx.curriculumSelectionOptions(layout, { column: columns[0], endColumn: columns[1], startRow: a.row, endRow: byName(layout, "음악, 미술").rowEnd });
+  assert.deepEqual(plain(pair.actions), ["group", "cross"]);
+  assert.equal(pair.primary, "group", "세 과목(공통국어1, 음악, 미술)은 둘 다 가능 → 선택과목군");
+  const two = ctx.curriculumSelectionOptions(layout, { column: columns[2], endColumn: columns[3], startRow: grouped.row, endRow: byName(layout, "독서 토론과 글쓰기").rowEnd });
+  assert.equal(two.names, 2);
+  assert.equal(two.primary, "cross", "같은 학년 두 학기·두 과목이면 교차집중");
+  const release = ctx.curriculumSelectionOptions(layout, { column: columns[5], startRow: grouped.row, endRow: byName(layout, "수학과제 탐구").rowEnd });
+  assert.equal(release.primary, "release");
+  assert.equal(ctx.curriculumSelectionOptions(layout, null), null);
+  assert.equal(ctx.curriculumSelectionOptions({ ...layout, derived: true }, { column: columns[2], startRow: b.row, endRow: b.row }), null);
+  const view = read("curriculum-data-view.js");
+  assert.match(view, /curriculumShortcutKey\(event, "m"\)/);
+  assert.match(view, /closest\?\.\("#curriculumPlanWrap, #curriculumSelectionActions"\)/, "편제표에 포커스가 있을 때만 막는다");
+  assert.match(view, /먼저 학기 칸을 끌어 고르세요/);
+  assert.match(view, /<kbd class="curriculum-shortcut">Ctrl\+M<\/kbd>/);
+  assert.equal(ctx.curriculumShortcutKey({ ctrlKey: true, key: "M" }, "m"), true);
+  assert.equal(ctx.curriculumShortcutKey({ metaKey: true, key: "ㅡ", code: "KeyM" }, "m"), true, "한글 자판·⌘");
+  assert.equal(ctx.curriculumShortcutKey({ key: "m" }, "m"), false);
+});
+
+test("Ctrl+Z: 편제표 칸 밖이면 편제표 실행취소, 칸에 글자를 입력하는 중이면 브라우저 글자 되돌리기, 다른 단계·입력칸은 가로채지 않음", () => {
+  const panel = { classList: { contains: () => false } };
+  const ctx = vm.createContext({
+    state: { workflowStep: 1, curriculumImportedLayout: {}, curriculumEditUndoRecorded: false },
+    $: (selector) => selector === "#workflowStep1Panel" ? panel : null,
+    document: { querySelector: () => null }
+  });
+  vm.runInContext(appFunction("curriculumUndoShortcutApplies"), ctx);
+  const element = ({ editable = false, inWrap = false, contentEditable = false } = {}) => ({
+    closest: (selector) => {
+      if (selector === "#curriculumPlanWrap") return inWrap ? {} : null;
+      return editable ? element({ inWrap, contentEditable }) : null;
+    },
+    matches: () => contentEditable
+  });
+  const key = (target, extra = {}) => ({ ctrlKey: true, key: "z", code: "KeyZ", target, ...extra });
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(element())), true, "포커스 없음·고른 상태");
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(element(), { metaKey: true, ctrlKey: false })), true, "맥 ⌘+Z");
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(element(), { shiftKey: true })), false, "Ctrl+Shift+Z는 다시 실행(없음)");
+  const cell = element({ editable: true, inWrap: true, contentEditable: true });
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(cell)), true, "칸에 커서만 있고 입력 전");
+  ctx.state.curriculumEditUndoRecorded = true;
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(cell)), false, "칸에 입력 중이면 글자 되돌리기");
+  ctx.state.curriculumEditUndoRecorded = false;
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(element({ editable: true }))), false, "편제표 밖 입력칸(검색 등)");
+  ctx.state.workflowStep = 2;
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(element())), false, "다른 단계");
+  ctx.state.workflowStep = 1;
+  ctx.document.querySelector = () => ({});
+  assert.equal(ctx.curriculumUndoShortcutApplies(key(element())), false, "열린 대화 상자");
+  assert.match(read("index.html"), /id="undoCurriculumEdit"[^>]*aria-keyshortcuts="Control\+Z"[^>]*>실행취소 <kbd class="curriculum-shortcut">Ctrl\+Z<\/kbd>/);
+});
+
+test("상단 접기 손잡이: 경계선 가운데 단추(▼ 펼치기/▲ 접기), 경계선 클릭, aria-expanded, 예전 이름(상단 펼치기) 유지", () => {
+  const html = read("index.html");
+  const divider = html.indexOf('id="curriculumTopDivider"');
+  assert.ok(divider > html.indexOf('id="curriculumMetaRow"') && divider < html.indexOf('id="curriculumPlanDropZone"'), "위쪽 영역과 편제표 표 사이");
+  assert.match(html, /<button class="collapse-handle" id="curriculumTopToggle" type="button" aria-expanded="false" aria-controls="curriculumCohortUploads curriculumMetaRow" aria-label="[^"]*상단 펼치기[^"]*">/);
+  const sync = appFunction("syncCurriculumTopToggle");
+  assert.match(sync, /"학교·학년도·편제표 카드 펼치기 \(상단 펼치기\)"/);
+  assert.match(sync, /"접기 · 학교·학년도·편제표 카드 접기 \(상단 접기\)"/);
+  assert.match(sync, /collapsed \? "▼" : "▲"/);
+  assert.match(app, /\$\("#curriculumTopDivider"\)\?\.addEventListener\("click"/);
+  const css = read("src/legacy.css");
+  assert.match(css, /\.collapse-divider:hover \.collapse-handle/);
+});
+
+test("변경 표시: 전학년 편제표(자동 생성)는 예전 전학년 이력과 비교하지 않고, 문구는 기준 시점을 보여 준다", async () => {
+  const ctx = changeContext();
+  const derived = { derived: true, rows: [[]], changeBaseline: { version: 2, source: "saved", versionId: "old" } };
+  ctx.state.curriculumPlanType = "annual";
+  ctx.state.curriculumImportedLayout = derived;
+  ctx.state.curriculumVersions["annual:2026"] = [{ id: "old", reason: "편제표 업로드", plan: [], snapshot: { layout: { rows: [[]] } } }];
+  await ctx.ensureCurriculumChangeBaseline(derived);
+  assert.equal(derived.changeBaseline, undefined);
+  assert.equal(ctx.curriculumTableChanges(derived).size, 0);
+  const summary = appFunction("renderCurriculumChangeSummary");
+  assert.match(summary, /마지막 저장 시점\$\{detail \? `\(\$\{detail\}\)` : ""\}/);
+  assert.match(summary, /과 같습니다/);
+  assert.match(summary, /바뀐 과목 \$\{changed\}개/);
+  assert.match(summary, /바뀐 과목명은 음영/);
+  assert.match(summary, /삭제 \$\{removed\}개/);
+  assert.match(summary, /data-change-history=/);
+  assert.match(summary, /서식·공식 과목명 자동 수정·원본 다시 읽기\(변환기 갱신\)는 바뀐 것으로 세지 않습니다/);
 });

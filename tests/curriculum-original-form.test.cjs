@@ -151,43 +151,48 @@ test("시트 자르기는 서식 번호·서식 있는 글자를 함께 옮기�
   assert.equal(cropped.sheetZoom, 70);
 });
 
-test("기본 화면은 원본 양식: 표기 기호·빨간 글씨·서식 있는 글자·테두리·정렬을 그대로, 앱 태그는 없다", () => {
+test("웹 화면은 띠 방식(원본 서식은 내보내기에서): 표기 기호는 그대로, 자동 수정은 이름 본문만, 택n·교차집중은 띠", () => {
   const ctx = context();
   const layout = converted(ctx);
   const html = ctx.curriculumDataSheetHtml(layout, {}, false, false, new Map());
-  // 표기 기호: 화면 글자는 원본 그대로(자동 수정은 이름 본문만: '고급물리학*' → '고급 물리학*')
   assert.match(rowHtml(html, "프로그래밍"), />프로그래밍★<\/button>/);
   assert.equal(subject(layout, "물리학").name, "고급 물리학* ");
   assert.equal(subject(layout, "물리학").originalName, "고급물리학* ");
   assert.match(rowHtml(html, "고급 물리학"), />고급 물리학\*<\/button>/, "자동 수정해도 * 기호가 남는다");
-  // 빨간 글씨: 칸 전체(화법과 언어, 자동 수정된 고급 물리학*)와 칸 일부(지구시스템 과학)
-  assert.match(rowHtml(html, "화법과 언어"), /class="curriculum-subject-cell"[^>]*style="[^"]*color:#FF0000/);
-  assert.match(rowHtml(html, "고급 물리학"), /class="curriculum-subject-cell"[^>]*style="[^"]*color:#FF0000/, "자동 수정된 이름도 원본 빨간 글씨");
-  const science = rowHtml(html, "역학과 에너지");
-  assert.match(science, /data-curriculum-subject="지구시스템과학" style="[^"]*color:#FF0000[^"]*"[^>]*>지구시스템과학<\/button>/, "자동 수정된 과목도 원래 조각의 빨간 글씨");
-  assert.doesNotMatch(science.match(/data-curriculum-subject="역학과 에너지"[^>]*>/)[0], /color:/);
-  // 테두리·정렬·확대 비율(70%)
-  assert.match(rowHtml(html, "공통국어1"), /class="curriculum-subject-cell"[^>]*style="[^"]*text-align:left[^"]*border-left:1px solid #000/);
-  assert.match(html, /<col style="width:\d+px">/);
-  assert.match(html, /font-size:13\.1px/, "14pt × 70% 확대");
-  // 원본 양식만: 태그·자동 수정 표시·행 메뉴 열·띠 없음, 택n·교차집중은 원본 글자
-  assert.doesNotMatch(html, /plan-section-tag|plan-autoname-mark|curriculum-row-tools|is-unverified/);
-  assert.match(rowHtml(html, "역학과 에너지"), /class="curriculum-group-band"[^>]*>택1<\/button>/);
-  assert.match(rowHtml(html, "음악"), /class="curriculum-cross-band"[^>]*>교차집중\(↔\)<\/button>/);
+  assert.doesNotMatch(html, /color:#FF0000/, "웹 화면은 원본 글꼴색을 쓰지 않는다");
+  assert.match(html, /class="curriculum-source-table is-band-form"/);
+  assert.match(rowHtml(html, "역학과 에너지"), /class="curriculum-group-band"[^>]*>택1 · 4학점<\/button>/);
+  assert.match(rowHtml(html, "음악"), /class="curriculum-cross-band"[^>]*>교차집중 · 음악↔미술 · 학기당 2학점<\/button>/);
+  assert.doesNotMatch(html, /plan-section-tag|plan-autoname-mark|curriculum-row-tools|is-unverified/, "점검 표시는 기본으로 숨김");
   assert.match(html, /☞ 표기방법 안내/);
   assert.match(html, /2026학년도 신입생 3개년 교육과정 편제표/);
 });
 
-test("원본 서식이 없는 편제표(울산 파일·예전 자료)도 같은 규칙(가는 테두리·굵은 머리글·과목명 왼쪽)으로 그린다", () => {
+test("엑셀 내보내기 표: 선택과목군은 학기 열에서 구성 과목 행 전체를 한 칸으로 병합해 '택n\\nm학점', 이수학점·소계는 n × 학점을 더하고 다시 올리면 같은 묶음", () => {
   const ctx = context();
-  const raw = fixture();
-  for (const key of ["cellStyles", "styleTable", "cellRich", "baseFont", "sheetZoom"]) delete raw[key];
-  const layout = converted(ctx, raw);
-  assert.equal(layout.planTemplate.format, undefined);
-  const html = ctx.curriculumDataSheetHtml(layout, {}, false, false, new Map());
-  assert.match(html, /is-basic-format/);
-  assert.match(rowHtml(html, "공통국어1"), /class="curriculum-subject-cell"[^>]*style="[^"]*text-align:left[^"]*border-left:1px solid #000/);
-  assert.match(html.split("<tr")[3], /font-weight:700/, "머리글은 굵게");
+  const layout = converted(ctx);
+  const out = ctx.curriculumExportLayout(layout);
+  assert.notEqual(out.rows, layout.rows, "화면용 표는 그대로");
+  const first = subject(out, "역학과 에너지"), last = subject(out, "프로그래밍");
+  assert.equal(out.rows[first.row][10], "택1\n4학점");
+  assert.ok(out.mergedRanges.includes(`K${first.row + 1}:K${last.rowEnd + 1}`), out.mergedRanges.join(" "));
+  assert.ok(out.wrapCells.has(`${first.row}:10`));
+  for (let row = first.row + 1; row <= last.rowEnd; row++) assert.equal(out.rows[row][10], "", "구성 과목마다 학점을 적지 않는다");
+  assert.equal(out.formulas[`${first.row}:12`], `SUM(G${first.row + 1}:L${last.rowEnd + 1})+1*4`);
+  const footer = (item) => item.planRowMeta.findIndex((meta) => meta.type === "footer");
+  assert.match(out.formulas[`${footer(out)}:10`], /\+1\*4$/, "3-1 소계에 묶음 n × 학점");
+  assert.deepEqual(plain(out.rows[footer(out)].slice(6, 13)), plain(layout.rows[footer(layout)].slice(6, 13)), "소계·총 이수학점은 화면용 표와 같다");
+  assert.equal(out.rows[first.row][12], layout.rows[subject(layout, "역학과 에너지").row][12]);
+  // 다시 올리기(왕복): 병합 칸 '택1\n4학점'도 선택과목군(택1·4학점, 구성 과목 둘)으로 읽힌다
+  const again = plain({ ...out, planData: undefined, planTemplate: undefined, planRowMeta: undefined, wrapCells: undefined });
+  assert.equal(ctx.ensureCurriculumPlanData(again), true, again.planDataError);
+  const groups = (data) => plain(data.groups.map((group) => ({ fields: group.fields, pick: group.pick, credit: ctx.planDataGroupCredit(data, group),
+    members: group.members.map((id) => data.subjects.find((item) => item.id === id).name.trim()) })));
+  assert.deepEqual(groups(again.planData), groups(layout.planData));
+  // 교차집중은 그대로 '교차집중(↔)' 칸 + 학기별 학점
+  const art = subject(out, "음악");
+  assert.equal(out.rows[art.row][6], "교차집중(↔)");
+  assert.deepEqual(plain(out.rows[art.row + 1].slice(6, 8)), ["2", "2"]);
 });
 
 test("새로 넣은 과목 행은 이웃 행 서식을 쓰되 빨간 글씨는 물려받지 않는다", () => {
@@ -242,10 +247,10 @@ test("전학년 편제표는 입학생 편제표 양식(제목·머리글·소�
     return cohort.rows[index].slice(6 + (grade - 1) * 2, 8 + (grade - 1) * 2);
   };
   assert.deepEqual(plain(subtotal), plain([...cohortSubtotal(y2026, 1), ...cohortSubtotal(y2025, 2), ...cohortSubtotal(y2024, 3)]));
-  // 원본 양식 서식(빨간 글씨·택n 칸)이 그대로
+  // 웹 화면은 띠 방식(읽기 전용)
   const html = ctx.curriculumDataSheetHtml(layout, {}, false, false, new Map());
-  assert.match(html, /class="curriculum-group-band"[^>]*disabled>택1<\/button>/);
-  assert.match(html, /교차집중\(↔\)/);
+  assert.match(html, /class="curriculum-group-band"[^>]*disabled>택1 · 4학점<\/button>/);
+  assert.match(html, /교차집중 · 음악↔미술/);
   assert.match(html, /☞ 표기방법 안내/);
   assert.doesNotMatch(html, /contenteditable="true"/, "전학년 편제표는 읽기 전용");
 });
@@ -257,4 +262,37 @@ test("원본 양식 데이터가 없으면 전학년 편제표는 기본 양식(
   const layout = ctx.buildAnnualCurriculumLayout({ 2026: { plan: [row("대수", 1, [4, 0])] }, 2025: { plan: [row("미적분", 2, [4, 4])] }, 2024: { plan: [] } }, 2026);
   assert.equal(layout.annualForm, undefined);
   assert.equal(layout.rows[1][13], "필수이수 학점");
+});
+
+test("전학년 편제표: 다른 입학생 편제표에서만 있는 행이 들어온 교과(군)은 이수학점·필수이수학점이 교과(군) 전체 한 칸", () => {
+  const ctx = context();
+  const y2026 = converted(ctx, fixture(2026), 2026);
+  const y2025 = converted(ctx, fixture(2025), 2025);
+  // 2024 입학생: 학교 지정 국어에 3학년 과목 '언어와 매체'(3-1 2학점)만 있다(2026 편제표에는 없음)
+  const raw2024 = fixture(2024);
+  raw2024.rows[5][3] = "언어와 매체"; raw2024.rows[5][9] = ""; raw2024.rows[5][10] = "2";
+  const y2024 = converted(ctx, raw2024, 2024);
+  const layout = ctx.buildAnnualCurriculumLayout({ 2026: { plan: [], layout: y2026 }, 2025: { plan: [], layout: y2025 }, 2024: { plan: [], layout: y2024 } }, 2026);
+  const list = ctx.planDataSubjects(layout.planData);
+  const korean = ["공통국어1", "화법과 언어", "언어와 매체"].map((name) => list.find((item) => item.name === name));
+  assert.ok(korean.every(Boolean), list.map((item) => item.name).join(","));
+  assert.equal(korean[2].annualFromY, undefined, "2024에서 들어온 행");
+  assert.equal(new Set(korean.map((item) => item.completion.seg)).size, 1, "이수학점 한 칸");
+  assert.equal(new Set(korean.map((item) => item.required.seg)).size, 1, "필수이수학점 한 칸");
+  assert.equal(korean[0].completion.text, "10", "1-1 4 + 2-2 4 + 3-1 2");
+  const start = korean[0].row, end = korean[2].rowEnd;
+  const ref = (column) => `${ctx.columnName(column)}${start + 1}:${ctx.columnName(column)}${end + 1}`;
+  assert.ok(layout.mergedRanges.includes(ref(12)), layout.mergedRanges.join(" "));
+  assert.ok(layout.mergedRanges.includes(ref(13)));
+  assert.equal(layout.formulas[`${start}:12`], `SUM(G${start + 1}:L${end + 1})`, "화면·엑셀은 학기 칸 합계 수식");
+  assert.equal(layout.rows[start][13], "8", "필수이수 = 2026 입학생 편제표의 국어 값 한 번");
+  assert.deepEqual(plain(layout.rows.slice(start + 1, end + 1).map((values) => values[13])), ["", ""]);
+  // Y 행만 있는 교과(군)(음악)은 Y 그대로
+  const music = list.find((item) => item.name === "음악, 미술");
+  assert.ok(!/^annual-/.test(music.completion.seg));
+  // 교과(군) 경계: 들어온 행이 교과(군) 끝, 그 사이는 안쪽 선
+  const table = layout.planTemplate.format.styleTable;
+  const bottom = (item) => table[item.styles.at(-1)[3]]?.bd?.b;
+  assert.equal(bottom(korean[1]), "thin");
+  assert.equal(bottom(korean[2]), "thin");
 });

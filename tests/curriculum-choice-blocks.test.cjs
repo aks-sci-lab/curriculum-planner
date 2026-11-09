@@ -395,7 +395,7 @@ function selectionContext() {
   vm.runInContext(appFunction("selectCurriculumCellRange"), ctx);
   vm.runInContext(appFunction("startCurriculumRangeSelection"), ctx);
   const start = app.indexOf('    $("#curriculumPlanWrap").addEventListener("pointerdown"');
-  const end = app.indexOf('    $("#curriculumPlanWrap").addEventListener("keydown"', start);
+  const end = app.indexOf("    function applyCurriculumCellSelection(", start);
   vm.runInContext(app.slice(start, end), ctx);
   const down = (cell, shiftKey = false) => listeners.pointerdown({
     target: { closest: (selector) => selector.includes("data-choice-selectable") ? cell : null },

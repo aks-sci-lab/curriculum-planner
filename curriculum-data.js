@@ -252,8 +252,12 @@ function curriculumDataFromLayout(layout) {
   for (const tag of tags) {
     const explicit = (layout.choiceBlockRanges || []).find((range) => range.column === tag.column && range.startRow === tag.row);
     let end = tag.row;
+    // 내보낸 엑셀처럼 '택n\nm학점' 칸이 구성 과목 행 전체로 세로 병합돼 있으면 그 범위가 묶음 범위다.
+    const tagMerge = mergeAt.get(`${tag.row}:${tag.column}`);
     if (explicit) {
       end = explicit.endRow;
+    } else if (tagMerge && tagMerge.startRow === tag.row && tagMerge.endRow > tag.row) {
+      end = tagMerge.endRow;
     } else {
       const completion = completionColumn >= 0 ? mergeAt.get(`${tag.row}:${completionColumn}`) : null;
       if (completion && completion.endRow > tag.row) {
@@ -589,7 +593,11 @@ function planDataGroupsOf(data, id) {
 }
 
 // 데이터에서 표(행 값·병합·수식·채움색·행 높이)를 다시 만든다. 화면과 엑셀 내보내기가 같은 표를 쓴다.
-function curriculumSheetFromData(data, template) {
+// options.mergedGroups(엑셀 내보내기): 선택과목군을 학기 열에서 구성 과목 행 전체 한 칸으로 세로 병합하고 '택n\nm학점'만 적는다.
+// 이수학점·소계 수식은 그 칸 대신 n × 학점을 더한다. 화면·계산용 표(기본)는 '택n' 칸 + 학점 칸 n개다.
+function curriculumSheetFromData(data, template, options = {}) {
+  const mergedGroups = Boolean(options.mergedGroups);
+  const wrapCells = [];
   const columns = template.columns;
   const width = template.width;
   const semesterColumns = columns.semesters;
@@ -642,7 +650,7 @@ function curriculumSheetFromData(data, template) {
   for (const group of groups) {
     const members = group.members.map((id) => byId.get(id)).filter(Boolean);
     const total = members.reduce((sum, member) => sum + Math.max(1, member.span || 1, member.cross?.length ? 2 : 1), 0);
-    const need = group.pick + 1;
+    const need = mergedGroups ? 1 : group.pick + 1;
     if (members.length && total < need) {
       const last = members.at(-1);
       extra.set(last.id, Math.max(extra.get(last.id) || 0, need - total));
@@ -725,6 +733,12 @@ function curriculumSheetFromData(data, template) {
     const start = members[0].row, end = members.at(-1).rowEnd;
     const groupColumns = group.fields.map((field) => semesterColumns[PLAN_DATA_FIELDS.indexOf(field)]).filter((column) => column >= 0).sort((a, b) => a - b);
     if (!groupColumns.length) continue;
+    if (mergedGroups) {
+      set(start, groupColumns[0], `택${group.pick}\n${planDataNumberText(planDataGroupCredit(data, group))}학점`);
+      merge(start, groupColumns[0], end, groupColumns.at(-1));
+      wrapCells.push(`${start}:${groupColumns[0]}`);
+      continue;
+    }
     set(start, groupColumns[0], `택${group.pick}`);
     merge(start, groupColumns[0], start, groupColumns.at(-1));
     // 학점 칸 n개: 첫 칸에 학점을 적고 나머지는 첫 칸을 가리키는 수식이다. 이수학점·소계 SUM이 n × 학점을 센다.
@@ -815,7 +829,8 @@ function curriculumSheetFromData(data, template) {
     const numeric = members.some((item) => Object.values(item.credits || {}).some((value) => Number(value) > 0) ||
       groups.some((group) => group.members.includes(item.id)));
     if (numeric) {
-      formulas[`${start}:${columns.completion}`] = `SUM(${planDataRef(start, firstSemester)}:${planDataRef(end, lastSemester)})`;
+      formulas[`${start}:${columns.completion}`] = `SUM(${planDataRef(start, firstSemester)}:${planDataRef(end, lastSemester)})` +
+        (mergedGroups ? planDataGroupTerms(data, groups.filter((group) => group.members.some((id) => members.some((item) => item.id === id)))) : "");
     } else {
       const first = members.find((item) => item.completion?.text) || members[0];
       set(start, columns.completion, first.completion?.text ?? planDataNoteCredit(first.note));
@@ -840,7 +855,13 @@ function curriculumSheetFromData(data, template) {
   };
   for (const [key, formula] of Object.entries(template.footer.formulas || {})) {
     const [row, column] = key.split(":").map(Number);
-    formulas[`${row + footerStart}:${column}`] = planDataRemapFormula(formula, mapRow);
+    let next = planDataRemapFormula(formula, mapRow);
+    // 선택과목군을 한 칸으로 병합한 내보내기: 학기 열 합계(소계)에 그 열 묶음의 n × 학점을 더한다.
+    const semester = semesterColumns.indexOf(column);
+    if (mergedGroups && semester >= 0 && next.includes(`${planDataRef(bodyStart, column)}:${planDataRef(bodyEnd, column)}`)) {
+      next += planDataGroupTerms(data, groups.filter((group) => group.fields.includes(PLAN_DATA_FIELDS[semester]) && group.members.some((id) => byId.has(id))), PLAN_DATA_FIELDS[semester]);
+    }
+    formulas[`${row + footerStart}:${column}`] = next;
   }
   // 병합으로 가려진 칸에는 값을 두지 않는다(원본에서 복사된 펼침 값이 남아 소계와 어긋나지 않게).
   for (const reference of new Set(merges)) {
@@ -856,7 +877,31 @@ function curriculumSheetFromData(data, template) {
     }
   }
   return { rows, mergedRanges: [...new Set(merges)], formulas, cellFills: fills, cellStyles: styles, cellRich: rich, rowHeights: heights,
-    hiddenRows: [...new Set(hidden)].sort((a, b) => a - b), rowMeta: meta, bodyStart, bodyEnd };
+    hiddenRows: [...new Set(hidden)].sort((a, b) => a - b), rowMeta: meta, bodyStart, bodyEnd, wrapCells };
+}
+
+// 수식에 더할 선택과목군 학점: '+n*m'(학기 열 하나면 그 열만, 아니면 묶음 학기 수만큼)
+function planDataGroupTerms(data, groups, field = null) {
+  return groups.map((group) => {
+    const count = field ? 1 : group.fields.length;
+    const credit = planDataGroupCredit(data, group);
+    return count && credit ? `+${count * group.pick}*${planDataNumberText(credit)}` : "";
+  }).join("");
+}
+
+// 엑셀 내보내기용 표: 화면용 표와 같은 데이터에서 선택과목군을 '택n\nm학점' 병합 칸으로 다시 만든다(원래 layout은 바꾸지 않음).
+function curriculumExportLayout(layout) {
+  if (!layout?.planData || !layout.planTemplate || typeof curriculumSheetFromData !== "function") return layout;
+  const data = planDataClone(layout.planData);
+  const sheet = curriculumSheetFromData(data, layout.planTemplate, { mergedGroups: true });
+  const copy = { ...layout, planData: data, rows: sheet.rows, mergedRanges: sheet.mergedRanges, formulas: sheet.formulas, cellFills: sheet.cellFills,
+    cellStyles: sheet.cellStyles, cellRich: sheet.cellRich, rowHeights: sheet.rowHeights, hiddenRows: sheet.hiddenRows, planRowMeta: sheet.rowMeta,
+    wrapCells: new Set(sheet.wrapCells) };
+  delete copy.changeBaseline;
+  if (typeof recalculatePlanFormulas === "function") {
+    try { recalculatePlanFormulas(copy); } catch (error) { copy.planFormulaError = error?.message || String(error); }
+  }
+  return copy;
 }
 
 function planDataNoteCredit(note) {
@@ -1041,7 +1086,7 @@ function curriculumDataPlanEntries(layout) {
 }
 
 // 비교 기준과 현재 편제표의 과목별 편성 지문(변경 음영에 쓴다).
-function curriculumDataSignatures(layout, plan = null) {
+function curriculumDataSignatures(layout, plan = null, nameKey = planDataNameKey) {
   const target = curriculumLayoutData(layout);
   const subjects = new Map();
   if (!target) return subjects;
@@ -1052,10 +1097,10 @@ function curriculumDataSignatures(layout, plan = null) {
   for (const subject of planDataSubjects(data)) {
     const memberships = planDataGroupsOf(data, subject.id);
     for (const name of planDataSubjectNames(subject.name)) {
-      const key = planDataNameKey(name);
+      const key = nameKey(name);
       if (!key) continue;
       const item = subjects.get(key) || { name, records: new Set() };
-      const placements = new Set(entries.filter((entry) => entry.rowIndex === subject.row && planDataNameKey(entry.subject) === key &&
+      const placements = new Set(entries.filter((entry) => entry.rowIndex === subject.row && nameKey(entry.subject) === key &&
         !memberships.some((group) => group.fields.includes(`sem${entry.grade}${entry.semester}`)))
         .map((entry) => JSON.stringify([`sem${entry.grade}${entry.semester}`, Number(entry.credit), entry.kind, entry.crossed])));
       for (const group of memberships) for (const field of group.fields) {
@@ -1074,8 +1119,8 @@ function curriculumDataSignatures(layout, plan = null) {
           ...identity, placement,
           groups: memberships.filter((group) => group.fields.includes(field)).map((group) =>
             JSON.stringify([group.pick, planDataGroupCredit(data, group), [...new Set(group.members.flatMap((id) =>
-              planDataSubjectNames(byId.get(id)?.name).map(planDataNameKey)))].sort()])).sort(),
-          ...(plan ? { manualGroups: [...new Set(plan.filter((row) => planDataNameKey(row.subject) === key && row[field] &&
+              planDataSubjectNames(byId.get(id)?.name).map(nameKey)))].sort()])).sort(),
+          ...(plan ? { manualGroups: [...new Set(plan.filter((row) => nameKey(row.subject) === key && row[field] &&
             row.semesterGroups?.[field] && !row.semesterGroups[field].block).map((row) =>
             JSON.stringify([row.semesterGroups[field].name, row.semesterGroups[field].pick])))].sort() } : {})
         }));
@@ -1084,6 +1129,23 @@ function curriculumDataSignatures(layout, plan = null) {
     }
   }
   return new Map([...subjects].map(([key, item]) => [key, { name: item.name, signature: JSON.stringify([...item.records].sort()) }]));
+}
+
+// 변경 비교용 과목명 키: 공식 과목명 자동 수정 전 이름(subject.originalName)도 고친 이름과 같은 과목으로 본다.
+// 비교 기준(예전 변환기로 저장한 시점)과 지금 편제표 중 어느 쪽에서든 자동 수정 기록을 모은다.
+function curriculumDataCompareNameKey(...layouts) {
+  const alias = new Map();
+  for (const layout of layouts) {
+    for (const subject of layout?.planData?.subjects || []) {
+      if (subject.fixed || subject.originalName === undefined) continue;
+      const from = planDataSubjectNames(subject.originalName), to = planDataSubjectNames(subject.name);
+      from.forEach((name, index) => {
+        const a = planDataNameKey(name), b = to[index] ? planDataNameKey(to[index]) : "";
+        if (a && b && a !== b) alias.set(a, b);
+      });
+    }
+  }
+  return (name) => { const key = planDataNameKey(name); return alias.get(key) || key; };
 }
 
 // ---- 편집: 모든 편집은 데이터만 바꾸고 표는 다시 만든다.
