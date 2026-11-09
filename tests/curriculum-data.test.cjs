@@ -107,21 +107,22 @@ test("업로드한 표는 과목·선택과목군 데이터가 되고 '택1'과 
     ["sem31", 4, ["지식 재산 일반", "인공지능 기초"]], ["sem32", 4, ["발명과 기업가 정신", "소프트웨어와 생활"]]]);
 });
 
-test("화면은 원본 양식 그대로: 선택과목군은 '택n' 칸 + 그 아래 학점 숫자 칸, 앱 태그·행 메뉴 열 없음", () => {
+test("웹 화면은 띠 방식: 선택과목군은 첫 과목 칸의 띠 '택n · m학점'(묶음 테두리), 구성 과목 학기 칸은 비움, 행 메뉴는 과목명 칸 안", () => {
   const { ctx, layout } = converted();
   const html = ctx.curriculumDataSheetHtml(layout, {}, false, false, new Map());
   const rowHtml = (name) => html.split("<tr").find((part) => part.includes(`data-curriculum-subject="${name}"`));
-  const tagCell = rowHtml("지식 재산 일반").match(/<td[^>]*data-source-column="10"[^>]*>[\s\S]*?<\/td>/)[0];
-  assert.match(tagCell, /is-group-tag/, "첫 과목 행의 3-1 칸은 '택n' 칸이다");
-  assert.match(tagCell, /<button type="button" class="curriculum-group-band"[^>]*>택1<\/button>/, "원본처럼 '택1'만 적힌다(띠·학점 문구 없음)");
-  const creditCell = rowHtml("인공지능 기초").match(/<td[^>]*data-source-column="10"[^>]*>[\s\S]*?<\/td>/)[0];
-  assert.match(creditCell, /is-group-credit/);
-  assert.match(creditCell, /contenteditable="true"[^>]*data-plan-group-credit="[^"]+"[^>]*>4</, "그 아래 칸에는 학점 숫자(원본 양식)가 있고 고칠 수 있다");
-  assert.doesNotMatch(html, />택1 · 4학점</, "앱이 덧붙인 '택n · m학점' 띠가 없다");
-  assert.equal((html.match(/curriculum-group-band"/g) || []).length, 2);
+  for (const name of ["지식 재산 일반", "인공지능 기초"]) {
+    const cell = rowHtml(name).match(/<td[^>]*data-source-column="10"[^>]*>/)[0];
+    assert.match(cell, /curriculum-group-cell/, `${name}의 3-1 칸은 묶음 칸이다`);
+    assert.doesNotMatch(cell, /rowspan/, `${name}의 3-1 칸은 다른 과목과 병합되지 않는다`);
+  }
+  assert.match(rowHtml("지식 재산 일반"), /class="curriculum-group-band"[^>]*>택1 · 4학점</);
+  assert.doesNotMatch(rowHtml("인공지능 기초"), /curriculum-group-band/);
+  assert.doesNotMatch(rowHtml("인공지능 기초").match(/<td[^>]*data-source-column="10"[^>]*>[\s\S]*?<\/td>/)[0], />4</, "구성 과목 학기 칸은 비운다");
+  assert.match(html, /class="curriculum-source-table is-band-form"/);
+  assert.doesNotMatch(html, /is-original-form|curriculum-row-tools|plan-section-tag|plan-autoname-mark/, "원본 양식 칸·행 메뉴 열·점검 태그가 기본 화면에 없다");
+  assert.match(rowHtml("인공지능 기초"), /class="curriculum-subject-cell"[^>]*>[\s\S]*data-plan-row-menu=/, "행 메뉴(⋯)는 과목명 칸 안(마우스를 올리면 보임)");
   assert.match(rowHtml("경제"), /colspan="6"[^>]*>소인수\/2학년\/1학기\/3학점\(순증\)</, "학기 칸 메모는 한 칸으로 보인다");
-  assert.doesNotMatch(html, /curriculum-row-tools|plan-section-tag|plan-autoname-mark/, "행 메뉴 열·편성 영역 태그·자동 수정 표시가 기본 화면에 없다");
-  assert.match(rowHtml("인공지능 기초"), /class="curriculum-subject-cell"[^>]*>[\s\S]*data-plan-row-menu=/, "행 메뉴(⋯)는 과목명 칸 안에 숨어 있다(마우스를 올리면 보임)");
   assert.match(html, /<thead class="curriculum-data-head">[\s\S]*1학기[\s\S]*<\/thead>/);
   assert.match(html, /이수학점 소계/);
 });

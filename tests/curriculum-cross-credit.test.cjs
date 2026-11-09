@@ -145,10 +145,8 @@ test("원본의 '교차집중(↔)' 표기는 교차집중 과목 한 행이 되
   assert.equal(layout.planData.groups.length, 1, "교차집중은 선택과목군이 아니다");
   assert.equal(ctx.curriculumPlanSection(art, layout.planData), "cross");
   const html = ctx.curriculumDataSheetHtml(layout);
-  // 원본 양식 그대로: 두 학기에 걸친 '교차집중(↔)' 칸 + 그 아래 학기별 학점 칸(고칠 수 있음)
-  assert.match(html, /colspan="2"[^>]*><button type="button" class="curriculum-cross-band" data-plan-cross="[^"]+"[^>]*>교차집중\(↔\)<\/button>/);
-  assert.equal((html.match(/data-plan-cross-credit="[^"]+"[^>]*>2</g) || []).length, 2, "학기별 학점 칸 2개");
-  assert.doesNotMatch(html, /교차집중 · 음악↔미술 · 학기당 2학점</, "앱이 덧붙인 보라색 띠 문구가 없다");
+  // 웹 화면: 두 학기에 걸친 띠 하나 '교차집중 · 음악↔미술 · 학기당 2학점'(원본 양식 칸은 엑셀 내보내기에서)
+  assert.match(html, /colspan="2"[^>]*><button type="button" class="curriculum-cross-band" data-plan-cross="[^"]+"[^>]*>교차집중 · 음악↔미술 · 학기당 2학점<\/button>/);
   assert.doesNotMatch(html, /택1 · 2학점/);
   // 학기 합계·이수학점은 학기당 한 번(2 + 2)
   const footer = layout.planRowMeta.findIndex((item) => item.type === "footer");

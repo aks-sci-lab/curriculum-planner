@@ -95,8 +95,40 @@ function planExportWriteCell(sheet, cell, value, formula, runs = null) {
   cell.appendChild(is);
 }
 
-async function buildCurriculumDataWorkbook(layout) {
-  if (!layout?.planData || !layout.planTemplate) throw new Error("편제표 데이터가 없습니다. 편제표를 다시 업로드하세요.");
+// 내보낸 '택n\nm학점' 병합 칸은 줄바꿈·가운데 정렬로 보이게 원본 칸 서식을 복사한 서식(xf)을 하나 더 만든다.
+function planExportWrapStyles(files, serializer) {
+  const path = "xl/styles.xml";
+  if (!files[path]) return { wrap: (index) => index, save() {} };
+  const doc = parseXml(files[path], "서식");
+  const cellXfs = doc.getElementsByTagNameNS(NS_MAIN, "cellXfs")[0];
+  const cache = new Map();
+  return {
+    wrap(index) {
+      const key = Number(index) || 0;
+      if (!cellXfs) return index;
+      if (cache.has(key)) return cache.get(key);
+      const source = [...cellXfs.children][key];
+      const xf = source ? source.cloneNode(true) : doc.createElementNS(NS_MAIN, "xf");
+      if (!source) for (const [name, value] of [["numFmtId", "0"], ["fontId", "0"], ["fillId", "0"], ["borderId", "0"], ["xfId", "0"]]) xf.setAttribute(name, value);
+      let alignment = [...xf.children].find((child) => child.localName === "alignment");
+      if (!alignment) { alignment = doc.createElementNS(NS_MAIN, "alignment"); xf.insertBefore(alignment, xf.firstChild); }
+      alignment.setAttribute("wrapText", "1");
+      alignment.setAttribute("vertical", "center");
+      if (!alignment.getAttribute("horizontal") || alignment.getAttribute("horizontal") === "general") alignment.setAttribute("horizontal", "center");
+      xf.setAttribute("applyAlignment", "1");
+      cellXfs.appendChild(xf);
+      cellXfs.setAttribute("count", String(cellXfs.children.length));
+      cache.set(key, cellXfs.children.length - 1);
+      return cellXfs.children.length - 1;
+    },
+    save() { if (cache.size) files[path] = serializer.serializeToString(doc); }
+  };
+}
+
+async function buildCurriculumDataWorkbook(sourceLayout) {
+  if (!sourceLayout?.planData || !sourceLayout.planTemplate) throw new Error("편제표 데이터가 없습니다. 편제표를 다시 업로드하세요.");
+  // 선택과목군은 학기 열에서 구성 과목 행 전체를 한 칸으로 병합해 '택n\nm학점'만 적는다(이수학점·소계 수식은 n × 학점을 더함).
+  const layout = typeof curriculumExportLayout === "function" ? curriculumExportLayout(sourceLayout) : sourceLayout;
   // 울산 편제 점검 프로그램에서 불러온 편제표는 원본 양식이 없으므로 기본 양식(화면 표 그대로)으로 저장한다.
   if (layout.officeImport && typeof buildCurriculumBasicWorkbook === "function") return buildCurriculumBasicWorkbook(layout);
   if (!layout.archiveId || !layout.sheetPath) throw new Error("원본 양식을 쓰려면 편제표를 다시 업로드하세요.");
@@ -105,6 +137,7 @@ async function buildCurriculumDataWorkbook(layout) {
   const directory = readZipDirectory(buffer), files = {};
   for (const name of directory.keys()) files[name] = await readZipEntry(buffer, directory, name);
   const sheet = parseXml(files[layout.sheetPath], "편제표");
+  const wrapStyles = planExportWrapStyles(files, new XMLSerializer());
   const sheetData = sheet.getElementsByTagNameNS(NS_MAIN, "sheetData")[0];
   const template = layout.planTemplate;
   const meta = layout.planRowMeta || [];
@@ -196,6 +229,7 @@ async function buildCurriculumDataWorkbook(layout) {
         if (font.fc) runs = [{ t: value, ...(font.b ? { b: 1 } : {}), ...(font.i ? { i: 1 } : {}), ...(font.sz ? { sz: font.sz } : {}), ...(font.fn ? { fn: font.fn } : {}) }];
       }
       planExportWriteCell(sheet, cell, value, formula === undefined ? "" : shiftPlanFormula(formula, offsetRow, offsetColumn), runs);
+      if (layout.wrapCells?.has(`${index}:${local}`)) cell.setAttribute("s", String(wrapStyles.wrap(cell.getAttribute("s"))));
     }
     sheetData.appendChild(rowNode);
   });
@@ -257,6 +291,7 @@ async function buildCurriculumDataWorkbook(layout) {
     dimension.setAttribute("ref", `${start}:${end.replace(/\d+/g, "")}${lastRow}`);
   }
   const serializer = new XMLSerializer();
+  wrapStyles.save();
   files[layout.sheetPath] = serializer.serializeToString(sheet);
 
   const workbook = parseXml(files["xl/workbook.xml"], "통합 문서");

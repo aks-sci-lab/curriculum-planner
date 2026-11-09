@@ -598,7 +598,9 @@ function annualColumnName(index) {
   return name;
 }
 
-function buildAnnualStyledWorkbookFiles(layout) {
+function buildAnnualStyledWorkbookFiles(sourceLayout) {
+  // 선택과목군은 학기 열에서 구성 과목 행 전체를 한 칸으로 병합해 '택n\nm학점'만 적는다(curriculum-data.js curriculumExportLayout).
+  const layout = typeof curriculumExportLayout === "function" ? curriculumExportLayout(sourceLayout) : sourceLayout;
   const template = layout.planTemplate;
   const table = template?.format?.styleTable || layout.styleTable || [];
   const baseFont = template?.format?.baseFont || { sz: 11, fn: "맑은 고딕" };
@@ -638,7 +640,8 @@ function buildAnnualStyledWorkbookFiles(layout) {
       // 병합 범위 안의 가려진 칸도 테두리를 그리도록 서식만 둔다(엑셀이 병합 칸 테두리를 칸마다 그린다).
       const range = mergeEdges.get(key);
       const anchorKey = range ? `${range.startRow}:${range.startColumn}` : key;
-      const descriptor = table[layout.cellStyles?.[key] ?? layout.cellStyles?.[anchorKey]] || null;
+      let descriptor = table[layout.cellStyles?.[key] ?? layout.cellStyles?.[anchorKey]] || null;
+      if (layout.wrapCells?.has(anchorKey)) descriptor = { ...(descriptor || {}), w: 1, v: "center", h: descriptor?.h || "center" };
       const fill = layout.cellFills?.[key] || (range ? layout.cellFills?.[anchorKey] : "") || "";
       const style = descriptor || fill ? xfFor(descriptor, fill) : 0;
       const reference = `${annualColumnName(column)}${row + 1}`;

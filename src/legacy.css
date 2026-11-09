@@ -2130,6 +2130,16 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 .curriculum-source-table.is-original-form tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: none; }
 .curriculum-source-table.is-original-form.show-plan-marks tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: inset 3px 0 0 #e0a43a; }
 .curriculum-source-table.is-original-form td.curriculum-cell-selected { background: #dce8ff !important; box-shadow: inset 0 0 0 2px #315fce; }
+/* 웹 화면(띠 방식, curriculum-data-view.js): 행 메뉴(⋯)는 열을 따로 두지 않고 과목명 칸에 마우스를 올렸을 때만, 추가 행 표시는 점검 표시를 켰을 때만 */
+.curriculum-source-table.is-band-form td.curriculum-subject-cell { position: relative; padding-right: 26px; }
+.curriculum-source-table.is-band-form .curriculum-row-menu-button {
+  position: absolute; top: 50%; right: 2px; width: 22px; height: 20px; margin-top: -10px; font-size: 12px; line-height: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .12s;
+}
+.curriculum-source-table.is-band-form tr.curriculum-data-row:hover .curriculum-row-menu-button,
+.curriculum-source-table.is-band-form .curriculum-row-menu-button:focus-visible { opacity: 1; pointer-events: auto; }
+.curriculum-source-table.is-band-form tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: none; }
+.curriculum-source-table.is-band-form.show-plan-marks tr.curriculum-data-row.is-added td.curriculum-subject-cell { box-shadow: inset 3px 0 0 #e0a43a; }
 
 /* 화면 맨 위 공통 머리 줄(workspace-header.js): 저장 상태는 문제가 있을 때만 눈에 띄게, 백업 시각은 오래됐을 때만,
    아래로 스크롤하거나 손잡이로 접으면 얇은 띠(결과 차수·⚙ 설정·☰ 자료 관리 아이콘)로. 경계선 손잡이는 1단계 위쪽 접기와 같은 모양. */
