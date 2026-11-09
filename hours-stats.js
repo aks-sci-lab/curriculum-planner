@@ -93,7 +93,10 @@ function hoursDepartmentName(id) {
   const role = hoursNonTeachingId(id);
   if (role) return `${HOURS_NON_TEACHING.find((item) => item.id === role).label}(비교과)`;
   const department = hoursDepartment(id);
-  return department.label && department.label !== department.group ? `${department.group}·${department.label}` : department.group;
+  if (!department.label || department.label === department.group) return department.group;
+  // '체육·예술', '생활·교양'은 여러 교과(군)을 묶은 이름이라 세부 교과 이름만 쓴다(체육·음악·정보·기술·가정 …).
+  if (department.group.includes("·")) return department.label;
+  return `${department.group}(${department.label})`;
 }
 
 function hoursDefaultDepartment(subject, area = "") {
