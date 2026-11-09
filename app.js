@@ -2111,8 +2111,11 @@
       // 데이터로 바꾼 편제표는 비교 기준도 데이터로 읽어 같은 규칙으로 비교한다.
       const signatures = layout.planData && typeof curriculumDataSignatures === "function"
         ? curriculumDataSignatures : curriculumSubjectSignatures;
-      const before = signatures(layout.changeBaseline, layout.changeBaseline.plan || null);
-      const after = signatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null);
+      // 공식 과목명 자동 수정(원래 이름 ↔ 고친 이름)은 같은 과목으로 본다(서식·자동 수정은 교사의 편성 변경이 아니다).
+      const nameKey = layout.planData && typeof curriculumDataCompareNameKey === "function"
+        ? curriculumDataCompareNameKey(layout, layout.changeBaseline) : undefined;
+      const before = signatures(layout.changeBaseline, layout.changeBaseline.plan || null, nameKey);
+      const after = signatures(layout, layout.changeBaseline.plan ? state.curriculumPlan : null, nameKey);
       for (const [key, subject] of after) {
         const previous = before.get(key);
         if (previous?.signature === subject.signature) continue;
@@ -2132,11 +2135,20 @@
     }
 
     async function ensureCurriculumChangeBaseline(layout) {
+      // 전학년 편제표는 3개년 편제표에서 자동으로 만들고 시점 저장도 하지 않으므로 변경 비교를 하지 않는다(예전에 올린 전학년 이력과 비교하지 않음).
+      if (layout?.derived) {
+        delete layout.changeBaseline;
+        delete layout.changeBaselineError;
+        return;
+      }
       if (typeof latestCurriculumSavedVersion === "function" && layout === state.curriculumImportedLayout) {
-        const latest = latestCurriculumSavedVersion();
+        // 비교 기준: 마지막 저장 시점(원본 다시 읽기 자동 기록만 뒤에 있으면 정규화된 그 앞 시점, curriculum-versions.js)
+        const latest = typeof curriculumComparisonVersion === "function" ? curriculumComparisonVersion() : latestCurriculumSavedVersion();
         if (latest) {
-          if (layout.changeBaseline?.versionId !== latest.id) {
+          const stamp = latest.normalized?.at || "";
+          if (layout.changeBaseline?.versionId !== latest.id || (layout.changeBaseline.normalizedAt || "") !== stamp) {
             layout.changeBaseline = curriculumSavedBaseline(latest.snapshot, latest.id, latest.savedAt);
+            if (stamp) layout.changeBaseline.normalizedAt = stamp;
           }
           return;
         }
@@ -2794,6 +2806,19 @@
       showAppToast("편제표 수정을 실행취소했습니다.");
     }
 
+    function curriculumUndoShortcutApplies(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
+      if (String(event.key || "").toLowerCase() !== "z" && event.code !== "KeyZ") return false;
+      if (Number(state.workflowStep) !== 1 || $("#workflowStep1Panel")?.classList.contains("hidden") || document.querySelector("dialog[open]")) return false;
+      if (!state.curriculumImportedLayout) return false;
+      const editable = event.target?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='']");
+      if (!editable) return true;
+      if (!editable.closest("#curriculumPlanWrap")) return false;
+      // 이 칸에 글자를 입력하기 시작했으면(입력 중) 글자 되돌리기는 브라우저에 맡긴다.
+      if (editable.matches("[contenteditable='true'], [contenteditable='']")) return !state.curriculumEditUndoRecorded;
+      return false;
+    }
+
     function curriculumFilterValues(layout) {
       const rows = expandCurriculumLayoutRows(layout);
       const columns = importedPlanColumnMap(layout);
@@ -2864,15 +2889,64 @@
       if (queryInput.value !== query) queryInput.value = query;
     }
 
+    // 표 위 변경 상태 문구: 비교 기준 시점(시각·이름)이 보이게. 0개면 '같습니다'. 마우스를 올리면 무엇을 세는지 설명한다.
+    function renderCurriculumChangeSummary(layout, changes) {
+      const box = $("#curriculumChangeSummary");
+      const baseline = layout.changeBaseline;
+      if (layout.derived) {
+        box.textContent = "전학년 편제표는 3개년 편제표에서 자동으로 만들어 변경 비교를 하지 않습니다";
+        box.title = "전학년 편제표는 직접 고치거나 시점으로 저장하지 않습니다. 바뀐 곳은 각 입학생 편제표의 변경 표시·변경 이력에서 확인하세요.";
+        return;
+      }
+      if (baseline?.version !== 2) {
+        box.textContent = layout.changeBaselineError ? `변경 비교 실패: ${layout.changeBaselineError}` : "비교 기준 준비 중";
+        box.removeAttribute("title");
+        return;
+      }
+      const removed = [...changes.values()].filter((change) => change.kind === "removed").length;
+      const changed = changes.size - removed;
+      const label = typeof curriculumBaselineLabel === "function" ? curriculumBaselineLabel(baseline) : { time: "", name: "" };
+      const detail = [label.time, label.name ? `'${label.name}'` : ""].filter(Boolean).join(", ");
+      const point = baseline.source === "saved" ? `마지막 저장 시점${detail ? `(${detail})` : ""}`
+        : baseline.source === "original" ? "최초 업로드(저장한 시점 없음)" : "처음 연 시점(저장한 시점 없음)";
+      const parts = [];
+      if (changed) parts.push(`바뀐 과목 ${changed}개`, "바뀐 과목명은 음영");
+      if (removed) parts.push(`삭제 ${removed}개`);
+      const text = parts.length ? `${point}보다 ${parts.join(" · ")}` : `${point}과 같습니다`;
+      const history = parts.length && baseline.source === "saved" && baseline.versionId
+        ? ` <button class="button button-quiet curriculum-change-history" type="button" data-change-history="${escapeHtml(baseline.versionId)}">이력 확인</button>` : "";
+      box.innerHTML = `<span>${escapeHtml(text)}</span>${history}`;
+      box.title = `비교 기준: ${baseline.source === "saved" ? `마지막으로 '새 시점으로 저장'한 시점${detail ? `(${detail})` : ""}` : point}. ` +
+        "그 뒤 학점·학기·선택과목군·교과(군)·과목 종류 등 편성이 바뀐 과목 수입니다. 표에서 바뀐 과목명은 노란 음영으로 표시합니다. " +
+        "서식·공식 과목명 자동 수정·원본 다시 읽기(변환기 갱신)는 바뀐 것으로 세지 않습니다." +
+        (removed ? " 삭제된 과목은 표에 없으므로 '이력 확인'에서 봅니다." : "") +
+        " 새 시점으로 저장하면 그 시점이 새 비교 기준이 됩니다.";
+    }
+
+    // 1단계 위쪽(학교·학년도 설정·편제표 카드·변경 이력)과 편제표 표 사이 경계선 가운데의 접기 손잡이.
+    // 접힌 상태 ▼ '학교·학년도·편제표 카드 펼치기', 펼친 상태 ▲ '접기'. 접근성 이름에는 예전 단추 이름(상단 펼치기/접기)도 남긴다.
+    function syncCurriculumTopToggle() {
+      const collapsed = Boolean(state.curriculumTopCollapsed);
+      $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", collapsed);
+      const toggle = $("#curriculumTopToggle");
+      if (!toggle) return;
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.setAttribute("aria-label", collapsed ? "학교·학년도·편제표 카드 펼치기 (상단 펼치기)" : "접기 · 학교·학년도·편제표 카드 접기 (상단 접기)");
+      const arrow = toggle.querySelector(".collapse-handle-arrow");
+      const label = toggle.querySelector(".collapse-handle-text");
+      if (arrow) arrow.textContent = collapsed ? "▼" : "▲";
+      if (label) label.textContent = collapsed ? "학교·학년도·편제표 카드 펼치기" : "접기";
+      if (!arrow && !label) toggle.textContent = collapsed ? "상단 펼치기" : "상단 접기";
+      $("#curriculumTopDivider")?.classList.toggle("is-collapsed", collapsed);
+    }
+
     function renderCurriculumStep() {
       const emptyRows = typeof curriculumEmptySubjectRows === "function" ? curriculumEmptySubjectRows(state.curriculumImportedLayout) : [];
       const emptyRowsToggle = $("#curriculumEmptyRowsToggle");
       emptyRowsToggle.classList.toggle("hidden", !emptyRows.length);
       emptyRowsToggle.textContent = `빈 과목 행 ${emptyRows.length}개 ${state.curriculumImportedLayout?.showEmptySubjectRows ? "접기" : "표시"}`;
       emptyRowsToggle.setAttribute("aria-pressed", String(Boolean(state.curriculumImportedLayout?.showEmptySubjectRows)));
-      $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", state.curriculumTopCollapsed);
-      $("#curriculumTopToggle").setAttribute("aria-expanded", String(!state.curriculumTopCollapsed));
-      $("#curriculumTopToggle").textContent = state.curriculumTopCollapsed ? "상단 펼치기" : "상단 접기";
+      syncCurriculumTopToggle();
       curriculumCellSelection = null;
       curriculumSelectionAnchor = null;
       curriculumSelectionDragging = false;
@@ -2909,11 +2983,7 @@
       const importedLayout = state.curriculumImportedLayout;
       if (importedLayout) {
         ensureCurriculumChangeBaseline(importedLayout);
-        const changes = curriculumTableChanges(importedLayout);
-        const removedSubjects = [...changes.values()].filter((change) => change.kind === "removed").length;
-        $("#curriculumChangeSummary").textContent = importedLayout.changeBaseline?.version === 2
-          ? `${importedLayout.changeBaseline.source === "saved" ? "마지막 저장본" : importedLayout.changeBaseline.source === "original" ? "최초 업로드(저장본 없음)" : "비교 기준 설정 시점"} 대비 초안 변경 ${changes.size - removedSubjects}과목 · 과목명 음영${removedSubjects ? ` · 삭제 ${removedSubjects}과목(이력 확인)` : ""}`
-          : importedLayout.changeBaselineError ? `변경 비교 실패: ${importedLayout.changeBaselineError}` : "원본과 변경 내용 비교 준비 중";
+        renderCurriculumChangeSummary(importedLayout, curriculumTableChanges(importedLayout));
         const planRows = state.curriculumPlan.map((item, index) => ({ item, index }));
         $("#curriculumPlanWrap").innerHTML =
           `${curriculumBundleSummaryHtml(planRows.map(({ item }) => item), importedLayout)}` +
@@ -2922,6 +2992,7 @@
         if (typeof decoratePlanComplianceSheet === "function") decoratePlanComplianceSheet();
       } else {
         $("#curriculumChangeSummary").textContent = "";
+        $("#curriculumChangeSummary").removeAttribute("title");
         $("#curriculumPlanWrap").innerHTML = '<div class="curriculum-empty">편제표 파일을 불러오면 여기에 표시됩니다.</div>';
         $("#curriculumFilterCount").textContent = "0개 과목 표시";
       }
@@ -6209,6 +6280,17 @@
       if (button.dataset.cohortUpload) curriculumPlanInput.click();
     });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
+    // Ctrl+Z(맥 ⌘+Z): 1단계 편제표 편집 실행취소. 편제표 칸에 글자를 입력하는 중이면 브라우저 기본(글자 되돌리기)을 그대로 두고,
+    // 칸 밖(고른 상태·포커스 없음)일 때만 편제표를 되돌린다. 다른 단계나 편제표 밖 입력칸에서는 가로채지 않는다.
+    document.addEventListener("keydown", (event) => {
+      if (!curriculumUndoShortcutApplies(event)) return;
+      event.preventDefault();
+      if (state.curriculumUndoStack.length) undoCurriculumEdit();
+      else {
+        status.style.color = "#596780";
+        status.textContent = "되돌릴 편제표 변경이 없습니다.";
+      }
+    });
     $("#addCurriculumPlanRow").addEventListener("click", appendBlankImportedPlanRow);
     $("#curriculumPlanFilters").addEventListener("change", (event) => {
       const filter = event.target.closest("select[id^='curriculumFilter']");
@@ -6440,12 +6522,25 @@
     }, true);
     $("#curriculumTopToggle").addEventListener("click", () => {
       state.curriculumTopCollapsed = !state.curriculumTopCollapsed;
-      $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", state.curriculumTopCollapsed);
-      $("#curriculumTopToggle").setAttribute("aria-expanded", String(!state.curriculumTopCollapsed));
-      $("#curriculumTopToggle").textContent = state.curriculumTopCollapsed ? "상단 펼치기" : "상단 접기";
+      syncCurriculumTopToggle();
       renderCurriculumStep();
       persistState();
       scheduleCurriculumTableSize();
+    });
+    // 변경 상태 문구의 '이력 확인': 위쪽을 펼치고 변경 이력에서 비교 기준 시점 → 현재 편제표 비교를 연다(삭제된 과목도 보인다).
+    $("#curriculumChangeSummary").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-change-history]");
+      if (!button) return;
+      if (state.curriculumTopCollapsed) $("#curriculumTopToggle").click();
+      const panel = $("#curriculumVersionsPanel");
+      panel.open = true;
+      panel.querySelector(`[data-version-compare="${CSS.escape(button.dataset.changeHistory)}"][data-version-mode="current"]`)?.click();
+      panel.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    // 손잡이뿐 아니라 경계선 어디를 눌러도 접고 펼친다(Enter·Space는 손잡이 단추가 받는다).
+    $("#curriculumTopDivider")?.addEventListener("click", (event) => {
+      if (event.target.closest("#curriculumTopToggle")) return;
+      $("#curriculumTopToggle").click();
     });
     window.addEventListener("resize", scheduleCurriculumTableSize);
     $("#teacherWorkspace").addEventListener("toggle", scheduleCurriculumTableSize, true);
@@ -6602,29 +6697,6 @@
     document.addEventListener("pointerup", stopCurriculumRangeSelection);
     document.addEventListener("pointercancel", stopCurriculumRangeSelection);
     window.addEventListener("blur", stopCurriculumRangeSelection);
-    $("#curriculumPlanWrap").addEventListener("keydown", (event) => {
-      const cell = event.target.closest("[data-choice-selectable]");
-      if (!curriculumCellSelectionMode || !cell) return;
-      if (event.key === " " || event.key === "Enter") {
-        event.preventDefault();
-        selectCurriculumCellRange(cell, event.shiftKey);
-        if (state.curriculumImportedLayout?.planData && typeof showCurriculumSelectionActions === "function") showCurriculumSelectionActions(curriculumCellSelection);
-      } else if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
-        event.preventDefault();
-        const row = event.key === "ArrowUp" ? Number(cell.dataset.choiceStart ?? cell.dataset.sourceRow) - 1 :
-          event.key === "ArrowDown" ? Number(cell.dataset.choiceEnd ?? cell.dataset.sourceRow) + 1 : Number(cell.dataset.displayRow ?? cell.dataset.sourceRow);
-        const column = event.key === "ArrowLeft" ? Number(cell.dataset.sourceColumn) - 1 :
-          event.key === "ArrowRight" ? Number(cell.dataset.choiceEndColumn ?? cell.dataset.sourceColumn) + 1 : Number(cell.dataset.sourceColumn);
-        const next = [...$("#curriculumPlanWrap").querySelectorAll("[data-choice-selectable]")].find((item) =>
-          row >= Number(item.dataset.choiceStart ?? item.dataset.sourceRow) && row <= Number(item.dataset.choiceEnd ?? item.dataset.sourceRow) &&
-          column >= Number(item.dataset.sourceColumn) && column <= Number(item.dataset.choiceEndColumn ?? item.dataset.sourceColumn));
-        if (next) {
-          if (!curriculumSelectionAnchor) selectCurriculumCellRange(cell, false);
-          selectCurriculumCellRange(next, event.shiftKey);
-          next.focus();
-        }
-      }
-    });
     function applyCurriculumCellSelection(release = false, insertion = "") {
       try {
         if (typeof isWorkspaceStorageProtected === "function" && isWorkspaceStorageProtected()) throw new Error("저장 원본을 먼저 복원하세요.");

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>교육과정 관리</title>
-  <link rel="stylesheet" href="styles.css?v=20261109-teachers">
+  <link rel="stylesheet" href="styles.css?v=20261109-ui-collapse">
 </head>
 <body class="min-h-screen">
   <header class="teacher-header" id="teacherHeader">
@@ -141,7 +141,6 @@
       <section class="workflow-step-panel hidden" id="workflowStep1Panel">
         <div class="curriculum-heading-row">
         <h3>1단계 · 편제표 관리</h3>
-        <button class="button" id="curriculumTopToggle" type="button" aria-expanded="false" aria-controls="curriculumCohortUploads curriculumMetaRow">상단 펼치기</button>
         <details class="curriculum-workflow-help">
           <summary>편제표·신청 기준 안내</summary>
           <p class="note">편제표는 신입생 3개년 편제표 3개(내년도·올해·전년도 입학생)와 올해 전학년 편제표 1개를 분리해 관리합니다. 현재 1학년은 올해 입학생 3개년 편제표의 2학년 과목, 현재 2학년은 전년도 입학생 3개년 편제표의 3학년 과목으로 신청합니다. 올해 전학년 편제표는 신청 과목 기준으로 사용하지 않습니다. 내년도 입학생 편제표는 다음 학년도 시수 통계의 1학년 계산에 사용됩니다.</p>
@@ -168,6 +167,9 @@
             <div class="curriculum-versions-diff" id="curriculumVersionsDiff" aria-live="polite"></div>
           </div>
         </details>
+        </div>
+        <div class="collapse-divider" id="curriculumTopDivider" data-collapse-divider="curriculumTopToggle" title="눌러서 학교·학년도 설정과 편제표 카드(입학생별 업로드·변경 이력)를 펼치거나 접습니다.">
+          <button class="collapse-handle" id="curriculumTopToggle" type="button" aria-expanded="false" aria-controls="curriculumCohortUploads curriculumMetaRow" aria-label="학교·학년도·편제표 카드 펼치기 (상단 펼치기)"><span class="collapse-handle-arrow" aria-hidden="true">▼</span><span class="collapse-handle-text">학교·학년도·편제표 카드 펼치기</span></button>
         </div>
         <section class="curriculum-box curriculum-import-box curriculum-plan-full" id="curriculumPlanDropZone">
             <h4>선택한 편제표 <span class="curriculum-edit-hint">과목명: 편성·학생선택/학교지정 변경 · 과목 종류 고정</span></h4>
@@ -206,7 +208,7 @@
                 <button class="button button-primary" id="openCurriculumVersionSave" type="button">새 시점으로 저장</button>
                 <button class="button" id="curriculumAddSubject" type="button">과목 추가</button>
                 <button class="button hidden" id="curriculumEmptyRowsToggle" type="button" aria-pressed="false">빈 과목 행 표시</button>
-                <button class="button button-secondary" id="undoCurriculumEdit" type="button" disabled title="편제표의 직전 변경을 되돌립니다.">실행취소</button>
+                <button class="button button-secondary" id="undoCurriculumEdit" type="button" disabled aria-keyshortcuts="Control+Z" title="편제표의 직전 변경을 되돌립니다(Ctrl+Z). 칸에 글자를 입력하는 중에는 Ctrl+Z가 그 글자만 되돌립니다.">실행취소 <kbd class="curriculum-shortcut">Ctrl+Z</kbd></button>
                 <button class="button" id="addCurriculumPlanRow" type="button">행 추가</button>
               </div>
             </div>
@@ -973,31 +975,31 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
-  <script src="curriculum-subject-list.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-choice-blocks.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-data.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-data-view.js?v=20261109-teachers" defer></script>
-  <script src="app-version.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-annual.js?v=20261109-teachers" defer></script>
-  <script src="course-checks.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-compliance.js?v=20261109-teachers" defer></script>
-  <script defer src="app.js?v=20261109-teachers"></script>
-  <script src="xlsx-parser.js?v=20261109-teachers" defer></script>
-  <script src="course-groups.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-workbook.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-data-export.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-office-format.js?v=20261109-teachers" defer></script>
-  <script src="result-import.js?v=20261109-teachers" defer></script>
-  <script src="round-status.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-versions.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-reconvert.js?v=20261109-teachers" defer></script>
-  <script src="hours-stats.js?v=20261109-teachers" defer></script>
-  <script src="curriculum-subject-actions.js?v=20261109-teachers" defer></script>
-  <script src="workspace-file.js?v=20261109-teachers" defer></script>
+  <script src="curriculum-subject-list.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-choice-blocks.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-data.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-data-view.js?v=20261109-ui-collapse" defer></script>
+  <script src="app-version.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-annual.js?v=20261109-ui-collapse" defer></script>
+  <script src="course-checks.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-compliance.js?v=20261109-ui-collapse" defer></script>
+  <script defer src="app.js?v=20261109-ui-collapse"></script>
+  <script src="xlsx-parser.js?v=20261109-ui-collapse" defer></script>
+  <script src="course-groups.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-workbook.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-data-export.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-office-format.js?v=20261109-ui-collapse" defer></script>
+  <script src="result-import.js?v=20261109-ui-collapse" defer></script>
+  <script src="round-status.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-versions.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-reconvert.js?v=20261109-ui-collapse" defer></script>
+  <script src="hours-stats.js?v=20261109-ui-collapse" defer></script>
+  <script src="curriculum-subject-actions.js?v=20261109-ui-collapse" defer></script>
+  <script src="workspace-file.js?v=20261109-ui-collapse" defer></script>
   <script src="vendor/qrcode.js" defer></script>
-  <script src="supabase-config.js?v=20261109-teachers" defer></script>
-  <script src="test-bot-bridge.js?v=20261109-teachers" defer></script>
-  <script src="supabase-client.js?v=20261109-teachers" defer></script>
+  <script src="supabase-config.js?v=20261109-ui-collapse" defer></script>
+  <script src="test-bot-bridge.js?v=20261109-ui-collapse" defer></script>
+  <script src="supabase-client.js?v=20261109-ui-collapse" defer></script>
   <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
 </body>
 </html>

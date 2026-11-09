@@ -190,6 +190,37 @@ function latestCurriculumSavedVersion(year = activeCurriculumVersionKey()) {
   return (state.curriculumVersions?.[year] || []).filter((version) => version.snapshot?.layout?.rows).at(-1) || null;
 }
 
+// 이력 시점의 편제표를 만든 변환기 버전. 데이터가 없는 표 기반 이력은 비교할 때 지금 규칙으로 데이터로 바꾸므로 지금 변환기로 본다.
+function curriculumVersionConverter(version) {
+  const data = version?.snapshot?.layout?.planData;
+  if (!data) return typeof PLAN_DATA_CONVERTER !== "undefined" ? PLAN_DATA_CONVERTER : 0;
+  return Number(data.converter) || 1;
+}
+
+// '원본 다시 읽기(변환기 갱신)' 자동 기록인지(교사가 저장한 시점이 아니다)
+function curriculumVersionIsReconvert(version) {
+  return Boolean(version?.reconvert) || /^원본 다시 읽기\(변환기 갱신\)/.test(String(version?.reason || ""));
+}
+
+// 변경 표시의 비교 기준 시점. 마지막으로 저장한 시점이 기준이고, 그 뒤 '원본 다시 읽기(변환기 갱신)' 자동 기록만 있으면
+// (교사의 편집이 아니므로) 그 앞 시점을 기준으로 둔다 — 단, 그 시점이 같은 변환기로 정규화돼 있을 때만(아니면 서식·자동 수정 차이가 변경으로 보인다).
+function curriculumComparisonVersion(year = activeCurriculumVersionKey()) {
+  const versions = (state.curriculumVersions?.[year] || []).filter((version) => version.snapshot?.layout?.rows);
+  let index = versions.length - 1;
+  while (index > 0 && curriculumVersionIsReconvert(versions[index]) &&
+    curriculumVersionConverter(versions[index - 1]) >= curriculumVersionConverter(versions[index])) index--;
+  return versions[index] || null;
+}
+
+// 비교 기준 안내: '10.12 14:30' + 시점 이름(변경 사유)
+function curriculumBaselineLabel(baseline, year = activeCurriculumVersionKey()) {
+  const version = baseline?.versionId ? (state.curriculumVersions?.[year] || []).find((item) => item.id === baseline.versionId) : null;
+  const date = new Date(version?.savedAt || baseline?.savedAt || "");
+  const pad = (value) => String(value).padStart(2, "0");
+  const time = Number.isNaN(date.getTime()) ? "" : `${date.getMonth() + 1}.${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return { time, name: String(version?.reason || "").trim(), version };
+}
+
 function curriculumSavedBaseline(snapshot, id, savedAt) {
   return {
     version: 2, rows: JSON.parse(JSON.stringify(snapshot.layout.rows)),
@@ -203,7 +234,7 @@ function curriculumSavedBaseline(snapshot, id, savedAt) {
   };
 }
 
-function recordCurriculumVersion(year, layout, { reason = "", basis = "", fileName = "", auto = false, rollbackOf = "" } = {}) {
+function recordCurriculumVersion(year, layout, { reason = "", basis = "", fileName = "", auto = false, rollbackOf = "", reconvert = false } = {}) {
   year = String(year);
   if (!/^(?:\d{4}|annual:\d{4})$/.test(year) || !layout) return null;
   const planRows = curriculumVersionPlanRows(year);
@@ -226,7 +257,7 @@ function recordCurriculumVersion(year, layout, { reason = "", basis = "", fileNa
     basis: String(basis).trim().slice(0, 200),
     fileName: String(fileName || "").slice(0, 200),
     auto: Boolean(auto),
-    plan, snapshot, ...(rollbackOf ? { rollbackOf } : {})
+    plan, snapshot, ...(rollbackOf ? { rollbackOf } : {}), ...(reconvert ? { reconvert: true } : {})
   };
   versions.push(version);
   state.curriculumVersions[year] = versions;

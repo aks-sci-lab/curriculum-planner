@@ -1041,7 +1041,7 @@ function curriculumDataPlanEntries(layout) {
 }
 
 // 비교 기준과 현재 편제표의 과목별 편성 지문(변경 음영에 쓴다).
-function curriculumDataSignatures(layout, plan = null) {
+function curriculumDataSignatures(layout, plan = null, nameKey = planDataNameKey) {
   const target = curriculumLayoutData(layout);
   const subjects = new Map();
   if (!target) return subjects;
@@ -1052,10 +1052,10 @@ function curriculumDataSignatures(layout, plan = null) {
   for (const subject of planDataSubjects(data)) {
     const memberships = planDataGroupsOf(data, subject.id);
     for (const name of planDataSubjectNames(subject.name)) {
-      const key = planDataNameKey(name);
+      const key = nameKey(name);
       if (!key) continue;
       const item = subjects.get(key) || { name, records: new Set() };
-      const placements = new Set(entries.filter((entry) => entry.rowIndex === subject.row && planDataNameKey(entry.subject) === key &&
+      const placements = new Set(entries.filter((entry) => entry.rowIndex === subject.row && nameKey(entry.subject) === key &&
         !memberships.some((group) => group.fields.includes(`sem${entry.grade}${entry.semester}`)))
         .map((entry) => JSON.stringify([`sem${entry.grade}${entry.semester}`, Number(entry.credit), entry.kind, entry.crossed])));
       for (const group of memberships) for (const field of group.fields) {
@@ -1074,8 +1074,8 @@ function curriculumDataSignatures(layout, plan = null) {
           ...identity, placement,
           groups: memberships.filter((group) => group.fields.includes(field)).map((group) =>
             JSON.stringify([group.pick, planDataGroupCredit(data, group), [...new Set(group.members.flatMap((id) =>
-              planDataSubjectNames(byId.get(id)?.name).map(planDataNameKey)))].sort()])).sort(),
-          ...(plan ? { manualGroups: [...new Set(plan.filter((row) => planDataNameKey(row.subject) === key && row[field] &&
+              planDataSubjectNames(byId.get(id)?.name).map(nameKey)))].sort()])).sort(),
+          ...(plan ? { manualGroups: [...new Set(plan.filter((row) => nameKey(row.subject) === key && row[field] &&
             row.semesterGroups?.[field] && !row.semesterGroups[field].block).map((row) =>
             JSON.stringify([row.semesterGroups[field].name, row.semesterGroups[field].pick])))].sort() } : {})
         }));
@@ -1084,6 +1084,23 @@ function curriculumDataSignatures(layout, plan = null) {
     }
   }
   return new Map([...subjects].map(([key, item]) => [key, { name: item.name, signature: JSON.stringify([...item.records].sort()) }]));
+}
+
+// 변경 비교용 과목명 키: 공식 과목명 자동 수정 전 이름(subject.originalName)도 고친 이름과 같은 과목으로 본다.
+// 비교 기준(예전 변환기로 저장한 시점)과 지금 편제표 중 어느 쪽에서든 자동 수정 기록을 모은다.
+function curriculumDataCompareNameKey(...layouts) {
+  const alias = new Map();
+  for (const layout of layouts) {
+    for (const subject of layout?.planData?.subjects || []) {
+      if (subject.fixed || subject.originalName === undefined) continue;
+      const from = planDataSubjectNames(subject.originalName), to = planDataSubjectNames(subject.name);
+      from.forEach((name, index) => {
+        const a = planDataNameKey(name), b = to[index] ? planDataNameKey(to[index]) : "";
+        if (a && b && a !== b) alias.set(a, b);
+      });
+    }
+  }
+  return (name) => { const key = planDataNameKey(name); return alias.get(key) || key; };
 }
 
 // ---- 편집: 모든 편집은 데이터만 바꾸고 표는 다시 만든다.

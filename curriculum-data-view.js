@@ -718,7 +718,8 @@ function syncCurriculumDataControls(layout) {
     if (element.dataset.legacyText === undefined) element.dataset.legacyText = element.textContent;
     element.textContent = dataMode ? text : element.dataset.legacyText;
   };
-  set("curriculumMergeToggle", "키보드로 칸 고르기");
+  // 데이터 편제표는 학기 칸을 마우스로 바로 끌어 고르므로 칸 고르기 모드 단추를 두지 않는다(묶기는 떠 있는 단추·Ctrl+M).
+  document.getElementById("curriculumMergeToggle")?.classList.toggle("hidden", dataMode);
   set("curriculumMergeApply", "선택과목군으로 묶기");
   set("curriculumMergeRelease", "묶음 풀기");
   for (const id of ["curriculumSplitMerged", "addCurriculumPlanRow", "curriculumInsertSelectionRow", "curriculumInsertSelectionCells"]) {
@@ -728,8 +729,7 @@ function syncCurriculumDataControls(layout) {
     document.getElementById(id)?.closest("label")?.classList.toggle("hidden", dataMode);
   }
   if (dataMode) {
-    document.getElementById("curriculumMergeToggle").title = "마우스로는 학기 칸을 바로 끌어 고릅니다(터치는 길게 눌러 고르기). 이 단추는 키보드(방향키·Space·Shift)로 칸을 고를 때 씁니다.";
-    document.getElementById("curriculumMergeSelection").textContent = "학기 칸을 바로 끌거나 Shift+클릭으로 고르면 옆에 '선택과목군으로 묶기' 단추가 나옵니다 · 묶음 띠 위·아래 끝을 끌어 범위 조정";
+    document.getElementById("curriculumMergeSelection").textContent = "학기 칸을 바로 끌거나 Shift+클릭으로 고르면 옆에 '선택과목군으로 묶기' 단추가 나옵니다(Ctrl+M) · 묶음 띠 위·아래 끝을 끌어 범위 조정";
   }
 }
 
@@ -748,22 +748,35 @@ function hideCurriculumSelectionActions(leave = false) {
   if (leave && typeof leaveCurriculumSelectionMode === "function") leaveCurriculumSelectionMode();
 }
 
-// app.js가 드래그·Shift+클릭으로 칸을 고른 뒤(놓을 때) 부른다.
-function showCurriculumSelectionActions(selection) {
-  const layout = state.curriculumImportedLayout;
-  if (!layout?.planData || layout.derived || !selection) return;
+// 고른 칸으로 할 수 있는 일과 Ctrl+M 기본 동작: 이미 묶음 칸이면 묶음 풀기, 한 학기 열이면 선택과목군,
+// 같은 학년 1·2학기 두 칸에 과목이 둘이면 교차집중, 셋 이상이라 둘 다 가능하면 선택과목군(1·2학기 묶음).
+function curriculumSelectionOptions(layout, selection) {
+  if (!layout?.planData || layout.derived || !selection) return null;
   const fields = planDataSelectionFields(layout.planTemplate, selection);
   const members = planDataSelectionSubjects(layout.planData, selection);
-  const box = curriculumSelectionActionsBox();
-  if (!fields.length || !members.length) { box.classList.add("hidden"); return; }
+  if (!fields.length || !members.length) return null;
   const ids = members.map((item) => item.id);
   const names = planDataNamesCount(layout.planData, ids);
   const grouped = layout.planData.groups.some((group) => group.fields.some((field) => fields.includes(field)) && group.members.some((id) => ids.includes(id)));
   const pair = planDataIsGradePair(fields);
-  const buttons = [];
-  if (fields.length === 1 || pair) buttons.push('<button class="button button-primary" type="button" data-selection-action="group">선택과목군으로 묶기</button>');
-  if (pair && names >= 2) buttons.push('<button class="button" type="button" data-selection-action="cross">교차집중으로 묶기</button>');
-  if (grouped) buttons.push('<button class="button" type="button" data-selection-action="release">묶음 풀기</button>');
+  const actions = [];
+  if (fields.length === 1 || pair) actions.push("group");
+  if (pair && names >= 2) actions.push("cross");
+  if (grouped) actions.push("release");
+  const primary = grouped ? "release" : pair && names === 2 ? "cross" : actions[0] || null;
+  return { fields, names, actions, primary };
+}
+
+// app.js가 드래그·Shift+클릭으로 칸을 고른 뒤(놓을 때) 부른다.
+function showCurriculumSelectionActions(selection) {
+  const layout = state.curriculumImportedLayout;
+  if (!layout?.planData || layout.derived || !selection) return;
+  const options = curriculumSelectionOptions(layout, selection);
+  const box = curriculumSelectionActionsBox();
+  if (!options) { box.classList.add("hidden"); return; }
+  const { fields, names, actions, primary } = options;
+  const labels = { group: "선택과목군으로 묶기", cross: "교차집중으로 묶기", release: "묶음 풀기" };
+  const buttons = actions.map((action) => `<button class="button${action === primary ? " button-primary" : ""}" type="button" data-selection-action="${action}"${action === primary ? ' aria-keyshortcuts="Control+M" title="단축키 Ctrl+M"' : ""}>${labels[action]}${action === primary ? ' <kbd class="curriculum-shortcut">Ctrl+M</kbd>' : ""}</button>`);
   buttons.push('<button class="button button-quiet" type="button" data-selection-action="cancel" aria-label="고르기 취소" title="취소(Esc)">×</button>');
   box.innerHTML = `<span class="curriculum-selection-actions-label">${planViewEscape(planDataFieldLabel(fields))} · ${names}과목</span>${buttons.join("")}`;
   box.classList.remove("hidden");
@@ -797,6 +810,27 @@ function runCurriculumSelectionAction(action) {
       if (result?.id) openCurriculumCrossDialog(result.id);
     }
   }
+}
+
+// Ctrl/⌘ + 글자(대소문자·한글 자판 무시: event.code로도 본다)
+function curriculumShortcutKey(event, letter) {
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  return String(event.key || "").toLowerCase() === letter || event.code === `Key${letter.toUpperCase()}`;
+}
+
+function runCurriculumMergeShortcut() {
+  const layout = state.curriculumImportedLayout;
+  const selection = typeof curriculumCellSelection !== "undefined" ? curriculumCellSelection : null;
+  const say = (text) => {
+    if (typeof status !== "undefined") { status.style.color = "#596780"; status.textContent = text; }
+    if (typeof showAppToast === "function") showAppToast(text);
+  };
+  if (!layout?.planData) { say("편제표를 먼저 불러오세요."); return; }
+  if (layout.derived) { say("전학년 편제표는 3개년 편제표에서 자동으로 만들어 묶을 수 없습니다."); return; }
+  const options = curriculumSelectionOptions(layout, selection);
+  if (!selection || !options) { say("먼저 학기 칸을 끌어 고르세요. 고른 뒤 Ctrl+M을 누르면 선택과목군으로 묶습니다."); return; }
+  if (!options.primary) { say("고른 칸으로는 묶을 수 없습니다. 한 학기 열이나 같은 학년 1·2학기 칸을 고르세요."); return; }
+  runCurriculumSelectionAction(options.primary);
 }
 
 // 묶음 띠 위·아래 끝 손잡이 끌기: 놓은 행까지 묶음 범위를 바꾼다.
@@ -880,6 +914,13 @@ function initCurriculumDataView() {
   }, true);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !actions.classList.contains("hidden") && !document.querySelector("dialog[open]")) hideCurriculumSelectionActions(true);
+  });
+  // Ctrl+M(맥 ⌘+M): 고른 칸을 떠 있는 단추의 기본 동작으로 묶기·풀기. 편제표(또는 떠 있는 단추)에 포커스가 있을 때만 브라우저 기본 동작을 막는다.
+  document.addEventListener("keydown", (event) => {
+    if (!curriculumShortcutKey(event, "m") || event.shiftKey || event.altKey) return;
+    if (!event.target?.closest?.("#curriculumPlanWrap, #curriculumSelectionActions") || document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    runCurriculumMergeShortcut();
   });
   wrap.addEventListener("click", (event) => {
     const band = event.target.closest("[data-plan-group]");
