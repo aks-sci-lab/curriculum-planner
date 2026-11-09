@@ -218,6 +218,88 @@ function annualFormatTable() {
   };
 }
 
+// 같은 구분(학교 지정/학생 선택) 안 같은 교과(군)의 이어진 행 묶음(교과(군) 칸이 한 칸으로 병합되는 범위)
+function annualAreaRuns(subjects) {
+  const runs = [];
+  const keyOf = (item) => `${planDataDivision(item.category) || planDataKey(item.category)}|${planDataKey(item.area)}`;
+  for (const item of subjects) {
+    const last = runs.at(-1);
+    if (last && keyOf(last[0]) === keyOf(item) && planDataKey(item.area)) last.push(item);
+    else runs.push([item]);
+  }
+  return runs;
+}
+
+// 그 교과(군) 행들의 학기 학점 합: 교차집중은 그 과목 행 한 번(학기마다), 택n 묶음은 n × 묶음 학점, 학기 칸 메모(소인수·공동)는 메모 학점.
+function annualAreaCredit(run, groups) {
+  const ids = new Set(run.map((item) => item.id));
+  const grouped = new Set();
+  let total = 0;
+  for (const group of groups) {
+    if (!group.members.some((id) => ids.has(id))) continue;
+    for (const field of group.fields) total += (Number(group.pick) || 0) * (Number(group.credit) || 0);
+    for (const id of group.members) for (const field of group.fields) grouped.add(`${id}:${field}`);
+  }
+  for (const item of run) {
+    for (const [field, value] of Object.entries(item.credits || {})) if (!grouped.has(`${item.id}:${field}`)) total += Number(value) || 0;
+    if (!Object.keys(item.credits || {}).length && item.note) total += Number(planDataNoteCredit(item.note)) || 0;
+  }
+  return total;
+}
+
+// 다른 입학생 편제표에서만 있는 과목 행이 끼어든 교과(군): 이수학점·필수이수학점을 교과(군) 전체 한 칸으로 합친다
+// (예전에는 끼어든 행이 자기 편제표의 칸을 따로 가져 '필수이수 10'이 두 번 나왔다). 이수학점 = 그 교과(군) 모든 행의 학기 학점 합
+// (화면·엑셀은 학기 칸 합계 수식), 필수이수학점 = Y 입학생 편제표의 그 교과(군) 값 한 번. 원본 양식이면 교과(군) 경계 테두리도
+// 그 범위에 맞춘다(끼어든 행은 이웃 Y 행 서식을 쓰므로 교과(군) 끝 굵은 선이 가운데 생길 수 있다). Y 행만 있는 교과(군)은 Y 그대로.
+function annualJoinAreaRuns(subjects, groups, formats, original) {
+  let count = 0;
+  for (const run of annualAreaRuns(subjects)) {
+    if (run.length < 2 || run.every((item) => item.annualFromY)) continue;
+    const segs = new Set(run.map((item) => item.completion?.seg || "")), required = new Set(run.map((item) => item.required?.seg || ""));
+    if (segs.size < 2 && required.size < 2) continue;
+    count++;
+    const yRequired = run.find((item) => item.annualFromY && String(item.required?.text || "").trim()) || run.find((item) => String(item.required?.text || "").trim());
+    const total = annualAreaCredit(run, groups);
+    for (const item of run) {
+      item.completion = { seg: `annual-c${count}`, text: total ? planDataNumberText(total) : "", formula: false };
+      item.required = { seg: `annual-q${count}`, text: yRequired?.required?.text || "" };
+    }
+    if (original) annualRunBorders(run, formats);
+  }
+  return count;
+}
+
+// 교과(군) 묶음 경계: 첫 행 위·마지막 행 아래는 그 교과(군) Y 첫 행·마지막 행의 선, 그 사이는 Y 안쪽 행의 선(없으면 가는 선).
+function annualRunBorders(run, formats) {
+  const table = formats.table;
+  const edge = (styles, side) => {
+    const result = {};
+    for (const [column, index] of Object.entries(styles || {})) result[column] = table[index]?.bd?.[side] ? { s: table[index].bd[side], c: table[index].bd[`${side}c`] } : null;
+    return result;
+  };
+  const ys = run.filter((item) => item.annualFromY && item.styles?.length);
+  if (!ys.length) return;
+  const top = edge(ys[0].styles[0], "t"), bottom = edge(ys.at(-1).styles.at(-1), "b");
+  const innerBottom = ys.length > 1 ? edge(ys[0].styles.at(-1), "b") : {};
+  const innerTop = ys.length > 1 ? edge(ys.at(-1).styles[0], "t") : {};
+  const set = (styles, side, value) => {
+    for (const [column, index] of Object.entries(styles)) {
+      const descriptor = planDataClone(table[index] || {});
+      const want = value[column] === undefined ? (side === "b" || side === "t" ? { s: "thin" } : null) : value[column];
+      descriptor.bd ||= {};
+      if (want) { descriptor.bd[side] = want.s; if (want.c) descriptor.bd[`${side}c`] = want.c; else delete descriptor.bd[`${side}c`]; }
+      else { delete descriptor.bd[side]; delete descriptor.bd[`${side}c`]; }
+      if (!Object.keys(descriptor.bd).length) delete descriptor.bd;
+      styles[column] = formats.add(descriptor);
+    }
+  };
+  run.forEach((item, index) => {
+    if (!item.styles?.length) return;
+    set(item.styles[0], "t", index === 0 ? top : innerTop);
+    set(item.styles.at(-1), "b", index === run.length - 1 ? bottom : innerBottom);
+  });
+}
+
 function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
   if (typeof curriculumSheetFromData !== "function" || typeof applyCurriculumData !== "function") return null;
   const years = annualCohortYears(schoolYear);
@@ -408,6 +490,7 @@ function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
       completion: seg(shape.completion, shapePrefix), required: seg(shape.required, shapePrefix), extra: {},
       span, semMerge: Boolean(primary.subject.semMerge), styles: original ? styles : [], fills, heights,
       hidden: false, styleRows: [], annualSources: Object.fromEntries(grades.map((grade) => [grade, parts[grade].source.year])),
+      ...(slot.y ? { annualFromY: true } : {}),
       ...(shape.planSectionManual ? { planSection: shape.planSection, planSectionManual: true } : {})
     });
   }
@@ -441,6 +524,7 @@ function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
     const order = new Map(subjects.map((item, index) => [item.id, index]));
     group.members.sort((a, b) => order.get(a) - order.get(b));
   }
+  annualJoinAreaRuns(subjects, groups, formats, original);
 
   // 4) 양식: 제목은 '전학년'으로, 학년 머리글에 입학연도(작은 글씨), 창의적 체험활동 같은 소계 아래 값은 그 학년 입학생 편제표 값.
   const headerRows = template.header.rows;

@@ -258,3 +258,36 @@ test("원본 양식 데이터가 없으면 전학년 편제표는 기본 양식(
   assert.equal(layout.annualForm, undefined);
   assert.equal(layout.rows[1][13], "필수이수 학점");
 });
+
+test("전학년 편제표: 다른 입학생 편제표에서만 있는 행이 들어온 교과(군)은 이수학점·필수이수학점이 교과(군) 전체 한 칸", () => {
+  const ctx = context();
+  const y2026 = converted(ctx, fixture(2026), 2026);
+  const y2025 = converted(ctx, fixture(2025), 2025);
+  // 2024 입학생: 학교 지정 국어에 3학년 과목 '언어와 매체'(3-1 2학점)만 있다(2026 편제표에는 없음)
+  const raw2024 = fixture(2024);
+  raw2024.rows[5][3] = "언어와 매체"; raw2024.rows[5][9] = ""; raw2024.rows[5][10] = "2";
+  const y2024 = converted(ctx, raw2024, 2024);
+  const layout = ctx.buildAnnualCurriculumLayout({ 2026: { plan: [], layout: y2026 }, 2025: { plan: [], layout: y2025 }, 2024: { plan: [], layout: y2024 } }, 2026);
+  const list = ctx.planDataSubjects(layout.planData);
+  const korean = ["공통국어1", "화법과 언어", "언어와 매체"].map((name) => list.find((item) => item.name === name));
+  assert.ok(korean.every(Boolean), list.map((item) => item.name).join(","));
+  assert.equal(korean[2].annualFromY, undefined, "2024에서 들어온 행");
+  assert.equal(new Set(korean.map((item) => item.completion.seg)).size, 1, "이수학점 한 칸");
+  assert.equal(new Set(korean.map((item) => item.required.seg)).size, 1, "필수이수학점 한 칸");
+  assert.equal(korean[0].completion.text, "10", "1-1 4 + 2-2 4 + 3-1 2");
+  const start = korean[0].row, end = korean[2].rowEnd;
+  const ref = (column) => `${ctx.columnName(column)}${start + 1}:${ctx.columnName(column)}${end + 1}`;
+  assert.ok(layout.mergedRanges.includes(ref(12)), layout.mergedRanges.join(" "));
+  assert.ok(layout.mergedRanges.includes(ref(13)));
+  assert.equal(layout.formulas[`${start}:12`], `SUM(G${start + 1}:L${end + 1})`, "화면·엑셀은 학기 칸 합계 수식");
+  assert.equal(layout.rows[start][13], "8", "필수이수 = 2026 입학생 편제표의 국어 값 한 번");
+  assert.deepEqual(plain(layout.rows.slice(start + 1, end + 1).map((values) => values[13])), ["", ""]);
+  // Y 행만 있는 교과(군)(음악)은 Y 그대로
+  const music = list.find((item) => item.name === "음악, 미술");
+  assert.ok(!/^annual-/.test(music.completion.seg));
+  // 교과(군) 경계: 들어온 행이 교과(군) 끝, 그 사이는 안쪽 선
+  const table = layout.planTemplate.format.styleTable;
+  const bottom = (item) => table[item.styles.at(-1)[3]]?.bd?.b;
+  assert.equal(bottom(korean[1]), "thin");
+  assert.equal(bottom(korean[2]), "thin");
+});
