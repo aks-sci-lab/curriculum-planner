@@ -1745,7 +1745,7 @@
 .curriculum-office-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid #d8dee8; border-radius: 8px; }
 .curriculum-office-option:has(input:disabled) { color: #8a94a3; }
 
-/* 4단계 집계·개설 확정: 위쪽 한 줄 도구 모음, 학년 탭(요약 겸용), 한 과목 한 행 표 */
+/* 4단계 집계·개설 확정: 위쪽 한 줄 도구 모음, 학년 탭(요약 겸용), 학교 양식 집계표 */
 #aggregatePanel .aggregate-toolbar { gap: 6px 10px; margin: 0 0 4px; padding: 6px 10px; }
 .aggregate-toolbar-title { margin: 0; white-space: nowrap; }
 .aggregate-toolbar .round-confirm-state { font-weight: 700; white-space: nowrap; }
@@ -1769,39 +1769,75 @@
 .aggregate-risk-filter[aria-pressed="true"] { border-color: #b3261e; background: #fdecea; color: #8f1f18; }
 #aggregatePanel .aggregate-content { gap: 10px; }
 .aggregate-grade-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; border-bottom: 1px solid #cad5ea; background: #f7f9fe; }
-.aggregate-grade-heading { flex: 1 1 520px; margin: 0; color: #26407a; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.aggregate-grade-heading strong { font-size: 14px; }
 .aggregate-grade-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .aggregate-grade-actions .button, .aggregate-adjust-button { min-height: 28px; padding: 2px 9px; font-size: 12px; }
-#aggregatePanel .aggregate-grade .aggregate-sheet-wrap { border: 0; border-radius: 0; }
-.aggregate-course-table { width: 100%; border-collapse: collapse; color: #14233c; font-size: 12px; font-variant-numeric: tabular-nums; }
-.aggregate-course-table th, .aggregate-course-table td { height: 30px; padding: 2px 8px; border-bottom: 1px solid #e3e9f3; text-align: center; white-space: nowrap; }
-.aggregate-course-table thead th { position: sticky; top: 0; z-index: 2; background: #eef3fb; color: #2f3f60; font-weight: 700; box-shadow: 0 1px 0 #cad5ea; }
-.aggregate-course-table thead th:first-child { text-align: left; }
-.aggregate-course-table .aggregate-subject { width: 30%; min-width: 180px; color: #1f2d47; font-weight: 600; text-align: left; white-space: normal; }
-.aggregate-course-table .aggregate-subject { color: #1f2d47; }
-.aggregate-course-row.at-risk .aggregate-subject { color: #b3261e; }
-.aggregate-course-row.is-closed { background: #f6f6f8; color: #7a8295; }
-.aggregate-course-row.is-closed .aggregate-subject { text-decoration: line-through; }
-.aggregate-course-row:hover { background: #f8fbff; }
-.aggregate-enrollment-cell { width: 150px; }
-.aggregate-course-table .aggregate-enrollment { display: grid; grid-template-columns: 46px minmax(60px, 1fr); align-items: center; gap: 6px; }
-.aggregate-course-table .aggregate-enrollment-value { text-align: right; }
-.aggregate-course-table .aggregate-progress-track { height: 6px; margin: 0; }
-.aggregate-course-table .aggregate-class-input { width: 58px; height: 26px; }
-.aggregate-average.is-over { color: #b3261e; font-weight: 700; }
-.aggregate-status { text-align: left !important; }
-.aggregate-status .at-risk-badge { margin: 0 4px 0 0; }
 .closed-badge { background: #eceef3; color: #4b556a; }
 .over-badge { background: #fff0e2; color: #98500d; }
-.aggregate-ok { color: #287956; font-size: 11px; }
-.aggregate-group-row th { padding: 5px 8px; border-top: 1px solid #cad5ea; border-bottom: 1px solid #cad5ea; background: #f3f6fc; text-align: left; font-weight: 500; white-space: normal; }
-.aggregate-group-name { margin-right: 8px; color: #253f76; font-weight: 700; }
-.aggregate-group-total { margin-right: 8px; color: #33425f; font-weight: 600; }
-.aggregate-group-row[data-group-status="mismatch"] th { background: #fff6e8; }
-.aggregate-group-row[data-group-status="mismatch"] .aggregate-group-total { color: #a04a00; }
-.aggregate-group-row[data-group-status="ok"] .aggregate-group-total { color: #287956; }
-.aggregate-group-message { display: inline-block; margin-left: 8px; color: #8f1f18; font-size: 12px; }
+/* 집계표: 엑셀과 같은 학교 양식(열 너비·행 높이·병합·테두리·노란 칸). 과목명·개설 학급수·총 학급수 칸에서 바로 고친다. */
+#aggregatePanel .aggregate-grade { border-color: #d6deec; }
+#aggregatePanel .aggregate-grade .aggregate-form-wrap { max-height: none; padding: 6px 12px 14px; border: 0; border-radius: 0; overflow-x: auto; overflow-y: visible; }
+.aggregate-form-hint { flex: 1 1 320px; color: #5c6982; font-size: 12px; }
+.aggregate-form { width: 100%; min-width: 900px; table-layout: fixed; border-collapse: collapse; color: #111; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; font-variant-numeric: tabular-nums; }
+.aggregate-form td { position: relative; padding: 1px 4px; overflow: visible; line-height: 1.25; white-space: nowrap; vertical-align: middle; }
+.aggregate-form td.af-wrap { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
+.aggregate-form .af-c { text-align: center; }
+.aggregate-form .af-l { text-align: left; }
+.aggregate-form .af-r { text-align: right; }
+.aggregate-form .af-title { font-size: 24px; font-weight: 400; }
+.aggregate-form .af-semester { font-size: 19px; }
+.aggregate-form .af-bold { font-size: 13px; font-weight: 700; }
+.aggregate-form .af-body { font-size: 13px; }
+.aggregate-form .af-small { font-size: 12px; }
+.aggregate-form .af-note { color: #595959; font-size: 12px; }
+.aggregate-form .af-yellow { background: #ffff00; }
+.aggregate-form .af-off { background: #fce4d6; color: #9c0006; }
+.aggregate-form .af-group-diff { color: #9c0006; }
+.aggregate-form .af-group-ok { color: #287956; }
+.aggregate-form .af-plan-message { margin-left: 6px; color: #8f1f18; font-weight: 700; }
+/* 과목명: 누르면 개설·폐강·미정 메뉴. 미정은 빨간 글자, 기준 미달은 칸 글자색. */
+.aggregate-form .af-course { display: block; width: 100%; min-height: 100%; padding: 1px 0; border: 0; border-radius: 3px; background: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; word-break: keep-all; overflow-wrap: anywhere; cursor: pointer; }
+.aggregate-form .af-course:hover, .aggregate-form .af-course:focus-visible { background: #eaf0ff; outline: 1px solid #3b68e8; }
+.aggregate-form td.is-undecided .af-course { color: #b3261e; text-decoration: underline dotted 1px; text-underline-offset: 3px; }
+.aggregate-form td.is-risk { color: #b3261e; font-weight: 700; }
+.aggregate-form td.is-over { color: #b3261e; font-weight: 700; }
+/* 개설 학급수: 칸처럼 보이는 입력. 누르면 바로 고친다. */
+.aggregate-form .af-class-input { display: block; width: 100%; max-width: none; height: 100%; min-height: 20px; margin: 0; padding: 0 2px; border: 1px dashed transparent; border-radius: 2px; background: transparent; color: inherit; font: inherit; text-align: center; -moz-appearance: textfield; }
+.aggregate-form .af-class-input::-webkit-inner-spin-button, .aggregate-form .af-class-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.aggregate-form td:hover > .af-class-input:not(:disabled) { border-color: #8aa2d8; background: #f5f8ff; cursor: text; }
+.aggregate-form .af-class-input:focus { border: 1px solid var(--blue); background: #fff; outline: 2px solid #dce6ff; }
+.aggregate-form .af-class-input:disabled { color: inherit; opacity: 1; cursor: not-allowed; }
+/* 과목 칸 모서리의 작은 표시(기준 미달·미정·인원 초과·위계 경고). 누르면 설명 메뉴·학생 목록 팝업. */
+.aggregate-form .af-corner { position: absolute; top: 50%; transform: translateY(-50%); display: inline-flex; line-height: 1; }
+.aggregate-form .af-corner-left { left: 2px; }
+.aggregate-form .af-corner-right { right: 2px; }
+.aggregate-form .af-tag, .aggregate-form .af-corner .prereq-badge { padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; background: #fff; font: inherit; font-size: 10px; font-weight: 700; line-height: 1.3; white-space: nowrap; cursor: pointer; }
+.aggregate-form .af-tag.is-risk, .aggregate-form .af-tag.is-undecided { border-color: #f1b7ae; background: #fdecea; color: #a3261c; }
+.aggregate-form .af-tag.is-over { border-color: #f0c28f; background: #fff0e2; color: #98500d; }
+.aggregate-form .af-corner .prereq-badge { margin: 0; border-color: #d4b7ef; background: #f6efff; color: #6a2ca3; }
+/* 총 학급수 칸: 값, 목표, 목표와 다를 때만 '학급수 자동 조정', 조정한 뒤에는 '조정 취소'. */
+.aggregate-form .af-total-value { display: block; font-size: 15px; }
+.aggregate-form .af-total-target { display: block; margin-top: 2px; font-size: 11px; font-weight: 500; }
+.aggregate-form .af-mini-button { display: block; max-width: 100%; margin: 5px auto 0; padding: 2px 5px; border: 1px solid #b8c4d8; border-radius: 4px; background: #fff; color: #244ba0; font: inherit; font-size: 11px; font-weight: 700; line-height: 1.3; white-space: normal; cursor: pointer; }
+.aggregate-form .af-mini-button > span { display: inline-block; white-space: nowrap; }
+.aggregate-form .af-mini-button:hover:not(:disabled) { border-color: #3b68e8; background: #eaf0ff; }
+.aggregate-form .af-mini-button:disabled { color: #8a94a3; cursor: not-allowed; }
+/* 처리할 것만: 처리할 과목 열·그룹은 강조, 나머지 과목은 흐리게(그룹은 처리할 것이 있는 것만 남긴다). */
+.aggregate-form.is-attention-mode td.is-dimmed { color: #9aa3b2; }
+.aggregate-form.is-attention-mode td.is-dimmed .af-course { color: #9aa3b2; }
+.aggregate-form td.is-attention { box-shadow: inset 0 0 0 999px rgba(255, 196, 0, .16); }
+.aggregate-form td.af-off.is-attention { box-shadow: inset 0 0 0 2px #e07a16; }
+.aggregate-course-menu { position: absolute; z-index: 60; width: 290px; padding: 10px 12px; border: 1px solid #b9c6dd; border-radius: 10px; background: #fff; box-shadow: 0 10px 28px rgba(22, 39, 77, .18); color: #1f2d47; font-size: 12px; }
+.aggregate-course-menu[hidden] { display: none; }
+.aggregate-course-menu-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 13px; }
+.aggregate-course-menu-close { padding: 0 4px; border: 0; background: none; color: #5c6982; font-size: 16px; line-height: 1; cursor: pointer; }
+.aggregate-course-menu-status { margin: 6px 0 8px; padding-left: 16px; color: #46546e; line-height: 1.5; }
+.aggregate-course-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.aggregate-course-choice { min-height: 30px; border: 1px solid #c9d3e6; border-radius: 6px; background: #fff; color: #33425f; font: inherit; font-weight: 700; cursor: pointer; }
+.aggregate-course-choice[aria-pressed="true"] { border-color: #3b68e8; background: #eaf0ff; color: #244ba0; box-shadow: inset 0 0 0 1px #3b68e8; }
+.aggregate-course-choice.is-closed[aria-pressed="true"] { border-color: #b39b00; background: #ffff00; color: #3d3300; box-shadow: inset 0 0 0 1px #b39b00; }
+.aggregate-course-choice:disabled { color: #8a94a3; cursor: not-allowed; }
+.aggregate-course-menu-note { margin: 8px 0 0; color: #6a7489; font-size: 11px; line-height: 1.5; }
+.aggregate-course-menu-prereq { width: 100%; min-height: 30px; margin-top: 8px; font-size: 12px; }
 .aggregate-fold-panel { padding-top: 4px; padding-bottom: 4px; }
 .aggregate-fold > summary { display: flex; align-items: center; gap: 10px; padding: 6px 8px; cursor: pointer; list-style: none; }
 .aggregate-fold > summary::-webkit-details-marker { display: none; }

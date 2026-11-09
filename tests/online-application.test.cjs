@@ -17,9 +17,10 @@ function plain(value) {
 }
 
 test("closure defaults open eligible courses and leave at-risk courses undecided, preserving manual decisions", () => {
-  // 개설/폐강 결정은 집계표의 과목 행 안에 있다(별도 개설/폐강 검토 표 없음).
+  // 개설/폐강 결정은 학교 양식 집계표의 과목명 메뉴에 있다(별도 개설/폐강 검토 표 없음). 과목 머리 칸이 지금 결정을 들고 있다.
   const ctx = vm.createContext({ $: () => ({ value: "" }), state: {}, escapeHtml: String });
   vm.runInContext(functionSource("function aggregateThresholds(", "function renderAggregate("), ctx);
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("), ctx);
   const course = (column, name, enrollment, atRisk, classCount = 1) => ({ column, name, enrollment, atRisk, closed: false, classCount,
     enrollmentPerDivision: 1, averageClassSize: classCount ? enrollment / classCount : 0 });
   const report = { summary: { grade: "1", students: 350, classes: 10, classSource: "roster", averageClassSize: 35, openingLimit: 31.5, divisionLimit: 38.5 },
@@ -31,30 +32,70 @@ test("closure defaults open eligible courses and leave at-risk courses undecided
       course(5, "수동 개설", 5, true)
     ] }] }] };
   const closures = { "1:3": "", "1:4": "closed", "1:5": "open" };
-  const options = { closures, round: "1", locked: false, maxClassSize: 34, attentionOnly: false, canUndo: false };
-  const decisions = (markup) => [...markup.matchAll(/data-closure-key="([^"]+)"[\s\S]*?<option value="([^"]*)" selected/g)]
+  const options = { closures, round: "1", locked: false, maxClassSize: 34, attentionOnly: false, canUndo: false, openingPercent: 90, divisionPercent: 110 };
+  const decisions = (markup) => [...markup.matchAll(/data-aggregate-course="([^"]+)" data-closure-round="1" data-decision="([^"]*)"/g)]
     .map((match) => [match[1], match[2]]);
+  // '처리할 것만'에서 강조하는 과목(과목 머리 칸에 is-attention)
+  const focused = (markup) => [...markup.matchAll(/<td class="[^"]*\bis-attention\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="([^"]+)"/g)]
+    .map((match) => match[1]);
   const markup = ctx.aggregateGradeSectionMarkup(report, options);
   assert.deepEqual(decisions(markup), [["1:1", "open"], ["1:2", ""], ["1:3", ""], ["1:4", "closed"], ["1:5", "open"]]);
-  assert.match(markup, /data-closure-round="1"/);
-  // 처리할 것만 보기: 결정이 미정인 기준 미달 과목만 남고, 이미 개설/폐강을 정한 과목과 기준을 충족한 과목은 빠진다.
-  // 목표(택1 × 10학급 = 10)와 맞지 않는 그룹의 소제목은 남는다.
+  // 미정인 과목은 과목명이 빨간 글자(is-undecided), 기준 미달은 인원 수 칸 모서리에 '미달' 표시(누르면 설명 메뉴).
+  assert.match(markup, /<td class="[^"]*\bis-undecided\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:2"/);
+  assert.match(markup, /data-aggregate-course-info="1:2" title="기준 미달: 신청 5명이 개설기준 31\.50명보다 적습니다/);
+  assert.doesNotMatch(markup, /<td class="[^"]*\bis-undecided\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:5"/);
+  assert.equal(focused(markup).length, 0, "attention marks only in 'attention only' mode");
+  // 처리할 것만 보기: 결정이 미정인 기준 미달 과목만 강조되고, 이미 개설/폐강을 정한 과목과 기준을 충족한 과목은 흐리게 남는다.
+  // 목표(택1 × 10학급 = 10)와 맞지 않는 그룹의 총 학급수 칸은 연한 주황 + 목표와 차이 + 강조 + 자동 조정 단추.
+  // 총 학급수는 엑셀과 같이 과목 개설 학급수의 합(1+1+3+3+1 = 9)이다.
   const attention = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
-  assert.deepEqual(decisions(attention).map(([key]) => key), ["1:2"]);
-  assert.match(attention, /data-group-status="mismatch"[\s\S]*2-1 택1[\s\S]*총 5학급 \/ 목표 10 \(-5\)/);
+  assert.deepEqual(focused(attention), ["1:2"]);
+  assert.match(attention, /<td class="[^"]*\baf-off\b[^"]*\bis-attention\b[^"]*"[^>]*data-af-role="total"><span class="af-total-value">9<\/span><span class="af-total-target">목표 10 \(-1\)<\/span><button type="button" class="af-mini-button" data-aggregate-adjust="group" data-grade="1" data-semester="2학년 1학기" data-group="2-1 택1" aria-label="2-1 택1 학급수 자동 조정">/);
+  assert.match(attention, /<td class="[^"]*\bis-dimmed\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:1"/, "settled courses stay, dimmed");
+  assert.match(attention, />2-1 택1</);
   assert.equal(ctx.aggregateAttention(report, closures, 34).count, 2, "one undecided at-risk course and one group off target");
-  // 학급수를 직접 줄여 학급당 인원이 최대 인원·분반 기준을 넘으면 그 과목도 처리할 것에 들어가고 행에 경고 배지가 붙는다.
+  // 학급수를 직접 줄여 학급당 인원이 최대 인원·분반 기준을 넘으면 그 과목도 처리할 것에 들어가고 학급당 칸 모서리에 경고가 붙는다.
   report.semesters[0].groups[0].courses[2] = course(3, "수동 미정", 100, false, 2);
   const crowded = ctx.aggregateGradeSectionMarkup(report, { ...options, attentionOnly: true });
-  assert.deepEqual(decisions(crowded).map(([key]) => key), ["1:2", "1:3"]);
-  assert.match(crowded, /data-course-key="1:3"[\s\S]*?34명 초과[\s\S]*?분반기준 초과/);
+  assert.deepEqual(focused(crowded), ["1:2", "1:3"]);
+  assert.match(crowded, /data-aggregate-course-info="1:3" title="[^"]*34명 초과: 학급당 50\.0명[^"]*분반기준 초과[^"]*">34명 초과<\/button>/);
   // 목표와 맞고 처리할 과목이 없는 그룹은 통째로 사라지고 빈 안내가 나온다.
   const settled = { summary: report.summary, semesters: [{ name: "2학년 1학기", groups: [{ category: "2-1 택1", choiceCount: 1, totalClasses: 10, courses: [
     course(1, "충족", 40, false, 10)] }] }] };
-  assert.match(ctx.aggregateGradeSectionMarkup(settled, { ...options, attentionOnly: true }), /처리할 과목이 없습니다/);
-  // 확정된 차수는 결정 칸이 잠긴다.
-  assert.equal(ctx.aggregateGradeSectionMarkup(report, { ...options, locked: true }).match(/<select class="closure-select"[^>]* disabled/g).length, 5);
-  assert.match(frontend, /state\.roundClosures\[round\]\[key\] = select\.value/);
+  const settledMarkup = ctx.aggregateGradeSectionMarkup(settled, { ...options, attentionOnly: true });
+  assert.match(settledMarkup, /처리할 과목이 없습니다/);
+  assert.doesNotMatch(settledMarkup, /data-aggregate-course=/);
+  // 확정된 차수는 개설 학급수 칸과 결정 메뉴(과목 머리 칸의 data-locked)가 잠긴다.
+  const lockedMarkup = ctx.aggregateGradeSectionMarkup(report, { ...options, locked: true });
+  assert.equal(lockedMarkup.match(/<input class="aggregate-class-input[^>]* disabled/g).length, 5);
+  assert.equal(lockedMarkup.match(/data-aggregate-course="[^"]+"[^>]* data-locked/g).length, 5);
+  assert.doesNotMatch(markup, /data-locked/);
+  assert.match(frontend, /state\.roundClosures\[round\]\[key\] = value/);
+});
+
+test("closure menu saves the teacher decision, refuses a confirmed round and keeps focus on the course", () => {
+  let locked = false;
+  const calls = [];
+  const focused = [];
+  const state = { roundClosures: {}, workflowStep: 4 };
+  const ctx = vm.createContext({
+    state, isRoundLocked: () => locked, persistState: () => calls.push("persist"), renderAggregate: () => calls.push("render"),
+    renderRetakePanel: () => calls.push("retake"), updateRetakeReadiness: () => calls.push("ready"),
+    document: { querySelectorAll: () => [{ dataset: { aggregateCourse: "2:b" }, focus: () => focused.push("2:b") }] }
+  });
+  vm.runInContext(functionSource("function setAggregateClosure(", "function renderRoundStatus("), ctx);
+  assert.equal(ctx.setAggregateClosure("1", "2:b", "closed"), true);
+  assert.deepEqual(plain(state.roundClosures), { "1": { "2:b": "closed" } });
+  assert.deepEqual(calls, ["persist", "render", "retake", "ready"]);
+  assert.deepEqual(focused, ["2:b"]);
+  assert.equal(ctx.setAggregateClosure("1", "2:b", ""), true, "미정으로 되돌릴 수 있다");
+  assert.equal(state.roundClosures["1"]["2:b"], "");
+  assert.equal(ctx.setAggregateClosure("1", "2:b", "maybe"), false, "알 수 없는 값은 무시");
+  locked = true;
+  calls.length = 0;
+  assert.equal(ctx.setAggregateClosure("1", "2:b", "open"), false);
+  assert.equal(state.roundClosures["1"]["2:b"], "", "확정된 차수는 바꾸지 않는다");
+  assert.deepEqual(calls, ["render"]);
 });
 
 class Sheet {
@@ -1360,6 +1401,86 @@ test("aggregate sheet merges line up with every block row and never overlap, and
   assert.doesNotMatch(extras, /localSheetId="1"/, "sheets without print titles are left alone");
   assert.match(extras, /fullCalcOnLoad="1"/);
   assert.equal(ctx.aggregateSheetName({ summary: { grade: "2" } }), "3학년");
+});
+
+test("the step-4 screen draws the same school sheet as the Excel file: cells, merges, yellow closed cells and the off-target fill", () => {
+  const { ctx, merges } = aggregateSheetFixture();
+  vm.runInContext(functionSource("function aggregateThresholds(", "function renderAggregate("), ctx);
+  ctx.escapeHtml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // 같은 보고서로 모델 → 엑셀(XML)과 화면(HTML)을 만든다.
+  const source = ctx.createWorksheetXml.toString();
+  assert.match(source, /aggregateSheetModel\(report, openingPercent, divisionPercent\)/, "Excel uses the shared sheet model");
+  const sample = { summary: { grade: "1", students: 30, classes: 2, averageClassSize: 15, openingLimit: 13.5, divisionLimit: 16.5, classSource: "roster" },
+    semesters: [{ name: "2학년 1학기", groups: [
+      { category: "2-1 택3", choiceCount: 3, courses: [
+        ["과목1", 30, 2], ["과목2", 30, 2], ["과목3", 20, 2], ["과목4", 5, 0, true], ["과목5", 5, 1], ["과목6", 0, 0], ["과목7", 0, 0]]
+        .map(([name, enrollment, classCount, closed = false], index) => ({ column: index + 1, name, displayName: name, enrollment, classCount, closed,
+          atRisk: enrollment < 13.5, enrollmentPerDivision: enrollment / 16.5, averageClassSize: classCount ? enrollment / classCount : 0 })) },
+      { category: "2-1 택1", choiceCount: 1, courses: [["일본어", 20, 1], ["기후변화와 지속가능한 세계(융합)", 10, 1]]
+        .map(([name, enrollment, classCount], index) => ({ column: index + 8, name, displayName: name, enrollment, classCount, closed: false,
+          atRisk: enrollment < 13.5, enrollmentPerDivision: enrollment / 16.5, averageClassSize: enrollment / classCount })) }
+    ] }] };
+  const xml = ctx.createWorksheetXml(sample, 90, 110);
+  assert.equal(xml, ctx.createWorksheetXml(sample, 90, 110));
+  const html = ctx.aggregateSheetHtml(ctx.aggregateSheetModel(sample, 90, 110), { grade: "1", closures: { "1:4": "closed" }, round: "1", maxClassSize: 34 });
+  // HTML 표를 칸 좌표(엑셀 열·행)로 펼친다. A열(여백)은 화면에 그리지 않으므로 B열부터.
+  const grid = new Map();
+  const spans = [];
+  const taken = new Set();
+  [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].forEach((rowMatch, rowIndex) => {
+    let column = 1;
+    for (const cell of rowMatch[1].matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)) {
+      while (taken.has(`${rowIndex + 1}:${column}`)) column++;
+      const colspan = Number(cell[1].match(/colspan="(\d+)"/)?.[1] || 1);
+      const rowspan = Number(cell[1].match(/rowspan="(\d+)"/)?.[1] || 1);
+      for (let r = 0; r < rowspan; r++) for (let c = 0; c < colspan; c++) taken.add(`${rowIndex + 1 + r}:${column + c}`);
+      if (colspan > 1 || rowspan > 1) spans.push(`${ctx.columnName(column)}${rowIndex + 1}:${ctx.columnName(column + colspan - 1)}${rowIndex + rowspan}`);
+      const input = cell[2].match(/<input[^>]*value="([^"]*)"/);
+      // 칸 글자: 모서리 표시·단추·목표 안내를 빼고 엑셀 칸 값만 본다.
+      const value = input ? input[1] : cell[2].replace(/<span class="af-corner[\s\S]*?<\/span><\/span>|<span class="af-corner[\s\S]*?<\/span>/g, "")
+        .replace(/<span class="af-total-target">[\s\S]*?<\/span>|<button type="button" class="af-mini-button"[\s\S]*?<\/button>|<span class="af-group-(?:diff|ok)">[\s\S]*?<\/span>/g, "")
+        .replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim();
+      grid.set(`${ctx.columnName(column)}${rowIndex + 1}`, { value, attrs: cell[1] });
+      column += colspan;
+    }
+  });
+  // 병합: 화면의 colspan/rowspan = 엑셀 mergeCells
+  const xmlMerges = [...xml.matchAll(/<mergeCell ref="([^"]+)"\/>/g)].map((match) => match[1]).sort();
+  assert.deepEqual(spans.sort(), xmlMerges);
+  assert.ok(merges.length > 0 && xmlMerges.includes("G7:G15"));
+  // 값: 엑셀의 모든 글자·숫자 칸이 화면 같은 자리에 같은 표시 형식으로 있다.
+  const xmlCells = new Map([...xml.matchAll(/<c r="([A-Z]+\d+)" s="(\d+)"(?: t="inlineStr")?(?:\/>|>(?:<f>([^<]*)<\/f>)?(?:<v>([^<]*)<\/v>|<is><t[^>]*>([^<]*)<\/t><\/is>)<\/c>)/g)]
+    .map((match) => [match[1], { style: Number(match[2]), number: match[4], text: match[5] }]));
+  const styles = ctx.aggregateSheetStyles().list;
+  let compared = 0;
+  for (const [reference, cell] of xmlCells) {
+    if (reference.startsWith("A")) continue;
+    const shown = grid.get(reference);
+    if (cell.text === undefined && cell.number === undefined) continue;
+    assert.ok(shown, `${reference} is on screen`);
+    const [, format] = styles[cell.style - 11].split("|");
+    const expected = cell.text !== undefined ? cell.text.replace(/&amp;/g, "&")
+      : format === "two" ? Number(cell.number).toFixed(2) : format === "one" ? Number(cell.number).toFixed(1) : String(Number(cell.number));
+    assert.equal(shown.value, expected, `${reference}`);
+    // 노란 칸(개설기준·폐강 과목의 인원 수·분반기준 칸)도 같은 자리에 있다.
+    assert.equal(/\baf-yellow\b/.test(shown.attrs), styles[cell.style - 11].split("|")[2] === "yellow", `${reference} fill`);
+    compared++;
+  }
+  assert.ok(compared >= 60, `compared ${compared} cells`);
+  assert.equal(grid.get("F8").value, "폐강");
+  assert.match(grid.get("F9").attrs, /data-af-role="classes"/);
+  assert.match(html, /<input class="aggregate-class-input af-class-input" type="number" min="0" step="1" value="0" aria-label="2학년 1학기 과목4 개설 학급수 \(폐강\)"[^>]* disabled/, "a closed course keeps 0 classes, locked");
+  assert.match(html, /value="2" aria-label="2학년 1학기 과목1 개설 학급수" data-grade="1" data-course-column="1">/, "open courses are editable in place");
+  // 엑셀 조건부 서식(총 학급수 ≠ 택n × 학급 수, 신청 합÷택n ≠ 총학생수)과 같은 칸이 연한 주황.
+  assert.match(grid.get("G7").attrs, /\baf-off\b/, "7 classes ≠ 택3 × 2");
+  assert.doesNotMatch(grid.get("E19").attrs, /\baf-off\b/, "2 classes = 택1 × 2");
+  assert.doesNotMatch(grid.get("F19").attrs, /\baf-off\b/, "택1 신청 합 30 = 총학생수 30");
+  assert.doesNotMatch(grid.get("H7").attrs, /\baf-off\b/, "택3 신청 합 90 ÷ 3 = 30");
+  // 열 너비는 엑셀과 같은 비율, 행 높이는 엑셀 높이 비례.
+  const widths = [...html.matchAll(/<col style="width:([\d.]+)%">/g)].map((match) => Number(match[1]));
+  assert.equal(widths.length, 9);
+  assert.ok(Math.abs(widths[0] / widths[6] - Math.floor(14.75 * 8 + 5) / Math.floor(17.625 * 8 + 5)) < 0.001);
+  assert.match(html, /<tr style="height:66px">/, "title row 54.6pt");
 });
 
 test("aggregate sheet splits large groups evenly, six subjects at most per row", () => {
