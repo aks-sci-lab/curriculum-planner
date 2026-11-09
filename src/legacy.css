@@ -1472,6 +1472,17 @@
     .hours-detail > summary { cursor: pointer; font-weight: 700; }
     .hours-detail-table tr.is-zero { color: #7b8493; }
     .hours-detail-table tr.is-manual { background: #fff8e9; }
+    .hours-suggested { color: #8a93a3; font-weight: 600; }
+    .hours-staff-over { color: #a3261c; font-weight: 700; }
+    .hours-staff-settings { display: grid; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #dce4ef; }
+    .hours-staff-settings h4 { margin: 0; font-size: 15px; }
+    .hours-staff-line { margin: 0; padding: 7px 10px; border-radius: 8px; background: #f3f6fb; font-size: 13px; }
+    .hours-staff-table, .hours-recommend-table { min-width: 640px; }
+    .hours-summary-table tfoot .hours-reference-row th, .hours-summary-table tfoot .hours-reference-row td { background: #f6f7f9; color: #5b6576; font-weight: 600; }
+    .hours-recommend-tools { margin: 8px 0; }
+    .hours-recommend-tools input { width: 70px; }
+    .hours-recommend-table tr.is-changed { background: #fff8e9; }
+    .hours-recommend-table tr.is-locked { color: #5b6576; background: #f3f6fb; }
     .curriculum-selection-group-help { margin: 6px 0 10px !important; font-size: 12px !important; }
     .workspace-context { margin-bottom: 0; padding: 10px 12px; }
     .workspace-context .note { margin: 4px 0; font-size: 12px; }
