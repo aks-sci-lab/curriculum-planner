@@ -161,7 +161,9 @@ function curriculumOfficeEntries(data, fields = OFFICE_FIELDS, { key = "" } = {}
       (section === "choice" ? parts.choicePlain : parts.school).push({ ...base, division, values: plainValues });
     }
     for (const group of own) {
-      const values = OFFICE_FIELDS.map((field) => group.fields.includes(field) ? Number(group.credit) || 0 : "");
+      // 학점을 읽지 못한 묶음(0)은 구성 과목 운영학점(curriculum-data.js planDataGroupCredit)을 쓴다.
+      const credit = Number(group.credit) > 0 ? Number(group.credit) : typeof planDataGroupCredit === "function" ? planDataGroupCredit(data, group) : 0;
+      const values = OFFICE_FIELDS.map((field) => group.fields.includes(field) ? credit : "");
       groupRows.get(group.id).push({ ...base, division: curriculumOfficeDivision(subject, { section: "choice" }), values });
     }
   });
@@ -649,7 +651,8 @@ function curriculumOfficeDataFromInputs(inputs, catalog = new Map()) {
     } else subject.note = row.label || "그 외";
     subjects.push(subject);
   }
-  return { version: typeof PLAN_DATA_VERSION !== "undefined" ? PLAN_DATA_VERSION : 1, nextId, subjects, groups };
+  return { version: typeof PLAN_DATA_VERSION !== "undefined" ? PLAN_DATA_VERSION : 1,
+    converter: typeof PLAN_DATA_CONVERTER !== "undefined" ? PLAN_DATA_CONVERTER : 2, nextId, subjects, groups };
 }
 
 // 불러온 편제표의 화면용 양식(머리글·소계 행). 원본 엑셀이 없으므로 앱이 만든다.

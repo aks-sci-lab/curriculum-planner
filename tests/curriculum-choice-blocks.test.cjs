@@ -398,7 +398,7 @@ function selectionContext() {
   const end = app.indexOf('    $("#curriculumPlanWrap").addEventListener("keydown"', start);
   vm.runInContext(app.slice(start, end), ctx);
   const down = (cell, shiftKey = false) => listeners.pointerdown({
-    target: { closest: (selector) => selector === "input, button" ? null : cell },
+    target: { closest: (selector) => selector.includes("data-choice-selectable") ? cell : null },
     button: 0, shiftKey, clientX: 10, clientY: 10, pointerId: 1, preventDefault() {}
   });
   return { ctx, listeners, cells, original, editable, down, col, row, table };

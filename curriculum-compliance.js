@@ -321,7 +321,10 @@ function planComplianceModel(planData, options = {}) {
     }
     const pick = Math.max(1, Number(group.pick) || 1);
     const label = `${fields.map((field) => planComplianceFieldLabel(field, true)).join("·")} 택${pick}`;
-    return { id: group.id || `g${index}`, fields, pick, credit: Number(group.credit) || 0, options: [...optionMap.values()], label };
+    // 학점을 학기 칸에서 읽지 못한 묶음(0)은 구성 과목 운영학점을 쓴다(curriculum-data.js와 같은 규칙).
+    const credit = Number(group.credit) > 0 ? Number(group.credit)
+      : typeof planDataGroupCredit === "function" ? planDataGroupCredit(planData, group) : 0;
+    return { id: group.id || `g${index}`, fields, pick, credit, options: [...optionMap.values()], label };
   }).filter((group) => group.fields.length && group.options.length);
   const labelCounts = new Map();
   for (const group of groups) labelCounts.set(group.label, (labelCounts.get(group.label) || 0) + 1);
@@ -568,17 +571,26 @@ function planComplianceReport(layout, options = {}) {
               const credits = Object.entries(row.designated).filter(([field]) => field.slice(3, 4) === grade).map(([, credit]) => credit);
               if (!credits.length) continue;
               const total = credits.reduce((sum, credit) => sum + credit, 0);
-              units.push({ row, name, credit: row.crossed && row.names.length > 1 ? total / row.names.length : total, each: credits, where: `${grade}학년` });
+              const split = row.crossed && row.names.length > 1;
+              units.push({ row, name, credit: split ? total / row.names.length : total, each: credits, where: `${grade}학년`,
+                how: split ? `교차집중 ${grade}학년 학기 학점 합 ${planComplianceRound(total)} ÷ ${row.names.length}과목` : `${grade}학년 학기 학점 ${credits.map(planComplianceRound).join("+")}` });
             }
-          } else units.push({ row, name, credit: row.unitCredit, each: [], where: Object.keys(row.designated).map((field) => planComplianceFieldLabel(field, true)).join("·") });
+          } else {
+            const where = Object.keys(row.designated).map((field) => planComplianceFieldLabel(field, true)).join("·");
+            const values = Object.values(row.designated).map(planComplianceRound);
+            const how = row.crossed && row.names.length > 1 ? `교차집중 ${where} 학기 학점 합 ${planComplianceRound(row.total)} ÷ ${row.names.length}과목`
+              : values.length > 1 ? `${where} 학기 학점 ${values.join("+")}` : `${where} 학기 학점`;
+            units.push({ row, name, credit: row.unitCredit, each: [], where, how });
+          }
         }
-        if (row.note && row.note.credit) units.push({ row, name, credit: row.note.credit, each: [], where: "학기 칸 메모" });
+        if (row.note && row.note.credit) units.push({ row, name, credit: row.note.credit, each: [], where: "학기 칸 메모", how: `학기 칸 메모 ${planComplianceRound(row.note.credit)}학점` });
       }
     }
     for (const group of model.groups) {
       for (const option of group.options) {
         const row = model.rows.find((item) => item.id === option.rowId);
-        units.push({ row, name: option, credit: group.credit * group.fields.length, each: [], where: group.label });
+        units.push({ row, name: option, credit: group.credit * group.fields.length, each: [], where: group.label,
+          how: `${group.label} 묶음 과목당 ${planComplianceRound(group.credit)}학점${group.fields.length > 1 ? ` × ${group.fields.length}학기` : ""}` });
       }
     }
     const seenOut = new Set();
@@ -592,7 +604,8 @@ function planComplianceReport(layout, options = {}) {
       seenOut.add(key);
       const text = `${unit.name.name} ${planComplianceRound(unit.credit)}학점(기준 ${range.base}, ${range.min}~${range.max})`;
       out.push(text);
-      flag(unit.row.id, { kind: "range", name: unit.name.name, credit: unit.credit, min: range.min, max: range.max, base: range.base, where: unit.where, text });
+      const reason = `${unit.name.name}: ${unit.how || unit.where} → ${planComplianceRound(unit.credit)}학점, 2022 개정 기준 ${range.base}학점의 증감 범위 ${range.min}~${range.max}학점 밖`;
+      flag(unit.row.id, { kind: "range", name: unit.name.name, credit: unit.credit, min: range.min, max: range.max, base: range.base, where: unit.where, text, reason });
       if (unit.name.type === "공통" && unit.credit < range.min) common.push(`${unit.name.name} ${planComplianceRound(unit.credit)}학점(기준 ${range.base})`);
     }
     const noRangeText = noRange.length ? `범위 정보 없음: ${planComplianceJoin(noRange, 8)}` : "";
@@ -672,7 +685,15 @@ function planComplianceReport(layout, options = {}) {
       }
     }
     add("a8", notListed.length ? "확인필요" : "O", notListed.length ? `${new Set(notListed).size}개 확인필요: ${planComplianceJoin(notListed)}` : "");
-    add("a9", spelled.length ? "확인필요" : "O", spelled.length ? `${new Set(spelled).size}개 확인필요: ${planComplianceJoin(spelled)}` : "");
+    // 업로드·원본 재변환 때 공식 과목명으로 자동 수정한 곳(subject.originalName)은 비고에만 남긴다.
+    const autoFixed = (planData?.subjects || []).filter((subject) => !subject.fixed && subject.originalName !== undefined && subject.originalName !== subject.name);
+    const autoPairs = autoFixed.flatMap((subject) => {
+      const before = planComplianceSplitNames(subject.originalName), after = planComplianceSplitNames(subject.name);
+      return before.length === after.length ? before.map((name, index) => [name.name, after[index].name]).filter(([a, b]) => a !== b).map(([a, b]) => `${a} → ${b}`)
+        : [`${subject.originalName} → ${subject.name}`];
+    });
+    const autoText = autoPairs.length ? `자동 수정 ${autoPairs.length}곳(${planComplianceJoin(autoPairs, 6)})` : "";
+    add("a9", spelled.length ? "확인필요" : "O", [spelled.length ? `${new Set(spelled).size}개 확인필요: ${planComplianceJoin(spelled)}` : "", autoText].filter(Boolean).join(" · "));
   }
   if (!annual) {
     // 10. 공통 과목 → 같은 교과(군) 선택 과목
@@ -893,6 +914,24 @@ function planComplianceReplaceName(rowName, from, to) {
   return changed ? name : null;
 }
 
+// '확인필요' 항목 → 편제표에서 보여 줄 과목 행(학점 범위·과목명은 과목별 경고, 그 밖은 비고에 적힌 과목명, 합계 항목은 소계 행)
+var PLAN_COMPLIANCE_ITEM_KINDS = { a3: ["range"], a8: ["unlisted"], a9: ["spelling"] };
+function planComplianceItemTargets(report, item) {
+  const kinds = PLAN_COMPLIANCE_ITEM_KINDS[item?.id];
+  const rows = [];
+  if (kinds) {
+    for (const [id, issues] of report.subjectIssues || []) if (issues.some((issue) => kinds.includes(issue.kind))) rows.push(id);
+  }
+  if (!rows.length && item?.note) {
+    for (const row of report.model?.rows || []) {
+      if (row.names.some((name) => name.name.length >= 2 && String(item.note).includes(name.name))) rows.push(row.id);
+    }
+  }
+  if (rows.length) return { rows, footer: false, label: rows.length === 1 ? "해당 과목 행" : `해당 과목 ${rows.length}행` };
+  if (["a1", "a2", "a6", "a7"].includes(item?.id)) return { rows: [], footer: true, label: "소계 행" };
+  return null;
+}
+
 // ---- 앱 연결 (아래는 1단계 화면·저장에 연결한다)
 
 function planComplianceEscape(value) {
@@ -953,9 +992,10 @@ function planComplianceAppRules() {
 }
 
 const planComplianceCache = new WeakMap();
-// 편제표별 점검 결과(편제표 데이터·기준값·위계 규칙이 같으면 다시 계산하지 않는다).
-function planComplianceFor(key) {
+// 편제표별 점검 결과(편제표 데이터·기준값·위계 규칙이 같으면 다시 계산하지 않는다). fresh: 캐시를 버리고 지금 데이터로 다시 계산(다시 점검·내보내기).
+function planComplianceFor(key, { fresh = false } = {}) {
   const plan = planCompliancePlan(key);
+  if (fresh && plan?.layout?.planData) planComplianceCache.delete(plan.layout.planData);
   if (!plan?.layout?.planData) return null;
   const settings = planComplianceCurrentSettings();
   const rules = planComplianceAppRules();
@@ -1034,6 +1074,7 @@ function planComplianceDialogs() {
   <dialog class="curriculum-subject-dialog plan-compliance-dialog" id="planComplianceDialog" aria-labelledby="planComplianceTitle">
     <form method="dialog">
       <h2 id="planComplianceTitle">교육과정 편제 점검표</h2>
+      <p class="plan-compliance-recheck"><button class="button" type="button" data-pc-action="recheck" title="지금 편제표 데이터로 바로 다시 계산합니다">다시 점검</button> <span id="planComplianceLastRun" role="status" aria-live="polite"></span></p>
       <div id="planComplianceBody"></div>
       <div class="curriculum-version-dialog-actions">
         <button class="button" type="button" data-pc-action="settings">점검 기준 설정</button>
@@ -1061,6 +1102,17 @@ function planComplianceDialogs() {
       <h2 id="planComplianceStatsTitle">교과(군) 편성 통계</h2>
       <div id="planComplianceStatsBody"></div>
       <div class="curriculum-version-dialog-actions">
+        <button class="button button-primary" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog plan-autoname-dialog" id="planAutoNameDialog" aria-labelledby="planAutoNameTitle">
+    <form method="dialog">
+      <h2 id="planAutoNameTitle">공식 과목명 자동 수정</h2>
+      <p class="note">업로드·원본 재변환 때 2022 개정 교육과정 과목 목록과 띄어쓰기·Ⅰ/1 표기·가운뎃점·괄호만 다르거나 오탈자 후보가 하나뿐인 과목명을 공식명으로 고쳤습니다. 수강신청 결과·선택 그룹이 원래 이름을 써도 같은 과목으로 연결됩니다.</p>
+      <label class="plan-autoname-toggle"><input type="checkbox" id="planAutoNameEnabled"> 이 편제표에서 공식 과목명 자동 수정</label>
+      <div id="planAutoNameList"></div>
+      <div class="curriculum-subject-actions">
         <button class="button button-primary" type="submit" formnovalidate>닫기</button>
       </div>
     </form>
@@ -1101,11 +1153,39 @@ function planComplianceSourcesHtml(report) {
   return `<table class="plan-compliance-sources"><caption>학년별 입학생 편제표 점검</caption><tbody>${rows}</tbody></table>`;
 }
 
-function renderPlanComplianceDialog() {
+// 다시 점검(단추·자동): 직전 결과와 비교해 바뀐 항목을 잠깐 강조하고 "마지막 점검: 14:32 · 확인필요 2 → 1"을 보여 준다.
+let planComplianceLastRun = null;
+let planComplianceHighlight = { key: "", ids: new Set(), until: 0 };
+
+function planComplianceRunState(result) {
+  const saved = planComplianceSaved(result.plan.key);
+  const statuses = Object.fromEntries(result.report.items.map((item) => [item.id, `${planComplianceDisplayStatus(item, saved).status}|${item.note}`]));
+  return { key: result.plan.key, at: new Date(), counts: planComplianceCounts(result.report, saved), statuses };
+}
+
+function planComplianceTimeText(date) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function renderPlanComplianceDialog({ fresh = false, compare = false } = {}) {
   const body = document.getElementById("planComplianceBody");
   if (!body) return;
   const dialog = document.getElementById("planComplianceDialog");
-  const result = planComplianceFor(planComplianceDialogKey);
+  const result = planComplianceFor(planComplianceDialogKey, { fresh });
+  const lastRun = document.getElementById("planComplianceLastRun");
+  if (result && lastRun) {
+    const next = planComplianceRunState(result);
+    const previous = planComplianceLastRun?.key === next.key ? planComplianceLastRun : null;
+    if (compare && previous) {
+      const changed = Object.keys(next.statuses).filter((id) => previous.statuses[id] !== next.statuses[id]);
+      if (changed.length) planComplianceHighlight = { key: next.key, ids: new Set(changed), until: Date.now() + 2500 };
+      const before = previous.counts["확인필요"], after = next.counts["확인필요"];
+      lastRun.textContent = `마지막 점검: ${planComplianceTimeText(next.at)} · 확인필요 ${before} → ${after}${changed.length ? ` · 바뀐 항목 ${changed.length}` : " · 바뀐 항목 없음"}`;
+    } else if (!compare || !previous) {
+      lastRun.textContent = `마지막 점검: ${planComplianceTimeText(next.at)} · 확인필요 ${next.counts["확인필요"]}`;
+    }
+    planComplianceLastRun = next;
+  }
   const buttons = (selector, disabled) => dialog.querySelectorAll(selector).forEach((button) => { button.disabled = disabled; });
   if (!result) {
     body.innerHTML = '<p class="plan-compliance-notice">편제표 데이터가 없습니다. 편제표를 먼저 업로드하세요.</p>';
@@ -1131,10 +1211,13 @@ function renderPlanComplianceDialog() {
     const display = planComplianceDisplayStatus(item, saved);
     const ack = saved.ack?.[item.id] || {};
     const canAck = item.status !== "해당 없음";
-    return `<tr class="${planComplianceStatusClass(display.status)}" data-pc-item="${item.id}">
+    const flash = planComplianceHighlight.key === plan.key && planComplianceHighlight.until > Date.now() && planComplianceHighlight.ids.has(item.id) ? " is-recheck-changed" : "";
+    const targets = display.status === "확인필요" ? planComplianceItemTargets(report, item) : null;
+    const goto = targets ? `<button class="button button-quiet plan-compliance-goto" type="button" data-pc-goto="${item.id}" title="팝업을 닫고 편제표에서 ${planComplianceEscape(targets.label)}을(를) 보여 줍니다">해당 위치로</button>` : "";
+    return `<tr class="${planComplianceStatusClass(display.status)}${flash}" data-pc-item="${item.id}">
       <td class="plan-compliance-no">${item.no}</td><td class="plan-compliance-area">${planComplianceEscape(item.area)}</td>
       <td>${planComplianceEscape(item.text)}${item.hint ? `<small>※ ${planComplianceEscape(item.hint)}</small>` : ""}</td>
-      <td class="plan-compliance-result"><b>${planComplianceEscape(display.status)}</b>${display.acknowledged ? `<small>인정(원래 ${planComplianceEscape(item.status)})</small>` : ""}</td>
+      <td class="plan-compliance-result"><b>${planComplianceEscape(display.status)}</b>${display.acknowledged ? `<small>인정(원래 ${planComplianceEscape(item.status)})</small>` : ""}${goto}</td>
       <td class="plan-compliance-note">${planComplianceEscape(item.note)}${extras[item.id] ? `<small class="plan-compliance-extra">${planComplianceEscape(extras[item.id])}</small>` : ""}</td>
       <td class="plan-compliance-ack">${canAck ? `<label><input type="checkbox" data-pc-ack="${item.id}"${ack.on ? " checked" : ""} aria-label="${item.no}번 인정 오류"> 인정</label>` : ""}</td>
       <td class="plan-compliance-reason">${canAck ? `<input type="text" maxlength="300" data-pc-ack-reason="${item.id}" value="${planComplianceEscape(ack.reason || "")}" placeholder="의도한 편성 사유" aria-label="${item.no}번 인정 오류 사유">` : ""}${canAck && item.id === "a7" ? `<button class="button button-quiet plan-compliance-suggest" type="button" data-pc-suggest="${item.id}" title="${planComplianceEscape(PLAN_COMPLIANCE_KEM_SUGGESTION)}">제안 문구 넣기</button>` : ""}</td>
@@ -1156,17 +1239,17 @@ function renderPlanComplianceDialog() {
     <p class="note">인정오류: 의도한 편성이면 '인정'에 표시하고 사유를 적으세요. 점검 결과가 O로 바뀌고 원래 결과는 함께 남습니다. 입력하면 바로 저장됩니다.</p>`;
 }
 
-function openPlanComplianceDialog(key) {
+function openPlanComplianceDialog(key, { compare = false } = {}) {
   planComplianceDialogs();
   planComplianceDialogKey = key;
-  renderPlanComplianceDialog();
+  renderPlanComplianceDialog({ fresh: true, compare });
   const dialog = document.getElementById("planComplianceDialog");
   if (!dialog.open) dialog.showModal();
 }
 
 // 점검표·통계 팝업과 카드 배지를 다시 그린다. sheet: 기준값이 바뀌어 편제표 표의 경고도 다시 그릴 때.
 function planComplianceRefresh(sheet = false) {
-  if (document.getElementById("planComplianceDialog")?.open) renderPlanComplianceDialog();
+  if (document.getElementById("planComplianceDialog")?.open) renderPlanComplianceDialog({ compare: true });
   if (document.getElementById("planComplianceStatsDialog")?.open) renderPlanComplianceStats();
   if (sheet && Number(state.workflowStep) === 1 && state.curriculumImportedLayout && typeof renderCurriculumDataKeepingScroll === "function") renderCurriculumDataKeepingScroll();
   else if (typeof renderCurriculumCohortUploads === "function") renderCurriculumCohortUploads();
@@ -1262,7 +1345,7 @@ function planComplianceFileName(plan) {
 }
 
 function exportPlanCompliance() {
-  const result = planComplianceFor(planComplianceDialogKey);
+  const result = planComplianceFor(planComplianceDialogKey, { fresh: true });
   if (!result || typeof createWorkbookBlob !== "function" || typeof downloadBlob !== "function") return;
   const { report, plan } = result;
   const sheet = planComplianceSheetRows(report, planComplianceSaved(plan.key), `${plan.label} 교육과정 편제 점검표`, planComplianceItemExtras(result));
@@ -1275,7 +1358,7 @@ function exportPlanCompliance() {
 }
 
 function printPlanCompliance() {
-  const result = planComplianceFor(planComplianceDialogKey);
+  const result = planComplianceFor(planComplianceDialogKey, { fresh: true });
   const target = document.getElementById("printBatch");
   if (!result || !target) return;
   const { report, plan } = result;
@@ -1295,6 +1378,67 @@ function printPlanCompliance() {
     <table><thead><tr><th>연번</th><th>영역</th><th>점검 내용</th><th>점검 결과</th><th>비고</th><th>인정오류</th><th>인정오류 사유</th></tr></thead>
     <tbody><tr><th colspan="7">편성과목 기반 자동점검</th></tr>${rows}<tr><th colspan="7">자체점검</th></tr>${selfRows}</tbody></table></div>`;
   window.print();
+}
+
+// 편제표가 바뀌면(편집·실행취소·업로드·원본 재변환·자동 수정 되돌리기) 부른다. 팝업이 열려 있으면 바로 다시 점검한다.
+// 카드 배지·표의 주황 경고·범례는 renderCurriculumStep이 다시 그린다(planComplianceFor는 바뀐 데이터로 새로 계산).
+function planComplianceChanged() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById("planComplianceDialog")?.open) renderPlanComplianceDialog({ compare: true });
+  if (document.getElementById("planComplianceStatsDialog")?.open) renderPlanComplianceStats();
+}
+
+// 다시 점검 뒤 화면(카드 배지·표 경고)도 같은 결과로 맞춘다.
+function planComplianceSyncScreen() {
+  if (typeof renderCurriculumCohortUploads === "function") renderCurriculumCohortUploads();
+  if (typeof state !== "undefined" && Number(state.workflowStep) === 1) decoratePlanComplianceSheet();
+}
+
+// '해당 위치로': 팝업을 닫고 편제표에서 그 과목 행(또는 소계 행)으로 스크롤·강조. 표 위에 '편제 점검으로 돌아가기' 단추를 잠시 둔다.
+function planComplianceGoto(key, itemId) {
+  const result = planComplianceFor(key);
+  const item = result?.report.items.find((entry) => entry.id === itemId);
+  const targets = item ? planComplianceItemTargets(result.report, item) : null;
+  if (!targets) return;
+  document.getElementById("planComplianceDialog")?.close();
+  if (planComplianceActiveKey() !== key) {
+    const [type, year] = key.split(":");
+    document.querySelector(type === "annual" ? `[data-annual-view="${year}"]` : `[data-cohort-view="${year}"]`)?.click();
+  }
+  const wrap = document.getElementById("curriculumPlanWrap");
+  if (!wrap) return;
+  const find = () => targets.footer ? [...wrap.querySelectorAll("tr.curriculum-footer-row")].slice(0, 1)
+    : targets.rows.map((id) => wrap.querySelector(`tr[data-plan-row="${CSS.escape(id)}"]`)).filter(Boolean);
+  let found = find();
+  if (found.length < Math.max(1, targets.rows.length) && Object.values(state.curriculumPlanFilters || {}).some(Boolean)) {
+    state.curriculumPlanFilters = { grade: "", division: "", area: "", detail: "", query: "" };
+    if (typeof renderCurriculumStep === "function") renderCurriculumStep();
+    found = find();
+  }
+  wrap.querySelectorAll(".is-plan-focus").forEach((row) => row.classList.remove("is-plan-focus"));
+  found.forEach((row) => row.classList.add("is-plan-focus"));
+  found[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  window.setTimeout(() => found.forEach((row) => row.classList.remove("is-plan-focus")), 4000);
+  planComplianceShowReturn(key, `${item.no}번 ${targets.label}`);
+}
+
+let planComplianceReturnTimer = null;
+function planComplianceShowReturn(key, label) {
+  let bar = document.getElementById("planComplianceReturn");
+  if (!bar) {
+    document.getElementById("planWarnLegend")?.insertAdjacentHTML("afterend", '<span id="planComplianceReturn" class="plan-compliance-return hidden"><span id="planComplianceReturnText"></span> <button class="button button-primary" type="button" id="planComplianceReturnButton">편제 점검으로 돌아가기(다시 점검)</button></span>');
+    bar = document.getElementById("planComplianceReturn");
+    if (!bar) return;
+    document.getElementById("planComplianceReturnButton").addEventListener("click", () => {
+      bar.classList.add("hidden");
+      openPlanComplianceDialog(bar.dataset.key, { compare: true });
+    });
+  }
+  bar.dataset.key = key;
+  document.getElementById("planComplianceReturnText").textContent = `편제 점검 ${label}을(를) 보는 중 · 고친 뒤`;
+  bar.classList.remove("hidden");
+  if (planComplianceReturnTimer) window.clearTimeout(planComplianceReturnTimer);
+  planComplianceReturnTimer = window.setTimeout(() => bar.classList.add("hidden"), 120000);
 }
 
 // ---- 편성 영역(행 메뉴)
@@ -1330,13 +1474,62 @@ function applyPlanSectionDialog() {
 }
 
 // ---- 편제표 표에 영역 표시·학점/과목명 경고(app.js renderCurriculumStep에서 표를 그린 뒤 부른다)
+// ---- 공식 과목명 자동 수정 표시·되돌리기(curriculum-data.js curriculumDataAutoNames)
+function planAutoNameDecorate(wrap) {
+  const layout = typeof state !== "undefined" ? state.curriculumImportedLayout : null;
+  const notice = document.getElementById("planAutoNameNotice");
+  const list = typeof curriculumAutoNameList === "function" ? curriculumAutoNameList(layout) : [];
+  if (notice) {
+    const off = Boolean(layout?.autoNameOff) && !layout?.derived;
+    notice.classList.toggle("hidden", !list.length && !off);
+    document.getElementById("planAutoNameNoticeText").textContent = list.length ? `공식 과목명으로 ${list.length}곳 자동 수정` : off ? "공식 과목명 자동 수정 꺼짐" : "";
+  }
+  for (const item of list) {
+    const cell = wrap.querySelector(`tr[data-plan-row="${CSS.escape(item.id)}"] .curriculum-subject-cell`);
+    if (!cell || cell.querySelector(".plan-autoname-mark")) continue;
+    cell.insertAdjacentHTML("beforeend", ` <span class="plan-autoname-mark" title="자동 수정 · 원래: ${planComplianceEscape(item.from)}">자동 수정</span>`);
+  }
+}
+
+function renderPlanAutoNameDialog() {
+  const layout = state.curriculumImportedLayout;
+  const list = typeof curriculumAutoNameList === "function" ? curriculumAutoNameList(layout) : [];
+  const enabled = document.getElementById("planAutoNameEnabled");
+  enabled.checked = !layout?.autoNameOff;
+  enabled.disabled = !layout?.planData || Boolean(layout.derived);
+  document.getElementById("planAutoNameList").innerHTML = list.length
+    ? `<table class="plan-compliance-sources"><thead><tr><th>원래 이름</th><th>공식 과목명</th><th></th></tr></thead><tbody>${list.map((item) => `<tr><td>${planComplianceEscape(item.from)}</td><td>${planComplianceEscape(item.to)}</td><td><button class="button button-quiet" type="button" data-autoname-revert="${planComplianceEscape(item.id)}">되돌리기</button></td></tr>`).join("")}</tbody></table>`
+    : `<p class="note">${layout?.autoNameOff ? "자동 수정이 꺼져 있습니다. 켜면 지금 과목명을 다시 고칩니다." : "자동으로 고친 과목명이 없습니다."}</p>`;
+}
+
+function openPlanAutoNameDialog() {
+  planComplianceDialogs();
+  renderPlanAutoNameDialog();
+  const dialog = document.getElementById("planAutoNameDialog");
+  if (!dialog.open) dialog.showModal();
+}
+
 function decoratePlanComplianceSheet() {
   const wrap = document.getElementById("curriculumPlanWrap");
+  const legend = document.getElementById("planWarnLegend");
+  legend?.classList.add("hidden");
+  if (wrap) planAutoNameDecorate(wrap);
   const key = planComplianceActiveKey();
   if (!wrap || !key) return;
   let result = null;
   try { result = planComplianceFor(key); } catch { result = null; }
   if (!result) return;
+  try { planComplianceDecorateRows(wrap, result); } finally {
+    // 범례: 주황 테두리의 뜻(편제 점검 3번 학점 범위 확인)을 표 위에 알린다.
+    const count = wrap.querySelectorAll("tr[data-plan-row] .curriculum-subject-cell.is-plan-warn-row").length;
+    if (legend && count) {
+      legend.classList.remove("hidden");
+      document.getElementById("planWarnLegendText").textContent = `주황 테두리 = 학점 범위 확인 ${count}과목(편제 점검 3번 · 칸에 마우스를 올리면 이유)`;
+    }
+  }
+}
+
+function planComplianceDecorateRows(wrap, result) {
   const { report, plan } = result;
   const columns = plan.layout.planTemplate?.columns || {};
   const warn = report.revision.revision !== "2015";
@@ -1354,7 +1547,7 @@ function decoratePlanComplianceSheet() {
     const issues = report.subjectIssues.get(row.id) || [];
     const range = issues.filter((issue) => issue.kind === "range");
     if (range.length) {
-      const message = `학점 범위 확인: ${range.map((issue) => `${issue.text} · ${issue.where}`).join(" / ")}`;
+      const message = `학점 범위 확인(편제 점검 3번) — ${range.map((issue) => issue.reason || `${issue.text} · ${issue.where}`).join(" / ")}. 학기 학점·운영학점·묶음(택n)·교차집중 설정을 확인하세요.`;
       const creditColumn = columns.op >= 0 ? columns.op : columns.base;
       const cells = [...tr.querySelectorAll(`td[data-source-column="${creditColumn}"]`)];
       for (const field of Object.keys(row.designated)) {
@@ -1403,6 +1596,9 @@ function initPlanCompliance() {
     if (open) { planComplianceDialogKey = open.dataset.pcOpen; renderPlanComplianceDialog(); return; }
     const action = event.target.closest("[data-pc-action]")?.dataset.pcAction;
     if (action === "settings") openPlanComplianceSettings();
+    if (action === "recheck") { renderPlanComplianceDialog({ fresh: true, compare: true }); planComplianceSyncScreen(); }
+    const goto = event.target.closest("[data-pc-goto]");
+    if (goto) { planComplianceGoto(planComplianceDialogKey, goto.dataset.pcGoto); return; }
     const suggest = event.target.closest("[data-pc-suggest]");
     if (suggest) {
       const id = suggest.dataset.pcSuggest;
@@ -1440,6 +1636,23 @@ function initPlanCompliance() {
     renderPlanComplianceSettings();
     planComplianceRefresh(true);
     if (typeof courseCheckSharedSettingsChanged === "function") courseCheckSharedSettingsChanged();
+  });
+  document.getElementById("planAutoNameOpen")?.addEventListener("click", openPlanAutoNameDialog);
+  const autoDialog = document.getElementById("planAutoNameDialog");
+  autoDialog.addEventListener("click", (event) => {
+    const revert = event.target.closest("[data-autoname-revert]");
+    if (!revert || typeof commitCurriculumDataEdit !== "function") return;
+    const item = curriculumAutoNameList(state.curriculumImportedLayout).find((entry) => entry.id === revert.dataset.autonameRevert);
+    if (!item) return;
+    commitCurriculumDataEdit((current) => curriculumDataRevertAutoName(current, item.id), `'${item.to}'을(를) 원래 이름 '${item.from}'(으)로 되돌렸습니다.`);
+    renderPlanAutoNameDialog();
+  });
+  autoDialog.addEventListener("change", (event) => {
+    if (event.target.id !== "planAutoNameEnabled" || typeof commitCurriculumDataEdit !== "function") return;
+    const on = event.target.checked;
+    commitCurriculumDataEdit((current) => curriculumDataSetAutoNames(current, on, state.curriculumCohortYear),
+      on ? "이 편제표의 공식 과목명 자동 수정을 켰습니다." : "이 편제표의 공식 과목명 자동 수정을 끄고 원래 이름으로 되돌렸습니다.");
+    renderPlanAutoNameDialog();
   });
   const sectionForm = document.getElementById("planSectionForm");
   sectionForm.addEventListener("submit", (event) => { event.preventDefault(); applyPlanSectionDialog(); });

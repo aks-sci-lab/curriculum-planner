@@ -1,14 +1,21 @@
 "use strict";
 var resultImportPending = null;
 
+// 과목명 비교 키. 편제표에서 공식 과목명으로 자동 수정한 과목은 원래 이름도 같은 키로 본다(curriculum-data.js curriculumNameAlias).
 function normalizeResultCourseName(name) {
+  const key = normalizeResultCourseKey(name);
+  const alias = typeof curriculumNameAlias === "function" ? curriculumNameAlias(key, normalizeResultCourseKey) : null;
+  return alias || key;
+}
+
+function normalizeResultCourseKey(name) {
   const text = typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(name) : String(name ?? "");
   return text
     .replace(/[*＊★☆■↔]/g, "")
     .replace(/[（(]\s*[12]\s*학기\s*[)）]/g, "")
     .replace(/[（(]\s*[123]\s*학년\s*[)）]/g, "")
     .replace(/[（(]\s*(?:일반|진로|융합)(?:선택)?\s*[)）]/g, "")
-    .replace(/[·ㆍ•‧]/g, "")
+    .replace(/[·ㆍ•‧⋅]/g, "")
     .replace(/\s+/g, "")
     .trim();
 }

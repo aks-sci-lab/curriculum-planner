@@ -6,6 +6,9 @@
 
 const PLAN_DATA_FIELDS = ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"];
 const PLAN_DATA_VERSION = 1;
+// 업로드 변환기 버전. 저장된 편제표 데이터의 planData.converter가 이보다 낮으면(없으면 1 이하) 원본 엑셀을 새 변환기로 다시 읽는다
+// (curriculum-reconvert.js). 2: 교차집중 과목·묶음 학점(수식·글자 칸)·공식 과목명 자동 수정.
+const PLAN_DATA_CONVERTER = 2;
 const PLAN_DATA_STOP = /소계|합계|총이수|창의적체험|필수이수|표기방법/;
 const PLAN_DATA_NOTE = /[123]\s*학년[\s\S]*학기/;
 
@@ -137,6 +140,14 @@ function curriculumDataFromLayout(layout) {
   };
   const raw = (row, column) => column < 0 || covered(row, column) ? "" : planDataText(rows[row]?.[column]);
   const formulas = layout.formulas || {};
+  // 학기 칸의 학점: 숫자, '4학점'·'(4)' 같은 글자, 저장값 없이 수식만 있는 칸(=F61처럼 다른 칸을 가리키는 수식)을 읽는다.
+  const cellNumber = (row, column, depth = 0) => {
+    const text = raw(row, column).trim();
+    const number = planDataNumber(text) ?? planDataNumber(text.replace(/^[(（]\s*|\s*[)）]$/g, "").replace(/\s*학점$/, ""));
+    if (number !== null || text || depth > 2) return number;
+    const reference = String(formulas[`${row}:${column}`] ?? "").replace(/^=/, "").trim().match(/^\$?([A-Z]{1,3})\$?(\d+)$/);
+    return reference ? cellNumber(Number(reference[2]) - 1, columnIndex(reference[1]), depth + 1) : null;
+  };
   const expanded = expandCurriculumLayoutRows(layout);
   const contexts = importedPlanCourseContexts(layout, columns);
   const usedSemesters = semesterColumns.filter((column) => column >= 0);
@@ -223,12 +234,14 @@ function curriculumDataFromLayout(layout) {
     }
     groupDrafts.push({ start: tag.row, end, columns: tag.columns, pick: tag.pick, tagCredit: tag.credit, credit: 0 });
   }
+  // 예전 앱의 병합 기록: '선택과목군 택n · m학점'은 선택과목군, '교차집중과목군'(같은 학년 1·2학기 병합)은 교차집중 과목이다.
   for (const merge of typeof curriculumSheetMerges === "function" ? curriculumSheetMerges(layout) : []) {
     if (merge.kind === "plain") continue;
     const mergeColumns = usedSemesters.filter((column) => column >= merge.startColumn && column <= merge.endColumn);
     if (!mergeColumns.length) continue;
+    const credit = Number(merge.credit) > 0 ? Number(merge.credit) : 0;
     groupDrafts.push({ start: merge.startRow, end: merge.endRow, columns: mergeColumns, pick: merge.pick,
-      tagCredit: merge.credit, credit: merge.credit, legacy: true });
+      tagCredit: credit, credit, legacy: true, cross: merge.kind === "cross" && mergeColumns.length > 1 });
   }
   const slotCells = new Set();
   for (const draft of groupDrafts) {
@@ -237,7 +250,7 @@ function curriculumDataFromLayout(layout) {
     if (!draft.credit) {
       for (let row = draft.start + 1; row <= draft.end && !draft.credit; row++) {
         for (const column of draft.columns) {
-          const value = planDataNumber(raw(row, column));
+          const value = cellNumber(row, column);
           if (value > 0) { draft.credit = value; break; }
         }
       }
@@ -288,7 +301,11 @@ function curriculumDataFromLayout(layout) {
       for (let row = start; row <= end; row++) {
         if (slotCells.has(`${row}:${column}`) || covered(row, column)) continue;
         const value = raw(row, column).trim();
-        if (!value) continue;
+        if (!value) {
+          const number = cellNumber(row, column);
+          if (number > 0 && !Object.hasOwn(subject.credits, field)) subject.credits[field] = number;
+          continue;
+        }
         if (PLAN_DATA_NOTE.test(value)) { if (!subject.note) subject.note = raw(row, column); continue; }
         if (/교차/.test(value)) {
           if (!crossLabel) crossLabel = raw(row, column).trim();
@@ -298,7 +315,7 @@ function curriculumDataFromLayout(layout) {
           subject.cross = crossColumns.map((item) => PLAN_DATA_FIELDS[semesterColumns.indexOf(item)]);
           continue;
         }
-        const number = planDataNumber(value);
+        const number = planDataNumber(value) ?? cellNumber(row, column);
         if (number !== null) { if (!Object.hasOwn(subject.credits, field)) subject.credits[field] = number; continue; }
         if (/^[-–—]+$/.test(value) || planDataTag(value)) continue;
         if (!Object.hasOwn(subject.texts, field)) subject.texts[field] = value;
@@ -362,6 +379,14 @@ function curriculumDataFromLayout(layout) {
     const clash = fields.some((field) => members.some((member) => usedSlots.has(`${member.id}:${field}`)));
     if (clash || !fields.length) continue;
     for (const field of fields) for (const member of members) usedSlots.add(`${member.id}:${field}`);
+    if (draft.cross) {
+      // 교차집중: 학생이 고르는 묶음이 아니라 학급마다 학기를 엇갈려 이수하는 과목이다. 학기마다 같은 학점을 둔다.
+      for (const member of members) {
+        member.cross = fields.slice();
+        for (const field of fields) if (Number(draft.credit) > 0) member.credits[field] = Number(draft.credit);
+      }
+      continue;
+    }
     groups.push({ id: `g${nextId++}`, fields, pick: Math.max(1, Number(draft.pick) || 1), credit: Number(draft.credit) || 0,
       members: members.map((member) => member.id) });
   }
@@ -391,9 +416,10 @@ function curriculumDataFromLayout(layout) {
     columns: columnSet, header, footer, bodyStart, bodyEnd, crossLabel: crossLabel || "교차집중(↔)",
     defaultHeight: subjects.map((subject) => subject.heights[0]).filter(Boolean).sort((a, b) => a - b)[Math.floor(subjects.length / 2)] || null
   };
-  const data = { version: PLAN_DATA_VERSION, nextId, subjects: body, groups };
+  const data = { version: PLAN_DATA_VERSION, converter: PLAN_DATA_CONVERTER, nextId, subjects: body, groups };
   normalizeCurriculumData(data);
-  return { data, template };
+  const repairs = curriculumDataRepair(data);
+  return { data, template, repairs };
 }
 
 function planDataSubjects(data) {
@@ -424,6 +450,100 @@ function normalizeCurriculumData(data) {
     }
   }
   return data;
+}
+
+// 선택과목군 학점을 학기 칸에서 읽지 못했으면(0) 구성 과목의 운영학점(없으면 기준학점)을 쓴다.
+// 여러 학기에 걸친 묶음(1·2학기 택1)은 운영학점이 두 학기 합이므로 학기 수로 나눈다. 구성 과목 학점이 서로 다르면 가장 큰 값을 쓰고 확인 표시를 남긴다.
+function planDataMemberCredits(data, group) {
+  const byId = new Map((data?.subjects || []).map((item) => [item.id, item]));
+  const fields = Math.max(1, group?.fields?.length || 1);
+  return (group?.members || []).map((id) => byId.get(id)).filter((item) => item && !item.fixed)
+    .map((item) => (planDataNumber(item.op) || planDataNumber(item.base) || 0) / fields)
+    .filter((value) => value > 0).map((value) => Math.round(value * 1000) / 1000);
+}
+
+function planDataGroupCredit(data, group) {
+  if (Number(group?.credit) > 0) return Number(group.credit);
+  const values = planDataMemberCredits(data, group);
+  return values.length ? Math.max(...values) : 0;
+}
+
+// 학점을 읽지 못한 묶음(0)의 계산용 대체값 안내. 저장 데이터는 바꾸지 않고 계산할 때만 운영학점을 쓴다.
+function planDataGroupCreditInfo(data, group) {
+  if (Number(group?.credit) > 0) return { credit: Number(group.credit), from: "sheet", note: "" };
+  const values = [...new Set(planDataMemberCredits(data, group))].sort((a, b) => a - b);
+  if (!values.length) return { credit: 0, from: "", note: "" };
+  const credit = Math.max(...values);
+  return { credit, from: "op", note: values.length > 1 ? `구성 과목 운영학점(${values.map(planDataNumberText).join("·")})이 서로 달라 가장 큰 ${planDataNumberText(credit)}학점을 썼습니다.` : "" };
+}
+
+function planDataSchoolDesignated(subject) {
+  return planDataDivision(subject?.category) === "학교 지정 교육과정" ||
+    (typeof normalizeCurriculumDivision === "function" && normalizeCurriculumDivision(String(subject?.category || "").replace(/↔/g, " ").trim()) === "학교 지정 교육과정");
+}
+
+function planDataIsGradePair(fields) {
+  return fields?.length === 2 && planDataGrade(fields[0]) === planDataGrade(fields[1]) &&
+    new Set(fields.map(planDataSemester)).size === 2;
+}
+
+// 선택과목군(들)을 교차집중 과목 한 행으로 바꾼다. 구성 과목이 여러 행이면 첫 행에 과목명을 모은다.
+function planDataGroupsToCross(data, groups) {
+  const fields = PLAN_DATA_FIELDS.filter((field) => groups.some((group) => group.fields.includes(field)));
+  const ids = [...new Set(groups.flatMap((group) => group.members))];
+  const members = data.subjects.filter((item) => ids.includes(item.id) && !item.fixed);
+  if (!members.length) throw new Error("교차집중으로 바꿀 과목을 찾지 못했습니다.");
+  const first = members[0];
+  const names = [...new Set(members.flatMap((item) => planDataNameParts(item.name).map((part) => part.trim())))];
+  const credits = {};
+  for (const field of fields) {
+    const group = groups.find((item) => item.fields.includes(field));
+    credits[field] = planDataGroupCredit(data, group);
+  }
+  data.groups = data.groups.filter((group) => !groups.includes(group));
+  for (const other of members.slice(1)) {
+    for (const group of planDataGroupsOf(data, other.id)) group.members = group.members.filter((id) => id !== other.id);
+    data.subjects.splice(planDataIndex(data, other.id), 1);
+  }
+  data.groups = data.groups.filter((group) => group.members.length);
+  first.name = names.join(", ");
+  first.cross = fields;
+  for (const field of fields) {
+    delete first.texts?.[field];
+    if (credits[field] > 0) first.credits[field] = credits[field];
+  }
+  if (first.planSectionManual && first.planSection === "choice") { delete first.planSection; delete first.planSectionManual; }
+  first.opFormula = false;
+  return first;
+}
+
+// 학교 지정 과목의 '같은 학년 1·2학기 택1'은 학생이 고르는 묶음이 아니라 교차집중(반마다 학기를 엇갈려 이수)이다.
+// ① 묶음 하나가 1·2학기 두 열에 걸친 택1, ② 같은 구성 과목의 택1 묶음이 1학기·2학기에 따로 있는 경우를 교차집중으로 바꾼다.
+function planDataRecognizeCross(data) {
+  const changed = [];
+  const byId = new Map(planDataSubjects(data).map((item) => [item.id, item]));
+  const eligible = (group) => Number(group.pick) === 1 && group.members.length &&
+    group.members.every((id) => byId.has(id) && planDataSchoolDesignated(byId.get(id)) && !byId.get(id).note) &&
+    planDataNamesCount(data, group.members) >= 2;
+  const used = new Set();
+  for (const group of [...(data.groups || [])]) {
+    if (used.has(group) || !eligible(group)) continue;
+    const set = planDataCrossCandidates(data, group);
+    if (!set || set.some((item) => used.has(item) || !eligible(item))) continue;
+    set.forEach((item) => used.add(item));
+    const subject = planDataGroupsToCross(data, set);
+    changed.push(`${planDataSubjectNames(subject.name).join("↔")}(${planDataFieldLabel(subject.cross)})`);
+  }
+  return changed;
+}
+
+// 업로드 변환의 마지막 단계: 교차집중 인식(원본의 학교 지정 1·2학기 택1), 학점을 읽지 못한 묶음 안내(계산할 때만 운영학점).
+function curriculumDataRepair(data) {
+  if (!data?.subjects) return [];
+  const cross = planDataRecognizeCross(data);
+  const empty = (data.groups || []).map((group) => ({ group, info: planDataGroupCreditInfo(data, group) })).filter(({ info }) => info.from === "op");
+  return [...cross.map((text) => `교차집중으로 인식: ${text}`),
+    ...empty.map(({ group, info }) => `${planDataFieldLabel(group.fields)} 택${group.pick}: 학기 칸에 학점이 없어 계산에는 구성 과목 운영학점 ${planDataNumberText(info.credit)}학점을 씁니다.${info.note ? ` ${info.note}` : ""}`)];
 }
 
 function planDataGroupsOf(data, id) {
@@ -559,7 +679,7 @@ function curriculumSheetFromData(data, template) {
     // 학점 칸 n개: 첫 칸에 학점을 적고 나머지는 첫 칸을 가리키는 수식이다. 이수학점·소계 SUM이 n × 학점을 센다.
     for (let offset = 1; offset <= group.pick && start + offset <= end; offset++) {
       for (const column of groupColumns) {
-        set(start + offset, column, planDataNumberText(group.credit));
+        set(start + offset, column, planDataNumberText(planDataGroupCredit(data, group)));
         if (offset > 1) formulas[`${start + offset}:${column}`] = planDataRef(start + 1, column);
       }
     }
@@ -724,14 +844,21 @@ function applyCurriculumData(layout, data = layout.planData, template = layout.p
   return layout;
 }
 
+// 업로드 변환에서 보정한 내용(교차집중 인식·운영학점으로 채운 묶음 학점). 상태 문구에만 쓰고 저장하지 않는다.
+const planDataRepairNotes = new WeakMap();
+function curriculumDataRepairNotes(layout) {
+  return planDataRepairNotes.get(layout) || [];
+}
+
 // 예전에 저장한 편제표(표 기반)는 열 때 데이터로 바꾼다. 실패하면 표 기반 그대로 둔다.
 function ensureCurriculumPlanData(layout) {
   if (!layout || layout.derived && layout.planData) return false;
   if (layout.planData?.version === PLAN_DATA_VERSION && layout.planTemplate) return false;
   if (!Array.isArray(layout.rows) || !layout.rows.length) return false;
   try {
-    const { data, template } = curriculumDataFromLayout(layout);
+    const { data, template, repairs } = curriculumDataFromLayout(layout);
     applyCurriculumData(layout, data, template);
+    planDataRepairNotes.set(layout, repairs || []);
     return true;
   } catch (error) {
     layout.planDataError = error?.message || String(error);
@@ -775,8 +902,8 @@ function curriculumDataChoiceBlocks(layout) {
       blocks.push({
         key: `${field}:${members[0].row}`, groupId: group.id, field,
         grade: planDataGrade(field), semester: planDataSemester(field), column: columns.semesters[index],
-        startRow: members[0].row, endRow: members.at(-1).rowEnd, pick: group.pick, credit: group.credit,
-        total: group.pick * group.credit, creditCells: [], subjects, completion: null,
+        startRow: members[0].row, endRow: members.at(-1).rowEnd, pick: group.pick, credit: planDataGroupCredit(data, group),
+        total: group.pick * planDataGroupCredit(data, group), creditCells: [], subjects, completion: null,
         ...(group.fields.length > 1 ? { crossed: true } : {})
       });
     }
@@ -817,6 +944,7 @@ function curriculumDataPlanEntries(layout) {
     const crossedName = String(subject.name).includes("↔");
     const area = String(subject.area || "").replace(/↔/g, " ").replace(/\s+/g, " ").trim();
     const base = { area, division, detail: subject.kind || "", names: names.length, crossed: Boolean(subject.cross?.length) || crossedName,
+      crossSemesters: subject.cross?.length || 0, ...(subject.cross?.length && names.length > 1 ? { crossExtra: planDataCrossSplitIndex(subject) } : {}),
       choiceTag, rowIndex: subject.row };
     if (subject.note) {
       const note = String(subject.note).trim();
@@ -839,7 +967,7 @@ function curriculumDataPlanEntries(layout) {
       const group = memberships.find((item) => item.fields.includes(field));
       if (group) {
         names.forEach((name, nameIndex) => result.entries.push({ ...base, crossed: group.fields.length > 1 || crossedName,
-          grade, semester, subject: name, nameIndex, credit: group.credit || credit, creditSource: "block", kind: "선택" }));
+          grade, semester, subject: name, nameIndex, credit: planDataGroupCredit(data, group) || credit, creditSource: "block", kind: "선택" }));
         return;
       }
       const value = subject.credits?.[field];
@@ -877,7 +1005,7 @@ function curriculumDataSignatures(layout, plan = null) {
         !memberships.some((group) => group.fields.includes(`sem${entry.grade}${entry.semester}`)))
         .map((entry) => JSON.stringify([`sem${entry.grade}${entry.semester}`, Number(entry.credit), entry.kind, entry.crossed])));
       for (const group of memberships) for (const field of group.fields) {
-        placements.add(JSON.stringify([field, group.credit, "선택", group.fields.length > 1]));
+        placements.add(JSON.stringify([field, planDataGroupCredit(data, group), "선택", group.fields.length > 1]));
       }
       const officialSubject = official(name);
       const identity = {
@@ -891,7 +1019,7 @@ function curriculumDataSignatures(layout, plan = null) {
         item.records.add(JSON.stringify({
           ...identity, placement,
           groups: memberships.filter((group) => group.fields.includes(field)).map((group) =>
-            JSON.stringify([group.pick, group.credit, [...new Set(group.members.flatMap((id) =>
+            JSON.stringify([group.pick, planDataGroupCredit(data, group), [...new Set(group.members.flatMap((id) =>
               planDataSubjectNames(byId.get(id)?.name).map(planDataNameKey)))].sort()])).sort(),
           ...(plan ? { manualGroups: [...new Set(plan.filter((row) => planDataNameKey(row.subject) === key && row[field] &&
             row.semesterGroups?.[field] && !row.semesterGroups[field].block).map((row) =>
@@ -927,6 +1055,7 @@ function curriculumDataEdit(layout, mutate) {
 }
 
 // 전학년 편제표에서 쓰는 과목별 학기 학점(묶음 과목은 묶음 학점, 메모 과목은 메모 학점).
+// 교차집중 과목은 함께 엇갈려 이수하는 과목명(crossNames)과 학기(crossFields)를 함께 남긴다(전학년 편제표가 한 행으로 다시 묶는다).
 function curriculumDataSubjectCredits(layout) {
   const credits = new Map();
   for (const entry of curriculumDataPlanEntries(layout).entries) {
@@ -935,6 +1064,15 @@ function curriculumDataSubjectCredits(layout) {
     const field = `sem${entry.grade}${entry.semester}`;
     if (!item[field]) item[field] = Number(entry.credit) || 0;
     credits.set(key, item);
+  }
+  for (const subject of planDataSubjects(layout?.planData)) {
+    if (!subject.cross?.length || subject.note) continue;
+    const names = planDataSubjectNames(subject.name);
+    if (names.length < 2) continue;
+    for (const name of names) {
+      const item = credits.get(planDataNameKey(name));
+      if (item) { item.crossNames = names.slice(); item.crossFields = subject.cross.slice(); if (subject.crossSplit) item.crossSplit = subject.crossSplit; }
+    }
   }
   return credits;
 }
@@ -1002,12 +1140,117 @@ function curriculumDataUngroupSelection(layout, selection) {
   });
 }
 
+// 드래그로 고른 두 학기 칸(같은 학년 1·2학기)을 교차집중 과목으로 묶는다. 학기당 학점은 고른 칸의 학점(없으면 운영학점 ÷ 2).
+function curriculumDataSelectionToCross(layout, selection) {
+  return curriculumDataEdit(layout, (data, template) => {
+    const fields = planDataSelectionFields(template, selection);
+    if (!planDataIsGradePair(fields)) throw new Error("교차집중은 같은 학년의 1·2학기 두 열을 함께 고르세요.");
+    const members = planDataSelectionSubjects(data, selection);
+    if (!members.length) throw new Error("과목이 있는 행을 선택하세요.");
+    if (members.some((item) => item.note)) throw new Error("학기 칸 메모(소인수·공동) 과목은 교차집중으로 묶을 수 없습니다.");
+    const ids = members.map((item) => item.id);
+    if (planDataNamesCount(data, ids) < 2) throw new Error("교차집중은 과목이 두 개 이상이어야 합니다(예: 음악, 미술).");
+    const overlapping = data.groups.filter((group) => group.fields.some((field) => fields.includes(field)) && group.members.some((id) => ids.includes(id)));
+    if (overlapping.some((group) => group.members.some((id) => !ids.includes(id)))) {
+      throw new Error("기존 선택과목군의 일부만 선택했습니다. 기존 묶음 전체를 포함해 선택하거나 먼저 묶음을 푸세요.");
+    }
+    const credits = members.flatMap((item) => fields.map((field) => Number(item.credits?.[field]) || 0)).filter((value) => value > 0);
+    const credit = Math.max(0, ...credits, ...overlapping.map((group) => planDataGroupCredit(data, group))) ||
+      (planDataNumber(members[0].op) || planDataNumber(members[0].base) || 0) / fields.length;
+    data.groups = data.groups.filter((group) => !overlapping.includes(group));
+    const group = { id: planDataNewId(data, "g"), fields, pick: 1, credit: credit > 0 ? credit : 0, members: ids };
+    data.groups.push(group);
+    return planDataGroupsToCross(data, [group]);
+  });
+}
+
+// 묶음 띠의 위·아래 끝을 끌어 범위를 바꾼다. edge: "top" | "bottom", targetId: 새 끝 과목 행.
+// 빠지는 과목은 묶음 학점을 자기 학기 학점으로 가지고, 들어오는 과목의 그 학기 학점·글자는 지운다.
+function curriculumDataResizeGroup(layout, groupId, edge, targetId) {
+  return curriculumDataEdit(layout, (data) => {
+    const group = data.groups.find((item) => item.id === groupId);
+    if (!group) throw new Error("선택과목군을 찾지 못했습니다.");
+    const indexes = group.members.map((id) => planDataIndex(data, id));
+    const target = planDataIndex(data, targetId);
+    if (target < 0 || data.subjects[target].fixed) throw new Error("과목 행까지 끌어 놓으세요.");
+    const first = edge === "top" ? target : Math.min(...indexes);
+    const last = edge === "top" ? Math.max(...indexes) : target;
+    if (first > last) throw new Error("묶음에는 과목이 하나 이상 있어야 합니다.");
+    const inside = data.subjects.slice(first, last + 1);
+    if (inside.some((item) => item.fixed)) throw new Error("소계 같은 고정 행을 넘어 묶을 수 없습니다.");
+    if (inside.some((item) => item.note)) throw new Error("학기 칸 메모(소인수·공동) 과목은 선택과목군에 넣을 수 없습니다.");
+    const ids = inside.map((item) => item.id);
+    const clash = data.groups.find((other) => other !== group && other.fields.some((field) => group.fields.includes(field)) &&
+      other.members.some((id) => ids.includes(id)));
+    if (clash) throw new Error(`${planDataGroupLabel(clash)} 묶음과 학기 칸이 겹칩니다.`);
+    const names = planDataNamesCount(data, ids);
+    if (group.pick > names) throw new Error(`묶음 과목이 ${names}개가 되어 택${group.pick}을 유지할 수 없습니다. 택 수를 먼저 줄이세요.`);
+    const credit = planDataGroupCredit(data, group);
+    for (const id of group.members) {
+      if (ids.includes(id)) continue;
+      const item = data.subjects.find((subject) => subject.id === id);
+      for (const field of group.fields) if (credit > 0) item.credits[field] = credit;
+    }
+    for (const item of inside) {
+      if (group.members.includes(item.id)) continue;
+      for (const field of group.fields) { delete item.credits?.[field]; delete item.texts?.[field]; }
+      if (item.cross?.some((field) => group.fields.includes(field))) item.cross = null;
+      if (item.opFormula) item.opFormula = false;
+    }
+    group.members = ids;
+    return group;
+  });
+}
+
+// 2단계 선택 그룹 편집기에서 편제표와 연동된 과목 칩을 다른 묶음(또는 묶음 밖)으로 끌었을 때.
+// 편제표가 기준이므로 과목 행을 목표 묶음의 끝으로 옮겨 묶음을 바꾼다. targetGroupId가 없으면 묶음 밖(원래 묶음 바로 아래)으로.
+function curriculumDataMoveSubjectToGroup(layout, name, field, targetGroupId) {
+  return curriculumDataEdit(layout, (data) => {
+    let item = planDataFindName(data, name);
+    if (!item) throw new Error(`${name}: 편제표에서 과목을 찾지 못했습니다.`);
+    const source = planDataGroupsOf(data, item.id).find((group) => group.fields.includes(field)) || null;
+    const target = targetGroupId ? data.groups.find((group) => group.id === targetGroupId) : null;
+    if (targetGroupId && !target) throw new Error("옮길 선택과목군을 찾지 못했습니다.");
+    if (target && !target.fields.includes(field)) throw new Error("같은 학기의 선택과목군으로만 옮길 수 있습니다.");
+    if (source && target && source === target) return item;
+    if (item.note) throw new Error("학기 칸 메모(소인수·공동) 과목은 선택과목군에 넣을 수 없습니다.");
+    if (planDataNameParts(item.name).length > 1) item = planDataIsolate(data, name);
+    const others = planDataGroupsOf(data, item.id).filter((group) => group !== source);
+    if (others.length) throw new Error(`${name}은(는) ${others.map(planDataGroupLabel).join(", ")} 묶음에도 있어 행을 옮길 수 없습니다. 1단계 편제표에서 바꾸세요.`);
+    const credit = source ? planDataGroupCredit(data, source) : 0;
+    if (source) {
+      const rest = source.members.filter((id) => id !== item.id);
+      if (rest.length && planDataNamesCount(data, rest) < source.pick) throw new Error(`${planDataGroupLabel(source)}: 남는 과목이 ${planDataNamesCount(data, rest)}개입니다. 선택 수를 먼저 줄이세요.`);
+    }
+    const lastOf = (group) => Math.max(...group.members.map((id) => planDataIndex(data, id)));
+    const anchor = target ? lastOf(target) : source ? lastOf(source) : -1;
+    if (source) source.members = source.members.filter((id) => id !== item.id);
+    data.groups = data.groups.filter((group) => group.members.length);
+    if (anchor >= 0) {
+      const anchorId = data.subjects[anchor].id === item.id ? null : data.subjects[anchor].id;
+      data.subjects.splice(planDataIndex(data, item.id), 1);
+      const at = anchorId ? planDataIndex(data, anchorId) + 1 : Math.min(anchor, data.subjects.length);
+      data.subjects.splice(at, 0, item);
+    }
+    for (const group of target ? [target] : []) {
+      group.members.push(item.id);
+      for (const key of group.fields) { delete item.credits?.[key]; delete item.texts?.[key]; }
+    }
+    if (!target && credit > 0) item.credits[field] = credit;
+    normalizeCurriculumData(data);
+    const joined = planDataGroupsOf(data, item.id).filter((group) => group.id !== target?.id);
+    if (joined.length) throw new Error(`${name}을(를) 옮길 자리에 ${joined.map(planDataGroupLabel).join(", ")} 묶음도 있어 다른 학기 묶음까지 바뀝니다. 1단계 편제표에서 묶음 띠 끝을 끌어 바꾸세요.`);
+    return item;
+  });
+}
+
 function planDataReleaseGroups(data, groups) {
   for (const group of groups) {
     for (const id of group.members) {
       const item = data.subjects.find((subject) => subject.id === id);
       if (!item) continue;
-      for (const field of group.fields) if (group.credit > 0) item.credits[field] = group.credit;
+      const credit = planDataGroupCredit(data, group);
+      for (const field of group.fields) if (credit > 0) item.credits[field] = credit;
     }
   }
   data.groups = data.groups.filter((group) => !groups.includes(group));
@@ -1022,8 +1265,233 @@ function curriculumDataUpdateGroup(layout, groupId, values) {
     planDataCheckGroup(group.fields, pick, credit, planDataNamesCount(data, group.members));
     group.pick = pick;
     group.credit = credit;
+    delete group.creditFrom;
+    delete group.creditNote;
     return group;
   });
+}
+
+// 선택과목군(같은 학년 1·2학기)을 교차집중 과목으로 바꾼다. 한 학기짜리 묶음은 같은 구성 과목의 다른 학기 묶음과 함께 바꾼다.
+function curriculumDataGroupToCross(layout, groupId) {
+  return curriculumDataEdit(layout, (data) => {
+    const group = data.groups.find((item) => item.id === groupId);
+    if (!group) throw new Error("선택과목군을 찾지 못했습니다. 화면을 새로 고친 뒤 다시 시도하세요.");
+    const set = planDataCrossCandidates(data, group);
+    if (!set) throw new Error("교차집중은 같은 학년 1·2학기에 걸친 묶음만 바꿀 수 있습니다. 1·2학기 두 열을 함께 묶거나 다른 학기에 같은 과목 묶음이 있어야 합니다.");
+    if (planDataNamesCount(data, set.flatMap((item) => item.members)) < 2) throw new Error("교차집중은 과목이 두 개 이상이어야 합니다(예: 음악, 미술).");
+    if (set.some((item) => item.members.some((id) => data.subjects.find((subject) => subject.id === id)?.note))) {
+      throw new Error("학기 칸 메모(소인수·공동) 과목은 교차집중으로 바꿀 수 없습니다.");
+    }
+    return planDataGroupsToCross(data, set);
+  });
+}
+
+function planDataCrossCandidates(data, group) {
+  if (planDataIsGradePair(group.fields)) return [group];
+  if (group.fields.length !== 1) return null;
+  const sibling = (data.groups || []).find((other) => other !== group && other.fields.length === 1 &&
+    planDataIsGradePair([group.fields[0], other.fields[0]].sort()) &&
+    other.members.length === group.members.length && other.members.every((id) => group.members.includes(id)));
+  return sibling ? [group, sibling] : null;
+}
+
+// 교차집중 과목을 1·2학기 택1 선택과목군으로 바꾼다(학생이 고르는 과목일 때).
+function curriculumDataCrossToGroup(layout, id) {
+  return curriculumDataEdit(layout, (data) => {
+    const subject = planDataSubjects(data).find((item) => item.id === id);
+    if (!subject?.cross?.length) throw new Error("교차집중 과목을 찾지 못했습니다.");
+    const fields = PLAN_DATA_FIELDS.filter((field) => subject.cross.includes(field));
+    const credit = Math.max(0, ...fields.map((field) => Number(subject.credits?.[field]) || 0)) ||
+      (planDataNumber(subject.op) || planDataNumber(subject.base) || 0);
+    if (!(credit > 0)) throw new Error("교차집중 학기 학점을 먼저 입력하세요.");
+    if (planDataGroupsOf(data, id).some((group) => group.fields.some((field) => fields.includes(field)))) {
+      throw new Error("이미 선택과목군에 들어 있는 학기입니다.");
+    }
+    for (const field of fields) { delete subject.credits[field]; delete subject.texts?.[field]; }
+    subject.cross = null;
+    const group = { id: planDataNewId(data, "g"), fields, pick: 1, credit, members: [id] };
+    data.groups.push(group);
+    return group;
+  });
+}
+
+// 교차집중 과목의 학기당 학점을 바꾼다. split: 학급 수가 홀수일 때 첫 학기에 1반 더 받는 과목(이름, 생략하면 그대로).
+function curriculumDataSetCrossCredit(layout, id, value, split) {
+  const credit = Number(String(value ?? "").trim());
+  if (!Number.isFinite(credit) || credit <= 0 || credit > 30) throw new Error("학기당 학점은 0보다 크고 30 이하인 숫자로 입력하세요.");
+  return curriculumDataEdit(layout, (data) => {
+    const subject = planDataSubjects(data).find((item) => item.id === id);
+    if (!subject?.cross?.length) throw new Error("교차집중 과목을 찾지 못했습니다.");
+    for (const field of subject.cross) subject.credits[field] = credit;
+    if (split !== undefined) planDataSetCrossSplit(subject, split);
+    return subject;
+  });
+}
+
+// 교차집중 학급 배분: 학급 수가 홀수면 한 과목이 1반 더 받는다. 첫 학기(예: 2-1)에 1반 더 받는 과목은 subject.crossSplit(과목명),
+// 둘째 학기는 반대로. 값이 없으면 뒤 과목(시수표와 같은 기본값: 1학기 미술 6·음악 5, 2학기 음악 6·미술 5).
+function planDataCrossSplitIndex(subject) {
+  const names = planDataSubjectNames(subject?.name);
+  if (!subject?.cross?.length || names.length < 2) return -1;
+  const index = subject.crossSplit ? names.map(planDataNameKey).indexOf(planDataNameKey(subject.crossSplit)) : -1;
+  return index >= 0 ? index : names.length - 1;
+}
+
+// 전학년 편제표(curriculum-annual.js)가 남긴 교차집중 학급 배분을 변환한 과목 데이터에 옮긴다.
+function curriculumDataApplyCrossSplits(layout) {
+  const splits = layout?.crossSplits;
+  if (!splits || !layout.planData) return;
+  for (const subject of planDataSubjects(layout.planData)) {
+    const split = subject.cross?.length ? splits[String(subject.name ?? "").replace(/\s+/g, "")] : null;
+    if (split) planDataSetCrossSplit(subject, split);
+  }
+}
+
+function planDataSetCrossSplit(subject, name) {
+  const names = planDataSubjectNames(subject.name);
+  const index = names.map(planDataNameKey).indexOf(planDataNameKey(name));
+  if (!name || index < 0 || index === names.length - 1) delete subject.crossSplit;
+  else subject.crossSplit = names[index];
+}
+
+// 교차집중 과목의 학기별 반 수(과목 순서대로). 학급 수가 짝수면 똑같이 나눈다.
+function planDataCrossClasses(subject, total) {
+  const names = planDataSubjectNames(subject?.name);
+  const count = Math.max(1, names.length);
+  const split = planDataCrossSplitIndex(subject);
+  return [1, 2].map((semester) => names.map((_, index) => {
+    const base = Math.floor(total / count), extra = total % count;
+    const position = semester === 1 ? (index - split + count) % count : (split - 1 - index + 2 * count) % count;
+    return base + (position < extra ? 1 : 0);
+  }));
+}
+
+// 교차집중 띠 문구: '교차집중 · 음악↔미술 · 학기당 2학점'
+function planDataCrossLabel(subject) {
+  const names = planDataSubjectNames(subject?.name);
+  const fields = PLAN_DATA_FIELDS.filter((field) => subject?.cross?.includes(field));
+  const credits = [...new Set(fields.map((field) => Number(subject.credits?.[field]) || 0))];
+  const creditText = credits.length === 1 ? `학기당 ${planDataNumberText(credits[0])}학점`
+    : fields.map((field) => `${planDataSemester(field)}학기 ${planDataNumberText(subject.credits?.[field] || 0)}`).join("·") + "학점";
+  return `교차집중 · ${names.join("↔")} · ${creditText}`;
+}
+
+// ---- 공식 과목명 자동 수정(업로드·원본 재변환 단계). 원래 이름은 subject.originalName에 남긴다.
+// 과목 칸 하나에 여러 과목(쉼표)이 있으면 과목마다 고치고 쉼표·표기 기호(*·★)는 그대로 둔다.
+function planDataAutoName(name) {
+  if (typeof curriculumOfficialAutoName !== "function") return null;
+  let changed = false;
+  const fixes = [];
+  const next = String(name ?? "").split(/([,，、])/).map((part, index) => {
+    if (index % 2) return part;
+    const lead = part.match(/^\s*/)[0], tail = part.match(/\s*$/)[0];
+    const core = part.trim();
+    const marks = core.match(/^[*＊★]*/)[0], after = core.slice(marks.length).match(/[*＊★]*$/)[0];
+    const plain = core.slice(marks.length, core.length - after.length);
+    const fix = plain ? curriculumOfficialAutoName(plain) : null;
+    if (!fix || fix.name === plain) return part;
+    changed = true;
+    fixes.push({ from: plain.trim(), to: fix.name, kind: fix.kind });
+    return `${lead}${marks}${fix.name}${after}${tail}`;
+  }).join("");
+  return changed ? { name: next, fixes } : null;
+}
+
+// 편제표 데이터의 과목명을 공식명으로 고친다(같은 데이터를 바꾼다). 고친 목록을 돌려준다.
+function curriculumDataAutoNames(data) {
+  const fixed = [];
+  for (const subject of planDataSubjects(data)) {
+    if (subject.originalName !== undefined) continue;
+    const result = planDataAutoName(subject.name);
+    if (!result) continue;
+    subject.originalName = subject.name;
+    subject.name = result.name;
+    fixed.push({ id: subject.id, from: subject.originalName, to: result.name, fixes: result.fixes });
+  }
+  return fixed;
+}
+
+// 자동 수정 대상 편제표인지: 2022 개정(2025학년도 이후 입학생) 입학생 편제표이고 교사가 끄지 않았을 때.
+function curriculumAutoNameEligible(layout, cohortYear) {
+  if (!layout?.planData || layout.derived || layout.autoNameOff) return false;
+  const revision = typeof planComplianceRevision === "function" ? planComplianceRevision(layout, cohortYear).revision
+    : Number(cohortYear) >= 2025 ? "2022" : "2015";
+  return revision === "2022";
+}
+
+// 업로드·원본 재변환 직후 부른다. 고치면 표를 다시 만든다.
+function curriculumApplyAutoNames(layout, cohortYear) {
+  if (!curriculumAutoNameEligible(layout, cohortYear)) return [];
+  const fixed = curriculumDataAutoNames(layout.planData);
+  if (fixed.length) applyCurriculumData(layout);
+  return fixed;
+}
+
+// 자동 수정한 과목 목록(표시·되돌리기)
+// 한 칸에 여러 과목이 있으면 바뀐 과목만 'from → to'로 보인다(전체 이름은 fullFrom·fullTo).
+function curriculumAutoNameList(layout) {
+  return planDataSubjects(layout?.planData).filter((subject) => subject.originalName !== undefined && subject.originalName !== subject.name)
+    .map((subject) => {
+      const before = planDataSubjectNames(subject.originalName), after = planDataSubjectNames(subject.name);
+      const pairs = before.length === after.length ? before.map((name, index) => [name, after[index]]).filter(([a, b]) => a !== b) : [];
+      return { id: subject.id, from: pairs.length ? pairs.map(([a]) => a).join(", ") : subject.originalName,
+        to: pairs.length ? pairs.map(([, b]) => b).join(", ") : subject.name, fullFrom: subject.originalName, fullTo: subject.name };
+    });
+}
+
+// 자동 수정 되돌리기(과목 하나). 이름을 원래대로 두고 originalName을 지운다.
+function curriculumDataRevertAutoName(layout, id) {
+  return curriculumDataEdit(layout, (data) => {
+    const subject = planDataSubjects(data).find((item) => item.id === id);
+    if (!subject || subject.originalName === undefined) throw new Error("자동 수정한 과목을 찾지 못했습니다.");
+    subject.name = subject.originalName;
+    delete subject.originalName;
+    return subject;
+  });
+}
+
+// 편제표별 자동 수정 켜기·끄기. 끄면 모두 원래 이름으로, 켜면 지금 이름을 다시 고친다.
+function curriculumDataSetAutoNames(layout, on, cohortYear) {
+  return curriculumDataEdit(layout, (data, template, next) => {
+    if (on) {
+      delete next.autoNameOff;
+      return curriculumAutoNameEligible(next, cohortYear) ? curriculumDataAutoNames(data) : [];
+    }
+    next.autoNameOff = true;
+    const reverted = [];
+    for (const subject of planDataSubjects(data)) {
+      if (subject.originalName === undefined) continue;
+      reverted.push({ id: subject.id, from: subject.name, to: subject.originalName });
+      subject.name = subject.originalName;
+      delete subject.originalName;
+    }
+    return reverted;
+  });
+}
+
+// 과목명 별칭: 자동 수정 전 이름(originalName)도 같은 과목으로 본다(수강신청 결과·선택 그룹·위계 규칙이 예전 표기를 써도 연결).
+// result-import.js normalizeResultCourseName이 정규화한 키로 묻는다. 편제표가 바뀔 때마다 다시 만든다.
+let planDataAliasCache = null;
+function curriculumNameAlias(key, normalize) {
+  if (typeof state === "undefined" || !key) return null;
+  const layouts = [state.curriculumImportedLayout, ...Object.values(state.curriculumCohorts || {}).map((item) => item?.importedLayout),
+    ...Object.values(state.curriculumAnnualPlans || {}).map((item) => item?.importedLayout)].filter((layout) => layout?.planData);
+  const stamp = layouts.map((layout) => layout.planData);
+  if (!planDataAliasCache || planDataAliasCache.stamp.length !== stamp.length || planDataAliasCache.stamp.some((item, index) => item !== stamp[index])) {
+    const map = new Map();
+    for (const layout of layouts) {
+      for (const subject of planDataSubjects(layout.planData)) {
+        if (subject.originalName === undefined) continue;
+        const from = planDataSubjectNames(subject.originalName), to = planDataSubjectNames(subject.name);
+        from.forEach((name, index) => {
+          const a = normalize(name), b = to[index] ? normalize(to[index]) : "";
+          if (a && b && a !== b && !map.has(a)) map.set(a, b);
+        });
+      }
+    }
+    planDataAliasCache = { stamp, map };
+  }
+  return planDataAliasCache.map.get(key) || null;
 }
 
 // 표의 칸 하나를 고친다. 학기 칸(학점·메모), 기준·운영학점, 필수이수학점, 추가 열, 소계 아래 행의 값.
@@ -1098,7 +1566,8 @@ function curriculumDataMoveRow(layout, id, direction) {
       // 묶음 밖으로 나간 과목은 묶음 학점을 자기 학기 학점으로 가진다.
       for (const leaving of [item, other]) {
         if (!before.has(leaving.id) || span.group.members.includes(leaving.id)) continue;
-        for (const field of span.group.fields) if (span.group.credit > 0) leaving.credits[field] = span.group.credit;
+        const credit = planDataGroupCredit(data, span.group);
+        for (const field of span.group.fields) if (credit > 0) leaving.credits[field] = credit;
       }
       for (const joining of [item, other]) {
         if (before.has(joining.id) || !span.group.members.includes(joining.id)) continue;

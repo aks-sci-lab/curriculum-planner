@@ -339,9 +339,12 @@ test("application subjects include student-choice courses in promoted grades and
     course("현재학년", "학생 선택 교육과정", [3, "", "", "", "", ""]),
     course("미편제", "학생 선택 교육과정", ["", "", 0, "-", "", ""], "2"),
     course("구분없음", "", ["", "", 3, "", "", ""]),
+    // 교차집중(학급마다 학기를 엇갈려 이수)은 학생이 고르는 과목이 아니므로 신청 과목에서 뺀다.
+    course("음악 연주, 미술 창작", "학생 선택 교육과정", ["", "", 3, 3, "", ""], "", 9),
   ];
   const ctx = vm.createContext({
-    state: { curriculumCohortYear: "2026", curriculumImportedLayout: {}, applicationExcluded: { "2:수학": true } },
+    state: { curriculumCohortYear: "2026", curriculumImportedLayout: { planData: { subjects: [{ id: "s9", row: 9, cross: ["sem21", "sem22"] }] } },
+      applicationExcluded: { "2:수학": true } },
     importedPlanColumnMap: () => ({ subject: 0, opCredit: 0, baseCredit: -1, semesters: [1, 2, 3, 4, 5, 6] }),
     importedPlanCourseContexts: () => contexts,
     curriculumCellFill: (_layout, rowIndex, column) => rowIndex === 7 && column === 3 ? "#FFFF00" : "",

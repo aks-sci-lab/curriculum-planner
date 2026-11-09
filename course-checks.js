@@ -122,7 +122,9 @@ function courseCheckPlanModel(planData) {
     const families = new Map();
     for (const member of members) member.keys.forEach((key) => families.set(key, member.family));
     return {
-      id: group.id || `g${index}`, fields, pick: Math.max(1, Number(group.pick) || 1), credit: Number(group.credit) || 0,
+      id: group.id || `g${index}`, fields, pick: Math.max(1, Number(group.pick) || 1),
+      // 학점을 읽지 못한 묶음(0)은 구성 과목 운영학점(curriculum-data.js planDataGroupCredit)
+      credit: Number(group.credit) > 0 ? Number(group.credit) : typeof planDataGroupCredit === "function" ? planDataGroupCredit(planData, group) : 0,
       keys: [...new Set(members.flatMap((member) => member.keys))], names: [...new Set(members.flatMap((member) => member.names))],
       families, label: `${fields.map(courseCheckFieldLabel).join("·")} 택${Math.max(1, Number(group.pick) || 1)}`
     };
