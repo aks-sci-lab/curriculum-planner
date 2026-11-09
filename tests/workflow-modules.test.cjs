@@ -525,7 +525,7 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
   answers = { prompt: "초기화", confirm: true };
   await ctx.resetWorkspaceAll();
   assert.deepEqual([...store.keys()].sort(), ["curriculum-google-pkce", "curriculum-teacher-session-v1", "other-app"]);
-  assert.equal(deletedDb, "curriculum-original-workbooks");
+  assert.equal(deletedDb, "curriculum-workspace-db", "the new workspace store is deleted too");
   assert.equal(reloaded, 1);
   assert.ok(backups >= 1, "a backup is offered first when there is unsaved work");
 });

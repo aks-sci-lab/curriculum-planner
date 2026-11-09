@@ -315,6 +315,8 @@ async function disconnectWorkspaceFile() {
 async function initWorkspaceFile() {
   renderWorkspaceFileStatus();
   if (!workspaceFileSupported()) return;
+  // 브라우저 자료를 다 읽은 뒤(새 저장소 IndexedDB 읽기·옮기기 포함) 파일과 비교한다.
+  if (typeof workspaceStartupReady !== "undefined" && typeof workspaceStartupReady?.then === "function") await workspaceStartupReady;
   try {
     const handle = await workspaceFileStore("get");
     if (!handle) return;

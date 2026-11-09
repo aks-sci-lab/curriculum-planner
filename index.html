@@ -125,9 +125,11 @@
             <button class="button button-quiet hidden" id="disconnectWorkspaceFile" type="button">연결 해제</button>
             <a class="button button-quiet" href="test-bot.html" target="_blank" rel="noopener" title="가상 학생으로 웹 수강신청을 시험하거나, 2단계에 올릴 가상 결과 엑셀을 만듭니다.">수강신청 테스트봇</a>
             <button class="button button-quiet" id="resetWorkspaceAll" type="button" title="이 브라우저에 저장된 모든 작업 자료를 삭제하고 처음 상태로 되돌립니다.">전체 초기화</button>
+            <p class="workspace-file-status" id="workspaceStorageUsage" role="status">저장 공간 확인 중</p>
             </div>
           </details>
           <button class="button button-secondary hidden" id="retryWorkspaceSave" type="button">저장·복원 재시도</button>
+          <button class="button button-primary hidden" id="workspaceFailureBackup" type="button">백업 내려받기</button>
           <button class="button button-danger hidden" id="resumeWorkspaceSave" type="button">현재 자료로 저장 재개</button>
         </div>
         <p class="storage-warning hidden" id="workspaceStorageWarning" role="alert"></p>
@@ -981,6 +983,7 @@ function courseClient_() {
   <script src="curriculum-annual.js?v=20261109-teachers" defer></script>
   <script src="course-checks.js?v=20261109-teachers" defer></script>
   <script src="curriculum-compliance.js?v=20261109-teachers" defer></script>
+  <script src="workspace-store.js?v=20261109-teachers" defer></script>
   <script defer src="app.js?v=20261109-teachers"></script>
   <script src="xlsx-parser.js?v=20261109-teachers" defer></script>
   <script src="course-groups.js?v=20261109-teachers" defer></script>

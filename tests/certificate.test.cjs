@@ -123,7 +123,7 @@ test("printing asks before printing a certificate without a school name or date"
 });
 
 test("an empty confirmation date is filled with today's date at start-up", () => {
-  assert.match(app, /if \(!String\(\$\("#confirmDate"\)\.value \|\| ""\)\.trim\(\)\) \$\("#confirmDate"\)\.value = certificateTodayLabel\(\);\n\s+restorePersistedState\(\);/);
+  assert.match(app, /if \(!String\(\$\("#confirmDate"\)\.value \|\| ""\)\.trim\(\)\) \$\("#confirmDate"\)\.value = certificateTodayLabel\(\);\n(?:\s+\/\/[^\n]*\n)?\s+workspaceStartupBoot = beginWorkspaceStoreBoot\(\);\n\s+restorePersistedState\(workspaceStartupBoot\?\.settingsRaw\);/);
 });
 
 test("opening step 3 selects the first student in the list", () => {

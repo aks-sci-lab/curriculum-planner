@@ -109,6 +109,15 @@
     let protectedStoredState = null;
     let workspaceSaveFailed = false;
     let lastSavedWorkspace = null;
+    // 새 저장소(IndexedDB, workspace-store.js) 상태. active: 이번 창이 새 저장소에 저장하는지(아니면 예전처럼 localStorage에 전체 자료)
+    // rev: 마지막으로 읽거나 쓴 저장 번호(다른 창 충돌 확인) · known: 저장소에 있는 조각 · cache: 지난번 나눈 결과
+    // lastCore: 마지막으로 저장(예약)한 본문 · pending/writing: 쓰기 대기·진행 · force: 다음 쓰기는 번호 확인 없이 모두 다시 씀(저장 재개)
+    // migrate: 예전 localStorage 자료를 읽었으니 시작 후 옮김. 이때 lastSavedWorkspace는 localStorage의 작은 기록이다.
+    const workspaceStoreState = { active: false, rev: "", known: new Set(), cache: new Map(), lastCore: null,
+      pending: null, writing: null, force: false, migrate: false, boot: null };
+    let resolveWorkspaceStartup = null;
+    // 저장 자료를 모두 읽은 뒤(새 저장소 읽기·옮기기 포함) 풀린다. PC 파일 자동 저장은 이것을 기다린 뒤 파일과 비교한다.
+    const workspaceStartupReady = new Promise((resolve) => { resolveWorkspaceStartup = resolve; });
     let curriculumSearchTimer = null;
     let curriculumImportRevision = 0;
     const $ = (selector) => document.querySelector(selector);
@@ -320,9 +329,10 @@
       const warning = $("#workspaceStorageWarning");
       warning.classList.toggle("hidden", !failed);
       warning.textContent = failed
-        ? `${message}. 새로고침하거나 창을 닫기 전에 작업 자료를 백업하세요. 원본 엑셀은 별도로 보관해야 합니다.`
+        ? `${message}. 새로고침하거나 창을 닫기 전에 작업 자료를 백업하세요('백업 내려받기'). 원본 엑셀은 별도로 보관해야 합니다.`
         : "";
       $("#retryWorkspaceSave").classList.toggle("hidden", !failed);
+      $("#workspaceFailureBackup")?.classList.toggle("hidden", !failed);
       $("#resumeWorkspaceSave").classList.toggle("hidden", !statePersistenceBlocked);
     }
 
@@ -400,6 +410,8 @@
           statePersistenceSuppressed--;
         }
         if (!$("#schoolYear").checkValidity()) throw new Error("학년도에 2000~2100 사이의 정수를 입력하세요.");
+        // 새 저장소(IndexedDB)를 쓰면 큰 자료는 그쪽에 조각별로, localStorage에는 작은 기록만 쓴다(workspace-store.js).
+        if (workspaceStoreState.active) return persistWorkspaceToStore(workspacePayload());
         const serialized = JSON.stringify(workspacePayload());
         if (serialized !== lastSavedWorkspace) {
           const stored = localStorage.getItem(STORAGE_KEY);
@@ -429,6 +441,277 @@
       } catch (error) {
         updateWorkspaceSaveStatus(`자동 저장 실패: ${error.message}`, true);
         return false;
+      }
+    }
+
+    // ---- 새 저장소(IndexedDB, workspace-store.js) 연결 ----
+    function readWorkspaceRecord() {
+      try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
+    }
+
+    // localStorage에 작은 기록을 쓴다. 예전 큰 자료가 차 있어 쓰지 못하면 지우고 다시 쓴다. 실패해도 자료는 IndexedDB에 있다.
+    function writeWorkspaceStoreRecord(record) {
+      try {
+        localStorage.setItem(STORAGE_KEY, record);
+      } catch {
+        try { localStorage.removeItem(STORAGE_KEY); localStorage.setItem(STORAGE_KEY, record); } catch { /* 다른 창 알림만 늦어진다. */ }
+      }
+      lastSavedWorkspace = readWorkspaceRecord();
+    }
+
+    function workspaceStoreFailureReason(error) {
+      return error?.name === "QuotaExceededError" || /quota/i.test(error?.message || "")
+        ? "브라우저 저장 공간이 부족합니다(용량 초과)"
+        : error?.message || "브라우저 저장소에 쓰지 못했습니다";
+    }
+
+    // persistState가 저장의 단일 진입점이다(묶음 저장도 결국 persistState를 부른다). 직렬화 규칙(stateJsonReplacer)이 있으면 그대로 따른다.
+    function persistWorkspaceToStore(payload) {
+      const replacer = typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined;
+      const split = workspaceStoreSplit(payload, workspaceStoreState.cache, replacer);
+      if (split.core === workspaceStoreState.lastCore) {
+        if (!workspaceStoreState.writing && !workspaceSaveFailed) updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        return true;
+      }
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!workspaceStoreState.force && stored !== lastSavedWorkspace) {
+        statePersistenceBlocked = true;
+        protectedStoredState = stored;
+        throw new Error("다른 창의 저장 자료가 변경되어 덮어쓰기를 중지했습니다.");
+      }
+      workspaceStoreState.cache = split.cache;
+      workspaceStoreState.lastCore = split.core;
+      workspaceStoreState.pending = { split, startupFlush: workspaceStartupFlush };
+      if (!workspaceStoreState.writing) {
+        workspaceStoreState.writing = flushWorkspaceStore().finally(() => { workspaceStoreState.writing = null; });
+      }
+      return true;
+    }
+
+    // 예약된 저장을 차례로 IndexedDB에 쓴다. 쓰는 동안 또 바뀌면 마지막 것만 이어서 쓴다.
+    async function flushWorkspaceStore() {
+      while (workspaceStoreState.pending) {
+        const job = workspaceStoreState.pending;
+        workspaceStoreState.pending = null;
+        try {
+          const result = await workspaceStoreWrite(job.split, {
+            expectedRev: workspaceStoreState.rev, known: workspaceStoreState.known, force: workspaceStoreState.force
+          });
+          workspaceStoreState.force = false;
+          workspaceStoreState.rev = result.rev;
+          workspaceStoreState.known = result.known;
+          writeWorkspaceStoreRecord(workspaceStoreRecord(job.split.core, result.rev, result.savedAt));
+          if (!job.startupFlush) {
+            try { localStorage.setItem(WORKSPACE_SAVED_AT_KEY, String(Date.now())); } catch { /* 시각 기록은 비교용이다. */ }
+          }
+          if (typeof scheduleWorkspaceFileSave === "function") scheduleWorkspaceFileSave();
+          if (!workspaceStoreState.pending) {
+            updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+            renderWorkspaceStorageUsage();
+          }
+        } catch (error) {
+          workspaceStoreState.pending = null;
+          workspaceStoreState.lastCore = null;
+          if (error?.name === "WorkspaceStoreConflict") {
+            statePersistenceBlocked = true;
+            protectedStoredState = readWorkspaceRecord();
+            updateWorkspaceSaveStatus(`자동 저장 실패: ${error.message}`, true);
+          } else {
+            // 브라우저 저장소가 가득 차도 연결된 PC 파일에는 지금 자료를 저장해 둔다.
+            const fileName = typeof scheduleWorkspaceFileSave === "function" ? scheduleWorkspaceFileSave() : "";
+            const reason = workspaceStoreFailureReason(error);
+            updateWorkspaceSaveStatus(`자동 저장 실패: ${fileName ? `${reason} · PC 파일 '${fileName}'에는 저장을 시도합니다` : reason}`, true);
+            renderWorkspaceStorageUsage();
+          }
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function workspaceStoreBusy() {
+      return Boolean(workspaceStoreState.writing || workspaceStoreState.pending);
+    }
+
+    // 시작할 때 저장 자료를 어디서 읽을지 정한다. null이면 예전처럼 localStorage 전체 자료를 바로 읽는다
+    // (그 자료는 시작이 끝난 뒤 새 저장소로 옮긴다). 아니면 IndexedDB를 읽기 시작하고, 읽는 동안 화면을 맞출 작은 설정을 돌려준다.
+    function beginWorkspaceStoreBoot() {
+      if (typeof workspaceStoreSupported !== "function" || !workspaceStoreSupported()) return null;
+      let raw;
+      try { raw = localStorage.getItem(STORAGE_KEY); } catch { return null; }
+      const record = workspaceStoreParseRecord(raw);
+      if (raw && !record) {
+        workspaceStoreState.migrate = true;
+        return null;
+      }
+      workspaceStoreState.boot = workspaceStoreRead();
+      workspaceStoreState.boot.catch(() => {});
+      let settingsRaw;
+      try { settingsRaw = record ? workspaceStoreSettingsRaw(record.core) : undefined; } catch { settingsRaw = undefined; }
+      return { record: raw, settingsRaw };
+    }
+
+    // IndexedDB에서 읽은 자료로 화면을 다시 만든다. 성공하면 true(검증 실패면 원본 보호 상태가 된다).
+    function applyStoredWorkspace(loaded) {
+      statePersistenceSuppressed++;
+      // 복원하며 그리는 동안 선택 그룹 등이 '원본 보호 중'으로 막히지 않게 한다(저장 예약은 statePersistenceSuppressed가 막는다).
+      statePersistenceReady = true;
+      statePersistenceBlocked = false;
+      try {
+        // 선택 그룹은 저장 자료를 읽기 전(빈 편제표)에 정리됐을 수 있어 이 학년도 설정을 먼저 다시 읽는다.
+        if (typeof reloadApplicationGroupData === "function") reloadApplicationGroupData(false);
+        restorePersistedState(loaded.raw);
+        if (!statePersistenceBlocked && typeof switchApplicationMenuGrade === "function") switchApplicationMenuGrade(state.applicationMenuGrade);
+      } finally {
+        statePersistenceSuppressed--;
+      }
+      if (statePersistenceBlocked) return false;
+      workspaceStoreState.active = true;
+      workspaceStoreState.rev = loaded.rev;
+      workspaceStoreState.known = loaded.known;
+      workspaceStoreState.lastCore = loaded.core;
+      const record = workspaceStoreParseRecord(readWorkspaceRecord());
+      if (record?.workspaceStore?.rev !== loaded.rev) writeWorkspaceStoreRecord(workspaceStoreRecord(loaded.core, loaded.rev, loaded.savedAt));
+      else lastSavedWorkspace = readWorkspaceRecord();
+      return true;
+    }
+
+    async function completeWorkspaceStoreBoot(boot) {
+      let loaded = null;
+      let failure = null;
+      try { loaded = await workspaceStoreState.boot; } catch (error) { failure = error; }
+      workspaceStoreState.boot = null;
+      // 다른 모듈의 시작 처리(DOMContentLoaded)가 모두 끝난 뒤 자료를 넣는다.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      if (failure && !boot.record) {
+        // 저장한 적이 없는데 IndexedDB를 열 수 없는 브라우저(사생활 보호 창 등): 예전처럼 localStorage에 저장한다.
+        updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        return;
+      }
+      if (failure || (!loaded && boot.record)) {
+        statePersistenceBlocked = true;
+        protectedStoredState = boot.record;
+        const reason = failure ? failure.message
+          : "새 저장소(IndexedDB)에서 작업 자료를 찾지 못했습니다. 브라우저의 사이트 데이터가 지워졌을 수 있습니다. 백업 파일이나 PC 파일에서 불러오세요";
+        updateWorkspaceSaveStatus(`복원 실패 · 기존 저장 원본 보호 중: ${reason}`, true);
+        return;
+      }
+      workspaceStoreState.active = true;
+      if (!loaded) {
+        // 처음 쓰는 브라우저(또는 전체 초기화 직후): 빈 자료로 시작한다.
+        workspaceStoreState.rev = "";
+        lastSavedWorkspace = readWorkspaceRecord();
+        updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        return;
+      }
+      applyStoredWorkspace(loaded);
+    }
+
+    // 저장·복원 재시도: 이 창의 미저장 변경 대신 새 저장소의 자료를 다시 읽는다.
+    async function reloadWorkspaceFromStore() {
+      let loaded;
+      try {
+        loaded = await workspaceStoreRead();
+      } catch (error) {
+        updateWorkspaceSaveStatus(`저장 원본 읽기 실패: ${error.message}`, true);
+        return false;
+      }
+      if (!loaded) {
+        updateWorkspaceSaveStatus("저장 원본 읽기 실패: 새 저장소에 작업 자료가 없습니다", true);
+        return false;
+      }
+      return applyStoredWorkspace(loaded);
+    }
+
+    // 예전 localStorage 자료를 새 저장소로 옮긴다. IndexedDB에 다 쓰고 다시 읽어 같은지 확인한 뒤에만 localStorage의 큰 자료를 작은 기록으로 바꾼다.
+    async function migrateLegacyWorkspace() {
+      workspaceStoreState.migrate = false;
+      if (statePersistenceBlocked || typeof workspaceStoreWrite !== "function") return false;
+      const localBefore = (readWorkspaceRecord() || "").length;
+      if (statePersistenceTimer !== null) {
+        window.clearTimeout(statePersistenceTimer);
+        statePersistenceTimer = null;
+      }
+      let payload;
+      statePersistenceSuppressed++;
+      try {
+        syncActiveRound();
+        syncActiveCurriculumCohort();
+        payload = workspacePayload();
+      } finally {
+        statePersistenceSuppressed--;
+      }
+      const replacer = typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined;
+      const expected = JSON.stringify(payload, replacer);
+      try {
+        const split = workspaceStoreSplit(payload, new Map(), replacer);
+        const result = await workspaceStoreWrite(split, { force: true });
+        const check = await workspaceStoreRead();
+        if (check?.raw !== expected) throw new Error("옮긴 자료를 다시 읽어 보니 원래 자료와 달랐습니다");
+        if (statePersistenceBlocked) return false;
+        workspaceStoreState.active = true;
+        workspaceStoreState.rev = result.rev;
+        workspaceStoreState.known = result.known;
+        workspaceStoreState.cache = split.cache;
+        workspaceStoreState.lastCore = split.core;
+        writeWorkspaceStoreRecord(workspaceStoreRecord(split.core, result.rev, result.savedAt));
+      } catch (error) {
+        workspaceStoreState.active = false;
+        showAppToast(`작업 자료를 새 저장소로 옮기지 못했습니다(${workspaceStoreFailureReason(error)}). 예전 저장 자료는 그대로 둡니다. 백업 파일을 받아 두세요.`, "error");
+        return false;
+      }
+      // 옮기는 동안 바뀐 내용이 있으면 이어서 저장한다.
+      persistState();
+      // 예전 저장소가 거의 찼다면 마지막 변경 일부가 저장되지 못했을 수 있다(용량 초과로 메모리에만 있던 자료).
+      if (localBefore >= WORKSPACE_LOCAL_LIMIT * 0.85) {
+        status.style.color = "#a44939";
+        status.textContent = "브라우저에 마지막으로 저장된 자료를 새 저장소로 옮겼습니다. 업데이트 전에 '자동 저장 실패(용량 초과)'가 났다면 그 뒤의 작업은 빠져 있을 수 있으니, 그때 받은 백업 파일이나 PC 자동 저장 파일을 '자료 관리 ▾'에서 불러오세요.";
+      }
+      showAppToast("작업 자료를 새 저장소(IndexedDB)로 옮겼습니다. 이제 용량 걱정 없이 저장됩니다.");
+      return true;
+    }
+
+    // 시작 마무리: 다른 모듈이 모두 로드된 뒤 한 번 더 그리고, 새 저장소 읽기·옮기기를 끝낸다.
+    async function finishWorkspaceStartup(boot) {
+      try {
+        if (boot) await completeWorkspaceStoreBoot(boot);
+        if (boot) {
+          $("#teacherWorkspace").inert = false;
+          $("#teacherWorkspace").removeAttribute("aria-busy");
+        }
+        refreshCurriculumDerivedPlans();
+        renderAggregate();
+        renderWorkflowLayout();
+        if (boot) statePersistenceReady = true;
+        if (workspaceStoreState.migrate) {
+          await migrateLegacyWorkspace();
+        } else if (statePersistenceTimer !== null) {
+          workspaceStartupFlush = true;
+          try { persistState(); } finally { workspaceStartupFlush = false; }
+        }
+        // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js).
+        if (typeof reconvertCurriculumOriginals === "function") reconvertCurriculumOriginals({ startup: true }).catch(() => {});
+        renderWorkspaceStorageUsage();
+      } finally {
+        resolveWorkspaceStartup?.();
+      }
+    }
+
+    // 자료 관리 메뉴의 저장 공간 사용량(navigator.storage.estimate). 80%를 넘으면 미리 알린다.
+    let workspaceStorageUsageAt = 0;
+    let workspaceStorageWarned = false;
+    async function renderWorkspaceStorageUsage(force = false) {
+      const label = document.getElementById("workspaceStorageUsage");
+      if (!label || typeof workspaceStorageEstimate !== "function") return;
+      if (!force && Date.now() - workspaceStorageUsageAt < 5000) return;
+      workspaceStorageUsageAt = Date.now();
+      const usage = workspaceStorageUsageText(await workspaceStorageEstimate());
+      const where = workspaceStoreState.active ? "새 저장소(IndexedDB)에 저장 중" : "기본 저장소(localStorage)에 저장 중";
+      label.textContent = `${usage.text} · ${where}${usage.warn ? " · 80%를 넘었습니다. 백업을 받아 두세요" : ""}`;
+      label.classList.toggle("is-warning", usage.warn);
+      if (usage.warn && !workspaceStorageWarned) {
+        workspaceStorageWarned = true;
+        showAppToast("브라우저 저장 공간을 80% 넘게 쓰고 있습니다. '자료 관리 ▾ → 파일로 백업하기'로 백업을 받아 두세요.", "error");
       }
     }
 
@@ -513,8 +796,11 @@
         }
         // 빈 자료가 연결된 PC 파일에 저장되지 않도록 먼저 연결을 끊는다(파일 자체는 지우지 않는다).
         if (typeof disconnectWorkspaceFile === "function") await disconnectWorkspaceFile();
+        // 새 저장소(IndexedDB)에 쓰던 것이 끝나기를 기다린 뒤 연결을 닫고 함께 지운다.
+        if (typeof workspaceStoreState !== "undefined") await workspaceStoreState.writing?.catch(() => {});
+        if (typeof workspaceStoreClose === "function") await workspaceStoreClose();
         clearWorkspaceStorage();
-        for (const name of ["curriculum-workspace-file", "curriculum-original-workbooks"]) {
+        for (const name of ["curriculum-workspace-file", "curriculum-original-workbooks", "curriculum-workspace-db"]) {
           await new Promise((resolve) => {
             if (typeof indexedDB === "undefined") { resolve(); return; }
             const request = indexedDB.deleteDatabase(name);
@@ -566,6 +852,8 @@
       if (!file) return false;
       const previous = new Map();
       const written = [];
+      let storeReplaced = false;
+      let blockedBeforeStore = null;
       try {
         const backup = JSON.parse(await file.text());
         if (backup.type !== "curriculum-workspace-backup" || !backup.groups ||
@@ -600,10 +888,26 @@
         }
         if (!confirmed && !window.confirm("백업에 포함된 편제표·차수·선택 그룹으로 이 브라우저의 자료를 교체합니다. 현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다.")) return false;
         entries.push([WORKSPACE_SAVED_AT_KEY, String(Date.now())]);
+        // 새 저장소를 쓰면 작업 자료는 IndexedDB에 통째로 바꿔 쓰고(한 번에), localStorage에는 그룹 설정과 작은 기록만 쓴다.
+        const useStore = typeof workspaceStoreState !== "undefined" && workspaceStoreState.active;
+        if (useStore) entries.shift();
         for (const [key] of entries) previous.set(key, localStorage.getItem(key));
         for (const [key, value] of entries) {
           localStorage.setItem(key, value);
           written.push(key);
+        }
+        if (useStore) {
+          // 바꿔 쓰는 동안 이 창의 자동 저장이 백업 자료를 덮어쓰지 않게 멈춘다(실패하면 아래에서 되돌린다).
+          blockedBeforeStore = statePersistenceBlocked;
+          statePersistenceBlocked = true;
+          workspaceStoreState.pending = null;
+          await workspaceStoreState.writing?.catch(() => {});
+          const split = workspaceStoreSplit(backup.workspace);
+          const result = await workspaceStoreWrite(split, { force: true });
+          // 작업 자료는 이미 바뀌었으므로 이 뒤의 실패는 그룹 설정만 되돌리지 않고 그대로 다시 연다.
+          storeReplaced = true;
+          workspaceStoreState.rev = result.rev;
+          writeWorkspaceStoreRecord(workspaceStoreRecord(split.core, result.rev, result.savedAt));
         }
         if (afterWrite) await afterWrite();
         statePersistenceReady = false;
@@ -612,6 +916,14 @@
         window.location.reload();
         return true;
       } catch (error) {
+        if (storeReplaced) {
+          statePersistenceReady = false;
+          statePersistenceBlocked = true;
+          showAppToast(`백업 자료는 불러왔지만 마무리하지 못했습니다: ${error.message}`, "error");
+          window.location.reload();
+          return true;
+        }
+        if (blockedBeforeStore !== null) statePersistenceBlocked = blockedBeforeStore;
         const rollbackErrors = [];
         for (const key of written.reverse()) {
           try {
@@ -1006,10 +1318,11 @@
       if (clearSaved) clearPersistedState();
     }
 
-    function restorePersistedState() {
+    // storedRaw: 새 저장소(IndexedDB)에서 읽은 작업 자료 JSON. 없으면 예전처럼 localStorage의 자료를 읽는다.
+    function restorePersistedState(storedRaw) {
       let raw = null;
       try {
-        raw = localStorage.getItem(STORAGE_KEY);
+        raw = storedRaw === undefined ? localStorage.getItem(STORAGE_KEY) : storedRaw;
         if (!raw) {
           resetWorkspace(false);
           statePersistenceBlocked = false;
@@ -7106,6 +7419,8 @@
       }
     });
     $("#downloadWorkspaceBackup").addEventListener("click", downloadWorkspaceBackup);
+    $("#workspaceFailureBackup").addEventListener("click", downloadWorkspaceBackup);
+    $("#workspaceDataMenu").addEventListener("toggle", (event) => { if (event.currentTarget.open) renderWorkspaceStorageUsage(true); });
     $("#resetWorkspaceAll").addEventListener("click", resetWorkspaceAll);
     document.addEventListener("click", (event) => {
       const menu = $("#workspaceDataMenu");
@@ -7119,6 +7434,10 @@
     $("#retryWorkspaceSave").addEventListener("click", () => {
       if (statePersistenceBlocked) {
         if (!window.confirm("현재 화면의 미저장 변경 대신 브라우저 저장 원본을 다시 읽습니다. 필요한 자료를 먼저 백업했나요?")) return;
+        if (workspaceStoreState.active || (typeof workspaceStoreParseRecord === "function" && workspaceStoreParseRecord(readWorkspaceRecord()))) {
+          reloadWorkspaceFromStore();
+          return;
+        }
         statePersistenceSuppressed++;
         try {
           restorePersistedState();
@@ -7135,6 +7454,12 @@
     $("#resumeWorkspaceSave").addEventListener("click", () => {
       if (!window.confirm("보호 중인 기존 저장 원본을 현재 화면의 자료로 교체합니다. 기존 자료가 사라질 수 있습니다. 작업 자료 백업을 먼저 내려받았나요?")) return;
       statePersistenceBlocked = false;
+      if (workspaceStoreState.active) {
+        // 새 저장소는 저장 번호 확인 없이 지금 자료로 모두 다시 쓴다.
+        workspaceStoreState.force = true;
+        workspaceStoreState.known = new Set();
+        workspaceStoreState.lastCore = null;
+      }
       try {
         lastSavedWorkspace = localStorage.getItem(STORAGE_KEY);
       } catch (error) {
@@ -7202,7 +7527,8 @@
     window.addEventListener("beforeunload", (event) => {
       if (workspaceResetting || !statePersistenceReady) return;
       if (!statePersistenceBlocked) persistState();
-      if (workspaceSaveFailed || statePersistenceBlocked ||
+      // 새 저장소에 아직 쓰는 중이면(보통 0.1초 안에 끝난다) 닫기 전에 한 번 묻는다.
+      if (workspaceSaveFailed || statePersistenceBlocked || workspaceStoreBusy() ||
           (typeof getApplicationGroupStorageIssue === "function" && getApplicationGroupStorageIssue())) {
         event.preventDefault();
         event.returnValue = "";
@@ -7219,24 +7545,28 @@
       if (input && !input.disabled) input.click();
     });
     window.addEventListener("hashchange", () => window.location.reload());
+    let workspaceStartupBoot = null;
     const studentApplicationRoute = showStudentApplicationEntry();
     if (!studentApplicationRoute) {
       $("#teacherWorkspace").classList.remove("hidden");
       // 확인 날짜는 저장된 값이 없으면 오늘 날짜로 채운다(저장된 값이 있으면 복원이 덮어쓴다).
       if (!String($("#confirmDate").value || "").trim()) $("#confirmDate").value = certificateTodayLabel();
-      restorePersistedState();
+      // 새 저장소(IndexedDB)에 저장된 자료면 작은 설정만 먼저 맞추고, 큰 자료는 읽는 대로 다시 그린다(그동안 화면 잠금).
+      workspaceStartupBoot = beginWorkspaceStoreBoot();
+      restorePersistedState(workspaceStartupBoot?.settingsRaw);
+      if (workspaceStartupBoot) {
+        $("#teacherWorkspace").inert = true;
+        $("#teacherWorkspace").setAttribute("aria-busy", "true");
+        updateWorkspaceSaveStatus("저장된 자료를 불러오는 중");
+      }
       $("#certificateSchoolName").value = $("#schoolName").value;
       // 결과 검증·차수 확정·시수 통계 모듈은 app.js 다음에 로드되므로 모두 로드된 뒤 한 번 더 그린다.
       document.addEventListener("DOMContentLoaded", () => {
-        refreshCurriculumDerivedPlans();
-        renderAggregate();
-        renderWorkflowLayout();
-        if (statePersistenceTimer !== null) {
-          workspaceStartupFlush = true;
-          try { persistState(); } finally { workspaceStartupFlush = false; }
-        }
-        // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js).
-        if (typeof reconvertCurriculumOriginals === "function") reconvertCurriculumOriginals({ startup: true }).catch(() => {});
+        finishWorkspaceStartup(workspaceStartupBoot).catch((error) => {
+          updateWorkspaceSaveStatus(`복원 실패 · 기존 저장 원본 보호 중: ${error?.message || error}`, true);
+        });
       }, { once: true });
+    } else {
+      resolveWorkspaceStartup?.();
     }
-    statePersistenceReady = !studentApplicationRoute;
+    statePersistenceReady = !studentApplicationRoute && !workspaceStartupBoot;

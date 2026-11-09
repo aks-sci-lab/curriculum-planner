@@ -10,6 +10,7 @@ var openApplicationWorkspaceTab;
 var getApplicationGroupStorageIssue;
 var getApplicationGroupBackup;
 var getApplicationPreparationStatus;
+var reloadApplicationGroupData;
 function validateApplicationGroupData(groups, seeded) {
   if (!Array.isArray(groups) || groups.some((group) => !group || !Array.isArray(group.courses) ||
       typeof group.name !== "string" || typeof group.id !== "string" || !["2", "3"].includes(group.grade) ||
@@ -293,6 +294,22 @@ function validateApplicationGroupData(groups, seeded) {
       return false;
     }
   }
+  // 작업 자료를 새 저장소(IndexedDB)에서 늦게 읽을 때 이 학년도 그룹 설정을 다시 읽는다(읽기 전 빈 편제표로 정리한 그룹은 버린다).
+  // render=false면 다시 읽기만 하고, 편제표를 넣은 뒤 그릴 때 정리한다.
+  reloadApplicationGroupData = (render = true) => {
+    lastSavedGroups = "";
+    // 읽는 동안 남은 '원본 보호 중' 안내는 지운다.
+    message.textContent = "";
+    try {
+      readGroupData(activeCohortYear);
+    } catch (error) {
+      groupStorageError = `그룹 설정 읽기 실패 · 원본 보호 중: ${error.message}`;
+      message.textContent = groupStorageError;
+      groups = [];
+      seeded = new Set();
+    }
+    if (render) renderCourseGroups();
+  };
   switchApplicationGroupCohort = (year) => {
     year = String(year || "");
     if (year === activeCohortYear) return;
