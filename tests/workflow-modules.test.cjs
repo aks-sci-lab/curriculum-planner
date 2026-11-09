@@ -274,7 +274,8 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.equal(stats.totals.excludedHours, 22);
   assert.equal(stats.totals.creative, 64);
   const sheets = ctx.buildHoursWorkbookSheets(stats);
-  assert.equal(sheets[0].freeze, "A5");
+  assert.equal(sheets[0].freeze, "D5");
+  assert.equal(sheets[0].name, "2027 교사시수표");
   assert.ok(sheets[0].rows.some((row) => row.some((cell) => cell?.f?.includes("SUM(P"))));
   const physicsRow = sheets[1].rows.findIndex((row) => row[4]?.v === "물리학");
   assert.ok(physicsRow > 0);
@@ -284,8 +285,10 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.equal(sheets[1].rows[0][11].v, "근거 차수");
   assert.deepEqual(plain(stats.grades.map((info) => info.label)),
     ["1학년(2027 입학 · 신입생)", "2학년(2026 입학 · 현 1학년 1차 확정)", "3학년(2025 입학 · 현 2학년 결과 없음)"]);
-  const headerText = sheets[0].rows[2].map((cell) => cell.v);
-  assert.ok(headerText.includes("2학년\n(2026 입학 · 현 1학년 1차 확정)"));
+  // 원래 양식의 'N학년' 머리글에 입학연도와 근거(현 N−1학년 결과)를 붙인다.
+  const headerText = sheets[0].rows[2].map((cell) => cell?.v);
+  assert.ok(headerText.includes("2학년 (2026 입학 · 현 1학년 1차 확정)"));
+  assert.ok(headerText.includes("3학년 (2025 입학 · 현 2학년 결과 없음)"));
   assert.equal(stats.issues.some((issue) => issue.drift), false);
   drift = ["내년 2학년 학급 수(확정 명단 반 수)"];
   const drifted = ctx.computeHoursStats("2027");

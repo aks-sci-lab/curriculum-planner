@@ -1910,6 +1910,35 @@
 .hours-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
 .hours-heading h3 { margin: 0; }
 .hours-heading .hours-toolbar { margin: 0; }
+/* 5단계 시수표: 학교 교과별 시수표(원래 양식)와 같은 행·열·병합·색. 칸 종류별 글꼴·채움은 hours-stats.js가 만든다(style[data-hours-form-styles]). */
+.hours-table-tools .hours-note { flex: 1 1 320px; color: #4b5872; font-size: 12px; }
+.hours-legend-red { color: #e00000; font-weight: 700; }
+.hours-zero-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.hours-form-wrap { margin-top: 6px; overflow: auto; }
+.hours-form { border-collapse: collapse; table-layout: fixed; width: max-content; color: #111; font-family: "맑은 고딕", "Malgun Gothic", sans-serif; font-size: 12px; background: #fff; }
+.hours-form td { height: 21px; padding: 1px 2px; border: 0; text-align: center; vertical-align: middle; white-space: pre-line; line-height: 1.2; overflow: hidden; overflow-wrap: anywhere; }
+.hours-form .hf-title-row td { padding: 3px 4px; border: 0; }
+.hours-form .hf-summary-row td { height: 46px; }
+/* 원래 양식의 틀 고정(D5)처럼 표 안에서 내려도 3·4행 머리글이 위에 남는다. */
+.hours-form .hf-head-row td { position: sticky; z-index: 2; box-shadow: inset 0 -1px 0 #4a5464; }
+.hours-form .hf-head-top td { top: 0; height: 34px; }
+.hours-form .hf-head-bottom td { top: 36px; }
+.hours-form td.hb-lm { border-left: 2px solid #1f2733; } .hours-form td.hb-lt { border-left: 1px solid #4a5464; } .hours-form td.hb-lh { border-left: 1px solid #b9c2cf; }
+.hours-form td.hb-rm { border-right: 2px solid #1f2733; } .hours-form td.hb-rt { border-right: 1px solid #4a5464; } .hours-form td.hb-rh { border-right: 1px solid #b9c2cf; }
+.hours-form td.hb-tm { border-top: 2px solid #1f2733; } .hours-form td.hb-tt { border-top: 1px solid #4a5464; } .hours-form td.hb-th { border-top: 1px solid #b9c2cf; }
+.hours-form td.hb-bm { border-bottom: 2px solid #1f2733; } .hours-form td.hb-bt { border-bottom: 1px solid #4a5464; } .hours-form td.hb-bh { border-bottom: 1px solid #b9c2cf; }
+.hours-form .hf-input { box-sizing: border-box; width: 100%; min-width: 0; height: 22px; margin: 0; padding: 0 2px; border: 1px solid rgba(60, 80, 110, .28); border-radius: 3px; background: rgba(255, 255, 255, .92); color: inherit; font: inherit; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.hours-form .hf-input::-webkit-outer-spin-button, .hours-form .hf-input::-webkit-inner-spin-button { margin: 0; -webkit-appearance: none; }
+.hours-form .hf-input:hover { border-color: #6b84ad; }
+.hours-form .hf-input:focus { border-color: #2852ce; outline: 2px solid rgba(40, 82, 206, .25); outline-offset: 0; }
+.hours-form .hf-input.is-manual { background: #fff3c4; border-style: dashed; }
+.hours-form .hf-input.is-zero { color: #8a93a3; }
+.hours-form .hf-memo .hf-input, .hours-form td.hf-memo { text-align: left; }
+.hours-form .hf-s .hf-input { height: 28px; font-size: 15px; font-weight: 700; }
+.hours-form td.hf-box { padding: 4px 8px; text-align: left; vertical-align: top; white-space: normal; }
+.hours-form .hf-memo-fixed { white-space: pre-line; font-weight: 700; line-height: 1.35; }
+.hours-form .hf-textarea { display: block; width: 100%; height: auto; min-height: 44px; margin-top: 4px; padding: 3px 5px; text-align: left; font-weight: 700; line-height: 1.35; resize: vertical; white-space: pre-wrap; }
+.hours-form .hf-memo-reset { min-height: 22px; margin-top: 3px; padding: 1px 8px; font-size: 11px; }
 
 /* 위계(선이수)·이수학점 점검 (course-checks.js) */
 .course-check-dialog { width: min(880px, calc(100vw - 24px)); }

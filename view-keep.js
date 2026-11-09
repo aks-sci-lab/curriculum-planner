@@ -5,7 +5,8 @@
 // 2) deferRenderUntilStepVisible(단계, 이름, 그리기): 보이지 않는 단계의 화면은 그리지 않고 미뤘다가 그 단계를 열 때 그린다.
 
 // 스크롤을 기억할 안쪽 상자. 새 상자는 data-scroll-key를 붙이면 된다.
-const VIEW_KEEP_SCROLL_SELECTOR = "[data-scroll-key], .aggregate-sheet-wrap, .curriculum-table-wrap, .student-list, .curriculum-data-sheet-scroll";
+// 열린 팝업(dialog)과 그 안의 form도 넣는다: 팝업 안 내용을 다시 그려도(예: 5단계 시수 설정·교사 수 추천) 팝업 스크롤이 그대로.
+const VIEW_KEEP_SCROLL_SELECTOR = "[data-scroll-key], .aggregate-sheet-wrap, .curriculum-table-wrap, .student-list, .curriculum-data-sheet-scroll, dialog[open], dialog[open] > form";
 
 function viewKeepTargets(target) {
   if (!target || typeof document === "undefined") return [];
