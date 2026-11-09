@@ -414,6 +414,17 @@ function validateApplicationGroupData(groups, seeded) {
     }
   }
   renderCourseGroups = () => {
+    // 2단계가 안 보이면 그리지 않고 2단계를 열 때 그린다(view-keep.js). 준비 상태 계산용 과목 목록(sync)만 맞춰 둔다.
+    if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(2, "renderCourseGroups", renderCourseGroups)) {
+      if (!workspaceProtected() && !groupStorageError) sync();
+      refreshWorkspaceContext();
+      return;
+    }
+    // 그룹명·선택 수를 바꿔 다시 그려도 창 스크롤과 입력 포커스를 그대로 둔다(view-keep.js).
+    if (typeof preserveViewDuring === "function") return preserveViewDuring(container, renderCourseGroupsView);
+    return renderCourseGroupsView();
+  };
+  const renderCourseGroupsView = () => {
     if (workspaceProtected()) {
       container.replaceChildren();
       container.textContent = "편제표 저장 원본을 먼저 복원하세요. 선택 그룹 원본도 보호 중입니다.";
@@ -491,6 +502,7 @@ function validateApplicationGroupData(groups, seeded) {
         const nameLabel = document.createElement("label"); nameLabel.textContent = "그룹명 ";
         nameLabel.className = "course-group-name";
         const input = document.createElement("input"); input.value = group.name; input.maxLength = 100;
+        input.dataset.focusKey = `group-name-${group.id}`;
         input.onchange = () => {
           group.name = input.value.trim();
           if (typeof window.updateCurriculumSelectionGroup === "function") {
@@ -504,6 +516,7 @@ function validateApplicationGroupData(groups, seeded) {
         countLabel.className = "course-group-count";
         const count = document.createElement("input"); count.type = "number"; count.min = "0"; count.max = String(group.courses.length);
         count.placeholder = "미지정"; count.value = group.count ?? "";
+        count.dataset.focusKey = `group-count-${group.id}`;
         count.setAttribute("aria-label", `${group.name}: 정확히 선택할 과목 수 (0~${group.courses.length})`);
         count.setAttribute("aria-invalid", String(group.count === null));
         count.onchange = () => {

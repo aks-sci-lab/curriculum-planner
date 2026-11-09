@@ -844,7 +844,14 @@ function hoursRecommendationSection(stats) {
   </details>`;
 }
 
+// 5단계 시수 통계 그리기의 입구. 화면 내용은 renderHoursStatsView가 그린다(화면을 다시 쓰더라도 이 입구는 그대로 둘 것).
+// 값을 바꿔 다시 그려도 창·표 안 스크롤과 입력 포커스·커서를 그대로 둔다(view-keep.js preserveViewDuring).
 function renderHoursStats() {
+  if (typeof preserveViewDuring === "function") return preserveViewDuring(["#workflowStep7Panel", "#hoursSettingsBody", "#hoursIssuesBody"], renderHoursStatsView);
+  return renderHoursStatsView();
+}
+
+function renderHoursStatsView() {
   const content = document.getElementById("hoursStatsContent");
   if (!content) return;
   const year = hoursTargetYear();
@@ -1367,7 +1374,8 @@ function initHoursStats() {
     const target = event.target;
     const changed = updateHoursSetting(target);
     if (!changed) return;
-    persistState();
+    // 4MB 자료를 칸마다 바로 직렬화하지 않고 묶어서 저장(app.js persistStateSoon).
+    if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
     if (changed === "classes") {
       syncNextYearClassInputs();
       renderAggregate();

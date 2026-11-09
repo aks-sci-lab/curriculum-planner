@@ -123,7 +123,8 @@ test("printing asks before printing a certificate without a school name or date"
 });
 
 test("an empty confirmation date is filled with today's date at start-up", () => {
-  assert.match(app, /if \(!String\(\$\("#confirmDate"\)\.value \|\| ""\)\.trim\(\)\) \$\("#confirmDate"\)\.value = certificateTodayLabel\(\);\n(?:\s+\/\/[^\n]*\n)?\s+workspaceStartupBoot = beginWorkspaceStoreBoot\(\);\n\s+restorePersistedState\(workspaceStartupBoot\?\.settingsRaw\);/);
+  // 새 저장소(IndexedDB) 확인 뒤, 단계 그리기를 미룬 채(holdStepRenders) 복원한다. 날짜를 먼저 채우고 복원이 저장값으로 덮어쓰는 순서는 그대로.
+  assert.match(app, /if \(!String\(\$\("#confirmDate"\)\.value \|\| ""\)\.trim\(\)\) \$\("#confirmDate"\)\.value = certificateTodayLabel\(\);\n(?:\s+\/\/[^\n]*\n)?\s+workspaceStartupBoot = beginWorkspaceStoreBoot\(\);\n(?:\s+\/\/[^\n]*\n)?\s+const restoreStartup = \(\) => restorePersistedState\(workspaceStartupBoot\?\.settingsRaw\);\n\s+if \(typeof holdStepRenders === "function"\) holdStepRenders\(restoreStartup\);\n\s+else restoreStartup\(\);/);
 });
 
 test("opening step 3 selects the first student in the list", () => {

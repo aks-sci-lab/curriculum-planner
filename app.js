@@ -61,6 +61,54 @@
     let statePersistenceTimer = null;
     let statePersistenceSuppressed = 0;
     let statePersistenceReady = false;
+    // state가 바뀔 때마다(프록시 set/delete) 1씩 오른다. 같은 자료로 반복되는 계산은 이 값이 같을 때만 캐시를 쓴다.
+    let stateRevision = 0;
+    let stateViewOnlyDirty = false;
+    const stateRevisionCaches = new Map();
+    // 화면 위치만 바꾸는 값(단계·고른 학생·선택 칸 등)은 계산 결과를 바꾸지 않으므로 revision을 올리지 않는다(단계를 오갈 때 캐시가 살아 있게).
+    // 캐시하는 계산이 이 값에 기대면 cachedByStateRevision의 key에 넣을 것.
+    const STATE_VIEW_ONLY_KEYS = new Set(["workflowStep", "selectedId", "applicationMenuGrade", "curriculumTopCollapsed", "curriculumShowMarks",
+      "curriculumSelectedRow", "curriculumSelectedColumn", "selectedCourseColumns", "lastSelectedCourseColumn"]);
+
+    // 자료(state)·학년도가 그대로면 이전 계산 결과를 돌려준다. key에는 state 밖의 입력(학년도 칸 값, 인수)을 넣는다.
+    // state를 거치지 않고 바꾸는 자료(예: localStorage의 선택 그룹)에 기대는 계산에는 쓰지 말 것. 강제로 비우려면 invalidateStateCaches().
+    function cachedByStateRevision(name, key, compute) {
+      let entry = stateRevisionCaches.get(name);
+      if (!entry || entry.revision !== stateRevision) {
+        entry = { revision: stateRevision, values: new Map() };
+        stateRevisionCaches.set(name, entry);
+      }
+      const cacheKey = String(key);
+      if (entry.values.has(cacheKey)) return entry.values.get(cacheKey);
+      const value = compute();
+      // 계산하는 동안 state가 바뀌었으면(정리용 쓰기 등) 바뀐 뒤의 자료로 다시 계산하도록 저장하지 않는다.
+      if (entry.revision === stateRevision) entry.values.set(cacheKey, value);
+      return value;
+    }
+
+    // 곧바로 저장하지 않고 200ms 뒤 한 번에 저장(여러 변경을 묶음). 창을 닫거나 숨길 때는 즉시 저장된다.
+    // 4MB 자료를 매번 직렬화하면 100ms 넘게 걸리므로 화면 조작 처리기에서는 persistState() 대신 이것을 쓴다.
+    function persistStateSoon({ viewOnly = false } = {}) {
+      if (viewOnly) {
+        stateViewOnlyDirty = true;
+        return;
+      }
+      scheduleStatePersistence();
+    }
+
+    function invalidateStateCaches() {
+      stateRevision++;
+    }
+
+    // 프록시를 벗긴 원래 객체. 읽기만 하는 큰 반복·JSON 직렬화에서 프록시 비용을 피할 때 쓴다(여기에 쓰면 저장이 예약되지 않는다).
+    function stateRawValue(value) {
+      return (value && typeof value === "object" && stateRawTargets.get(value)) || value;
+    }
+
+    // JSON.stringify(값, stateJsonReplacer): 안쪽에 섞인 프록시도 원래 객체로 바꿔 직렬화(4MB 자료에서 약 3배 빠름).
+    function stateJsonReplacer(key, value) {
+      return (value && typeof value === "object" && stateRawTargets.get(value)) || value;
+    }
 
     function scheduleStatePersistence() {
       if (!statePersistenceReady || statePersistenceSuppressed || statePersistenceTimer !== null) return;
@@ -72,10 +120,12 @@
 
     function observeState(value) {
       if (!value || typeof value !== "object") return value;
+      // 자주 읽는 경로가 먼저: 이미 만든 프록시면 바로 돌려준다(학생·과목 반복에서 읽을 때마다 거치므로).
+      const cached = stateProxyCache.get(value);
+      if (cached) return cached;
       if (stateRawTargets.has(value)) return value;
       const prototype = Object.getPrototypeOf(value);
       if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
-      if (stateProxyCache.has(value)) return stateProxyCache.get(value);
       const proxy = new Proxy(value, {
         get(target, property, receiver) {
           return observeState(Reflect.get(target, property, receiver));
@@ -84,13 +134,23 @@
           const rawValue = stateRawTargets.get(nextValue) || nextValue;
           if (Object.is(target[property], rawValue)) return true;
           const updated = Reflect.set(target, property, rawValue, receiver);
-          if (updated) scheduleStatePersistence();
+          if (updated) {
+            // 단계·고른 학생 같은 화면 위치만 바뀌면 4MB를 다시 저장하지 않고, 다음 저장·창 닫기·숨기기 때 함께 저장한다.
+            if (target === rawState && STATE_VIEW_ONLY_KEYS.has(property)) stateViewOnlyDirty = true;
+            else {
+              stateRevision++;
+              scheduleStatePersistence();
+            }
+          }
           return updated;
         },
         deleteProperty(target, property) {
           if (!Object.hasOwn(target, property)) return true;
           const deleted = Reflect.deleteProperty(target, property);
-          if (deleted) scheduleStatePersistence();
+          if (deleted) {
+            stateRevision++;
+            scheduleStatePersistence();
+          }
           return deleted;
         }
       });
@@ -410,9 +470,12 @@
           statePersistenceSuppressed--;
         }
         if (!$("#schoolYear").checkValidity()) throw new Error("학년도에 2000~2100 사이의 정수를 입력하세요.");
+        // 화면 위치만 바뀐 값(stateViewOnlyDirty)도 이번 저장에 함께 들어간다.
+        if (typeof stateViewOnlyDirty === "boolean") stateViewOnlyDirty = false;
         // 새 저장소(IndexedDB)를 쓰면 큰 자료는 그쪽에 조각별로, localStorage에는 작은 기록만 쓴다(workspace-store.js).
+        // persistStateSoon(묶음 저장)도 200ms 뒤 여기를 거치므로 같은 저장 계층을 탄다.
         if (workspaceStoreState.active) return persistWorkspaceToStore(workspacePayload());
-        const serialized = JSON.stringify(workspacePayload());
+        const serialized = JSON.stringify(workspacePayload(), typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined);
         if (serialized !== lastSavedWorkspace) {
           const stored = localStorage.getItem(STORAGE_KEY);
           if (stored !== lastSavedWorkspace) {
@@ -552,7 +615,8 @@
     }
 
     // IndexedDB에서 읽은 자료로 화면을 다시 만든다. 성공하면 true(검증 실패면 원본 보호 상태가 된다).
-    function applyStoredWorkspace(loaded) {
+    // hold: 시작할 때처럼 곧이어 renderWorkflowLayout이 그리면 복원 중 단계 그리기를 미룬다(view-keep.js holdStepRenders).
+    function applyStoredWorkspace(loaded, { hold = false } = {}) {
       statePersistenceSuppressed++;
       // 복원하며 그리는 동안 선택 그룹 등이 '원본 보호 중'으로 막히지 않게 한다(저장 예약은 statePersistenceSuppressed가 막는다).
       statePersistenceReady = true;
@@ -560,7 +624,9 @@
       try {
         // 선택 그룹은 저장 자료를 읽기 전(빈 편제표)에 정리됐을 수 있어 이 학년도 설정을 먼저 다시 읽는다.
         if (typeof reloadApplicationGroupData === "function") reloadApplicationGroupData(false);
-        restorePersistedState(loaded.raw);
+        const restore = () => restorePersistedState(loaded.raw);
+        if (hold && typeof holdStepRenders === "function") holdStepRenders(restore);
+        else restore();
         if (!statePersistenceBlocked && typeof switchApplicationMenuGrade === "function") switchApplicationMenuGrade(state.applicationMenuGrade);
       } finally {
         statePersistenceSuppressed--;
@@ -604,7 +670,7 @@
         updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
         return;
       }
-      applyStoredWorkspace(loaded);
+      applyStoredWorkspace(loaded, { hold: true });
     }
 
     // 저장·복원 재시도: 이 창의 미저장 변경 대신 새 저장소의 자료를 다시 읽는다.
@@ -671,6 +737,12 @@
       return true;
     }
 
+    // 시작할 때 첫 화면을 그린 뒤 쉬는 시간에 할 일(정리용 저장·옮기기·원본 재변환·캐시 미리 계산).
+    function afterWorkspaceFirstPaint(task) {
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(task, { timeout: 1500 });
+      else window.setTimeout(task, 300);
+    }
+
     // 시작 마무리: 다른 모듈이 모두 로드된 뒤 한 번 더 그리고, 새 저장소 읽기·옮기기를 끝낸다.
     async function finishWorkspaceStartup(boot) {
       try {
@@ -680,18 +752,34 @@
           $("#teacherWorkspace").removeAttribute("aria-busy");
         }
         refreshCurriculumDerivedPlans();
-        renderAggregate();
-        renderWorkflowLayout();
+        // 보이는 단계만 그린다(집계는 4단계일 때 renderWorkflowLayout이 그림). 첫 화면이라 스크롤 보존은 건너뜀.
+        if (typeof withoutViewKeep === "function") withoutViewKeep(renderWorkflowLayout);
+        else renderWorkflowLayout();
         if (boot) statePersistenceReady = true;
         if (workspaceStoreState.migrate) {
+          // 예전 localStorage 자료를 새 저장소로 옮기기(4MB 직렬화·비교)는 첫 화면을 그린 뒤에 한다.
+          await new Promise((resolve) => afterWorkspaceFirstPaint(resolve));
           await migrateLegacyWorkspace();
         } else if (statePersistenceTimer !== null) {
-          workspaceStartupFlush = true;
-          try { persistState(); } finally { workspaceStartupFlush = false; }
+          // 예약된 200ms 저장 대신 첫 화면 뒤에 '시작 정리용'으로 한 번 저장한다(저장 시각은 바꾸지 않음).
+          window.clearTimeout(statePersistenceTimer);
+          statePersistenceTimer = null;
+          let userChanged = false;
+          const markUserChange = () => { userChanged = true; };
+          for (const type of ["input", "change", "drop"]) document.addEventListener(type, markUserChange, { capture: true, once: true });
+          afterWorkspaceFirstPaint(() => {
+            for (const type of ["input", "change", "drop"]) document.removeEventListener(type, markUserChange, { capture: true });
+            // 그 사이 사용자가 고쳤으면 보통 저장(저장 시각 갱신)이 이미 예약·실행되었으므로 시작 정리용 표시를 붙이지 않는다.
+            if (userChanged) { if (statePersistenceTimer !== null) persistState(); return; }
+            workspaceStartupFlush = true;
+            try { persistState(); } finally { workspaceStartupFlush = false; }
+          });
         }
-        // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js).
-        if (typeof reconvertCurriculumOriginals === "function") reconvertCurriculumOriginals({ startup: true }).catch(() => {});
-        renderWorkspaceStorageUsage();
+        // 다른 단계를 처음 열 때 걸리는 큰 계산(위계 점검·신청 과목)을 쉬는 시간에 미리 해 둔다(같은 자료면 캐시를 씀).
+        afterWorkspaceFirstPaint(() => warmWorkflowCaches(afterWorkspaceFirstPaint));
+        // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js). 변환기 버전이 낮을 때만 돈다.
+        if (typeof reconvertCurriculumOriginals === "function") afterWorkspaceFirstPaint(() => reconvertCurriculumOriginals({ startup: true }).catch(() => {}));
+        afterWorkspaceFirstPaint(() => renderWorkspaceStorageUsage());
       } finally {
         resolveWorkspaceStartup?.();
       }
@@ -1029,6 +1117,14 @@
 
     function renderWorkflowLayout() {
       const step = Number(state.workflowStep) || 3;
+      // 다른 단계에서 막 들어올 때는 지킬 스크롤·포커스가 없으므로 보존 도우미를 건너뛴다(view-keep.js).
+      if (typeof workflowStepEntering === "function" && workflowStepEntering(step) && typeof withoutViewKeep === "function") {
+        return withoutViewKeep(() => renderWorkflowLayoutSteps(step));
+      }
+      return renderWorkflowLayoutSteps(step);
+    }
+
+    function renderWorkflowLayoutSteps(step) {
       if (step === 1) renderCurriculumStep();
       renderRoundStatus();
       if (step === 2) renderApplicationSubjects();
@@ -1053,10 +1149,28 @@
       if (step === 7 && typeof renderHoursStats === "function") renderHoursStats();
       // 3단계에 들어오면 목록의 첫 학생 확인서를 바로 보여 준다(이미 고른 학생이 목록에 있으면 그대로).
       if (step === 3 && typeof showFirstVisibleStudent === "function") showFirstVisibleStudent();
+      // 안 보일 때 미뤄 둔 이 단계의 그리기(view-keep.js). 위에서 직접 그린 것은 이미 빠져 있다.
+      if (typeof flushDeferredStepRenders === "function") flushDeferredStepRenders(step);
       if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
       if (typeof syncNextYearClassInputs === "function") syncNextYearClassInputs();
       renderWorkspaceContext();
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
+    }
+
+    // 첫 화면 뒤 쉬는 시간에 단계별 큰 계산을 하나씩 미리 해 둔다(캐시). 실패해도 화면에는 영향이 없다.
+    function warmWorkflowCaches(schedule) {
+      const tasks = [
+        () => { if (state.students.length && typeof courseCheckFlags === "function") courseCheckFlags(state.students); },
+        () => { for (const grade of ["1", "2"]) collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }); },
+        () => { collectApplicationSubjects(); }
+      ];
+      const next = () => {
+        const task = tasks.shift();
+        if (!task) return;
+        try { task(); } catch { /* 미리 계산은 선택 사항 */ }
+        if (tasks.length) schedule(next);
+      };
+      schedule(next);
     }
 
     // 내부 단계 번호 5·6(이동수업·시간표)은 보류 중이고 시수 통계는 7번으로 저장한다.
@@ -1070,7 +1184,11 @@
       renderWorkflowLayout();
       $("#workflowMenuToggle").setAttribute("aria-expanded", "false");
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
-      if (!skipPersist) persistState();
+      if (!skipPersist) {
+        // 단계 이동은 화면 위치만 바꾸므로 다음 저장·창 닫기 때 함께 저장한다(persistStateSoon viewOnly).
+        if (typeof persistStateSoon === "function") persistStateSoon({ viewOnly: true });
+        else persistState();
+      }
     }
 
     function renderWorkspaceContext() {
@@ -1523,9 +1641,8 @@
         $("#studentCount").textContent = `${state.students.length} / ${state.students.length}명`;
         renderRoster();
         renderPreview();
-        renderCurriculumStep();
         renderSemesterClassifier();
-        renderAggregate();
+        // 편제표(1단계)·집계(4단계)는 renderWorkflowLayout이 보이는 단계만 그리고, 나머지는 그 단계를 열 때 그린다.
         renderWorkflowLayout();
         protectedStoredState = null;
         statePersistenceBlocked = false;
@@ -1606,6 +1723,9 @@
     function curriculumCellFill(layout, row, column) {
       const direct = layout.cellFills?.[`${row}:${column}`];
       if (direct) return direct;
+      // state 안의 편제표는 병합 칸 → 색 표를 한 번 만들어 조회한다(칸마다 병합 목록 전체를 다시 훑으면 제곱으로 느려짐).
+      const index = typeof curriculumMergedFillIndex === "function" ? curriculumMergedFillIndex(layout) : null;
+      if (index) return index.get(`${row}:${column}`) || "";
       for (const ref of layout.mergedRanges || []) {
         const [a,b=a] = ref.split(":");
         const r1=Number(a.match(/\d+/)[0])-1, r2=Number(b.match(/\d+/)[0])-1;
@@ -1613,6 +1733,35 @@
         if (row>=r1 && row<=r2 && column>=c1 && column<=c2) return layout.cellFills?.[`${r1}:${c1}`] || "";
       }
       return "";
+    }
+
+    // 병합 칸마다 그 병합의 왼쪽 위 칸 색. state를 거쳐 읽은 편제표만(바뀌면 stateRevision이 올라 다시 만든다).
+    const curriculumMergedFillIndexes = new WeakMap();
+    function curriculumMergedFillIndex(layout) {
+      if (typeof stateRawTargets === "undefined" || typeof stateRevision !== "number" || !stateRawTargets.has(layout)) return null;
+      const raw = stateRawTargets.get(layout);
+      const merged = raw.mergedRanges || [];
+      const cached = curriculumMergedFillIndexes.get(raw);
+      if (cached && cached.revision === stateRevision && cached.merged === merged && cached.length === merged.length && cached.fills === raw.cellFills) return cached.map;
+      const map = new Map();
+      let cells = 0;
+      for (const ref of merged) {
+        const [a, b = a] = String(ref).split(":");
+        const r1 = Number(a.match(/\d+/)?.[0]) - 1, r2 = Number(b.match(/\d+/)?.[0]) - 1;
+        const c1 = columnIndex(a), c2 = columnIndex(b);
+        if (![r1, r2, c1, c2].every(Number.isInteger)) continue;
+        cells += Math.max(0, r2 - r1 + 1) * Math.max(0, c2 - c1 + 1);
+        if (cells > 200000) return null;
+        const fill = raw.cellFills?.[`${r1}:${c1}`] || "";
+        for (let r = r1; r <= r2; r++) {
+          for (let c = c1; c <= c2; c++) {
+            const key = `${r}:${c}`;
+            if (!map.has(key)) map.set(key, fill);
+          }
+        }
+      }
+      curriculumMergedFillIndexes.set(raw, { revision: stateRevision, merged, length: merged.length, fills: raw.cellFills, map });
+      return map;
     }
 
     function isSelected(value) {
@@ -3178,6 +3327,8 @@
     }
 
     function renderCurriculumStep() {
+      // 1단계가 안 보이면 그리지 않고 1단계를 열 때 그린다(view-keep.js, 첫 화면·다른 단계 조작이 빨라짐).
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(1, "renderCurriculumStep", renderCurriculumStep)) return;
       const emptyRows = typeof curriculumEmptySubjectRows === "function" ? curriculumEmptySubjectRows(state.curriculumImportedLayout) : [];
       const emptyRowsToggle = $("#curriculumEmptyRowsToggle");
       emptyRowsToggle.classList.toggle("hidden", !emptyRows.length);
@@ -3266,8 +3417,10 @@
           courses: new Set()
         });
       }
+      // 과목 행 정보는 묶음마다 다시 만들지 않고 한 번만 만든다.
+      const contexts = groups.size ? importedPlanCourseContexts(layout, columns) : [];
       for (const group of groups.values()) {
-        for (const context of importedPlanCourseContexts(layout, columns)) {
+        for (const context of contexts) {
           if (normalizeCurriculumDivision(context.division) !== "학생 선택 교육과정" ||
               !isSelectableDetail(context.selectionType || context.detail) ||
               curriculumCellFill(layout, context.rowIndex, semesterColumn).toUpperCase() !== group.fill.toUpperCase()) continue;
@@ -3443,6 +3596,7 @@
     }
 
     function renderRoster() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(3, "renderRoster", renderRoster)) return;
       const students = visibleStudents();
       $("#studentCount").textContent = `${students.length} / ${state.students.length}명`;
       const prereq = typeof courseCheckFlags === "function" ? courseCheckFlags(state.students) : null;
@@ -3547,6 +3701,7 @@
     }
 
     function renderPreview() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(3, "renderPreview", renderPreview)) return;
       renderCertificateInfoSummary();
       const student = currentStudent();
       const preview = $("#preview");
@@ -3877,7 +4032,16 @@
       </section>`;
     }
 
+    // 4단계 집계 화면 그리기의 입구. 화면 내용은 renderAggregateView가 그린다(집계 화면을 다시 쓰더라도 이 입구는 그대로 둘 것).
+    // - 4단계가 안 보이면 그리지 않고 4단계를 열 때 그린다(view-keep.js deferRenderUntilStepVisible).
+    // - 값을 바꿔 다시 그려도 창·표 안 스크롤과 입력 포커스·커서를 그대로 둔다(view-keep.js preserveViewDuring).
     function renderAggregate() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(4, "renderAggregate", renderAggregate)) return;
+      if (typeof preserveViewDuring === "function") return preserveViewDuring(["#aggregatePanel", "#retakePanel"], renderAggregateView);
+      return renderAggregateView();
+    }
+
+    function renderAggregateView() {
       const gradeBar = $("#aggregateGradeBar");
       const settingsSummary = $("#aggregateSettingsSummary");
       const maxClassSize = aggregateMaxClassSize();
@@ -4425,8 +4589,17 @@
       ? `annual:${state.curriculumCohortYear}`
       : String(state.curriculumCohortYear);
 
-    function collectApplicationSubjects({ includeExcluded = false, currentGrade: requestedCurrentGrade } = {}) {
+    // 편제표에서 신청 과목을 모으는 계산(약 40ms)은 집계·그룹·확인서·단계 표시가 여러 번 부르므로 자료(state)·학년도가 그대로면 캐시를 쓴다.
+    // 결과는 부르는 쪽이 고칠 수 있어 항상 복사본을 돌려준다(cloneApplicationSubjects).
+    function collectApplicationSubjects(options = {}) {
       if (typeof syncActiveCurriculumCohort === "function") syncActiveCurriculumCohort();
+      if (!options.fresh && typeof cachedByStateRevision === "function" && typeof cloneApplicationSubjects === "function") {
+        const schoolYear = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+        const key = [options.includeExcluded ? 1 : 0, options.currentGrade ?? state.applicationMenuGrade ?? "1", schoolYear].join("|");
+        return cloneApplicationSubjects(cachedByStateRevision("collectApplicationSubjects", key,
+          () => collectApplicationSubjects({ ...options, fresh: true })));
+      }
+      const { includeExcluded = false, currentGrade: requestedCurrentGrade } = options;
       const currentGrade = String(requestedCurrentGrade ?? state.applicationMenuGrade ?? "1");
       const schoolYear = Number(typeof $ === "function" ? $("#schoolYear")?.value || "2026" : "2026");
       const cohortYear = String(schoolYear - Number(currentGrade) + 1);
@@ -4558,6 +4731,15 @@
       return result;
     }
 
+    function cloneApplicationSubjects(result) {
+      if (!result) return result;
+      return Object.fromEntries(Object.entries(result).map(([grade, items]) => [grade, items.map((item) => ({
+        ...item,
+        semesterColors: { ...item.semesterColors },
+        semesterGroups: Object.fromEntries(Object.entries(item.semesterGroups || {}).map(([semester, group]) => [semester, { ...group }]))
+      }))]));
+    }
+
     function selectedApplicationSubjects() {
       return collectApplicationSubjects();
     }
@@ -4568,6 +4750,7 @@
     }
 
     function renderApplicationSubjects() {
+      if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(2, "renderApplicationSubjects", renderApplicationSubjects)) return;
       const container = $("#applicationSubjectList");
       if (!container) return;
       const subjects = collectApplicationSubjects();
@@ -5994,7 +6177,8 @@
       renderPreview();
       renderSemesterClassifier();
       renderAggregate();
-      persistState();
+      // 글자를 칠 때마다 4MB를 직렬화하지 않고 묶어서 저장한다.
+      if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
     }
 
     function resultImportOptions(grade) {
@@ -7103,9 +7287,13 @@
       const button = event.target.closest("[data-student-id]");
       if (!button) return;
       state.selectedId = button.dataset.studentId;
-      renderRoster();
-      renderPreview();
-      persistState();
+      // 목록을 다시 그려도 목록 스크롤과 누른 학생 단추의 포커스를 그대로 둔다(view-keep.js).
+      preserveViewDuring("#studentList", () => {
+        renderRoster();
+        renderPreview();
+      });
+      // 고른 학생은 화면 위치일 뿐이라 4MB 전체 저장을 바로 하지 않는다(다음 저장·창 닫기 때 함께 저장).
+      persistStateSoon({ viewOnly: true });
     });
     function openCertificateInfoDialog() {
       const dialog = document.getElementById("certificateInfoDialog");
@@ -7148,7 +7336,7 @@
         // 집계표 안에 개설/폐강 결정 칸이 함께 있으므로 집계표만 다시 그리면 결정 기본값도 함께 갱신된다.
         if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
         renderAggregate();
-        persistState();
+        persistStateSoon();
       });
     }
     $("#openAggregateSettings").addEventListener("click", () => {
@@ -7204,7 +7392,7 @@
         return;
       }
       renderAggregate();
-      persistState();
+      persistStateSoon();
     });
     $("#aggregateContent").addEventListener("change", (event) => {
       const select = event.target.closest("[data-closure-key]");
@@ -7217,7 +7405,7 @@
         }
         if (!state.roundClosures[round]) state.roundClosures[round] = {};
         state.roundClosures[round][key] = select.value;
-        persistState();
+        persistStateSoon();
         renderAggregate();
         if (Number(state.workflowStep) === 4) renderRetakePanel();
         if (typeof updateRetakeReadiness === "function") updateRetakeReadiness();
@@ -7241,7 +7429,7 @@
       if (value === null) delete state.classOverrides[key];
       else state.classOverrides[key] = value;
       renderAggregate();
-      persistState();
+      persistStateSoon();
     });
     document.addEventListener("scroll", (event) => {
       const wrap = event.target.closest?.(".aggregate-sheet-wrap");
@@ -7535,7 +7723,8 @@
       }
     });
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden" && statePersistenceReady && statePersistenceTimer !== null) persistState();
+      // 미뤄 둔 화면 위치(단계·고른 학생)도 창을 숨길 때 저장한다.
+      if (document.visibilityState === "hidden" && statePersistenceReady && (statePersistenceTimer !== null || stateViewOnlyDirty)) persistState();
     });
     document.addEventListener("keydown", (event) => {
       const label = event.target.closest('label[for][role="button"]');
@@ -7553,7 +7742,10 @@
       if (!String($("#confirmDate").value || "").trim()) $("#confirmDate").value = certificateTodayLabel();
       // 새 저장소(IndexedDB)에 저장된 자료면 작은 설정만 먼저 맞추고, 큰 자료는 읽는 대로 다시 그린다(그동안 화면 잠금).
       workspaceStartupBoot = beginWorkspaceStoreBoot();
-      restorePersistedState(workspaceStartupBoot?.settingsRaw);
+      // 다른 모듈이 아직 안 읽혀 DOMContentLoaded에서 다시 그리므로, 복원 중에는 단계 화면을 그리지 않고 미뤄 둔다(view-keep.js).
+      const restoreStartup = () => restorePersistedState(workspaceStartupBoot?.settingsRaw);
+      if (typeof holdStepRenders === "function") holdStepRenders(restoreStartup);
+      else restoreStartup();
       if (workspaceStartupBoot) {
         $("#teacherWorkspace").inert = true;
         $("#teacherWorkspace").setAttribute("aria-busy", "true");
