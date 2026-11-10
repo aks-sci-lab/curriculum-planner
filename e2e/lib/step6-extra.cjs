@@ -724,7 +724,7 @@ async function specialRoomScenario({ page, h, info, semester = "1" }) {
 
 // 담임학급별 출석부(학기 전체, 두 학년): 담임반 수 = 내년 학급 수, 반 학생 수 합 = 학년 학생 수, 현황 칸 = 분반 명렬표,
 // zip 파일 수 = 반 수, 화면 담임반 목록·표 인원, 인쇄(이 반 = 현황 1장 + 그 반 분반 출석부, 학년 전체 = 반 수)
-async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextClasses, submitted = null }) {
+async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextClasses, submitted = null, mapGrades = ["1"] }) {
   const out = {};
   const semester = groupKey.split(":")[1];
   // 기대: 학기 모든 그룹 명렬표 → 학생 → 강의실 목록
@@ -745,12 +745,17 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   const perGrade = new Map();
   for (const r of list) { const m = String(r[2]).match(/(내년|현) (\d)학년/); const grade = m ? (m[1] === "내년" ? String(Number(m[2]) - 1) : m[2]) : "?"; const e = perGrade.get(grade) || { rooms: 0, students: 0 }; e.rooms++; e.students += Number(r[3]) || 0; perGrade.set(grade, e); }
   out.file = { sheets: file.length, first: file[0]?.name, homerooms: list.length, perGrade: Object.fromEntries(perGrade), gradeCount: Object.fromEntries(gradeCount) };
-  // 학년 학생 수: 신청한 학생(그룹 학생). 명단 전체와 다르면(미제출) 따로 알린다.
-  const want = submitted || gradeCount;
+  // 학년 학생 수(print-6 이후): 현1(내년 반 배정표) = 배정표 학생 수(미제출 포함), 현2('그대로 올라감', 명렬·배정표 없음) = 신청 학생 + '미제출 확인 불가' 안내
+  const want = new Map([...gradeCount].map(([g, n]) => [g, mapGrades.includes(g) ? n : (submitted?.get(g) ?? n)]));
   const gradeBad = [...want].filter(([g, n]) => perGrade.get(g)?.rooms !== nextClasses || perGrade.get(g)?.students !== n);
   out.file.submitted = submitted ? Object.fromEntries(submitted) : null;
   const missingRoster = [...gradeCount].filter(([g, n]) => perGrade.get(g) && perGrade.get(g).students < n).map(([g, n]) => `현${g}: 명단 ${n}명 중 ${n - perGrade.get(g).students}명`);
-  if (missingRoster.length) h.issue("경미", "6단계", `담임학급 이동수업 현황에 신청하지 않은 학생(미제출)이 빠짐 — ${missingRoster.join(", ")} (반 학생 수가 실제 학급 인원보다 적음) [확인 요청]`, { actual: out.file });
+  const unsubCol = new Map(); for (const r of list) { const m = String(r[2]).match(/(내년|현) (\d)학년/); const g = m ? (m[1] === "내년" ? String(Number(m[2]) - 1) : m[2]) : "?"; unsubCol.set(g, (unsubCol.get(g) || 0) + (Number(r[4]) || 0)); }
+  out.file.unsubmitted = Object.fromEntries(unsubCol);
+  for (const g of mapGrades) {
+    const expectUnsub = (gradeCount.get(g) || 0) - (submitted?.get(g) || 0);
+    h.check((unsubCol.get(g) || 0) === expectUnsub, "중요", "6단계", `담임학급 전체 파일 '미제출' 열 합(현${g}) ${unsubCol.get(g) || 0}명 ≠ 배정표 기준 미제출 ${expectUnsub}명`, { actual: out.file });
+  }
   h.check(file[0]?.name === "목록" && file.length === list.length + 1 && !gradeBad.length, "중요", "6단계", `담임학급 전체 파일: 담임반 수(학년별 내년 ${nextClasses}학급)·반 학생 수 합(학년 학생 수)이 다름`, { actual: out.file });
   // 현황 시트: 학생 줄 = 그 담임반 학생(내년 반), 칸의 강의실 = 명렬표
   const bad = [];
@@ -798,6 +803,17 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   out.print = { one: await printCount("#classSectionsHomeroomPrintOne"), grade: await printCount("#classSectionsHomeroomPrintGrade") };
   h.check(out.print.one.hr === 1 && out.print.one.att === pickedSections && out.print.grade.hr === nextClasses && out.print.one.printed && out.print.grade.printed, "중요", "6단계",
     `담임반 인쇄: 이 반 현황 ${out.print.one.hr}장·분반 출석부 ${out.print.one.att}장(기대 1·${pickedSections}), 학년 전체 현황 ${out.print.grade.hr}장(기대 ${nextClasses})`, { actual: out.print });
+  // 담임반 화면 요약(#classSectionsHomeroomUnsubmitted): 현1 = 배정표 기준 미제출 n명, 현2 = '미제출 확인 불가'
+  out.unsubNote = {};
+  for (const g of [...gradeCount.keys()]) {
+    const opt = options.find((o) => new RegExp(`(내년 ${Number(g) + 1}|현 ${g})학년`).test(o.text));
+    if (!opt) continue;
+    await page.locator("#classSectionsHomeroomPick").selectOption(opt.value); await sleep(400);
+    const note = await page.locator("#classSectionsHomeroomUnsubmitted").evaluate((el) => ({ text: el.textContent.replace(/\s+/g, " ").trim().slice(0, 200), basis: el.dataset.basis, count: Number(el.dataset.count) })).catch(() => null);
+    out.unsubNote[g] = note;
+    if (mapGrades.includes(g)) h.check(note && ["map", "roster"].includes(note.basis) && /미제출 \d+명/.test(note.text), "중요", "6단계", `담임반 화면(현${g}, 내년 반 배정표): '미제출 n명 · 내년 반 배정표 기준' 요약이 없음`, { actual: note });
+    else h.check(note && /미제출 확인 불가/.test(note.text), "중요", "6단계", `담임반 화면(현${g}, 그대로 올라감·명렬 없음): '미제출 확인 불가' 안내가 없음`, { actual: note });
+  }
   await page.locator("#classSectionsAttendanceScope").selectOption("group"); await sleep(300);
   out.sections = sections;
   return out;

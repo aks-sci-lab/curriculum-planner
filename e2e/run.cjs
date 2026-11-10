@@ -1682,6 +1682,23 @@ async function main() {
         await sleep(500);
         result[grade] = (await text(page, "#courseGroupEditor")).slice(0, 3000);
         await h.screenshot(page, `groups-grade${grade}`);
+        // 2단계 과목 목록(#applicationSubjectList): 학기별 과목 수 = 선택 그룹 과목 수(두 학기 과목은 '(1학기)·(2학기)' 한 줄씩), 따로 신청 과목 없음
+        const list = await page.evaluate(() => [...document.querySelectorAll("#applicationSubjectList section.application-semester-column")].map((sec) => ({
+          head: sec.querySelector("h5")?.textContent.replace(/\s+/g, " ").trim() || "", names: [...sec.querySelectorAll(".application-subject > span:first-child")].map((x) => x.textContent.trim()) })));
+        const want = {};
+        for (const g of choiceGroups(Number(grade) + 1)) want[g.semester] = [...new Set([...(want[g.semester] || []), ...g.courses])];
+        const twoTerm = new Set(Object.values(want).flat().filter((c, i, a) => a.indexOf(c) !== i));
+        const listCheck = ["1", "2"].map((sem, i) => {
+          const col = list.find((x) => x.head.startsWith(`${sem}학기`)) || list[i] || { head: "", names: [] };
+          const n = Number((col.head.match(/(\d+)과목/) || [])[1]);
+          const names = col.names.map((x) => x.replace(/\([^)]*\)$/, "").trim());
+          const wantNames = (want[sem] || []).map((c) => (twoTerm.has(c) ? `${c} (${sem}학기)` : c));
+          const missing = wantNames.filter((c) => !names.some((x) => Expected.bare(x) === Expected.bare(c) || x.startsWith(c)));
+          const extra = names.filter((x) => !wantNames.some((c) => Expected.bare(x) === Expected.bare(c) || x.startsWith(c)));
+          return { semester: sem, shown: n, items: names.length, want: wantNames.length, missing, extra, tagged: names.filter((x) => /\([12]학기\)/.test(x)) };
+        });
+        result[`list${grade}`] = listCheck;
+        h.check(listCheck.every((x) => x.shown === x.want && x.items === x.want && !x.missing.length && !x.extra.length), "중요", "2단계", `${Number(grade) + 1}학년 2단계 과목 목록 학기별 과목 수가 선택 그룹 과목 수와 다름`, { actual: listCheck });
       }
       return result;
     });
