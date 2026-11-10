@@ -142,17 +142,30 @@ function checkRetakeSheets({ h, label, files, screen }) {
 }
 
 // 그룹 하나의 결과 검증(엑셀 기준) + 화면 대조
-function checkGroup({ h, label, files, screen, selections, semester, courseNames, classUnitCourses = [], unitStudents = new Set(), expectedUnassigned = 0 }) {
+function checkGroup({ h, label, files, screen, selections, semester, courseNames, classUnitCourses = [], unitCourseOf = new Map(), expectedUnassigned = 0 }) {
   const { sections, byRoom } = modelFromExports(files, { semester });
+  const pick = Number((label.match(/택(\d+)/) || [])[1]) || 1;
+  const movingOf = new Map();
+  for (const sec of sections) for (const st of sec.students) { if (!movingOf.has(st)) movingOf.set(st, []); movingOf.get(st).push(sec.subject); }
   const sel = new Map();
+  const explained = new Set(); // 학급 단위 반 학생이 이동 칸(택n−1)에 못 넣은 희망 과목 = '희망과 다름'(오류 아님)
+  const unitCountWrong = [];
   for (const [student, list] of selections) {
-    if (unitStudents.has(student)) continue; // 학급 단위 반 학생: 이 그룹 과목은 학급 단위 행으로 받음
-    const mine = list.filter((x) => courseNames.includes(x.subject) && (!x.semester || x.semester === semester) && !classUnitCourses.includes(x.subject)).map((x) => ({ subject: x.subject, semester }));
+    let mine = list.filter((x) => courseNames.includes(x.subject) && (!x.semester || x.semester === semester) && !classUnitCourses.includes(x.subject)).map((x) => ({ subject: x.subject, semester }));
+    const unitCourse = unitCourseOf.get(student);
+    if (unitCourse !== undefined) {
+      // 학급 단위 반 학생: 그 반 과목 1개는 학급 단위 행으로 받고, 나머지 택n−1은 이동 분반(신청 과목 중에서)
+      mine = mine.filter((x) => x.subject !== unitCourse);
+      const moving = movingOf.get(student) || [];
+      if (moving.length !== pick - 1) unitCountWrong.push({ student, unitCourse, moving });
+      for (const x of mine) if (!moving.includes(x.subject)) explained.add(`${student}|${x.subject}`);
+    }
     if (mine.length) sel.set(student, mine);
   }
-  const check = Timetable.checkTimetable({ sections, selections: sel });
+  const check = Timetable.checkTimetable({ sections, selections: sel, unassignedExplained: explained });
+  if (unitCourseOf.size) h.check(!unitCountWrong.length, "중요", "6단계", `${label}: 학급 단위 반 학생의 이동 분반 수가 택${pick}−1이 아님 ${unitCountWrong.length}명`, { actual: unitCountWrong.slice(0, 5) });
   const p = check.problems;
-  const result = { sections: sections.length, students: sel.size, problems: Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.length])) };
+  const result = { sections: sections.length, students: sel.size, unitStudents: unitCourseOf.size, unitWish: explained.size, unitCountWrong: unitCountWrong.length, problems: Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.length])) };
   h.check(!p.unassigned.length || screen.unassignedRows === p.unassigned.length, "중요", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면 미배정 표 ${screen.unassignedRows}건)`, { actual: p.unassigned.slice(0, 8) });
   if (p.unassigned.length && p.unassigned.length !== expectedUnassigned) h.issue("경미", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면에 사유 표시)`, { actual: p.unassigned.slice(0, 8) });
   result.retake = checkRetakeSheets({ h, label, files, screen });
