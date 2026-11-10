@@ -114,6 +114,7 @@ async function stepCertificates({ page, h, report, roster }, round) {
         if (tagged.length && !(report.data.certTagReported ||= new Set()).has(grade) && report.data.certTagReported.add(grade)) h.issue("중요", "3단계", `확인서 과목명에 학기 꼬리표가 보임(현 ${grade}학년 ${row.classroom}-${row.number}): ${tagged.join(", ")} [수정 대기]`, { actual: tagged, pending: true });
         h.check(same, "중요", "3단계", `확인서 과목이 서버 저장값과 다름(현 ${grade}학년 ${row.classroom}-${row.number})`, { expected: row.selections, actual: names });
         h.check(preview.includes(header), "중요", "3단계", `확인서 학년 표기 누락(현 ${grade}학년 → ${Number(grade) + 1}학년)`, { expected: header, actual: preview.slice(0, 200) });
+        if (SEPARATE_WORDS.test(preview) && !(report.data.certSeparateReported ||= new Set()).has(`${round}:${grade}`) && report.data.certSeparateReported.add(`${round}:${grade}`)) h.issue("중요", "3단계", `확인서에 '소인수/공동/따로 신청' 글자가 남음(${round}차 현 ${grade}학년 ${row.classroom}-${row.number})`, { actual: preview.slice(Math.max(0, preview.search(SEPARATE_WORDS) - 80), preview.search(SEPARATE_WORDS) + 80) });
         result.samples.push({ grade, seat: `${row.classroom}-${row.number}`, ok: same });
       }
     }
@@ -454,6 +455,21 @@ wb=openpyxl.load_workbook(sys.argv[1]); print(json.dumps([{"name":ws.title,"rows
   } catch (error) { return { ok: false, file, error: String(error.stderr || error.message).slice(-500) }; }
 }
 
+// 소인수·공동 안내 글자(1단계 밖에서는 없어야 함)
+const SEPARATE_WORDS = /소인수|공동교육|따로 신청/;
+// xlsx 모든 시트 칸에서 정규식(문자열) 또는 과목명이 든 칸 → [{ sheet, cell, value }]
+function xlsxFind(file, pattern, name) {
+  const { execFileSync } = require("node:child_process");
+  return JSON.parse(execFileSync("python3", ["-I", "-c", `import json,sys,re,openpyxl
+wb=openpyxl.load_workbook(sys.argv[1]); p=re.compile(sys.argv[2]); n=sys.argv[3]; out=[]
+for ws in wb.worksheets:
+  for row in ws.iter_rows():
+    for c in row:
+      v=c.value
+      if isinstance(v,str) and (p.search(v) or n in v): out.append({"sheet":ws.title,"cell":c.coordinate,"value":v[:120]})
+print(json.dumps(out[:20],ensure_ascii=False))`, file, pattern, name], { encoding: "utf8" }));
+}
+
 // 재신청: 폐강 신청 학생만 대체 선택(2차) → 테스트봇
 async function stepRetake({ page, h, report, roster }) {
   report.data.retakeEvents = {};
@@ -781,6 +797,8 @@ async function stepResultTwice({ page, h, report, roster, dialogs }) {
     const twice = students[0];
     h.check(/같은 과목을 두 학기에 신청한 학생 1명/.test(out.errorList) && out.errorList.includes(`${twice.classroom}-${twice.number}`) && /심화 영어/.test(out.errorList), "중요", "2단계·결과", "두 학기 모두 고른 학생이 있는데 검증 미리보기에 오류 목록이 없음(또는 학생·과목이 다름)", { expected: `같은 과목을 두 학기에 신청한 학생 1명: ${twice.classroom}-${twice.number} … 심화 영어`, actual: out.errorList.slice(0, 400) || (await text(page, "#resultImportPreview")).slice(0, 600) });
     h.check(/오류 1건 확인 후 결과 반영/.test(out.button) && !(await page.locator("#confirmResultImport").isDisabled()), "중요", "2단계·결과", "결과 반영 단추가 '오류 1건 확인 후 결과 반영'(누를 수 있음)이 아님", { actual: out.button });
+    out.previewWords = (await text(page, "#resultImportPreview")).match(SEPARATE_WORDS)?.[0] || "";
+    h.check(!out.previewWords, "중요", "2단계·결과", "결과 검증 미리보기에 '소인수/공동/따로 신청' 글자가 남음", { actual: out.previewWords });
     await h.screenshot(page, "result-twice-preview");
     await page.locator("#confirmResultImport").click();
     await waitText(page, "#status", /반영했습니다|명단을 만들었습니다|반영하지 않았|실패|못했/, 20000).catch(() => "");
@@ -789,6 +807,7 @@ async function stepResultTwice({ page, h, report, roster, dialogs }) {
     out.dialogs = dialogs.slice(before).map((d) => ({ type: d.type, title: d.title, message: String(d.message || "").slice(0, 300) }));
     h.check(out.dialogs.some((d) => d.type === "appConfirm" && d.title === "오류가 있는 결과 반영"), "중요", "2단계·결과", "오류 결과 반영 때 앱 확인 창 '오류가 있는 결과 반영'이 뜨지 않음", { actual: out.dialogs });
     h.check(/반영했습니다|명단을 만들었습니다/.test(out.status) && !/반영하지 않았/.test(out.status), "중요", "2단계·결과", "확인 창에서 '반영'을 눌렀는데 결과가 반영되지 않음", { actual: out.status });
+    h.check(!SEPARATE_WORDS.test(out.status), "중요", "2단계·결과", "결과 반영 안내에 '소인수/공동/따로 신청' 글자가 남음", { actual: out.status });
     // 3단계 확인서 점검란
     await gotoStep(page, 3);
     const item = (s) => page.locator(`[data-student-id^="app-${grade}-${s.classroom}-${s.number}-"]`).first();
@@ -1514,7 +1533,8 @@ async function stepClassSections({ page, h, report, roster }) {
     } else h.issue("경미", "6단계", "직접 고치기 시나리오를 돌릴 택n 그룹이 없음", { actual: info.map((g) => g.key) });
     // 특별실: 두 학년 1학기 과학 과목에 과학실(2곳) → 같은 시간 같은 특별실 0
     result.specialRooms = await X6.specialRoomScenario({ page, h, info, semester: "1" });
-    // 따로 신청(소인수 메모) 과목: 6단계 그룹 과목·4단계 집계표에 없고 5단계 '확인 필요'에 있음
+    // 따로 신청(소인수 메모) 과목(0d71b03~): 2·4·6단계에서 빠지고, 5단계에도 없음(시수 항목·'확인 필요'·시수표·엑셀 모든 시트).
+    // 1단계(편제표·편제 점검·교육청 양식) 밖에서는 '소인수/공동교육/따로 신청' 글자도 없어야 함.
     result.separate = { name: SMALL_CLASS.name };
     {
       const in6 = Object.values(sectionsByGroup).flat().some((x) => Expected.bare(x.subject) === SMALL_CLASS.name);
@@ -1524,12 +1544,17 @@ async function stepClassSections({ page, h, report, roster }) {
       const open = page.locator('[data-open-dialog="hoursIssuesDialog"]').first();
       if (await open.count()) { await open.click(); await sleep(500); }
       const issues = await page.locator("#hoursIssuesBody").innerText().catch(() => "");
-      const hoursRow = await page.locator("#workflowStep7Panel").innerText().catch(() => "");
-      const line = issues.split("\n").find((x) => x.includes(SMALL_CLASS.name)) || "";
       await page.keyboard.press("Escape").catch(() => {});
-      Object.assign(result.separate, { in6, in4: agg.includes(SMALL_CLASS.name), in5Issues: Boolean(line), issueLine: line.slice(0, 200), in5Form: hoursRow.includes(SMALL_CLASS.name) });
+      const hoursRow = await page.locator("#workflowStep7Panel").innerText().catch(() => "");
+      const hoursFile = path.join(OUT, "downloads", "hours.xlsx");
+      const excelHits = fs.existsSync(hoursFile) ? xlsxFind(hoursFile, SEPARATE_WORDS.source, SMALL_CLASS.name) : null;
+      const hit = (t) => { const m = String(t).match(SEPARATE_WORDS); return m ? String(t).slice(Math.max(0, m.index - 60), m.index + 60) : ""; };
+      Object.assign(result.separate, { in6, in4: agg.includes(SMALL_CLASS.name), in4Words: hit(agg), in5Issues: issues.includes(SMALL_CLASS.name), in5Form: hoursRow.includes(SMALL_CLASS.name),
+        words5: hit(issues + "\n" + hoursRow), excel5: excelHits });
       h.check(!in6 && !result.separate.in4, "중요", "4·6단계", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 ${in6 ? "6단계 분반" : ""}${result.separate.in4 ? " 4단계 집계표" : ""}에 들어감`, { actual: result.separate });
-      h.check(result.separate.in5Issues && /따로 신청|소인수/.test(line), "중요", "5단계", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 5단계 '확인 필요'에 없음`, { actual: result.separate });
+      h.check(!result.separate.in5Issues && !result.separate.in5Form && !result.separate.words5, "중요", "5단계", `소인수·공동 과목 '${SMALL_CLASS.name}' 또는 '소인수/공동/따로 신청' 글자가 5단계 화면(시수표·확인 필요)에 남음`, { actual: result.separate });
+      h.check(excelHits && !excelHits.length, "중요", "5단계", `5단계 시수 엑셀에 소인수·공동 과목 또는 '소인수/공동/따로 신청' 글자가 남음${excelHits ? "" : "(파일 없음)"}`, { actual: excelHits });
+      h.check(!result.separate.in4Words, "중요", "4단계", "4단계 화면에 '소인수/공동/따로 신청' 글자가 남음", { actual: result.separate.in4Words });
       await S6.open6(page);
     }
     report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));

@@ -41,7 +41,7 @@ const GROUPS = [
   { field: "sem32", pick: 1, credit: 2, members: [["제2외국어/한문", "진로", "일본어 회화"], ["제2외국어/한문", "진로", "중국어 회화"]] },
 ];
 
-// options.smallClass: 학기 칸 메모(소인수) 과목 한 줄 — 따로 신청(2·4·6단계에서 빠지고 5단계 "확인 필요")
+// options.smallClass: 학기 칸 메모(소인수) 과목 한 줄 — 따로 신청(2·4·5·6단계 모두에서 빠짐, 5단계 시수·확인 필요에도 없음)
 const SMALL_CLASS = { area: "사회(역사/도덕 포함)", kind: "융합", name: "금융과 경제생활", base: 4, op: 3, note: "소인수/2학년/2학기/3학점(순증)" };
 function planSheet(year, school = "가상고등학교", options = {}) {
   const W = 14;
