@@ -1,5 +1,5 @@
 // 6단계 분반 편성 화면 확인(사용자처럼 클릭): 하네스 전체 실행이 남긴 백업(가상 학생)을 복원 → 6단계 편성·비교·교사·블록 시간·내보내기·새로고침.
-// 사용: node e2e/run.cjs --seed 1 --out /tmp/e2e  →  node e2e/class-sections-ui.cjs /tmp/cs-ui /tmp/e2e/downloads/workspace-backup.json
+// 사용: node e2e/run.cjs --seed 1 --out /tmp/e2e  →  node e2e/class-sections-ui.cjs /tmp/cs-ui /tmp/e2e/downloads/workspace-backup.json.gz(예전 하네스는 .json)
 const path = require("path"), fs = require("fs");
 const ROOT = path.join(__dirname, "..");
 const globalRoot = require("child_process").execSync("npm root -g", { encoding: "utf8" }).trim();

@@ -180,7 +180,9 @@ function classSectionsSourceCompute(round, thresholds) {
       }
     }
   }
-  groups.sort((a, b) => a.semester.localeCompare(b.semester) || a.grade.localeCompare(b.grade) || a.category.localeCompare(b.category, "ko"));
+  // 현 학년별로 묶고 그 안에서 학기 순(현1 → 2-1 택3, 2-1 택1, 2-2 …; 현2 → …).
+  const choiceOf = (group) => -group.choice;
+  groups.sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) || choiceOf(a) - choiceOf(b) || a.category.localeCompare(b.category, "ko"));
   return { groups, locked, maxClassSize: Number(snapshot?.maxClassSize) || Number($("#maxClassSize")?.value) || 34 };
 }
 
@@ -336,6 +338,7 @@ async function classSectionsSolveCurrent(kind = "solve") {
   const context = classSectionsCurrent();
   if (!context || CLASS_SECTIONS_VIEW.running) return;
   const { round, group, entry, source } = context;
+  const scope = { round, group: group.key };
   const previous = entry.sectionResult;
   let input;
   if (kind === "partial" && previous?.assign) {
@@ -348,7 +351,7 @@ async function classSectionsSolveCurrent(kind = "solve") {
     input = classSectionsBuildInput(round, group, entry, previous?.assign ? { baseline: { assign: previous.assign } } : {});
   }
   CLASS_SECTIONS_VIEW.running = true;
-  classSectionsSetStatus(kind === "compare" ? "편성 방식 3가지를 계산하는 중…" : "분반 편성을 계산하는 중…");
+  classSectionsSetStatus(kind === "compare" ? "편성 방식 3가지를 계산하는 중…" : "분반 편성을 계산하는 중…", false, scope);
   renderClassSections();
   try {
     if (kind === "compare") {
@@ -358,14 +361,14 @@ async function classSectionsSolveCurrent(kind = "solve") {
         baselineAt: previous?.createdAt || "" };
       entry.mode = compared.recommended;
       classSectionsSaveResult(entry, pick, { ...input, mode: compared.recommended }, group, source);
-      classSectionsSetStatus(`편성 방식 비교 완료 · 추천: ${CLASS_SECTIONS_MODE_LABELS[compared.recommended]}`);
+      classSectionsSetStatus(`편성 방식 비교 완료 · 추천: ${CLASS_SECTIONS_MODE_LABELS[compared.recommended]}`, false, scope);
     } else {
       const result = await classSectionsRunSolver({ kind: "solve", input });
       classSectionsSaveResult(entry, result, input, group, source);
-      classSectionsSetStatus(result.explain.feasible ? `편성 완료 · ${result.explain.summary}` : `편성 결과 확인 필요 · ${result.explain.summary}`, !result.explain.feasible);
+      classSectionsSetStatus(result.explain.feasible ? `편성 완료 · ${result.explain.summary}` : `편성 결과 확인 필요 · ${result.explain.summary}`, !result.explain.feasible, scope);
     }
   } catch (error) {
-    classSectionsSetStatus(`편성 계산 실패: ${error?.message || error}`, true);
+    classSectionsSetStatus(`편성 계산 실패: ${error?.message || error}`, true, scope);
   } finally {
     CLASS_SECTIONS_VIEW.running = false;
     if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
@@ -379,6 +382,7 @@ async function classSectionsSolveSemesterCurrent() {
   const context = classSectionsCurrent();
   if (!context?.group || CLASS_SECTIONS_VIEW.running) return;
   const { round, source, group } = context;
+  const scope = { round, group: group.key };
   const groups = source.groups.filter((item) => item.semester === group.semester);
   const inputs = groups.map((item) => {
     const entry = classSectionsEntry(round, item.key, true);
@@ -386,7 +390,7 @@ async function classSectionsSolveSemesterCurrent() {
     return classSectionsBuildInput(round, item, entry, { noOccupied: true, ...(previous?.assign ? { baseline: { assign: previous.assign } } : {}) });
   });
   CLASS_SECTIONS_VIEW.running = true;
-  classSectionsSetStatus(`${group.semester}학기 그룹 ${groups.length}개를 함께 계산하는 중…`);
+  classSectionsSetStatus(`${group.semester}학기 그룹 ${groups.length}개를 함께 계산하는 중…`, false, scope);
   renderClassSections();
   try {
     const all = await classSectionsRunSolver({ kind: "solveAll", input: { groups: inputs, teachers: inputs[0]?.teachers || [], seed: inputs[0]?.seed || 1 } });
@@ -407,9 +411,9 @@ async function classSectionsSolveSemesterCurrent() {
     });
     const orderText = (all.orders || []).length > 1 ? ` · 순서 ${all.orders.length}가지 비교 → ‘${all.chosenOrder}’` : "";
     const shortText = (all.shortages || []).length ? ` · 교사 부족 ${all.shortages.length}곳(예: ${all.shortages[0].message})` : "";
-    classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}${orderText}${shortText}.`, problems > 0 || Boolean(shortText));
+    classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}${orderText}${shortText}.`, problems > 0 || Boolean(shortText), scope);
   } catch (error) {
-    classSectionsSetStatus(`함께 계산 실패: ${error?.message || error}`, true);
+    classSectionsSetStatus(`함께 계산 실패: ${error?.message || error}`, true, scope);
   } finally {
     CLASS_SECTIONS_VIEW.running = false;
     if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
@@ -453,6 +457,7 @@ async function classSectionsRecommendTimesCurrent() {
   const context = classSectionsCurrent();
   if (!context?.group || CLASS_SECTIONS_VIEW.running) return;
   const { round, source, group } = context;
+  const scope = { round, group: group.key };
   const settings = classSectionsSettings();
   const groups = source.groups.filter((item) => item.semester === group.semester);
   const teachers = classSectionsTeacherList(settings);
@@ -463,15 +468,15 @@ async function classSectionsRecommendTimesCurrent() {
     groups: groups.map((item) => ({ groupId: item.key, label: item.label, grade: item.targetGrade, blocks: classSectionsBlockDemand(round, item, classSectionsEntry(round, item.key, true), settings) }))
   };
   CLASS_SECTIONS_VIEW.running = true;
-  classSectionsSetStatus(`${group.semester}학기 블록 ${spec.groups.reduce((sum, item) => sum + item.blocks.length, 0)}개의 시간을 추천하는 중…`);
+  classSectionsSetStatus(`${group.semester}학기 블록 ${spec.groups.reduce((sum, item) => sum + item.blocks.length, 0)}개의 시간을 추천하는 중…`, false, scope);
   renderClassSections();
   try {
     const result = await classSectionsRunSolver({ kind: "recommendTimes", input: spec });
     CLASS_SECTIONS_VIEW.timesProposal = { round, semester: group.semester, result, edits: {},
       labels: Object.fromEntries(groups.map((item) => [item.key, item.label])) };
-    classSectionsSetStatus(`블록 시간 추천 완료${result.shortages.length ? ` · 교사 부족 ${result.shortages.length}곳` : " · 교사 부족 없음"}. 칸을 고친 뒤 ‘추천 적용’을 누르세요.`, result.shortages.length > 0);
+    classSectionsSetStatus(`블록 시간 추천 완료${result.shortages.length ? ` · 교사 부족 ${result.shortages.length}곳` : " · 교사 부족 없음"}. 칸을 고친 뒤 ‘추천 적용’을 누르세요.`, result.shortages.length > 0, scope);
   } catch (error) {
-    classSectionsSetStatus(`블록 시간 추천 실패: ${error?.message || error}`, true);
+    classSectionsSetStatus(`블록 시간 추천 실패: ${error?.message || error}`, true, scope);
   } finally {
     CLASS_SECTIONS_VIEW.running = false;
     renderClassSections();
@@ -522,8 +527,10 @@ function classSectionsSaveResult(entry, result, input, group, source) {
   entry.inputStudents = Object.fromEntries(group.students.map((student) => [student.key, student.courses.slice()]));
 }
 
-function classSectionsSetStatus(text, error = false) {
-  CLASS_SECTIONS_VIEW.status = { text, error };
+// 상태 문구는 그 문구를 만든 차수·그룹에서만 보인다(그룹을 바꾸면 다른 그룹 결과 문구가 남지 않게).
+function classSectionsSetStatus(text, error = false, scope = null) {
+  CLASS_SECTIONS_VIEW.status = { text, error, round: scope?.round ?? CLASS_SECTIONS_VIEW.round, group: scope?.group ?? CLASS_SECTIONS_VIEW.group };
+  if (scope && (scope.round !== CLASS_SECTIONS_VIEW.round || scope.group !== CLASS_SECTIONS_VIEW.group)) return;
   const box = typeof document !== "undefined" ? document.getElementById("classSectionsStatus") : null;
   if (box) { box.textContent = text; box.dataset.state = error ? "error" : "ok"; }
 }
@@ -611,8 +618,8 @@ function renderClassSectionsView() {
   const sum = group.courses.reduce((total, course) => total + (entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount), 0);
   const limit = base.maxSectionsPerBlock ? base.maxSectionsPerBlock * base.blocks : 0;
   const modeOptions = CLASS_SECTIONS_MODE_OPTIONS.map(([value, label]) => `<option value="${value}"${(entry.mode || "move") === value ? " selected" : ""}>${label}</option>`).join("");
-  const teacherNote = settings.teachers.length ? `교사 ${settings.teachers.length}명 입력됨`
-    : settings.useHoursTeachers ? "교사 명단 없음 · 5단계 교과별 교사 수로 블록 제한" : "교사 제한 없음";
+  const statusHere = CLASS_SECTIONS_VIEW.status && CLASS_SECTIONS_VIEW.status.round === round && CLASS_SECTIONS_VIEW.status.group === group.key ? CLASS_SECTIONS_VIEW.status : null;
+  const teacherNote = classSectionsTeacherNote(settings, group, input);
   panel.innerHTML = `
     <div class="cs-groups" role="group" aria-label="편성할 그룹">${groupsHtml}</div>
     <div class="cs-badges">
@@ -647,7 +654,7 @@ function renderClassSectionsView() {
         <button class="button" id="classSectionsCompare" type="button"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>방식 비교·추천</button>
         ${source.groups.filter((item) => item.semester === group.semester).length > 1 ? `<button class="button" id="classSectionsSolveSemester" type="button" title="${group.semester}학기 그룹 ${source.groups.filter((item) => item.semester === group.semester).length}개를 함께 풀어 학년 간 교사 겹침이 편성 순서에 따라 달라지지 않게 합니다"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>전 학년 함께 다시 계산</button>` : ""}
         ${result ? `<button class="button" id="classSectionsPartial" type="button"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>바뀐 학생만 다시 계산</button>` : ""}
-        <span class="cs-status" id="classSectionsStatus" role="status" aria-live="polite" data-state="${CLASS_SECTIONS_VIEW.status?.error ? "error" : "ok"}">${esc(CLASS_SECTIONS_VIEW.status?.text || "")}</span>
+        <span class="cs-status" id="classSectionsStatus" role="status" aria-live="polite" data-state="${statusHere?.error ? "error" : "ok"}">${esc(statusHere?.text || "")}</span>
       </div>
     </section>
     ${classSectionsCompareHtml(group, entry)}
@@ -670,6 +677,25 @@ function classSectionsClassesHtml(group, entry) {
     <p class="cs-note" id="classSectionsClassMapLine">${esc(mapLine)}</p>${warn}`;
 }
 
+// 교사 수 안내: 무엇으로 블록 분반 수를 제한하는지, 비어 있는 교과는 제한 없이 계산함을 분명히.
+function classSectionsTeacherNote(settings, group, input) {
+  const label = (id) => (typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id);
+  const departments = [...new Set(input.courses.filter((course) => course.mode !== "class").map((course) => course.department).filter(Boolean))];
+  if (settings.teachers.length) {
+    const covered = new Set(classSectionsTeacherList(settings).flatMap((teacher) => teacher.departments));
+    const missing = departments.filter((dept) => !covered.has(dept));
+    return `교사 ${settings.teachers.length}명 입력됨${missing.length ? ` · 명단에 없는 교과는 교사 수 제한 없이 계산: ${missing.map(label).join(", ")}` : ""}`;
+  }
+  if (!settings.useHoursTeachers) return "교사 명단 없음 · 교사 수 제한 없이 계산합니다";
+  if (!input.departmentTeachers) return "교사 명단 없음 · 5단계 교사 수가 비어 있어 교사 수 제한 없이 계산합니다";
+  const missing = departments.filter((dept) => input.departmentTeachers[dept] === undefined);
+  return `교사 명단 없음 · 5단계 교과별 교사 수로 블록당 분반을 제한합니다${missing.length ? ` · 5단계 교사 수가 비어 있는 교과(제한 없음): ${missing.map(label).join(", ")}` : ""}`;
+}
+
+function classSectionsCircled(number) {
+  return number >= 1 && number <= 20 ? String.fromCharCode(0x2460 + number - 1) : number ? `(${number})` : "";
+}
+
 function classSectionsCompareHtml(group, entry) {
   const compare = CLASS_SECTIONS_VIEW.compare;
   if (!compare || compare.groupKey !== group.key || compare.round !== CLASS_SECTIONS_VIEW.round) return "";
@@ -680,7 +706,8 @@ function classSectionsCompareHtml(group, entry) {
     <td><button class="button" type="button" data-cs-use-mode="${esc(row.mode)}"${(entry.mode || "move") === row.mode ? ' aria-pressed="true"' : ""}>이 방식으로 편성</button></td></tr>`).join("");
   return `<section class="cs-card" aria-label="편성 방식 비교"><h4>편성 방식 비교</h4>
     <p class="cs-note">${esc(compare.reason)}</p>
-    <table class="cs-table"><thead><tr><th>방식</th><th>미배정</th><th>분반 인원 차이(최대)</th><th>같은 반끼리 비율</th><th>앞 편성 대비 이동</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="cs-table"><thead><tr><th>방식</th><th>미배정</th><th title="같은 과목 분반들의 인원 최대 − 최소(과목 중 가장 큰 값)">분반 인원 차이(최대)</th><th title="같은 담임반 학생이 같은 분반에 모인 비율(과목·반마다 가장 많이 모인 분반 기준)">같은 반끼리 비율</th><th title="앞 편성 결과에서 분반이 바뀐 학생·과목 수">앞 편성 대비 이동</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="cs-note">분반 인원 차이 = 같은 과목 분반 인원의 최대 − 최소 · 같은 반끼리 비율 = 같은 담임반 학생이 같은 분반에 모인 비율</p>
     <p class="cs-note">${compare.baselineAt ? `앞 편성 대비 이동 = ${esc(new Date(compare.baselineAt).toLocaleString("ko-KR"))}에 저장한 편성 결과에서 분반이 바뀐 학생·과목 수.` : "앞 편성 결과가 없어 이동 수는 ‘–’로 표시합니다."}</p></section>`;
 }
 
@@ -706,10 +733,10 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
         ${(eligible.length ? eligible : teachers).map((teacher) => `<option value="${esc(teacher.id)}"${pinned === teacher.id ? " selected" : ""}>${esc(teacher.name)}</option>`).join("")}</select>` : "";
       const over = section.size > section.capacity;
       return `<li class="cs-section${over ? " is-over" : ""}" data-section-id="${esc(section.id)}">
-        <strong title="${esc(section.roomName)}">${esc(section.roomName)}</strong>
+        <strong title="${esc(section.courseName)}${section.roomNo ? ` ${section.roomNo}반` : ""}">${esc(section.courseName)}${section.roomNo ? ` ${classSectionsCircled(section.roomNo)}` : ""}</strong>
         <span class="cs-size" aria-label="인원">${section.size}/${section.capacity}명</span>
-        <span class="cs-course" title="${esc(section.courseName)}">${esc(section.courseName)}</span>
-        <span class="cs-controls">${teacherSelect}<label class="cs-pin"><input type="checkbox" data-cs-pin="${esc(section.id)}" data-cs-pin-block="${esc(block.id)}"${entry.pins.sections[section.id] ? " checked" : ""} aria-label="${esc(section.roomName)} 블록 고정"> 고정</label></span></li>`;
+        <span class="cs-neis" title="나이스 개설강의실 이름(내보내기에 이 이름을 씀)">나이스 ${esc(section.roomName)}</span>
+        <span class="cs-controls">${teacherSelect}<label class="cs-pin" title="이 분반을 ${esc(block.letter)}블록에 고정합니다. 다시 계산해도 블록이 바뀌지 않습니다."><input type="checkbox" data-cs-pin="${esc(section.id)}" data-cs-pin-block="${esc(block.id)}"${entry.pins.sections[section.id] ? " checked" : ""} aria-label="${esc(section.roomName)} 블록 고정"> 블록 고정</label></span></li>`;
     }).join("");
     return `<div class="cs-block"><h5>${esc(block.letter)}블록 <span>${block.sectionIds.length}개${block.maxSections ? ` / 최대 ${block.maxSections}` : ""}</span>${block.times?.length ? ` <em>${esc(classSectionsTimesText(block.times))}</em>` : ""}</h5><ul>${cards}</ul></div>`;
   }).join("");
@@ -725,7 +752,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   return `<section class="cs-card" aria-label="편성 결과">
     <h4>편성 결과 <span class="cs-note">${esc(CLASS_SECTIONS_MODE_LABELS?.[result.mode] || result.mode)} · ${result.draft ? "확정 전 시안" : "확정 결과 기준"} · ${esc(new Date(result.createdAt).toLocaleString("ko-KR"))}</span></h4>
     <p class="cs-summary" id="classSectionsSummary" data-feasible="${explain.feasible ? "true" : "false"}">${esc(explain.summary || "")}</p>
-    <p class="cs-note">미배정 ${metrics.unassignedStudents || 0}명 · 분반 인원 차이 최대 ${metrics.maxSpread || 0}명 · 같은 반끼리 ${Math.round((metrics.sameHomeroomRatio || 0) * 100)}%${metrics.moved !== null && metrics.moved !== undefined ? ` · 앞 편성 대비 이동 ${metrics.moved}` : ""}</p>
+    <p class="cs-note" id="classSectionsMetrics">미배정 ${metrics.unassignedStudents || 0}명 · <span title="같은 과목 분반 인원의 최대 − 최소(과목 중 가장 큰 값)">분반 인원 차이 최대 ${metrics.maxSpread || 0}명</span> · <span title="같은 담임반 학생이 같은 분반에 모인 비율(과목·반마다 가장 많이 모인 분반 기준)">같은 반끼리 ${Math.round((metrics.sameHomeroomRatio || 0) * 100)}%(같은 담임반 학생이 같은 분반에 모인 비율)</span>${metrics.moved !== null && metrics.moved !== undefined ? ` · 앞 편성 대비 이동 ${metrics.moved}` : ""}</p>
     ${causes ? `<h5>원인</h5><ul class="cs-list">${causes}</ul>` : ""}
     ${suggestions ? `<h5>제안</h5><ul class="cs-list" id="classSectionsSuggestions">${suggestions}</ul>` : ""}
     ${errors.length ? `<h5>오류 ${errors.length}건</h5><ul class="cs-list is-error">${errors.slice(0, 30).map((issue) => `<li>${esc(issue.message)}</li>`).join("")}</ul>` : ""}
@@ -869,7 +896,7 @@ function classSectionsApplySuggestion(index) {
 function classSectionsHandleClick(event) {
   const target = event.target.closest("button, [data-cs-group]");
   if (!target) return;
-  if (target.dataset.csGroup) { CLASS_SECTIONS_VIEW.group = target.dataset.csGroup; CLASS_SECTIONS_VIEW.search = ""; renderClassSections(); return; }
+  if (target.dataset.csGroup) { CLASS_SECTIONS_VIEW.group = target.dataset.csGroup; CLASS_SECTIONS_VIEW.search = ""; CLASS_SECTIONS_VIEW.status = null; renderClassSections(); return; }
   if (target.id === "classSectionsSolve") return void classSectionsSolveCurrent("solve");
   if (target.id === "classSectionsCompare") return void classSectionsSolveCurrent("compare");
   if (target.id === "classSectionsPartial") return void classSectionsSolveCurrent("partial");

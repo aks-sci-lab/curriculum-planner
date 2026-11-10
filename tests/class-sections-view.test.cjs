@@ -216,3 +216,28 @@ test("promotion re-forms classes (now 4 → next year 5): next-year counts, home
   assert.ok(waiting.warnings.some((text) => /학생 배정은 반 배정표를 올린 뒤/.test(text)));
   assert.deepEqual(plain(ctx.classSectionsRestore({ classMaps: { "1": { "1-1-1": { classroom: "2" } } } })), { classMaps: { "1": { "1-1-1": { classroom: "2" } } } });
 });
+
+test("screen tidy-up: status belongs to its group, readable section names with the NEIS name beside, teacher-limit note, group order", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  // 상태 문구: 다른 그룹(또는 그룹을 바꾼 뒤)에는 보이지 않는다
+  ctx.CLASS_SECTIONS_VIEW.round = "1";
+  ctx.CLASS_SECTIONS_VIEW.group = "1:2:other";
+  ctx.classSectionsSetStatus("편성 완료 · 분반 55개", false, { round: "1", group: group.key });
+  assert.equal(ctx.CLASS_SECTIONS_VIEW.status.group, group.key);
+  // 교사 수 안내: 5단계 교사 수가 비면 '제한 없이'
+  const settings = ctx.classSectionsSettings();
+  const entry = ctx.classSectionsEntry("1", group.key);
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  assert.match(ctx.classSectionsTeacherNote(settings, group, input), /5단계 교과별 교사 수로 블록당 분반을 제한합니다 · 5단계 교사 수가 비어 있는 교과\(제한 없음\): 과학-지구/);
+  assert.match(ctx.classSectionsTeacherNote(settings, group, { ...input, departmentTeachers: null }), /5단계 교사 수가 비어 있어 교사 수 제한 없이 계산합니다/);
+  settings.teachers.push({ id: "t1", name: "물리A", department: "과학-물리" });
+  assert.match(ctx.classSectionsTeacherNote(settings, group, input), /명단에 없는 교과는 교사 수 제한 없이 계산: 과학-화학, 과학-지구/);
+  assert.equal(ctx.classSectionsCircled(2), "②");
+  const view = fs.readFileSync(path.join(root, "class-sections-view.js"), "utf8");
+  assert.match(view, /나이스 \$\{esc\(section\.roomName\)\}/, "card shows the NEIS room name in small text");
+  assert.match(view, /> 블록 고정<\/label>/);
+  assert.match(view, /같은 담임반 학생이 같은 분반에 모인 비율/);
+  // 그룹 순서: 현 학년 → 학기 → 택n 큰 것
+  assert.match(view, /a\.grade\.localeCompare\(b\.grade\) \|\| a\.semester\.localeCompare\(b\.semester\)/);
+});
