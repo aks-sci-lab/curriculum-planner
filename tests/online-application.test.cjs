@@ -1076,8 +1076,8 @@ test("workflow menus reveal their matching panels without changing the selected 
   vm.runInContext(functionSource("function renderWorkflowLayout(", "function switchRound("),ctx);
   ctx.renderWorkspaceContext=()=>{};
   ctx.renderWorkflowLayout();
-  // 편제표·수강신청·확인서·집계·시수 통계 5개 업무 메뉴와 보류 중인 이동수업·시간표 메뉴
-  assert.deepEqual(buttons.map((button)=>button.dataset.workflowStep),["1","2","3","4","7","5","6"]);
+  // 편제표·수강신청·확인서·집계·시수 통계·분반 편성 6개 업무 메뉴와 보류 중인 이동수업·시간표 메뉴
+  assert.deepEqual(buttons.map((button)=>button.dataset.workflowStep),["1","2","3","4","7","8","5","6"]);
   assert.equal(elements.get("#workflowStep1Panel").classList.states.hidden,false);
   ctx.switchWorkflowStep(3);
   assert.equal(elements.get("#certificatePanel").classList.states.hidden,false);
@@ -1094,6 +1094,12 @@ test("workflow menus reveal their matching panels without changing the selected 
   assert.equal(elements.get("#aggregatePanel").classList.states.hidden,true);
   assert.equal(ctx.hoursRendered,1);
   assert.equal(elements.get("#workflowMenuToggle").textContent,"단계 선택 · 5단계");
+  ctx.renderClassSections=()=>{ctx.classSectionsRendered=(ctx.classSectionsRendered||0)+1;};
+  ctx.switchWorkflowStep(8);
+  assert.equal(elements.get("#workflowStep8Panel").classList.states.hidden,false);
+  assert.equal(elements.get("#workflowStep7Panel").classList.states.hidden,true);
+  assert.equal(ctx.classSectionsRendered,1);
+  assert.equal(elements.get("#workflowMenuToggle").textContent,"단계 선택 · 6단계");
   ctx.switchWorkflowStep(5);
   assert.equal(elements.get("#classifierPanel").classList.states.hidden,false);
   ctx.switchWorkflowStep(6);

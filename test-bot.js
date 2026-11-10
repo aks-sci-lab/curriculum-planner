@@ -216,7 +216,9 @@ function columnIndex(reference) {
 
   function renderStats(records) {
     const summary = Core.summarize(records);
-    const cells = [["대상", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["잠김 확인", summary.locked], ["코드 변경", summary.codeChanged],
+    const cells = [["대상", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["잠김 확인", summary.locked],
+      // 재신청 대상이 아닌 학생(서버가 접수를 닫아 둠)은 실패가 아니라 따로 센다.
+      ...(summary.skipped ? [["대상 아님", summary.skipped]] : []), ["코드 변경", summary.codeChanged],
       ["요청 수", summary.requests], ["평균 응답", `${summary.averageMs}ms`], ["최대 응답", `${summary.maxMs}ms`],
       ["위반 거절", summary.violationsRefused],
       // 위계(선이수) 위반 시도는 경고만이라 저장되는 것이 정상이다.
@@ -248,7 +250,7 @@ function columnIndex(reference) {
   }
   function renderRecord(record) {
     const row = document.createElement("tr");
-    if (!record.ok && record.status !== "잠김 확인") row.className = "is-failed";
+    if (!record.ok && record.status !== "잠김 확인" && !record.skipped) row.className = "is-failed";
     for (const value of [`${record.round || 1}회차`, `${record.grade}-${record.classroom}-${record.number} ${record.name}`, record.status, record.newCode,
       record.selections.join(", "), record.notes.join(" / "), record.failure]) {
       row.insertCell().textContent = value || "";
@@ -268,7 +270,7 @@ function columnIndex(reference) {
     caption.textContent = `회차별 결과 · ${report.repeat.count}회 반복 · ${report.repeat.freshEvent ? "회차마다 새 수강신청(회차마다 닫고 삭제)" : "같은 수강신청에서 재신청"}`;
     table.appendChild(caption);
     const head = table.createTHead().insertRow();
-    for (const label of ["회차", "결과", "대상", "성공", "실패", "잠김", "위반 거절", "대조 불일치", "평균 응답", "최대 응답"]) {
+    for (const label of ["회차", "결과", "대상", "성공", "실패", "잠김", "대상 아님", "위반 거절", "대조 불일치", "평균 응답", "최대 응답"]) {
       const cell = document.createElement("th");
       cell.textContent = label;
       head.appendChild(cell);
@@ -277,7 +279,7 @@ function columnIndex(reference) {
     const line = (row, label, status, className = "") => {
       const tr = body.insertRow();
       if (className) tr.className = className;
-      for (const value of [label, status, row.targets, row.ok, row.failed, row.locked, row.violationsRefused,
+      for (const value of [label, status, row.targets, row.ok, row.failed, row.locked, row.skipped || 0, row.violationsRefused,
         row.mismatches === null ? "대조 안 함" : row.mismatches, `${row.averageMs}ms`, `${row.maxMs}ms`]) {
         tr.insertCell().textContent = String(value);
       }

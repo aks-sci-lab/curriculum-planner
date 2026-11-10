@@ -94,9 +94,10 @@
           <button class="workflow-step-button" type="button" data-workflow-step="3">3. 수강신청 확인서</button>
           <button class="workflow-step-button" type="button" data-workflow-step="4">4. 집계·개설 확정</button>
           <button class="workflow-step-button" type="button" data-workflow-step="7">5. 교과별 시수 통계</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="8">6. 분반 편성</button>
           <details class="workflow-deferred" id="workflowDeferred">
             <summary>보류 단계 2개 · 업무 파악 후 진행</summary>
-            <button class="workflow-step-button is-deferred" type="button" data-workflow-step="5">이동수업 반편성 (보류)</button>
+            <button class="workflow-step-button is-deferred" type="button" data-workflow-step="5">이동수업 과목 분류 (보류)</button>
             <button class="workflow-step-button is-deferred" type="button" data-workflow-step="6">시간표 작성 (보류)</button>
           </details>
         </div>
@@ -118,7 +119,7 @@
             <summary class="button button-quiet">자료 관리</summary>
             <div class="workspace-data-menu-items">
             <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">파일로 백업하기</button>
-            <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json"></label>
+            <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json,.gz,application/json,application/gzip"></label>
             <button class="button button-quiet hidden" id="connectWorkspaceFile" type="button" title="작업 자료를 내 PC의 파일 하나에 자동으로 저장합니다. Chrome·Edge에서 쓸 수 있습니다.">자동 저장 파일 연결</button>
             <button class="button button-quiet hidden" id="openWorkspaceFile" type="button" title="이전에 저장한 자료 파일을 열어 복원하고, 그 파일에 계속 자동 저장합니다.">자료 파일 열기</button>
             <button class="button button-secondary hidden" id="allowWorkspaceFile" type="button">저장 허용</button>
@@ -372,7 +373,7 @@
       </section>
       <section class="workflow-placeholder hidden" id="workflowStep6Panel">
         <h3>시간표 작성 · 준비 중</h3>
-        <p>아직 시간표 자동 편성 기능은 제공하지 않습니다. 이동수업 과목 분류는 보류 메뉴의 ‘이동수업 반편성’에서 할 수 있습니다.</p>
+        <p>아직 시간표 자동 편성 기능은 제공하지 않습니다. 이동수업 분반·블록 편성은 ‘6. 분반 편성’에서 합니다.</p>
       </section>
 
       <section id="certificatePanel" class="hidden">
@@ -469,9 +470,22 @@
         </div>
         <div id="hoursStatsContent"></div>
       </section>
+      <section class="workflow-step-panel hidden" id="workflowStep8Panel" aria-labelledby="classSectionsTitle">
+        <div class="hours-heading">
+          <div>
+            <h3 id="classSectionsTitle">6단계 · 분반 편성 <span class="count-pill" id="classSectionsRoundBadge"></span></h3>
+            <p class="note">4단계에서 정한 개설 과목·분반 수와 학생 신청으로 블록(같은 시간 분반 묶음)·학생 분반·교사를 편성합니다. 요일·교시 전체 시간표는 만들지 않습니다.</p>
+          </div>
+          <div class="hours-toolbar">
+            <label>차수 <select id="classSectionsRound" aria-label="편성할 차수"></select></label>
+            <button class="button" id="classSectionsTeachersOpen" type="button" aria-haspopup="dialog">교사·시간 설정</button>
+          </div>
+        </div>
+        <div id="classSectionsContent"></div>
+      </section>
       <section class="panel hidden" id="classifierPanel">
         <div class="roster-header">
-          <div><h2 class="panel-heading">이동수업 반편성</h2><p class="panel-subtitle">시간표용 이동수업 과목 분류입니다. 학생 선택과목군은 2단계 과목·그룹 설정에서 관리하며, 두 설정은 서로 구분됩니다.</p></div>
+          <div><h2 class="panel-heading">이동수업 과목 분류 (보류)</h2><p class="panel-subtitle">시간표용 이동수업 과목 분류입니다(예전 기능). 학생 분반·블록 편성은 ‘6. 분반 편성’에서 합니다. 학생 선택과목군은 2단계 과목·그룹 설정에서 관리하며, 두 설정은 서로 구분됩니다.</p></div>
         </div>
         <div class="semester-classifier" id="semesterClassifier"></div>
       </section>
@@ -479,6 +493,11 @@
     </main>
   </div>
   <div id="printBatch" aria-hidden="true"></div>
+  <dialog class="cs-dialog" id="classSectionsTeacherDialog" aria-labelledby="classSectionsTeacherTitle">
+    <div class="main-heading"><div><h2 id="classSectionsTeacherTitle">분반 편성 · 교사·시간 설정</h2><p class="note">교사 불가 시간(육아시간·순회), 고정 시간, 특별실을 넣으면 블록 배치와 교사 배정에서 지킵니다. 블록 시간은 그룹 화면의 ‘블록별로 다르게’에서 넣습니다.</p></div>
+      <button class="button" id="classSectionsTeacherClose" type="button">닫기</button></div>
+    <div id="classSectionsTeacherBody"></div>
+  </dialog>
   <dialog id="cloudStudentPreviewDialog" style="width:min(850px, calc(100vw - 40px));max-height:90vh;overflow:auto">
     <div class="main-heading"><div><h2>학생 화면 미리보기</h2><p>가상 학생으로 확인합니다. 선택·제출 내용은 저장되지 않습니다.</p></div><button class="button" id="cloudStudentPreviewClose" type="button">닫기</button></div>
     <div id="cloudStudentPreviewContent"></div>
@@ -1000,6 +1019,7 @@ function courseClient_() {
   <script src="course-checks.js?v=20261110-release" defer></script>
   <script src="curriculum-compliance.js?v=20261110-release" defer></script>
   <script src="workspace-store.js?v=20261110-release" defer></script>
+  <script src="class-sections.js?v=20261110-release" defer></script>
   <script defer src="app.js?v=20261110-release"></script>
   <script src="xlsx-parser.js?v=20261110-release" defer></script>
   <script src="course-groups.js?v=20261110-release" defer></script>
@@ -1011,6 +1031,7 @@ function courseClient_() {
   <script src="curriculum-versions.js?v=20261110-release" defer></script>
   <script src="curriculum-reconvert.js?v=20261110-release" defer></script>
   <script src="hours-stats.js?v=20261110-release" defer></script>
+  <script src="class-sections-view.js?v=20261110-release" defer></script>
   <script src="curriculum-subject-actions.js?v=20261110-release" defer></script>
   <script src="workspace-file.js?v=20261110-release" defer></script>
   <script src="workspace-header.js?v=20261110-release" defer></script>
