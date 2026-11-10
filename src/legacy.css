@@ -2417,12 +2417,18 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   /* 칸 글자 12px = 9pt. 쪽 나눔은 class-sections-print.js classSectionsHomeroomStatusPages(쪽마다 .print-page 한 장, 오른쪽 위 1/2) */
   .print-page.cs-hr-page { page: cs-landscape; width:auto; padding:0; position:relative; }
   .print-page.cs-hr-page .cs-att-table { width:100%; font-size:12px; table-layout:fixed; }
-  .print-page.cs-hr-page .cs-att-table td, .print-page.cs-hr-page .cs-att-table th { height:auto; padding:.4mm .8mm; line-height:1.22; border-color:#444; overflow-wrap:anywhere; }
-  .print-page.cs-hr-page .cs-att-table td[data-kind="title"] { height:8mm; font-size:16px; }
+  .print-page.cs-hr-page .cs-att-table td, .print-page.cs-hr-page .cs-att-table th { height:auto; padding:.2mm .8mm; line-height:1.2; border-color:#444; overflow-wrap:anywhere; }
+  .print-page.cs-hr-page .cs-att-table td[data-kind="title"] { height:7mm; font-size:16px; }
   .print-page.cs-hr-page .cs-att-table td[data-kind="note"] { font-size:12px; }
   .print-page.cs-hr-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
   .print-page.cs-hr-page .cs-hr-pageno { position:absolute; top:1mm; right:1mm; font-size:12px; font-weight:700; }
 }
+/* 담임 현황 쪽 나눔 재기(classSectionsHomeroomStatusMeasurer, 화면 밖): 위 인쇄 규칙과 같은 글자·여백 — 하나를 바꾸면 둘 다 */
+.print-page.cs-hr-page.cs-hr-measure { padding:0; color:#111; }
+.cs-hr-measure .cs-att-table { width:100%; font-size:12px; table-layout:fixed; }
+.cs-hr-measure .cs-att-table td, .cs-hr-measure .cs-att-table th { height:auto; padding:.2mm .8mm; line-height:1.2; border-color:#444; overflow-wrap:anywhere; }
+.cs-hr-measure .cs-att-table td[data-kind="title"] { height:7mm; font-size:16px; }
+.cs-hr-measure .cs-att-table td[data-kind="note"] { font-size:12px; }
 /* 학생 배부용 '이동수업 안내' 쪽지(classSectionsHandoutHtml): 글자 크기는 --ho-font(인쇄 장마다 classSectionsHandoutLayout이 정함) */
 .cs-ho-box { margin-top:8px; padding-top:6px; border-top:1px solid #d7deed; }
 .cs-ho { box-sizing:border-box; padding:3mm 4mm; border:1px dashed #777; font-size:var(--ho-font, 12px); color:#111; background:#fff; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
@@ -2433,6 +2439,7 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 .cs-ho-table thead th { background:#eef1f6; font-weight:700; }
 .cs-ho-table tbody th { font-weight:700; white-space:nowrap; padding:.15em .1em; }
 .cs-ho-retake td strong { color:#a42b1c; }
+.cs-ho-table .cs-ho-room { display:block; font-size:.8em; color:#666; line-height:1.25; }
 .cs-ho-unsub { margin:.6em 0; padding:.8em; border:2px solid #a42b1c; text-align:center; font-size:1.25em; }
 .cs-ho-foot { margin:auto 0 0; padding-top:.4em; font-size:.85em; color:#444; }
 .cs-ho-preview { max-width:720px; margin-top:6px; }
