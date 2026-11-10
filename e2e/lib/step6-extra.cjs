@@ -190,9 +190,17 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     return { row, from, to };
   }).find((x) => x.from >= 0 && x.to >= 0 && x.row.sections >= 2) || table.rows.map((row) => ({ row, from: row.values.findIndex((v) => v.value > 0), to: row.values.findIndex((v) => v.value === 0), full: true }))
     .find((x) => x.from >= 0 && x.to >= 0 && x.row.sections >= 2) || null;
+  // 모든 블록이 최대면: 다른 과목 Y를 반대로(toL→fromL) 하나 옮겨 블록별 분반 수를 그대로 둔다
+  let swap = null;
+  if (pick?.full) {
+    const yRow = table.rows.find((row) => row !== pick.row && row.values[pick.to].value > 0 && row.sections >= 2);
+    if (yRow) swap = yRow;
+  }
   if (pick) {
     const name = pick.row.name, fromL = table.blocks[pick.from], toL = table.blocks[pick.to];
     await setCell(page, name, toL, 1);
+    if (swap) await setCell(page, swap.name, toL, swap.values[pick.to].value - 1);
+    if (swap) await setCell(page, swap.name, fromL, swap.values[pick.from].value + 1);
     await setCell(page, name, fromL, pick.row.values[pick.from].value - 1);
     table = await readPlacement(page);
     const row = table.rows.find((x) => x.name === name);
@@ -200,17 +208,17 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     const after = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
     const blockCount = (letter) => after.sections.filter((s) => bareTerm(s.subject) === bareTerm(name) && s.block === letter).length;
     const moved = movedStudents(before.sections, after.sections);
-    const courseStudents = new Set([...sel].filter(([, list]) => list.some((x) => x.subject === bareTerm(name))).map(([k]) => k));
+    const courseStudents = new Set([...sel].filter(([, list]) => list.some((x) => x.subject === bareTerm(name) || (swap && x.subject === bareTerm(swap.name)))).map(([k]) => k));
     const othersMoved = [...moved].filter((k) => !courseStudents.has(k));
     const othersBlockMoved = [...blockMovedStudents(before.sections, after.sections)].filter((k) => !courseStudents.has(k));
-    out.cell = { course: name, from: fromL, to: toL, table: row?.values.map((v) => v.value), excel: { [fromL]: blockCount(fromL), [toL]: blockCount(toL) }, moved: moved.size, othersMoved: othersMoved.length, othersBlockMoved: othersBlockMoved.length, courseStudents: courseStudents.size, groupStudents: sel.size, overMax: Boolean(pick.full),
+    out.cell = { course: name, from: fromL, to: toL, table: row?.values.map((v) => v.value), excel: { [fromL]: blockCount(fromL), [toL]: blockCount(toL) }, moved: moved.size, othersMoved: othersMoved.length, othersBlockMoved: othersBlockMoved.length, courseStudents: courseStudents.size, groupStudents: sel.size, overMax: Boolean(pick.full && !swap), swap: swap ? `${swap.name} ${toL}→${fromL}` : "",
       pinNote: table.pinNote.slice(0, 160), status: (await status(page)).slice(0, 200) };
     h.check(row?.values[pick.to].value === 1 && row?.values[pick.from].value === pick.row.values[pick.from].value - 1 && blockCount(toL) === 1 && blockCount(fromL) === pick.row.values[pick.from].value - 1,
       "중요", "6단계", `${groupKey}: 분반 수 표에서 '${name}' ${fromL}→${toL}블록으로 1개 옮겼는데 표·블록표 분반 수가 다름`, { actual: out.cell });
     h.check(/블록 고정 \d+개/.test(table.pinNote), "경미", "6단계", `${groupKey}: 칸을 고친 뒤 표 위 '블록 고정 n개' 안내가 없음`, { actual: table.pinNote });
     // 다른 과목 학생: 블록이 바뀐 학생(분반 고정 → 블록은 그대로여야 함)과 같은 블록 안 분반만 바뀐 학생을 나눠 본다
-    if (othersBlockMoved.length) h.issue("중요", "6단계", `${groupKey}: 분반 수 칸 하나(${name} ${fromL}→${toL})를 바꿨는데 그 과목을 신청하지 않은 학생 ${othersBlockMoved.length}명의 과목 블록이 바뀜(분반 블록 고정 상태)`, { actual: out.cell });
-    if (othersMoved.length > Math.max(5, sel.size * 0.3)) h.issue("경미", "6단계", `${groupKey}: 분반 수 칸 하나(${name} ${fromL}→${toL})를 바꿨는데 그 과목을 신청하지 않은 학생 ${othersMoved.length}명(그룹 ${sel.size}명)도 같은 블록 안 다른 분반으로 바뀜(이동 최소가 아님)`, { actual: out.cell });
+    if (othersBlockMoved.length) h.issue("중요", "6단계", `${groupKey}: 분반 수 칸(${name} ${fromL}→${toL}${swap ? `, ${swap.name} ${toL}→${fromL}` : ""})을 바꿨는데 그 과목을 신청하지 않은 학생 ${othersBlockMoved.length}명의 과목 블록이 바뀜(분반 블록 고정 상태)`, { actual: out.cell });
+    if (othersMoved.length > Math.max(5, sel.size * 0.3)) h.issue("경미", "6단계", `${groupKey}: 분반 수 칸(${name} ${fromL}→${toL}${swap ? `, ${swap.name} ${toL}→${fromL}` : ""})을 바꿨는데 그 과목을 신청하지 않은 학생 ${othersMoved.length}명(그룹 ${sel.size}명)도 같은 블록 안 다른 분반으로 바뀜(이동 최소가 아님)`, { actual: out.cell });
     out.cell.validate = validate(files, await S6.readScreen(page), `${groupKey} (분반 수 칸 고친 뒤)`, { allowShownUnassigned: true });
   } else out.cell = { skipped: "분반 2개 이상이고 빈 블록이 있는 과목 없음" };
 
@@ -292,7 +300,12 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
   await waitIdle(page).catch(() => {});
   out.assign.sameStatus = (await status(page)).slice(0, 120);
   h.check(/바뀐 학생이 없습니다/.test(out.assign.sameStatus), "중요", "6단계", `${groupKey}: 배정 결과 엑셀을 그대로 올렸는데 '바뀐 학생이 없습니다'가 아님`, { actual: out.assign.sameStatus });
-  // 3명: 같은 블록 안 다른 번호(블록 겹침 없음)가 있는 과목의 학생, 서로 다른 학생
+  // 3명: 같은 블록 안 다른 번호(블록 겹침 없음)·정원이 남는 분반으로, 서로 다른 학생
+  const capModel = await exportModel("assign-cap");
+  const capOf = new Map(); for (const sec of capModel.sections) capOf.set(bareTerm(sec.subject), Math.min(capOf.get(bareTerm(sec.subject)) ?? 999, Number(sec.capacity) || 999));
+  const countAt = new Map();
+  for (const r of rows.slice(3)) for (let c = 2; c < rows[0].length; c += 2) if (r[c]) { const k = `${rows[0][c]}|${r[c]}|${Number(r[c + 1])}`; countAt.set(k, (countAt.get(k) || 0) + 1); }
+  const hasRoom = (course, letter, no) => (countAt.get(`${course}|${letter}|${no}`) || 0) < (capOf.get(bareTerm(course)) ?? 999);
   const changes = [];
   const usedStudents = new Set([out.move.student].filter(Boolean));
   for (let c = 2; c < rows[0].length && changes.length < 3; c += 2) {
@@ -302,7 +315,9 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
       const key = String(rows[r][0] || "");
       const o = opened.find((x) => x.letter === rows[r][c]);
       if (!o || usedStudents.has(key)) continue;
-      const to = o.numbers.find((n) => n !== Number(rows[r][c + 1]));
+      const to = o.numbers.find((n) => n !== Number(rows[r][c + 1]) && hasRoom(rows[0][c], o.letter, n));
+      if (!to) continue;
+      countAt.set(`${rows[0][c]}|${o.letter}|${to}`, (countAt.get(`${rows[0][c]}|${o.letter}|${to}`) || 0) + 1);
       changes.push({ key, course: rows[0][c], letter: o.letter, from: Number(rows[r][c + 1]), to });
       rows[r][c + 1] = to;
       usedStudents.add(key);
@@ -316,7 +331,9 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
       for (let r = 3; r < rows.length && changes.length < 3 && opened.length; r++) {
         const key = String(rows[r][0] || ""); const o = opened.find((x) => x.letter === rows[r][c]);
         if (!o || usedStudents.has(key)) continue;
-        const to = o.numbers.find((n) => n !== Number(rows[r][c + 1]));
+        const to = o.numbers.find((n) => n !== Number(rows[r][c + 1]) && hasRoom(rows[0][c], o.letter, n));
+        if (!to) continue;
+        countAt.set(`${rows[0][c]}|${o.letter}|${to}`, (countAt.get(`${rows[0][c]}|${o.letter}|${to}`) || 0) + 1);
         changes.push({ key, course: rows[0][c], letter: o.letter, from: Number(rows[r][c + 1]), to }); rows[r][c + 1] = to; usedStudents.add(key);
       }
     }
@@ -340,13 +357,16 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     const byKey = new Map(again.slice(3).map((r) => [String(r[0]), r]));
     const col = new Map(); for (let c = 2; c < again[0].length; c += 2) col.set(again[0][c], c);
     const wrong = changes.filter((x) => { const r = byKey.get(x.key); const c = col.get(x.course); return !r || r[c] !== x.letter || Number(r[c + 1]) !== x.to; });
-    const changedRows = again.slice(3).filter((r) => { const o = rows.find((x) => String(x[0]) === String(r[0])); return o && JSON.stringify(o.slice(2)) !== JSON.stringify(r.slice(2)); }).map((r) => r[0]);
+    const changedKeys = new Set(changes.map((x) => x.key));
+    const differ = again.slice(3).filter((r) => { const o = rows.find((x) => String(x[0]) === String(r[0])); return o && JSON.stringify(o.slice(2).map(String)) !== JSON.stringify(r.slice(2).map(String)); }).map((r) => String(r[0]));
+    const changedRows = differ.filter((k) => !changedKeys.has(k));
+    out.assign.changedStudentsOtherColumns = differ.filter((k) => changedKeys.has(k));
     const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-import-after`);
     const after = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
     const moved = movedStudents(beforeImport.sections, after.sections);
     out.assign.wrong = wrong; out.assign.otherRowsDiffer = changedRows.slice(0, 8); out.assign.moved = moved.size;
     h.check(!wrong.length, "중요", "6단계", `${groupKey}: 배정 결과 엑셀 적용 뒤 다시 내려받은 엑셀에서 바꾼 학생 ${wrong.length}명이 고친 분반이 아님`, { actual: { wrong, changes } });
-    h.check(!changedRows.length && moved.size === changes.length, "중요", "6단계", `${groupKey}: 배정 결과 엑셀 적용 뒤 바꾸지 않은 학생도 바뀜(엑셀 ${changedRows.length}줄·명렬표 이동 ${moved.size}명, 바꾼 학생 ${changes.length}명)`, { actual: { changedRows: changedRows.slice(0, 5), moved: [...moved].slice(0, 8) } });
+    h.check(!changedRows.length && [...moved].every((k) => changedKeys.has(k)), "중요", "6단계", `${groupKey}: 배정 결과 엑셀 적용 뒤 바꾸지 않은 학생도 바뀜(엑셀 ${changedRows.length}줄·명렬표 이동 ${moved.size}명, 바꾼 학생 ${changes.length}명)`, { actual: { changedRows: changedRows.slice(0, 5), moved: [...moved].slice(0, 8) } });
     out.assign.validate = validate(files, await S6.readScreen(page), `${groupKey} (배정 결과 엑셀 올린 뒤)`, { allowShownUnassigned: true });
   } else h.issue("경미", "6단계", `${groupKey}: 배정 결과 엑셀에서 바꿀 학생(같은 블록에 분반 2개 이상인 과목)을 찾지 못함`, { actual: rows.slice(0, 3) });
   return out;
@@ -604,7 +624,8 @@ async function specialRoomScenario({ page, h, info, semester = "1" }) {
     const perBlock = new Map(); for (const s of mine) perBlock.set(s.letter, (perBlock.get(s.letter) || 0) + 1);
     out.assigned.push({ group: g.key, course, feasible: r.feasible, rooms: mine.map((s) => `${s.letter}:${s.roomLabel}`), perBlock: Object.fromEntries(perBlock), errors: rooms.errors, errorList: rooms.errorList });
     const fits = [...perBlock.values()].every((n) => n <= 2);
-    h.check(!fits || mine.every((s) => /^(물리실|화학실)$/.test(s.roomLabel)), "경미", "6단계", `${g.key}: '${course}' 특별실(과학실 2곳) 지정 뒤 분반 교실이 물리실·화학실이 아님(블록당 2개 이하)`, { actual: out.assigned.at(-1) });
+    // 교실을 직접 고른 분반(roomPins)은 고른 교실이 우선 → 빼고 본다
+    h.check(!fits || mine.filter((s) => !s.pick).every((s) => /^(물리실|화학실)$/.test(s.roomLabel)), "경미", "6단계", `${g.key}: '${course}' 특별실(과학실 2곳) 지정 뒤 분반 교실이 물리실·화학실이 아님(블록당 2개 이하)`, { actual: out.assigned.at(-1) });
   }
   out.rooms = await checkRoomsAll({ page, h, info: groupsHere, label: " (특별실 지정 뒤)" });
   return out;
