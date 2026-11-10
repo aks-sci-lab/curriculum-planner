@@ -589,8 +589,12 @@ function classSectionsOutputWarnings(round, group) {
     let list = [];
     try { list = classSectionsTeacherNameWarnings() || []; } catch { list = []; }
     if (!Array.isArray(list)) list = list.teachers || [];
-    const names = list.map((item) => (typeof item === "string" ? item : item?.name || item?.alias || item?.label || "")).filter(Boolean);
-    if (list.length) out.push({ type: "teacher", count: list.length, message: `실제 이름이 아닌 교사 ${list.length}명(${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}) — 교사 명단을 올리거나 이름을 고치세요.` });
+    // class-sections-teachers.js는 안내 문장 배열을 돌려준다(그대로 보임). 교사 객체 배열이면 이름을 모아 한 문장으로.
+    const sentences = list.filter((item) => typeof item === "string" && item.trim());
+    for (const message of sentences) out.push({ type: "teacher", count: Number(message.match(/(\d+)명/)?.[1]) || 1, message });
+    const objects = list.filter((item) => item && typeof item === "object");
+    const names = objects.map((item) => item.name || item.alias || item.label || "").filter(Boolean);
+    if (objects.length) out.push({ type: "teacher", count: objects.length, message: `실제 이름이 아닌 교사 ${objects.length}명(${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}) — 교사 명단을 올리거나 이름을 고치세요.` });
   }
   return out;
 }

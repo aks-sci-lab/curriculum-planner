@@ -375,9 +375,24 @@ test("내보내기 전 경고: 교실을 고르지 않은 분반 수·자리 이
   assert.match(card, /교실 선택 필요/);
   assert.match(card, /data-cs-room-new=/);
   assert.match(ctx.classSectionsPrintButtonsHtml("1", group, result), /id="classSectionsOutputWarnings"/);
-  ctx.classSectionsTeacherNameWarnings = () => [{ name: "사회(지리) 1" }, "과학(물리) 2"];
+  // class-sections-teachers.js 모양: 안내 문장 배열 → 그대로
+  const sentence = "실제 이름이 없는 교사 2명(사회(지리) 1, 과학(물리) 2) — 교사 명단에서 이름을 넣으세요.";
+  ctx.classSectionsTeacherNameWarnings = () => [sentence];
   const both = plain(ctx.classSectionsOutputWarnings("1", group));
-  assert.match(both.find((item) => item.type === "teacher").message, /실제 이름이 아닌 교사 2명\(사회\(지리\) 1, 과학\(물리\) 2\)/);
+  assert.deepEqual(both.find((item) => item.type === "teacher"), { type: "teacher", count: 2, message: sentence });
+  // 교사 객체 배열도 받는다
+  ctx.classSectionsTeacherNameWarnings = () => [{ name: "사회(지리) 1" }];
+  assert.match(plain(ctx.classSectionsOutputWarnings("1", group)).find((item) => item.type === "teacher").message, /실제 이름이 아닌 교사 1명\(사회\(지리\) 1\)/);
+  // 교사 이름을 바꾸면 출석부·시간표에 새 이름(저장된 결과는 교사 id만 가짐)
+  const teacherId = result.sections.find((section) => section.teacherId)?.teacherId;
+  assert.ok(teacherId, "a section has a teacher");
+  const teacher = ctx.classSectionsSettings().teachers.find((item) => item.id === teacherId);
+  teacher.name = "새이름교사";
+  const infos = ctx.classSectionsAttendanceInfos("1", group, "group").list.filter((info) => info.teacherId === teacherId);
+  assert.ok(infos.length && infos.every((info) => info.teacherName === "새이름교사"));
+  const key = Object.keys(result.assign).find((item) => result.assign[item].some((id) => result.sections.find((section) => section.id === id)?.teacherId === teacherId));
+  const [model] = ctx.classSectionsTimetableModels("1", group, [key]);
+  assert.ok(model.semesters[0].grid.flat().some((cell) => cell.lines.includes("새이름교사")));
 });
 
 test("createWorkbookBlob: printTitles가 있으면 시트별 인쇄 제목 줄(_xlnm.Print_Titles)", () => {
