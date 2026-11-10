@@ -1770,3 +1770,8 @@ test("offline application page notes once-only courses", () => {
   assert.match(html, /c\.sameCourseOnce\?'1·2학기 중 한 학기만 · ':''/);
   assert.match(html, /"sameCourseOnce":true/);
 });
+
+test("adding a round says 'n차를 추가했습니다.' (차 is not dropped)", () => {
+  assert.match(frontend, /status\.textContent = `\$\{state\.currentRound\}차를 추가했습니다\.`/);
+  assert.doesNotMatch(frontend, /\$\{[^}]*[Rr]ound[^}]*\}(를|을) /, "차수 숫자 뒤에 '차' 없이 조사가 붙은 문구 없음");
+});
