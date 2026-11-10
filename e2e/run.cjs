@@ -413,7 +413,7 @@ async function stepAggregate({ page, h, report }, round) {
     const open = await openDialogs(page);
     if (open.length) {
       result.confirmDialogs = open;
-      const confirmButton = page.locator("dialog[open]").getByRole("button", { name: /확정/ }).first();
+      const confirmButton = (await page.locator("#roundConfirmDialog[open]").count()) ? page.locator("#roundConfirmOk") : page.locator("dialog[open]").getByRole("button", { name: /확정/ }).first();
       if (await confirmButton.count()) await confirmButton.click();
       await sleep(500);
     }
