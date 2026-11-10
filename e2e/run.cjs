@@ -11,6 +11,8 @@ const Expected = require("./lib/expected.cjs");
 const { buildNeis } = require("./lib/neis-fixture.cjs");
 const { GROUPS } = require("./lib/plan-fixture.cjs");
 const Timetable = require("./lib/timetable-checks.cjs");
+const S6 = require("./lib/step6.cjs");
+const SC = require("./lib/step6-scenario.cjs");
 
 const args = Object.fromEntries(process.argv.slice(2).join(" ").split(/\s*--/).filter(Boolean).map((part) => {
   const [key, ...rest] = part.split(/\s+/); return [key, rest.join(" ") || "1"];
@@ -318,6 +320,9 @@ async function stepAggregate({ page, h, report }, round) {
     const file = await (await download).path();
     result.excel = await inspectXlsx(await savedCopy(file, `aggregate-r${round}.xlsx`));
     h.check(result.excel.ok, "중요", "4단계", `${round}차 집계표 엑셀이 열리지 않음`, { actual: result.excel.error });
+    // 6단계 확정 전 시안(1차): 확정 전에 한 번 편성해 보고, 확정 뒤 '재계산 필요' 표시를 본다.
+    if (round === 1) result.step6Draft = await step6Draft(page, h, report);
+    await gotoStep(page, 4);
     // 차수 확정
     const t3 = Date.now();
     await page.locator("#roundConfirm").click();
@@ -333,6 +338,18 @@ async function stepAggregate({ page, h, report }, round) {
     const stateText = await text(page, "#roundConfirmState");
     result.roundState = stateText;
     h.check(/확정/.test(stateText), "중요", "4단계", `${round}차 결과 확정이 되지 않음`, { actual: stateText, dialogs: open.map((d) => d.text.slice(0, 300)) });
+    if (round === 1 && result.step6Draft?.group) {
+      await S6.open6(page);
+      await page.locator("#classSectionsRound").selectOption("1").catch(() => {});
+      await S6.selectGroup(page, result.step6Draft.group);
+      const scr = await S6.readScreen(page);
+      result.step6AfterConfirm = { badge: scr.badge, stale: scr.stale, header: scr.header };
+      h.check(/1차 확정 결과/.test(scr.badge), "중요", "6단계", "1차 확정 뒤 6단계 배지가 '1차 확정 결과'가 아님", { actual: scr.badge });
+      // 입력(학생·분반 수)이 같으면 재계산 표시가 안 뜨는 설계일 수 있다 → 결과 머리글이 아직 '확정 전 시안'인지 함께 본다.
+      h.check(scr.stale || !/확정 전 시안/.test(scr.header), "경미", "6단계", "1차 확정 뒤에도 6단계 결과가 '확정 전 시안'으로 남고 '재계산 필요' 표시도 없음(입력 같음)", { actual: { badge: scr.badge, header: scr.header, stale: scr.stale } });
+      await h.screenshot(page, "step6-stale-after-confirm");
+      await gotoStep(page, 4);
+    }
     return result;
   });
 }
@@ -459,6 +476,8 @@ async function stepHours({ page, h, report }) {
     await h.screenshot(page, "hours-settings");
     await page.locator("#hoursSettingsDialog").getByRole("button", { name: /닫기|확인/ }).last().click().catch(() => page.keyboard.press("Escape"));
     await sleep(500);
+    result.teacherCounts = await SC.setTeacherCounts(page);
+    await sleep(300);
     const panel = await text(page, "#workflowStep7Panel");
     result.title = (panel.match(/\d{4}학년도 교과별 시수 통계 \(총\d+학급\)/) || [""])[0];
     h.check(result.title.includes(`총${CLASSES * 3}학급`), "중요", "5단계", "시수 통계 총 학급 수가 설정과 다름", { expected: `총${CLASSES * 3}학급`, actual: result.title });
@@ -496,6 +515,15 @@ async function snapshot(page) {
   const hTxt = await text(page, "#workflowStep7Panel");
   snap.hours = (hTxt.match(/\d{4}학년도 교과별 시수 통계 \(총\d+학급\)/) || [""])[0] + " | " + (hTxt.match(/교과\t[^\n]*/) || [""])[0];
   snap.rounds = await page.locator("#workspaceRound option").allInnerTexts();
+  const nav6 = page.locator('[data-workflow-step="8"]');
+  if (await nav6.count()) {
+    await S6.open6(page);
+    await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+    await sleep(300);
+    const gs = await S6.groups(page);
+    snap.step6 = gs.map((g) => g.text).join(" | ");
+    if (gs[0]) { await S6.selectGroup(page, gs[0].key); snap.step6First = (await S6.readScreen(page)).sections.map((x) => `${x.room}:${x.size}`).join(" "); }
+  }
   return snap;
 }
 
@@ -783,7 +811,251 @@ function sectionChips(panelText) {
 }
 
 
-// ---- 6단계(분반·시간표 편성) ----
+
+// ---- 6단계 실제 시나리오 ----
+async function step6Draft(page, h, report) {
+  const out = {};
+  report.timings.step6EnterDraft = await S6.open6(page);
+  await page.locator("#classSectionsRound").selectOption("1").catch(() => {});
+  await sleep(300);
+  const gs = await S6.groups(page);
+  out.groups = gs.length;
+  const scr0 = await S6.readScreen(page);
+  out.badge = scr0.badge;
+  h.check(/1차 · 확정 전 시안/.test(scr0.badge), "중요", "6단계", "1차 확정 전인데 배지가 '1차 · 확정 전 시안'이 아님", { actual: scr0.badge });
+  if (!gs.length) { h.issue("중요", "6단계", "확정 전 1차 결과에서 편성 그룹이 없음"); return out; }
+  out.group = gs[0].key;
+  await S6.selectGroup(page, out.group);
+  const r = await S6.solve(page);
+  out.solve = { ms: r.ms, feasible: r.feasible, summary: r.summary.slice(0, 200), header: (await S6.readScreen(page)).header };
+  // 1차에는 폐강 과목 신청 학생(재신청 대상)이 남아 있어 그만큼 미배정이 정상이다.
+  const closed = (report.data[`closed1`] || []).filter((c) => c.grade === out.group[0]).map((c) => c.name);
+  const rows = await serverSelections(h, report.data.events[out.group[0]]);
+  const groupCourses = GROUPS.find((g) => g.field === `sem${Number(out.group[0]) + 1}${out.group.split(":")[1]}` && g.pick === Number((out.group.match(/택(\d+)/) || [])[1]))?.members.map((m) => m[2]) || [];
+  const closedHere = closed.filter((n) => groupCourses.includes(n));
+  const expectedUnassigned = rows.filter((x) => x.submitted_at && x.selections.some((n) => closedHere.includes(n))).length;
+  const shown = Number((r.summary.match(/미배정 (\d+)명/) || [])[1] || 0);
+  out.expectedUnassigned = expectedUnassigned;
+  h.check(r.feasible === true || shown === expectedUnassigned, "중요", "6단계", `확정 전 시안 편성 불가(${out.group}): 미배정 ${shown}명(폐강 과목 신청 ${expectedUnassigned}명)`, { actual: r.summary.slice(0, 300) });
+  if (r.feasible === false && expectedUnassigned && shown === expectedUnassigned) h.issue("경미", "6단계", `1차 시안: 폐강 과목 신청 학생(재신청 대상) ${expectedUnassigned}명 때문에 '모두 배정하는 편성을 찾지 못했습니다'(불가)로 나옴 — 폐강 미배정은 따로 안내하는 편이 맞아 보임`, { actual: r.summary.slice(0, 200) });
+  await h.screenshot(page, "step6-draft");
+  return out;
+}
+
+async function stepClassSections({ page, h, report }) {
+  return h.step("6. 분반 편성: 교사·시간·전 그룹 편성·학급 단위·재신청 부분 재계산·엑셀 검증", async () => {
+    const result = { groups: {}, solves: [] };
+    report.timings.step6Enter = await S6.open6(page);
+    const rounds = await page.locator("#classSectionsRound option").allInnerTexts();
+    await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+    await sleep(300);
+    result.rounds = rounds;
+    result.badge = (await S6.readScreen(page)).badge;
+    h.check(/2차 확정 결과/.test(result.badge), "중요", "6단계", "2차 확정 뒤 6단계 배지가 '2차 확정 결과'가 아님", { actual: result.badge });
+    const t0 = Date.now();
+    result.teachers = await SC.setupTeachers(page);
+    report.timings.step6Teachers = Date.now() - t0;
+    h.check(result.teachers.fromHours >= Object.values(SC.TEACHER_COUNTS).reduce((a, b) => a + b, 0) - 5, "중요", "6단계", "'5단계 교사 수로 명단 만들기' 교사 수가 5단계 입력과 다름", { expected: Object.values(SC.TEACHER_COUNTS).reduce((a, b) => a + b, 0), actual: result.teachers.fromHours });
+    const gs = await S6.groups(page);
+    const info = [];
+    for (const g of gs) {
+      await S6.selectGroup(page, g.key);
+      info.push({ key: g.key, grade: String(Number(g.key[0]) + 1), semester: g.key.split(":")[1], blocks: Number(await page.getByLabel("블록 수", { exact: true }).inputValue()), credit: SC.groupCredit(g.key) });
+    }
+    const times = S6.planBlockTimes(info);
+    result.blockTimes = times;
+    // 첫 그룹: 방식 비교·추천 → 추천 방식으로 편성
+    for (const [index, g] of info.entries()) {
+      await S6.selectGroup(page, g.key);
+      await SC.setBlockTimes(page, times[g.key]);
+      let r;
+      if (index === 0) {
+        const tc = Date.now();
+        await page.locator("#classSectionsCompare").click();
+        await page.locator('section[aria-label="편성 방식 비교"]').waitFor({ timeout: 120000 });
+        await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+        report.timings.step6Compare = Date.now() - tc;
+        const compare = await page.locator('section[aria-label="편성 방식 비교"]').innerText();
+        result.compare = compare.replace(/\s+/g, " ").slice(0, 400);
+        const rec = page.locator('section[aria-label="편성 방식 비교"] tr.is-recommended [data-cs-use-mode]');
+        h.check(await rec.count() === 1, "중요", "6단계", "방식 비교에서 추천 방식이 하나가 아님", { actual: result.compare });
+        r = await S6.solve(page, 'section[aria-label="편성 방식 비교"] tr.is-recommended [data-cs-use-mode]');
+        result.recommendedMode = await page.getByLabel("편성 방식", { exact: true }).inputValue();
+      } else r = await S6.solve(page);
+      const log = { group: g.key, ms: r.ms, feasible: r.feasible, applied: [] };
+      // 불가면 '제안 적용'을 차례로(최대 3번)
+      for (let tries = 0; r.feasible === false && tries < 3; tries++) {
+        const apply = page.locator("[data-cs-apply]").first();
+        if (!(await apply.count())) break;
+        log.applied.push((await apply.locator("xpath=..").innerText()).replace(/\s+/g, " ").slice(0, 160));
+        await apply.click(); await sleep(300);
+        r = await S6.solve(page);
+        log.feasibleAfter = r.feasible;
+      }
+      log.summary = r.summary.slice(0, 300);
+      if (r.feasible === false && /^모든 학생 배정/.test(r.summary)) h.issue("경미", "6단계", `${g.key}: 요약은 '모든 학생 배정…'인데 결과는 불가(data-feasible=false)로 표시`, { actual: { summary: r.summary, status: r.status, applied: log.applied } });
+      result.solves.push(log);
+      h.check(r.ms < 15000, "경미", "6단계", `${g.key} 편성 계산이 오래 걸림 ${(r.ms / 1000).toFixed(1)}초`, { actual: r.ms });
+      if (r.feasible === false) h.issue(log.applied.length ? "중요" : "경미", "6단계", `${g.key}: 편성 불가${log.applied.length ? "(제안 적용 뒤에도)" : "(적용할 제안 없음)"}`, { actual: { summary: log.summary, applied: log.applied } });
+    }
+    // 학급 단위 과목: 3학년 택1(일본어/중국어)
+    const unitGroup = info.find((g) => /택1/.test(g.key) && g.grade === "3");
+    if (unitGroup) {
+      await S6.selectGroup(page, unitGroup.key);
+      for (const name of ["일본어", "중국어", "일본어 회화", "중국어 회화"]) {
+        const select = page.getByLabel(`${name} 운영 방식`, { exact: true });
+        if (await select.count()) { await select.selectOption("class"); await sleep(200); }
+      }
+      const r = await S6.solve(page);
+      const unit = await page.locator('section[aria-label="학급 단위 과목"]').innerText().catch(() => "");
+      result.classUnit = { group: unitGroup.key, feasible: r.feasible, summary: r.summary.slice(0, 200), card: unit.replace(/\s+/g, " ").slice(0, 500) };
+      const rooms = await page.locator("[data-cs-unit-room]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-cs-unit-room"), e.options[e.selectedIndex]?.textContent]));
+      result.classUnit.rooms = rooms;
+      h.check(rooms.length === CLASSES && rooms.every(([, v]) => v), "중요", "6단계", "학급 단위 과목: 담임반마다 과목이 배분되지 않음", { expected: `${CLASSES}개 반`, actual: rooms });
+      await h.screenshot(page, "step6-class-unit");
+    }
+    // 그룹별 엑셀 검증 + 그룹 간 시간 검증
+    const selections = await finalSelections(h, report);
+    const sectionsByGroup = {};
+    const dir = path.join(OUT, "downloads", "step6");
+    for (const g of info) {
+      await S6.selectGroup(page, g.key);
+      const screen = await S6.readScreen(page);
+      const files = await S6.exportGroup(page, dir, g.key.replace(/[:\s]/g, "_"));
+      const courseNames = [...new Set(screen.sections.map((x) => x.course))];
+      const groupCourses = GROUPS.find((x) => x.field === `sem${g.grade}${g.semester}` && x.pick === Number((g.key.match(/택(\d+)/) || [])[1]))?.members.map((m) => m[2]) || courseNames;
+      const sel = new Map([...selections].filter(([key]) => key.startsWith(`${g.key[0]}-`)));
+      const classUnitCourses = screen.classUnit.length ? [...new Set(screen.classUnit.map(([, v]) => v))] : [];
+      const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses });
+      if (classUnitCourses.length) {
+        check.classUnit = screen.classUnit;
+        const neisSubjects = new Set(files.neis[0].rows.slice(2).map((r) => String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "")));
+        const missingUnit = classUnitCourses.filter((c) => !neisSubjects.has(c));
+        h.check(!missingUnit.length, "중요", "6단계", `${g.key}: 학급 단위로 바꾼 과목(${missingUnit.join("·")})이 나이스 편성 엑셀·분반 명렬표에 없음(담임반 배정 학생 행 없음)`, { actual: { classUnit: screen.classUnit, neisRows: files.neis[0].rows.length - 2, rosterSheets: files.rosters.length } });
+      }
+      sectionsByGroup[g.key] = sections;
+      result.groups[g.key] = check;
+    }
+    const unavailable = Object.fromEntries(SC.SPECIAL_TEACHERS.map((t) => [t.name, t.slots]));
+    result.across = S6.checkAcross({ h, sectionsByGroup, unavailable, fixed: SC.FIXED });
+    const special = Object.values(sectionsByGroup).flat().filter((x) => unavailable[x.teacher]).map((x) => `${x.teacher}:${x.room}:${x.times.join(",")}`);
+    result.specialTeacherSections = special.slice(0, 20);
+    await h.screenshot(page, "step6-solved");
+    // 같은 학년·학기 두 그룹의 블록을 일부러 같은 시간으로 두면(학생 시간 겹침) 앱이 알려 주는지 본다 → 원래대로 되돌림.
+    const same = info.filter((g) => g.grade === "2" && g.semester === "2");
+    if (same.length >= 2) {
+      const [a, b] = same;
+      await S6.selectGroup(page, a.key);
+      const overlap = times[b.key][0].split(",").slice(0, a.credit);
+      while (overlap.length < a.credit) overlap.push(times[a.key][0].split(",")[overlap.length]);
+      await SC.setBlockTimes(page, [overlap.join(","), ...times[a.key].slice(1)]);
+      const r = await S6.solve(page);
+      const body = await text(page, 'section[aria-label="편성 결과"]');
+      result.overlapProbe = { group: a.key, with: b.key, times: overlap.join(","), feasible: r.feasible, warned: /겹|같은 시간|충돌/.test(body + r.summary + r.status), summary: r.summary.slice(0, 200) };
+      h.check(result.overlapProbe.warned, "경미", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 학생 시간 겹침 경고가 없음`, { actual: result.overlapProbe });
+      await SC.setBlockTimes(page, times[a.key]);
+      await S6.solve(page);
+    }
+    report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
+    // 재신청 시뮬레이션: 2차 확정 해제 → 학생 3명 선택 변경(교사 화면) → 재확정 → '바뀐 학생만 다시 계산'
+    result.partial = await step6Partial({ page, h, report, groupKey: info[0].key, before: sectionsByGroup[info[0].key] });
+    report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
+    return result;
+  });
+}
+
+async function step6Snapshot(page, keys) {
+  await S6.open6(page);
+  const snap = { groups: (await S6.groups(page)).map((g) => g.text) };
+  for (const key of keys.slice(0, 3)) {
+    await S6.selectGroup(page, key);
+    const scr = await S6.readScreen(page);
+    snap[key] = scr.sections.map((x) => `${x.room}:${x.size}`).join(" ");
+  }
+  return snap;
+}
+
+async function step6Partial({ page, h, report, groupKey, before }) {
+  const out = {};
+  const grade = groupKey[0];
+  await gotoStep(page, 4);
+  await page.locator("#workspaceRound").selectOption("2");
+  await sleep(300);
+  await page.locator("#roundUnlock").click();
+  await sleep(800);
+  out.unlocked = await text(page, "#roundConfirmState");
+  // 교사 화면: 학생 선택 과목 변경(2차 신청)
+  await gotoStep(page, 2);
+  await selectGradeTab(page, grade);
+  await page.locator("#applicationOnlineTab").click();
+  await page.locator("#cloudRefreshEvents").click();
+  await page.waitForLoadState("networkidle"); await sleep(500);
+  const section = page.locator("#cloudEventList > section").filter({ hasText: "2차" }).first();
+  await section.getByRole("button", { name: "학생 선택 과목 변경" }).click();
+  await page.locator("#cloudTeacherEditDialog[open]").waitFor({ timeout: 20000 });
+  const options = await page.locator("#cloudTeacherEditStudent option").evaluateAll((els) => els.map((o) => ({ value: o.value, text: o.textContent })));
+  const rng = Core.createRng(SEED * 977);
+  // 2차(폐강 신청 학생만)는 대상이 아닌 학생·유지 과목 칸이 잠겨 있다 → 이 그룹에서 고칠 수 있는 칸이 있는 학생을 찾아 3명까지 바꾼다.
+  const candidates = Core.shuffle(options.filter((o) => o.value && !/미제출/.test(o.text)), rng);
+  const [, semester, groupName] = groupKey.split(":");
+  out.changed = [];
+  out.tried = 0;
+  for (const option of candidates) {
+    if (out.changed.length >= 3 || out.tried >= 120) break;
+    out.tried++;
+    if (!(await page.locator("#cloudTeacherEditDialog[open]").count())) {
+      await section.getByRole("button", { name: "학생 선택 과목 변경" }).click();
+      await page.locator("#cloudTeacherEditDialog[open]").waitFor({ timeout: 20000 });
+    }
+    await page.locator("#cloudTeacherEditStudent").selectOption(option.value);
+    await sleep(200);
+    const fieldset = page.locator("#cloudTeacherEditChoices fieldset").filter({ hasText: groupName }).first();
+    const state = await fieldset.locator("input[type=checkbox]").evaluateAll((els) => els.map((e) => ({ value: e.value, checked: e.checked, disabled: e.disabled })));
+    const fromBox = state.find((b) => b.checked && !b.disabled);
+    const toBox = state.find((b) => !b.checked && !b.disabled);
+    if (!fromBox || !toBox) continue;
+    await fieldset.locator(`input[value="${fromBox.value}"]`).uncheck();
+    await fieldset.locator(`input[value="${toBox.value}"]`).check();
+    await page.locator("#cloudTeacherEditSave").click();
+    let msg = "";
+    for (let i = 0; i < 80 && !/변경했습니다|실패|정확히|오류|없습니다|할 수 없/.test(msg); i++) {
+      await sleep(250);
+      msg = `${await text(page, "#cloudTeacherEditMessage")} ${await text(page, "#cloudTeacherMessage")}`;
+    }
+    const m = option.text.match(/(\d)학년 (\d+)반 (\d+)번/);
+    out.changed.push({ student: m ? `${m[1]}-${m[2]}-${m[3]}` : option.text, from: fromBox.value, to: toBox.value, message: msg.trim().slice(0, 120) });
+  }
+  h.check(out.changed.filter((c) => /변경했습니다/.test(c.message)).length >= 1, "중요", "2단계·웹", "교사 화면 '학생 선택 과목 변경'으로 2차 학생 선택을 바꾸지 못함", { actual: { tried: out.tried, changed: out.changed } });
+  if (await page.locator("#cloudTeacherEditDialog[open]").count()) await page.locator("#cloudTeacherEditClose").click();
+  await sleep(1500);
+  // 재확정
+  await gotoStep(page, 4);
+  await page.locator("#roundConfirm").click(); await sleep(800);
+  out.reconfirmed = await text(page, "#roundConfirmState");
+  h.check(/2차 · 확정/.test(out.reconfirmed), "중요", "4단계", "확정 해제 → 재확정이 되지 않음", { actual: out.reconfirmed });
+  // 6단계: 재계산 필요 → 바뀐 학생만 다시 계산
+  await S6.open6(page);
+  await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+  await S6.selectGroup(page, groupKey);
+  const scr = await S6.readScreen(page);
+  out.staleBefore = scr.stale;
+  h.check(scr.stale, "중요", "6단계", "학생 선택을 바꾸고 재확정했는데 '입력 변경됨, 재계산 필요'가 없음", { actual: scr.badge });
+  const r = await S6.solve(page, "#classSectionsPartial");
+  out.solve = { ms: r.ms, feasible: r.feasible, note: r.note, summary: r.summary.slice(0, 200) };
+  const files = await S6.exportGroup(page, path.join(OUT, "downloads", "step6"), `${groupKey.replace(/[:\s]/g, "_")}-partial`);
+  const after = S6.modelFromExports(files, { semester }).sections;
+  const roomOf = (sections) => { const m = new Map(); for (const x of sections) for (const st of x.students) m.set(`${st}|${x.subject}`, x.room); return m; };
+  const b = roomOf(before), a = roomOf(after);
+  const changedKeys = new Set(out.changed.map((c) => c.student));
+  const moved = [...b].filter(([k, room]) => !changedKeys.has(k.split("|")[0]) && a.has(k) && a.get(k) !== room).map(([k, room]) => `${k}: ${room}→${a.get(k)}`);
+  const changedOk = out.changed.filter((c) => c.message.includes("변경")).every((c) => a.has(`${c.student}|${c.to}`) && !a.has(`${c.student}|${c.from}`));
+  out.moved = moved.length; out.movedSample = moved.slice(0, 8); out.changedOk = changedOk;
+  h.check(!moved.length, "중요", "6단계", `'바뀐 학생만 다시 계산' 뒤 바뀌지 않은 학생 ${moved.length}명의 분반이 달라짐`, { actual: moved.slice(0, 8) });
+  h.check(changedOk, "중요", "6단계", "'바뀐 학생만 다시 계산' 뒤 바뀐 학생의 새 과목이 배정되지 않음", { actual: out.changed });
+  return out;
+}
+
+// ---- 6단계(분반·시간표 편성) · 예전 자리 ----
 // 6단계가 통합 브랜치에 들어오면 STEP6 단추 이름·패널·읽기(adapter)만 맞추면 된다. 지금은 '보류' 자리면 건너뛴다.
 const STEP6 = {
   nav: '[data-workflow-step="6"]',
@@ -1053,7 +1325,7 @@ async function main() {
     await stepCertificates(ctx, 2);
     if (STOP_AFTER === "4") return;
     await stepHours(ctx);
-    await stepTimetable(ctx);
+    await stepClassSections(ctx);
     await stepPersistence(ctx);
     if (args.explore2) await require(path.resolve(args.explore2))({ page, h, text, sleep, gotoStep, upload, waitText, report, OUT });
   } finally {
