@@ -335,3 +335,31 @@ test("backup format 2 leaves out the duplicate current-round students, is gzippe
   assert.equal(await f.context.restoreWorkspaceBackup({ text: async () => broken }), false);
   assert.match(f.notices.at(-1), /현재 차수 학생 자료를 찾지 못했습니다/);
 });
+
+test("6단계 분반 편성 결과(classSections)는 형식 2 백업·PC 파일 경로로 복원되고, 예전 백업(없음)은 빈 값으로 시작한다", async () => {
+  const students = [{ id: "1-1-1-가상", grade: "1", classroom: "1", number: "1", name: "가상", selections: [] }];
+  const classSections = { settings: { teachers: [], spreadWarn: 3 },
+    "2": { "1:1:2-1 택3": { mode: "move", classCounts: {}, sectionResult: { signature: "abc", sections: [{ id: "a-물리학-1", students: ["1-1-1"] }], explain: { feasible: true } } } } };
+  const workspace = valid({ students, courses: [], fileName: "결과.xlsx", schoolName: "가나고", classSections,
+    rounds: { "1": { fileName: "결과.xlsx", students, courses: [], classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } } });
+  const saved = fixture(JSON.stringify(workspace));
+  saved.context.restorePersistedState();
+  assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext("state.classSections", saved.context))), classSections, "새로고침(저장 자료 다시 읽기) 뒤 그대로");
+  await saved.context.downloadWorkspaceBackup();
+  const backup = saved.context.downloaded;
+  assert.deepEqual(backup.workspace.classSections, classSections, "백업(형식 2)에 들어감");
+  const restoreInto = async (text) => {
+    const f = fixture(JSON.stringify(valid({ schoolName: "원래" })));
+    f.context.window.location.reload = () => { f.context.reloaded = true; };
+    assert.equal(await f.context.restoreWorkspaceBackup({ text: async () => text }), true, f.notices.at(-1));
+    const after = fixture(f.storage.get(key));
+    after.context.restorePersistedState();
+    return JSON.parse(JSON.stringify(vm.runInContext("state.classSections", after.context)));
+  };
+  // 백업 파일·PC 파일(같은 buildWorkspaceBackup 글자, text()만 넘김) 모두 같은 경로로 복원된다.
+  assert.deepEqual(await restoreInto(saved.context.downloadedText), classSections);
+  const legacy = { ...backup, backupVersion: 1, workspace: { ...backup.workspace, students } };
+  delete legacy.omitted;
+  delete legacy.workspace.classSections;
+  assert.deepEqual(await restoreInto(JSON.stringify(legacy, null, 2)), {}, "예전 백업은 빈 분반 편성으로 시작");
+});
