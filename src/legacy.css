@@ -2286,10 +2286,12 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-block h5 { margin:0 0 8px; font-size:13px; }
     .cs-block h5 span, .cs-block h5 em { color:var(--muted); font-size:11px; font-style:normal; font-weight:400; }
     .cs-block ul { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:6px; }
-    .cs-section { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:12px; }
-    .cs-section strong { min-width:90px; }
-    .cs-section span { color:var(--muted); }
-    .cs-section .cs-size { margin-left:auto; color:var(--ink); font-weight:700; }
+    .cs-section { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:3px 8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:12px; }
+    .cs-section strong, .cs-section .cs-course { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cs-section .cs-course { color:var(--muted); }
+    .cs-section .cs-size { justify-self:end; color:var(--ink); font-weight:700; white-space:nowrap; }
+    .cs-section .cs-controls { display:inline-flex; align-items:center; justify-self:end; gap:6px; white-space:nowrap; }
+    .cs-section .cs-controls select { max-width:120px; }
     .cs-section.is-over { border-color:#e3a497; background:#fff6f4; }
     .cs-pin { display:inline-flex; align-items:center; gap:3px; color:var(--muted); font-size:11px; }
     .cs-lookup { margin:4px 0; padding-left:18px; font-size:12px; }
