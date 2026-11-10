@@ -183,7 +183,7 @@ test("promotion re-forms classes (now 4 → next year 5): next-year counts, home
   assert.equal(input.homeroomBasis, "current");
   assert.deepEqual(input.recommendExclude, ["homeroom"]);
   entry.mode = "homeroom";
-  assert.match(ctx.classSectionsClassesHtml(group, entry), /지금 반 기준 — 진급 때 반이 바뀌면 효과 없음/);
+  assert.match(ctx.classSectionsClassesHtml(group, entry), /지금 반 기준 — 진급 때 반을 새로 편성하므로 효과 없음/);
   // 학급 단위 과목: 내년 5학급으로 반 수만 확정, 학생 배정은 배정표 뒤
   const settings = ctx.classSectionsSettings();
   settings.courseModes["지구과학"] = "class";
@@ -240,4 +240,59 @@ test("screen tidy-up: status belongs to its group, readable section names with t
   assert.match(view, /같은 담임반 학생이 같은 분반에 모인 비율/);
   // 그룹 순서: 현 학년 → 학기 → 택n 큰 것
   assert.match(view, /a\.grade\.localeCompare\(b\.grade\) \|\| a\.semester\.localeCompare\(b\.semester\)/);
+});
+
+test("promotion setting per grade: same classes & '그대로' / same & '아직 모름' / different counts (forced '새로 편성')", () => {
+  // 1) 반 수 같음(4 → 4) + 그대로 올라감: 지금 반 = 내년 반, 추천 대상, 학급 단위 학생 배정 확정, 나이스 반은 지금 반·번호는 비움
+  let ctx = context();
+  ctx.state.roundStatuses["1"].snapshot.classBases = { "2": 4 };
+  let group = ctx.classSectionsSource("1").groups[0];
+  let entry = ctx.classSectionsEntry("1", group.key);
+  const settings = ctx.classSectionsSettings();
+  assert.deepEqual(plain(ctx.classSectionsPromotion(group)), { value: "unknown", forced: false, reason: "" }, "default when counts are equal");
+  settings.promotion["1"] = "same";
+  let input = plain(ctx.classSectionsBuildInput("1", group, entry));
+  assert.equal(input.homeroomBasis, "next");
+  assert.deepEqual(input.recommendExclude, []);
+  assert.deepEqual(input.students.map((student) => student.homeroom), plain(group.students.map((student) => student.homeroom)));
+  settings.courseModes["지구과학"] = "class";
+  assert.equal(ctx.classSectionsClassUnitPlan(group, entry, settings).mapped, true);
+  const effective = plain(ctx.classSectionsEffectiveClassMap(group));
+  assert.equal(effective.basis, "same");
+  assert.deepEqual(effective.map["1-3-7"], { classroom: "3", number: "" });
+  assert.match(ctx.classSectionsClassesHtml(group, entry), /진급 때 반이 그대로 올라감/);
+  entry.mode = "homeroom";
+  assert.doesNotMatch(ctx.classSectionsClassesHtml(group, entry), /classSectionsHomeroomWarn/);
+  // 배정표를 올리면 그것이 우선
+  ctx.classSectionsStore().classMaps = { "1": { "1-1-1": { classroom: "2", number: "5" } } };
+  assert.equal(ctx.classSectionsEffectiveClassMap(group).basis, "map");
+
+  // 2) 반 수 같음 + 아직 모름: 조건형 문구, 추천 제외
+  ctx = context();
+  ctx.state.roundStatuses["1"].snapshot.classBases = { "2": 4 };
+  group = ctx.classSectionsSource("1").groups[0];
+  entry = ctx.classSectionsEntry("1", group.key);
+  input = plain(ctx.classSectionsBuildInput("1", group, entry));
+  assert.deepEqual(input.recommendExclude, ["homeroom"]);
+  entry.mode = "homeroom";
+  const html = ctx.classSectionsClassesHtml(group, entry);
+  assert.match(html, /진급 때 반이 바뀌면 ‘같은 담임반끼리 묶기’\(지금 반 기준\)는 효과가 없으므로 추천에서 뺍니다/);
+  assert.match(html, /지금 반 기준 — 진급 때 반이 바뀌면 효과 없음/);
+  assert.equal(ctx.classSectionsClassUnitPlan(group, entry, ctx.classSectionsSettings()).mapped, false);
+
+  // 3) 반 수 다름(4 → 5): '새로 편성' 고정, '그대로'는 고를 수 없음(이유 표시) — 저장값이 'same'이어도 무시
+  ctx = context();
+  ctx.state.roundStatuses["1"].snapshot.classBases = { "2": 5 };
+  group = ctx.classSectionsSource("1").groups[0];
+  entry = ctx.classSectionsEntry("1", group.key);
+  ctx.classSectionsSettings().promotion["1"] = "same";
+  const forced = plain(ctx.classSectionsPromotion(group));
+  assert.equal(forced.value, "new");
+  assert.equal(forced.forced, true);
+  assert.match(forced.reason, /현 4학급 → 내년 5학급/);
+  assert.equal(ctx.classSectionsEffectiveClassMap(group).basis, "none");
+  assert.deepEqual(plain(ctx.classSectionsBuildInput("1", group, entry)).recommendExclude, ["homeroom"]);
+  const forcedHtml = ctx.classSectionsClassesHtml(group, entry);
+  assert.match(forcedHtml, /<option value="same" disabled>그대로 올라감<\/option>/);
+  assert.match(forcedHtml, /id="classSectionsPromotionReason"/);
 });

@@ -38,6 +38,7 @@ function classSectionsSettings() {
   if (typeof settings.gridDays !== "string" || !settings.gridDays.trim()) settings.gridDays = "월,화,수,목,금";
   if (!(Number(settings.gridPeriods) > 0)) settings.gridPeriods = 7;
   if (!classSectionsPlain(settings.reserve)) settings.reserve = {};
+  if (!classSectionsPlain(settings.promotion)) settings.promotion = {};
   return settings;
 }
 
@@ -58,6 +59,28 @@ function classSectionsClassMap(grade) {
   const maps = classSectionsStore().classMaps;
   const map = classSectionsPlain(maps) ? maps[String(grade)] : null;
   return classSectionsPlain(map) && Object.keys(map).length ? map : null;
+}
+
+// 진급 때 반 편성(현 학년마다): "same" 그대로 올라감 / "new" 새로 편성 / "unknown" 아직 모름.
+// 학급 수가 바뀌면(현 반 수 ≠ 내년 학급 수) 'new'로 고정한다. 고르지 않았으면 같을 때 'unknown'.
+var CLASS_SECTIONS_PROMOTION_LABELS = { same: "그대로 올라감", new: "새로 편성", unknown: "아직 모름" };
+function classSectionsPromotion(group) {
+  const changes = Boolean(group.nextClasses && group.rosterClasses && group.nextClasses !== group.rosterClasses);
+  if (changes) return { value: "new", forced: true, reason: `현 ${group.rosterClasses}학급 → 내년 ${group.nextClasses}학급으로 학급 수가 바뀌어 새로 편성합니다.` };
+  const saved = classSectionsSettings().promotion[String(group.grade)];
+  return { value: ["same", "new", "unknown"].includes(saved) ? saved : "unknown", forced: false, reason: "" };
+}
+
+// 실제로 쓸 내년 반: 올린 배정표 > '그대로 올라감'(지금 반 = 내년 반, 번호는 비움) > 없음.
+// 번호를 비우는 이유: 반이 그대로여도 진급 때 번호는 다시 매기는 경우가 많고(전입·전출·성명 순), 틀린 번호로 나이스에 올리면
+// 다른 학생에게 잘못 편성돼도 알아채기 어렵지만 빈칸은 올리기 전에 드러난다.
+function classSectionsEffectiveClassMap(group) {
+  const map = classSectionsClassMap(group.grade);
+  if (map) return { map, basis: "map" };
+  if (classSectionsPromotion(group).value === "same") {
+    return { map: Object.fromEntries(group.students.map((student) => [student.key, { classroom: String(student.homeroom), number: "" }])), basis: "same" };
+  }
+  return { map: null, basis: "none" };
 }
 
 // 복원: 예전 저장분·백업에 없으면 빈 객체. 모양이 틀린 값은 버린다(app.js restorePersistedState가 부름).
@@ -214,7 +237,7 @@ function classSectionsGroupSettings(source, group, entry) {
 
 // 담임반 묶기 기준 반: 내년 반 배정표가 있으면 새 반(없는 학생은 '미정'), 없으면 지금 반.
 function classSectionsHomeroomStudents(group) {
-  const map = classSectionsClassMap(group.grade);
+  const { map } = classSectionsEffectiveClassMap(group);
   if (!map) return group.students;
   return group.students.map((student) => ({ ...student, homeroom: String(map[student.key]?.classroom || "미정") }));
 }
@@ -280,7 +303,7 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
     groupId: `${round}:${group.key}`, label: group.label, grade: group.grade, targetGrade: group.targetGrade, semester: group.semester,
     blocks, maxSectionsPerBlock: base.maxSectionsPerBlock || undefined, defaultCapacity: base.capacity,
     courses, students: classSectionsHomeroomStudents(group), teachers, departmentTeachers, rooms, occupied, fixedSlots, spreadWarn: settings.spreadWarn,
-    homeroomBasis: classSectionsClassMap(group.grade) ? "next" : "current", recommendExclude: classSectionsClassMap(group.grade) ? [] : ["homeroom"],
+    homeroomBasis: classSectionsEffectiveClassMap(group).map ? "next" : "current", recommendExclude: classSectionsEffectiveClassMap(group).map ? [] : ["homeroom"],
     mode: entry.mode || "move", seed: Number(entry.seed) || 1,
     pins: { sections: { ...entry.pins.sections }, students: { ...entry.pins.students }, teachers: { ...entry.pins.teachers } },
     ...rest
@@ -664,16 +687,24 @@ function renderClassSectionsView() {
 
 function classSectionsClassesHtml(group, entry) {
   const esc = classSectionsEsc;
-  const map = classSectionsClassMap(group.grade);
-  const mapped = map ? group.students.filter((student) => map[student.key]?.classroom).length : 0;
+  const uploaded = classSectionsClassMap(group.grade);
+  const promotion = classSectionsPromotion(group);
+  const mapped = uploaded ? group.students.filter((student) => uploaded[student.key]?.classroom).length : 0;
   const classLine = group.nextClasses
     ? `현 ${group.grade}학년 ${group.rosterClasses}학급 → 내년 ${group.targetGrade}학년 ${group.nextClasses}학급 (블록당 최대 분반·학급 단위 반 수 기본값 = 내년 학급 수)`
     : `내년 ${group.targetGrade}학년 학급 수가 없어 지금 반 수 ${group.rosterClasses}학급으로 잡았습니다. 4단계 기준 설정에서 내년 학급 수를 넣으세요.`;
-  const mapLine = map ? `내년 반 배정표: ${mapped}/${group.students.length}명 · 담임반 묶기·학급 단위 학생 배정·나이스 반·번호를 새 반 기준으로 합니다.`
-    : "내년 반 배정표 없음 · 진급 때 반이 새로 편성될 수 있어 ‘같은 담임반끼리 묶기’는 지금 반 기준이며 추천에서 뺍니다.";
-  const warn = (entry.mode || "move") === "homeroom" && !map
-    ? '<p class="cs-note is-warn" id="classSectionsHomeroomWarn">같은 담임반끼리 묶기: 지금 반 기준 — 진급 때 반이 바뀌면 효과 없음. 내년 반 배정표를 올리면 새 반 기준으로 묶습니다.</p>' : "";
+  let mapLine;
+  if (uploaded) mapLine = `내년 반 배정표: ${mapped}/${group.students.length}명 · 담임반 묶기·학급 단위 학생 배정·나이스 반·번호를 새 반 기준으로 합니다.`;
+  else if (promotion.value === "same") mapLine = "진급 때 반이 그대로 올라감 · 지금 반을 내년 반으로 보고 담임반 묶기·학급 단위 학생 배정·나이스 반을 정합니다(나이스 번호는 진급 때 다시 매길 수 있어 비움). 배정표를 올리면 그것이 우선입니다.";
+  else if (promotion.value === "new") mapLine = "내년 반 배정표 없음 · 진급 때 반을 새로 편성하므로 ‘같은 담임반끼리 묶기’는 지금 반 기준이라 효과가 없어 추천에서 뺍니다. 학급 단위 과목 학생 배정은 배정표를 올린 뒤.";
+  else mapLine = "내년 반 배정표 없음 · 진급 때 반이 바뀌면 ‘같은 담임반끼리 묶기’(지금 반 기준)는 효과가 없으므로 추천에서 뺍니다. 반이 그대로 올라가면 ‘진급 때 반 편성’을 ‘그대로 올라감’으로 고르세요.";
+  const warnText = promotion.value === "new" ? "지금 반 기준 — 진급 때 반을 새로 편성하므로 효과 없음" : "지금 반 기준 — 진급 때 반이 바뀌면 효과 없음";
+  const warn = (entry.mode || "move") === "homeroom" && !uploaded && promotion.value !== "same"
+    ? `<p class="cs-note is-warn" id="classSectionsHomeroomWarn">같은 담임반끼리 묶기: ${esc(warnText)}. 내년 반 배정표를 올리면 새 반 기준으로 묶습니다.</p>` : "";
+  const options = ["same", "new", "unknown"].map((value) => `<option value="${value}"${promotion.value === value ? " selected" : ""}${promotion.forced && value !== "new" ? " disabled" : ""}>${CLASS_SECTIONS_PROMOTION_LABELS[value]}</option>`).join("");
   return `<p class="cs-note${group.nextClasses ? "" : " is-warn"}" id="classSectionsClassesLine">${esc(classLine)}</p>
+    <div class="cs-fields"><label>진급 때 반 편성 <select data-cs-promotion="${esc(group.grade)}" data-focus-key="cs-promotion-${esc(group.grade)}" aria-label="현 ${esc(group.grade)}학년 진급 때 반 편성"${promotion.forced ? ' title="' + esc(promotion.reason) + '"' : ""}>${options}</select></label>
+      ${promotion.forced ? `<span class="cs-note" id="classSectionsPromotionReason">${esc(promotion.reason)}</span>` : ""}</div>
     <p class="cs-note" id="classSectionsClassMapLine">${esc(mapLine)}</p>${warn}`;
 }
 
@@ -795,8 +826,8 @@ function classSectionsClassUnitPlan(group, entry, settings) {
     sections: entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount }));
   const count = group.nextClasses || group.rosterClasses || group.classes || 0;
   const homerooms = Array.from({ length: count }, (_, index) => String(index + 1));
-  const map = classSectionsClassMap(group.grade);
-  // 학생 희망은 새 반을 알 때만 반영한다(지금 반으로는 내년 반을 알 수 없음).
+  const { map } = classSectionsEffectiveClassMap(group);
+  // 학생 희망은 내년 반을 알 때만 반영한다(배정표, 또는 '그대로 올라감'이면 지금 반).
   const students = map ? classSectionsHomeroomStudents(group).filter((student) => student.homeroom !== "미정") : [];
   const split = typeof classSectionsClassUnitSplit === "function" ? classSectionsClassUnitSplit({ courses, homerooms: homerooms.map((id) => ({ id })), students }) : { assign: {}, ratio: "", mismatched: 0 };
   const manual = classSectionsPlain(entry.classUnit.assign) ? entry.classUnit.assign : {};
@@ -948,6 +979,7 @@ function classSectionsHandleChange(event) {
   else if (data.csBlockTimes !== undefined) entry.blockTimes[data.csBlockTimes] = target.value.trim();
   else if (data.csTeacher !== undefined) { if (target.value) entry.pins.teachers[data.csTeacher] = target.value; else delete entry.pins.teachers[data.csTeacher]; }
   else if (data.csPin !== undefined) { if (target.checked) entry.pins.sections[data.csPin] = data.csPinBlock; else delete entry.pins.sections[data.csPin]; }
+  else if (data.csPromotion !== undefined) settings.promotion[data.csPromotion] = ["same", "new", "unknown"].includes(target.value) ? target.value : "unknown";
   else if (data.csUnitRoom !== undefined) { if (!classSectionsPlain(entry.classUnit.assign)) entry.classUnit.assign = {}; entry.classUnit.assign[data.csUnitRoom] = target.value; }
   else if (target.id === "classSectionsStudentSearch") { CLASS_SECTIONS_VIEW.search = target.value; return renderClassSections(); }
   else if (target.id === "classSectionsClassMap") return void classSectionsReadClassMap(target.files?.[0]);
@@ -1088,12 +1120,14 @@ function classSectionsExport(kind) {
       const department = settings.courseDepartments[course.key] || course.department;
       return [course.key, { family: classSectionsNeisFamily(course.area, department), credits: course.credits }];
     }));
-    const map = classSectionsClassMap(group.grade) || {};
+    const effective = classSectionsEffectiveClassMap(group);
+    const map = effective.map || {};
     const students = group.students.map((student) => ({ key: student.key, classroom: map[student.key]?.classroom || "", number: map[student.key]?.number || "", name: names.get(student.key) || "" }));
     const unitCourses = group.courses.filter((course) => settings.courseModes[course.key] === "class");
     const classUnit = unitCourses.length ? { byClass: classSectionsClassUnitPlan(group, entry, settings).assign,
       courses: Object.fromEntries(unitCourses.map((course) => [course.key, { name: course.name, ...courses[course.key] }])) } : null;
     const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students, classUnit });
+    if (effective.basis === "same") warnings.push("진급 때 반이 그대로 올라감으로 설정해 반은 지금 반으로 넣고 번호는 비웠습니다(진급 때 번호를 다시 매길 수 있음). 내년 반 배정표를 올리면 반·번호를 채웁니다.");
     const sheets = [{ name: "수강학생 편성", rows, widths: [8, 6, 6, 18, 22, 18, 12, 6, 6, 10, 16], merges: ["A1:F1", "G1:J1"], freeze: "A3" },
       { name: "확인 필요", orientation: "portrait", widths: [100], rows: [["확인 필요"], ...warnings.map((text) => [text]),
         ["개설강의실 번호: 어느 블록에서든 그 과목 분반이 2개 이상이면 모든 분반에 번호, 교사가 배정돼 있으면 같은 교사는 같은 번호(사용자 나이스 파일에서 추정)."]] }];
