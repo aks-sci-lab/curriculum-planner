@@ -299,7 +299,9 @@ function attendanceInfo(sheet) {
   }
   report.checks.homeroomTotals = perGrade;
   // 현1·현2 모두 웹 신청 만들 때 올린 명렬이 이 PC에 저장돼 있어(applicationRosterFor) 미제출까지 = 명단. 현2는 배정표 없이 '그대로 올라감'.
-  check(perGrade["1"] === 340, `현1 담임반 학생 합 ${perGrade["1"]} = 명단 340(배정표 기준, 미제출 포함)`, perGrade);
+  const basis1 = await page.locator("#classSectionsHomeroomUnsubmitted").getAttribute("data-basis").catch(() => "");
+  const basisLabel = { roster: "명렬 기준", map: "내년 반 배정표 기준", none: "근거 없음" };
+  check(perGrade["1"] === 340 && ["roster", "map"].includes(basis1), `현1 담임반 학생 합 ${perGrade["1"]} = 명단 340(${basisLabel[basis1] || basis1}, 미제출 포함)`, { perGrade, basis1 });
   await page.getByLabel("담임반 고르기").selectOption({ index: hrOptions.findIndex((text) => /내년 3학년|현 2학년/.test(text)) }); await sleep(600);
   const grade2Note = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
   report.checks.grade2Unsubmitted = { total: perGrade["2"], note: grade2Note };
