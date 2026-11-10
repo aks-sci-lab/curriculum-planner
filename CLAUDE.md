@@ -10,8 +10,9 @@
 node --test tests/*.test.cjs      # 전체 테스트(이 환경에서는 슬래시 경로 사용)
 npm run build:css                  # src/legacy.css 를 고친 뒤 styles.css 재생성
 npm run build:deploy               # 배포용 파일만 dist/ 에 모음
-node e2e/run.cjs --seed 1 --out <폴더>   # 전과정 자동 테스트(1~5단계·저장, 실제 규모 약 1.5분, e2e/README.md)
+node e2e/run.cjs --seed 1 --out <폴더>   # 전과정 자동 테스트(1~6단계·저장, 실제 규모 약 6분, e2e/README.md)
 ```
+배포할 때는 `app-version.js` `APP_VERSION`(일련 번호 `2026.11.N`)과 `index.html`·`test-bot.html`의 모든 스크립트·CSS `?v=` 캐시 문자열(`YYYYMMDD-이름`, 한 값)을 함께 올립니다(`tests/project-integrity.test.cjs`가 한 값인지 검사, `npm run build:deploy`가 `dist/version.json`에 버전 기록, `dist/`는 커밋하지 않음).
 e2e 하네스는 저장소를 http 정적 서버로 열고 PGlite 모의 Supabase·테스트봇으로 진행합니다(**실제 Supabase 요청 없음**, 막힌 요청은 `report.json` `blockedRequests`). `--explore2 스크립트.cjs`로 저장 단계 뒤 추가 점검을 붙입니다. Playwright가 blob 내려받기 이름을 `download`로만 알려 주므로 파일 이름은 앱이 붙인 `a.download`로 확인하세요.
 화면 검증은 Playwright(설치돼 있음)로 `file:///.../index.html` 을 열어 **사용자처럼 클릭**해서 합니다. 내부 함수를 직접 호출해 통과시키지 말고, 화면에 보이는 글자·스크린샷으로 확인하세요.
 
