@@ -2787,3 +2787,201 @@ if (typeof module !== "undefined" && module.exports) {
     classSectionsFromCombos, classSectionsClassUnitSplit, classSectionsAssignTeachers, classSectionsNeisRows, classSectionsSignature,
     classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow, classSectionsNeisExport, classSectionsClassMapFromRows, classSectionsRecommendTimes, classSectionsTeacherShortages };
 }
+
+// ---- 교실 배정 ----
+// 분반 → 교실 추천(순수 계산, 결정적). 블록마다 그 블록의 분반을 교실에 하나씩 놓는다(같은 블록 안 겹침 없음).
+// 기본: 그 분반 수강생이 가장 많은 내년 반 교실(학생 이동이 가장 적게), 특별실 과목은 그 종류 특별실. 블록마다 최소 비용 매칭.
+// 블록 시간이 있으면 같은 시간의 다른 그룹(다른 학년) 블록이 쓰는 교실·특별실은 못 쓴다(학년 교실은 학년별이라 보통 안 겹침).
+// 블록 시간이 없으면 다른 그룹과의 겹침은 알 수 없으므로 안내만 한다(같은 그룹 블록끼리는 시간이 다르다).
+// rooms: [{ id, label, kind: "class" | "special" | "extra", grade(수업 학년, class만), homeroom(반 번호, class만), type(special만) }]
+// groups: [{ groupId, label, targetGrade, blocks: [{ id, letter, times }], sections: [{ id, courseName, blockId, roomName, size, special, homerooms: { 반: 인원 } }], pins: { 분반id: 교실id } }]
+var CLASS_SECTIONS_ROOM_COST = { special: 0, extra: 3000, fallback: 6000, perStudent: 100 };
+
+// 기본 교실 이름: 학년 교실 '2-1'…, 특별실은 하나면 '컴퓨터실', 여럿이면 '과학실1'·'과학실2'.
+function classSectionsDefaultRoomNames(type, count, grade) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (grade !== undefined && grade !== null && grade !== "") return Array.from({ length: n }, (_, i) => `${grade}-${i + 1}`);
+  return n === 1 ? [String(type)] : Array.from({ length: n }, (_, i) => `${type}${i + 1}`);
+}
+
+// 교실 목록 만들기. spec: { classrooms: { 학년: [이름] }, special: { 종류: [이름] }, extra: [이름] }
+// 학년 교실의 반 번호는 목록 순서(1번째 = 1반)다. 이름이 '2-3'처럼 생겼으면 화면 이름은 '2학년 3반'.
+function classSectionsRoomList(spec) {
+  const rooms = [];
+  const seen = new Set();
+  const push = (room) => { if (!room.id || seen.has(room.id)) return; seen.add(room.id); rooms.push(room); };
+  for (const [grade, names] of Object.entries(spec?.classrooms || {})) {
+    (names || []).map(classSectionsText).filter(Boolean).forEach((name, index) => {
+      const match = name.match(/^(\d+)\s*-\s*(\d+)$/);
+      push({ id: name, label: match ? `${Number(match[1])}학년 ${Number(match[2])}반` : name, kind: "class", grade: String(grade), homeroom: String(index + 1) });
+    });
+  }
+  for (const [type, names] of Object.entries(spec?.special || {})) {
+    (names || []).map(classSectionsText).filter(Boolean).forEach((name) => push({ id: name, label: name, kind: "special", type: classSectionsText(type) }));
+  }
+  (spec?.extra || []).map(classSectionsText).filter(Boolean).forEach((name) => push({ id: name, label: name, kind: "extra" }));
+  return rooms;
+}
+
+// 두 블록이 같은 시간에 열리는가: 같은 그룹이면 같은 블록일 때만, 다른 그룹이면 시간(요일·교시)이 겹칠 때만.
+function classSectionsRoomBlocksClash(a, b) {
+  if (a.groupId === b.groupId) return a.blockId === b.blockId;
+  return classSectionsOverlap(a.times, b.times);
+}
+
+// 분반이 그 교실을 쓸 수 있는가와 비용(작을수록 좋음). 못 쓰면 null.
+function classSectionsRoomCost(section, room, targetGrade, roomIndex) {
+  const C = CLASS_SECTIONS_ROOM_COST;
+  if (section.special) {
+    if (room.kind === "special") return room.type === section.special ? C.special + roomIndex : null;
+    if (room.kind === "class" && room.grade === targetGrade) return C.fallback + C.perStudent * (section.size - (section.homerooms?.[room.homeroom] || 0)) + roomIndex;
+    return null;
+  }
+  if (room.kind === "class") return room.grade === targetGrade ? C.perStudent * (section.size - (section.homerooms?.[room.homeroom] || 0)) + roomIndex : null;
+  if (room.kind === "extra") return C.extra + roomIndex;
+  return null;
+}
+
+function classSectionsAssignRooms(spec) {
+  const rooms = Array.isArray(spec?.rooms) ? spec.rooms : [];
+  const roomById = new Map(rooms.map((room, index) => [room.id, { ...room, index }]));
+  const issues = [];
+  const assign = {};
+  const reasons = {};
+  // 블록 목록(그룹 순서 → 블록 순서). 시간은 '월:1' 모양으로 맞춘다.
+  const blocks = [];
+  let timed = 0;
+  let untimed = 0;
+  for (const group of spec?.groups || []) {
+    assign[group.groupId] = {};
+    reasons[group.groupId] = {};
+    const sectionsByBlock = new Map();
+    for (const raw of group.sections || []) {
+      const section = { ...raw, size: Number(raw.size) || 0, special: classSectionsText(raw.special), homerooms: raw.homerooms || {} };
+      if (!sectionsByBlock.has(section.blockId)) sectionsByBlock.set(section.blockId, []);
+      sectionsByBlock.get(section.blockId).push(section);
+    }
+    for (const block of group.blocks || []) {
+      const times = classSectionsSlots(block.times);
+      if (times.length) timed += 1; else untimed += 1;
+      blocks.push({ groupId: group.groupId, label: group.label || group.groupId, targetGrade: String(group.targetGrade || ""), blockId: block.id, letter: block.letter || block.id,
+        times, sections: sectionsByBlock.get(block.id) || [], pins: group.pins || {}, order: blocks.length });
+    }
+  }
+  const used = []; // [{ block, roomId, sectionId }]
+  const takenAt = (block) => {
+    const taken = new Map();
+    for (const item of used) if (classSectionsRoomBlocksClash(item.block, block)) taken.set(item.roomId, item);
+    return taken;
+  };
+  // 1) 직접 고른 교실(고정)을 먼저 둔다. 겹쳐도 지키고 검증기가 알린다.
+  for (const block of blocks) for (const section of block.sections) {
+    const roomId = classSectionsText(block.pins[section.id]);
+    if (!roomId || !roomById.has(roomId)) continue;
+    assign[block.groupId][section.id] = roomId;
+    reasons[block.groupId][section.id] = "직접 고름";
+    used.push({ block, roomId, sectionId: section.id });
+  }
+  // 2) 특별실 수요가 많은 블록부터(같은 수요면 입력 순서) 블록마다 최소 비용 매칭.
+  const order = blocks.slice().sort((a, b) => b.sections.filter((s) => s.special).length - a.sections.filter((s) => s.special).length || a.order - b.order);
+  for (const block of order) {
+    const todo = block.sections.filter((section) => !assign[block.groupId][section.id]);
+    if (!todo.length) continue;
+    const taken = takenAt(block);
+    const free = rooms.filter((room) => !taken.has(room.id));
+    const edges = [];
+    const source = 0;
+    const sink = 1 + todo.length + free.length;
+    todo.forEach((section, i) => {
+      edges.push([source, 1 + i, 1, 0]);
+      free.forEach((room, j) => {
+        const cost = classSectionsRoomCost(section, room, block.targetGrade, roomById.get(room.id).index);
+        if (cost !== null) edges.push([1 + i, 1 + todo.length + j, 1, cost]);
+      });
+    });
+    const firstRoomEdge = edges.length;
+    free.forEach((room, j) => edges.push([1 + todo.length + j, sink, 1, 0]));
+    const flow = classSectionsMinCostFlow(sink + 1, edges, source, sink);
+    const picked = new Map();
+    for (let e = 0; e < firstRoomEdge; e += 1) {
+      const [from, to] = edges[e];
+      if (from === source || !flow.flows[e]) continue;
+      picked.set(from - 1, free[to - 1 - todo.length]);
+    }
+    const missing = [];
+    todo.forEach((section, i) => {
+      const room = picked.get(i);
+      if (!room) { missing.push(section); return; }
+      assign[block.groupId][section.id] = room.id;
+      used.push({ block, roomId: room.id, sectionId: section.id });
+      const here = section.homerooms?.[room.homeroom] || 0;
+      reasons[block.groupId][section.id] = room.kind === "special" ? `특별실(${room.type})`
+        : section.special ? `${section.special} 부족 → 일반 교실`
+        : room.kind === "extra" ? "학년 교실 부족 → 다른 교실"
+        : here > 0 ? `수강생 ${here}명이 이 반(가장 많음)` : "수강생 반 정보 없음(순서대로)";
+      if (section.special && room.kind !== "special") {
+        issues.push({ type: "special-fallback", severity: "warn", groupId: block.groupId, sectionId: section.id,
+          message: `${block.label} ${block.letter}블록 ${section.roomName || section.courseName}: ${section.special}이 모자라 일반 교실 ${room.label}에 배정했습니다${classSectionsRoomShortWhy(block, section.special, rooms, taken)}.` });
+      }
+    });
+    if (missing.length) {
+      const classCount = rooms.filter((room) => room.kind === "class" && room.grade === block.targetGrade).length;
+      const extraCount = rooms.filter((room) => room.kind === "extra").length;
+      const busy = [...taken.values()].filter((item) => item.block.groupId !== block.groupId);
+      issues.push({ type: "room-short", severity: "error", groupId: block.groupId, sectionIds: missing.map((section) => section.id),
+        message: `${block.label} ${block.letter}블록: 교실이 모자라 분반 ${missing.length}개(${missing.map((section) => section.roomName || section.courseName).join(", ")})에 교실을 못 정했습니다 — 분반 ${block.sections.length}개 > ${block.targetGrade}학년 교실 ${classCount}개${extraCount ? ` + 다른 교실 ${extraCount}개` : ""}${busy.length ? `(같은 시간 다른 학년이 ${busy.length}개 사용)` : ""}. 교사·시간 설정에서 교실을 늘리거나 블록당 분반을 줄이세요.` });
+    }
+  }
+  if (untimed && blocks.some((block) => block.sections.some((section) => section.special)) && new Set(blocks.map((block) => block.groupId)).size > 1) {
+    issues.push({ type: "no-times", severity: "info", message: "블록 시간(요일·교시)이 없는 블록이 있어 다른 학년과의 특별실 겹침은 확인하지 못했습니다. 블록 시간을 넣으면 같은 시간 겹침을 막습니다." });
+  }
+  const check = classSectionsValidateRooms({ rooms, groups: spec?.groups || [] }, assign);
+  const fellBack = new Set(issues.filter((item) => item.type === "special-fallback").map((item) => `${item.groupId}|${item.sectionId}`));
+  const extra = check.filter((item) => item.type !== "room-missing" && !(item.type === "special-mismatch" && fellBack.has(`${item.groupId}|${item.sectionId}`)));
+  return { assign, reasons, issues: [...issues, ...extra], timed: timed > 0 && !untimed };
+}
+
+function classSectionsRoomShortWhy(block, type, rooms, taken) {
+  const total = rooms.filter((room) => room.kind === "special" && room.type === type).length;
+  const others = [...taken.values()].filter((item) => item.block.groupId !== block.groupId && rooms.find((room) => room.id === item.roomId)?.type === type);
+  const need = block.sections.filter((section) => section.special === type).length;
+  return ` — ${type} ${total}개, 이 블록 ${type} 과목 분반 ${need}개${others.length ? `, 같은 시간 다른 학년 ${[...new Set(others.map((item) => `${item.block.label} ${item.block.letter}블록`))].join(", ")}이 ${others.length}개 사용` : ""}`;
+}
+
+// 교실 배정 검증(계산과 독립): 같은 블록 두 분반 한 교실, 같은 시간 다른 학년 블록과 같은 교실, 특별실 과목이 다른 교실, 없는 교실, 교실 미정.
+function classSectionsValidateRooms(spec, assign) {
+  const rooms = new Map((spec.rooms || []).map((room) => [room.id, room]));
+  const issues = [];
+  const uses = [];
+  for (const group of spec.groups || []) {
+    const blockOf = new Map((group.blocks || []).map((block) => [block.id, block]));
+    for (const section of group.sections || []) {
+      const roomId = assign?.[group.groupId]?.[section.id] || "";
+      const block = blockOf.get(section.blockId);
+      const name = `${group.label || group.groupId} ${block?.letter || section.blockId}블록 ${section.roomName || section.courseName}`;
+      if (!roomId) { issues.push({ type: "room-missing", severity: "error", groupId: group.groupId, sectionId: section.id, message: `${name}: 교실 미정` }); continue; }
+      const room = rooms.get(roomId);
+      if (!room) { issues.push({ type: "room-unknown", severity: "error", groupId: group.groupId, sectionId: section.id, message: `${name}: 교실 '${roomId}'이(가) 교실 목록에 없습니다.` }); continue; }
+      const special = classSectionsText(section.special);
+      if (special && room.type !== special) issues.push({ type: "special-mismatch", severity: "warn", groupId: group.groupId, sectionId: section.id, message: `${name}: ${special} 과목인데 ${room.label}에 배정됨` });
+      if (room.kind === "class" && String(room.grade) !== String(group.targetGrade || "")) issues.push({ type: "room-grade", severity: "warn", groupId: group.groupId, sectionId: section.id, message: `${name}: 다른 학년 교실 ${room.label}(그 반 수업과 겹칠 수 있음)` });
+      uses.push({ groupId: group.groupId, blockId: section.blockId, times: classSectionsSlots(block?.times), roomId, label: name, sectionId: section.id });
+    }
+  }
+  const seen = new Set();
+  for (let i = 0; i < uses.length; i += 1) for (let j = i + 1; j < uses.length; j += 1) {
+    const a = uses[i]; const b = uses[j];
+    if (a.roomId !== b.roomId || !classSectionsRoomBlocksClash(a, b)) continue;
+    const key = `${a.sectionId}|${b.sectionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const room = rooms.get(a.roomId)?.label || a.roomId;
+    issues.push({ type: a.groupId === b.groupId ? "room-double" : "room-cross", severity: "error", groupId: b.groupId, sectionId: b.sectionId, otherGroupId: a.groupId, otherSectionId: a.sectionId,
+      message: a.groupId === b.groupId ? `${room}: 같은 블록 두 분반(${a.label}, ${b.label})` : `${room}: 같은 시간 두 분반(${a.label}, ${b.label})` });
+  }
+  return issues;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  Object.assign(module.exports, { classSectionsDefaultRoomNames, classSectionsRoomList, classSectionsAssignRooms, classSectionsValidateRooms });
+}

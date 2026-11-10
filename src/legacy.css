@@ -2334,3 +2334,40 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 
 .hours-status { margin: 4px 0 6px; font-size: 13px; }
 .hours-status:empty { display: none; }
+
+/* 6단계 출력물: 교실 배정 칸·출력물 단추 줄·학생 이동수업 시간표(class-sections-print.js) */
+.cs-section .cs-room { display:inline-flex; align-items:center; gap:4px; grid-column:1 / -1; color:var(--muted); font-size:11px; }
+.cs-section .cs-room select { max-width:150px; min-width:90px; }
+.cs-section .cs-room.is-clash select { border-color:#c5533f; background:#fff1ee; color:#a44939; }
+.cs-room-summary { margin:6px 0 10px; }
+.cs-print { margin-top:12px; padding:10px; border:1px solid var(--line); border-radius:10px; background:#fbfcff; }
+.cs-print h5 { margin:0 0 6px; font-size:13px; }
+.cs-print label { display:inline-flex; align-items:center; gap:4px; font-size:12px; }
+.cs-tt-preview { margin-top:10px; max-width:760px; }
+.cs-tt { padding:8px 10px; border:1px solid #9aa6ba; border-radius:6px; background:#fff; color:#111; break-inside:avoid; page-break-inside:avoid; }
+.cs-tt header h4 { margin:0; font-size:13px; }
+.cs-tt header p { margin:2px 0 6px; font-size:12px; font-weight:700; }
+.cs-tt-retake { margin:0 0 6px; padding:3px 6px; border:1px solid #e3a497; border-radius:4px; background:#fff6f4; color:#a44939; font-size:12px; font-weight:700; }
+.cs-tt-grid { width:100%; border-collapse:collapse; table-layout:fixed; font-size:11px; }
+.cs-tt-grid th, .cs-tt-grid td { padding:2px 3px; border:1px solid #777; text-align:center; vertical-align:middle; line-height:1.25; }
+.cs-tt-grid thead th, .cs-tt-grid tbody th { background:#eef1f6; }
+.cs-tt-grid tbody th { width:26px; }
+.cs-tt-grid td { height:40px; }
+.cs-tt-grid td span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-tt-grid td span:first-of-type { font-weight:700; }
+.cs-tt-grid td small { display:block; color:#5d6a82; font-size:9px; }
+.cs-tt-grid td[data-kind="fixed"] { background:#f3f3f3; color:#444; }
+.cs-tt-grid td[data-kind="empty"] { color:#888; }
+.cs-tt-grid td[data-kind="empty"] span { font-weight:400; }
+.cs-tt-grid td[data-kind="clash"] { background:#fff1ee; color:#a44939; }
+.cs-tt-list, .cs-tt-unit { margin:6px 0 0; padding-left:16px; font-size:11px; }
+.cs-tt-unit { padding-left:0; }
+@media print {
+  .print-page.cs-tt-page { display:flex; flex-direction:column; gap:5mm; padding:0; }
+  .print-page.cs-tt-page[data-per="3"] .cs-tt-grid td { height:9mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-grid td { height:14mm; }
+  .print-page.cs-tt-page[data-per="4"] { display:grid; grid-template-columns:1fr 1fr; gap:4mm; }
+  .print-page.cs-tt-page[data-per="4"] .cs-tt-grid { font-size:8px; }
+  .print-page.cs-tt-page[data-per="4"] .cs-tt-grid td { height:13mm; }
+  .print-page.cs-tt-page .cs-tt { border-color:#555; }
+}
