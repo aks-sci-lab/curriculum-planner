@@ -32,9 +32,12 @@ function columnIndex(reference) {
   const optionFields = ["botScope", "botScopeCount", "botScopeClasses", "botConcurrency", "botDelay", "botPopularity",
     "botWrongPercent", "botWrongTimes", "botViolationPercent", "botResubmitPercent", "botCleanup", "botTeacherCheck",
     "botRepeat", "botRepeatFresh"];
+  // 지난 실행에서 저장된 대상 범위(반 지정·처음 N명)를 그대로 쓰는 중인지. 실행 단추 옆에 눈에 띄게 보인다.
+  let scopeFromSaved = false;
   function loadOptions() {
     try {
       const saved = JSON.parse(localStorage.getItem(OPTIONS_KEY) || "{}");
+      scopeFromSaved = saved.botScope === "first" || saved.botScope === "class";
       for (const id of optionFields) {
         if (!(id in saved)) continue;
         if (byId(id).type === "checkbox") byId(id).checked = !!saved[id];
@@ -50,6 +53,23 @@ function columnIndex(reference) {
   }
   loadOptions();
   for (const id of optionFields) byId(id).addEventListener("change", saveOptions);
+  // 실행 단추 옆 대상 범위: 전체가 아니면 주황 칸으로 보이고, 지난 설정을 그대로 쓰면 '(지난 설정)'을 붙인다.
+  function renderScopeNotice() {
+    const summary = Core.scopeSummary(options(), source?.students || null);
+    byId("botScopeText").textContent = `${summary.text}${summary.limited && scopeFromSaved ? " (지난 설정)" : ""}`;
+    byId("botScopeNotice").classList.toggle("is-limited", summary.limited);
+    byId("botScopeAll").hidden = !summary.limited;
+  }
+  for (const id of ["botScope", "botScopeCount", "botScopeClasses"]) {
+    byId(id).addEventListener("change", () => { scopeFromSaved = false; renderScopeNotice(); });
+    byId(id).addEventListener("input", () => { scopeFromSaved = false; renderScopeNotice(); });
+  }
+  byId("botScopeAll").addEventListener("click", () => {
+    byId("botScope").value = "all";
+    scopeFromSaved = false;
+    saveOptions();
+    renderScopeNotice();
+  });
   byId("botImport").addEventListener("change", () => {
     if (byId("botImport").checked && !window.confirm("테스트 결과가 교사의 실제 작업 자료(같은 차수)에 반영됩니다. 기존 결과가 바뀔 수 있습니다. 백업했나요? 켤까요?")) {
       byId("botImport").checked = false;
@@ -76,10 +96,12 @@ function columnIndex(reference) {
   let source = null; // { eventId, link, schoolName, schoolYear, round, students, from: "app"|"file", testEvent, receivedAt }
   let running = null;
   let lastReport = null;
+  renderScopeNotice();
 
   function renderSource() {
     const summary = byId("botSourceSummary");
     byId("botRun").disabled = !source || !!running;
+    renderScopeNotice();
     if (!source) { summary.textContent = ""; return; }
     const title = [source.schoolYear && `${source.schoolYear}학년도`, source.schoolName, source.round && `${source.round}차`].filter(Boolean).join(" ");
     summary.className = source.from === "app" ? "bot-received" : "";
@@ -450,7 +472,7 @@ function columnIndex(reference) {
         now: () => new Date().toLocaleString("ko-KR"),
         teacher: (action, { eventId, timeoutMs } = {}) => teacherRequest(action, timeoutMs, eventId),
         waitForTeacher,
-        confirm: (info) => waitForConfirm(`${info.round ? `${info.round}차 테스트 · ` : ""}${info.schoolYear}학년도 ${info.schoolName} ${info.round}차 · 대상 가상 학생 ${info.targets}명 · 동시 접속 ${opts.concurrency}` +
+        confirm: (info) => waitForConfirm(`${info.round ? `${info.round}차 테스트 · ` : ""}${info.schoolYear}학년도 ${info.schoolName} ${info.round}차 · 대상 가상 학생 ${info.targets}명(${Core.scopeSummary(opts).text.replace(/^대상: /, "")}${Core.scopeSummary(opts).limited && scopeFromSaved ? " · 지난 설정" : ""}) · 동시 접속 ${opts.concurrency}` +
           ` · 반복 ${info.repeat.count}회(${info.repeat.freshEvent ? "회차마다 새 수강신청을 만들고 회차가 끝나면 닫고 삭제" : "같은 수강신청에서 바뀐 코드로 재신청"})`),
         askCleanup,
         acceptCreated: (data) => Bridge.validatePayload(data),
