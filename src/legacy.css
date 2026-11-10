@@ -393,6 +393,7 @@
     .curriculum-cohort-card h4 { margin: 0; color: #263e68; font-size: 13px; overflow-wrap: anywhere; }
     .curriculum-cohort-card p { margin: 3px 0; color: #596983; font-size: 12px; line-height: 1.4; }
     .curriculum-cohort-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .curriculum-cohort-file.is-warn { color: #8a3b12; white-space: normal; font-size: 12px; }
     .curriculum-cohort-card > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 3px; }
     .curriculum-cohort-card [aria-pressed="true"] { border-color: #9eb4e8; color: #244ba0; background: #eaf0ff; }
     .curriculum-meta-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin: 4px 0 6px; }
@@ -1072,8 +1073,10 @@
     .course-group-card.is-drag-over, .course-group-unassigned.is-drag-over { outline:2px dashed #315fce; outline-offset:2px; background:#f0f5ff; }
     .course-group-course-chip { display:inline-block; max-width:100%; margin:2px 0; padding:3px 6px; border:1px solid #d6deed; border-radius:5px; background:#fff; cursor:grab; overflow-wrap:anywhere; }
     .course-group-course-chip:active { cursor:grabbing; }
-    @container (min-width:420px) {
-      .course-group-grid fieldset { grid-template-columns:minmax(0,1fr) auto auto; }
+    /* 넓은 카드에서만 한 줄로: 그룹명 칸이 선택 수·단추에 밀려 16px로 줄지 않게 최소 폭을 둔다. */
+    .course-group-grid .course-group-name input { min-width:120px; }
+    @container (min-width:560px) {
+      .course-group-grid fieldset { grid-template-columns:minmax(200px,1fr) auto auto; }
       .course-group-grid .course-group-name { grid-column:1; grid-row:1; }
       .course-group-grid .course-group-count { grid-column:2; grid-row:1; }
       .course-group-grid .button { grid-column:3; grid-row:1; }

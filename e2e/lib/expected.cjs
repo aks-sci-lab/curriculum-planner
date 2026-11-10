@@ -15,12 +15,20 @@ const ORDER = ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"];
 // 과목 → 편제표 학기 칸(학교 지정은 credits, 선택은 그룹 field)
 const designated = new Map();
 for (const [, , name, , credits] of SCHOOL) designated.set(name, Object.keys(credits));
+// 두 학기 개설 과목은 서버·앱 안에서 '심화 영어 (1학기)'처럼 꼬리표가 붙는다.
+const TERM_TAG = /\s*[(（]\s*([12])\s*학기\s*[)）]\s*$/;
+const bare = (name) => String(name ?? "").replace(TERM_TAG, "").trim();
+const tagOf = (name) => (String(name ?? "").match(TERM_TAG) || [])[1] || "";
 const elective = new Map();
 for (const group of GROUPS) for (const [, , name] of group.members) elective.set(name, group.field);
 
 // selections: 학생이 고른 신청 학년 과목들, targetGrade: 2|3, prior: null(나이스 없음) 또는 Set(이전 학년 이수 과목명)
 function prerequisiteStatus(selections, targetGrade, prior = null) {
-  const picked = new Map(selections.map((name) => [name, elective.get(name)]));
+  const picked = new Map(selections.map((name) => {
+    const tag = tagOf(name), base = bare(name);
+    const field = tag ? GROUPS.find((g) => g.field.endsWith(tag) && g.field.startsWith(`sem${targetGrade}`) && g.members.some((m) => m[2] === base))?.field : elective.get(base);
+    return [base, field || elective.get(base)];
+  }));
   const violations = [];
   const unknowns = [];
   for (const [after, field] of picked) {
@@ -55,7 +63,7 @@ function kemCredits(selections3, priorElectives2 = ["미적분Ⅰ"]) {
   let total = 0;
   for (const [area, , , , credits] of SCHOOL) if (KEM_AREAS.has(area)) total += Object.values(credits).reduce((a, b) => a + b, 0);
   for (const name of priorElectives2) if (KEM_AREAS.has(areaOf.get(name))) total += creditOf.get(name);
-  for (const name of selections3) if (KEM_AREAS.has(areaOf.get(name))) total += creditOf.get(name);
+  for (const raw of selections3) { const name = bare(raw); if (KEM_AREAS.has(areaOf.get(name))) total += creditOf.get(name); }
   return total;
 }
 function kemOver(selections3, priorElectives2, { limit = 81, totalCredits = 174, subjects = 174, ratio = 50 } = {}) {
@@ -63,4 +71,4 @@ function kemOver(selections3, priorElectives2, { limit = 81, totalCredits = 174,
   return kemCredits(selections3, priorElectives2) > allowed;
 }
 
-module.exports = { RULES, prerequisiteStatus, kemCredits, kemOver, areaOf, creditOf };
+module.exports = { bare, tagOf, TERM_TAG, RULES, prerequisiteStatus, kemCredits, kemOver, areaOf, creditOf };

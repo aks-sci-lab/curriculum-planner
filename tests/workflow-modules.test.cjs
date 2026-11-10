@@ -1185,3 +1185,72 @@ test("5단계 담당 교과: 교과(군) '기술·가정/정보'는 과목명으
   assert.equal(ctx.hoursDefaultDepartment("로봇과 공학세계", "기술·가정/정보"), "기술가정");
   assert.equal(ctx.hoursDefaultDepartment("일본어", "제2외국어"), "제2외국어");
 });
+
+test("4단계: 앞 차수에서 '개설'로 정한 미달 과목은 다음 차수에서도 그 결정을 이어받고(바꿀 수 있음), 이 차수에 직접 정한 값이 우선", () => {
+  const state = {
+    rounds: {
+      "1": { courses: [{ column: "c7", name: "일본어 회화", applicationCurrentGrade: "2" }, { column: "c8", name: "기하", applicationCurrentGrade: "2" }] },
+      "2": { courses: [{ column: "x3", name: "일본어 회화", applicationCurrentGrade: "2" }, { column: "x4", name: "기하", applicationCurrentGrade: "2" }] }
+    },
+    roundClosures: { "1": { "2:c7": "open", "2:c8": "closed" }, "2": {} }
+  };
+  const { ctx } = aggregateHelpers({ globals: { state, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "") } });
+  const merged = ctx.effectiveRoundClosures("2");
+  assert.deepEqual({ ...merged }, { "2:x3": "open", "2:x4": "closed" });
+  assert.equal(merged.inherited.get("2:x3"), "1");
+  assert.equal(ctx.aggregateClosureDecision(merged, "2:x3", true), "open", "미달이어도 1차 '개설' 결정을 이어받아 미정으로 돌아가지 않는다");
+  assert.deepEqual(Object.keys(merged), ["2:x3", "2:x4"], "숨은 inherited 속성은 목록에 나오지 않는다");
+  // 2차에서 직접 '미정'으로 바꾸면 그것이 우선
+  state.roundClosures["2"]["2:x3"] = "";
+  const changed = ctx.effectiveRoundClosures("2");
+  assert.equal(changed["2:x3"], "");
+  assert.equal(changed.inherited.has("2:x3"), false);
+  assert.deepEqual({ ...ctx.effectiveRoundClosures("1") }, { "2:c7": "open", "2:c8": "closed" }, "1차는 그대로");
+});
+
+test("1단계 원본 교체: 신청·확정에 쓰는 편제표면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 요약해 묻는다", () => {
+  const subject = (name, credits, extra = {}) => ({ name, credits, category: "학생 선택 교육과정", area: "과학", ...extra });
+  const layout = (subjects) => ({ planData: { subjects } });
+  const ctx = vm.createContext({
+    state: { rounds: { "1": { students: [{}] }, "2": { students: [{}] } } },
+    planDataSubjects: (data) => data.subjects, planDataNameKey: (name) => String(name).replace(/\s+/g, ""),
+    applicationRoundNumbers: () => ["1", "2"], isRoundLocked: (round) => round === "1",
+    getApplicationGroupSettings: () => [{ name: "2-2 택3", courses: ["물리학", "화학", "지구과학"] }]
+  });
+  vm.runInContext(functionSource(app, "function curriculumReplaceImpact(", "function handleCurriculumPlanWorkbook("), ctx);
+  const before = layout([subject("물리학", { sem21: 3 }), subject("화학", { sem21: 3 }), subject("지구과학", { sem22: 3 })]);
+  const after = layout([subject("물리학", { sem21: 4 }), subject("화학", { sem21: 3 }), subject("생명과학", { sem22: 3 })]);
+  const impact = plain(ctx.curriculumReplaceImpact(before, after));
+  assert.deepEqual(impact.added, ["생명과학"]);
+  assert.deepEqual(impact.removed, ["지구과학"]);
+  assert.equal(impact.changed, 1);
+  assert.deepEqual(impact.locked, ["1"]);
+  assert.equal(impact.touchedGroups, 1);
+  const message = ctx.curriculumReplaceMessage(impact, "9월판.xlsx");
+  assert.match(message, /'9월판\.xlsx'\(으\)로 원본을 교체하면/);
+  assert.match(message, /확정한 차수: 1차/);
+  assert.match(message, /없어지는 과목 1개: 지구과학/);
+  assert.match(message, /없어지는 과목이 든 그룹 1개/);
+  // 같은 내용이거나 아직 쓰는 곳이 없으면 묻지 않는다
+  assert.equal(ctx.curriculumReplaceImpact(before, before), null);
+  assert.equal(ctx.curriculumReplaceImpact(null, after), null);
+  ctx.state.rounds = {}; ctx.isRoundLocked = () => false; ctx.getApplicationGroupSettings = () => [];
+  assert.equal(ctx.curriculumReplaceImpact(before, after), null);
+});
+
+test("1단계 엑셀 내보내기: 원본 엑셀이 이 브라우저에 없으면(백업 복원 뒤) 실패하지 않고 기본 양식으로 저장하고 알린다", async () => {
+  const source = fs.readFileSync(path.join(root, "curriculum-data-export.js"), "utf8");
+  const basic = { size: 10 };
+  const ctx = vm.createContext({ curriculumExportLayout: (layout) => layout, buildCurriculumBasicWorkbook: () => basic,
+    curriculumArchiveStore: async () => undefined });
+  vm.runInContext(source.slice(source.indexOf("async function buildCurriculumDataWorkbook("), source.indexOf("const directory = readZipDirectory(buffer)", source.indexOf("async function buildCurriculumDataWorkbook("))) + "}", ctx);
+  const layout = { planData: { subjects: [] }, planTemplate: {}, archiveId: "gone", sheetPath: "xl/worksheets/sheet1.xml" };
+  const blob = await ctx.buildCurriculumDataWorkbook(layout);
+  assert.equal(blob, basic);
+  assert.equal(blob.basicFallback, true);
+  const noArchive = await ctx.buildCurriculumDataWorkbook({ ...layout, archiveId: "" });
+  assert.equal(noArchive.basicFallback, true);
+  const workbook = fs.readFileSync(path.join(root, "curriculum-workbook.js"), "utf8");
+  assert.match(workbook, /blob\.basicFallback\?"원본 엑셀이 이 브라우저에 없어/);
+  assert.match(app, /원본 엑셀 없음\(다시 올리면 학교 양식으로 내보냄\)/);
+});

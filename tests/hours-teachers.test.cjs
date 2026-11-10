@@ -79,8 +79,11 @@ test("교사 수 추천: 1인당 시수가 학교 평균에서 가장 덜 벗어
   assert.deepEqual(counts(run([{ id: "A", hours: { 1: 100, 2: 100 }, current: 4 }, { id: "B", hours: { 1: 2, 2: 2 }, current: 0 }, { id: "C", hours: { 1: 0, 2: 0 }, current: 1 }], { total: 6 })), [5, 1, 0]);
   // 한 학기 최대 시수: 42시간이면 20시간 한도로 3명 이상이어야 하니 3명으로는 둘 다 못 맞춘다.
   const capped = run([{ id: "A", hours: { 1: 42, 2: 42 }, current: 2 }, { id: "B", hours: { 1: 18, 2: 18 }, current: 1 }], { total: 3 });
-  assert.equal(capped.ok, false);
+  // 그래도 3명 안에서 가장 고른 배치를 보여 주고(적용 가능) 한도를 넘는 교과를 표시한다.
+  assert.equal(capped.ok, true);
+  assert.equal(capped.capExceeded, true);
   assert.match(capped.reason, /20시간을 넘지 않으려면 교과 교사가 최소 4명/);
+  assert.equal(capped.rows.reduce((sum, row) => sum + row.recommended, 0), 3);
   assert.deepEqual(counts(run([{ id: "A", hours: { 1: 42, 2: 42 }, current: 2 }, { id: "B", hours: { 1: 18, 2: 18 }, current: 1 }], { total: 3, maxHours: 25 })), [2, 1]);
   assert.match(run([{ id: "A", hours: { 1: 4, 2: 4 } }, { id: "B", hours: { 1: 4, 2: 4 } }, { id: "C", hours: { 1: 4, 2: 4 } }], { total: 2 }).reason, /최소 3명/);
   assert.match(run([{ id: "A", hours: { 1: 4, 2: 4 } }], { total: 0 }).reason, /교과 교사 수를 입력/);
@@ -249,4 +252,28 @@ test("시수 화면: 교원 구성 줄·추천 칸·비교과 담당 선택·되
   // 전년도 설정 불러오기는 총 교사 수·비교과·고정도 가져온다.
   assert.match(hoursStats, /settings\.nonTeaching = \{ \.\.\.source\.nonTeaching \}/);
   assert.match(hoursStats, /\["creativeHours", "totalTeachers", "maxTeacherHours"\]/);
+});
+
+test("교사 수 추천: 정원으로 1인당 최대 시간을 지킬 수 없어도 정해진 교사 수 안의 가장 고른 배치를 보여 주고(적용 가능), 최대 시간을 지키는 교사 수 안도 함께", () => {
+  const ctx = pureContext();
+  // 시수 합 1학기 1220·2학기 1180, 20시간 상한이면 61명 이상 필요
+  const units = [
+    { id: "국어", hours: { "1": 300, "2": 290 }, current: 14 },
+    { id: "수학", hours: { "1": 320, "2": 310 }, current: 15 },
+    { id: "영어", hours: { "1": 300, "2": 290 }, current: 14 },
+    { id: "과학-물리", hours: { "1": 300, "2": 290 }, current: 14 }
+  ];
+  const result = plain(ctx.hoursRecommendTeachers(units, { total: 57, maxHours: 20 }));
+  assert.equal(result.ok, true, "표를 보여 주고 적용할 수 있다");
+  assert.equal(result.capExceeded, true);
+  assert.equal(result.needed, 61);
+  assert.match(result.reason, /최소 61명 필요합니다\(지금 57명\)\. 57명 안에서 가장 고른 배치/);
+  assert.equal(result.rows.reduce((sum, row) => sum + row.recommended, 0), 57);
+  assert.ok(result.rows.some((row) => row.recommendedOverCap), "최대 시간을 넘는 교과 표시");
+  assert.ok(result.alternative && result.alternative.rows.reduce((sum, row) => sum + row.recommended, 0) === 61, "최대 시간을 지키는 61명 안");
+  assert.ok(result.alternative.rows.every((row) => Math.max(row.recommendedPerTeacher["1"], row.recommendedPerTeacher["2"]) <= 20));
+  // 시수가 있는 교과 수보다 교사가 적으면 예전처럼 거절
+  const tooFew = plain(ctx.hoursRecommendTeachers(units, { total: 3, maxHours: 20 }));
+  assert.equal(tooFew.ok, false);
+  assert.match(tooFew.reason, /최소 4명이 필요한데 3명뿐/);
 });

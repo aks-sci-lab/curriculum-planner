@@ -212,3 +212,32 @@ test("the student search understands 2학년, 3반, 1-3 and names", () => {
   assert.equal(ids("5번"), "a");
   assert.equal(ids(""), "a,b,c");
 });
+
+test("certificate groups follow semester → group order → plan order, not the order the student picked", () => {
+  const ctx = markupContext({ "#schoolYear": "2026", "#round": "1차", "#confirmDate": "", "#schoolName": "학교" });
+  const groups = [
+    { grade: "3", semester: "1", name: "3-1 택1", courses: ["미적분Ⅱ", "기하"] },
+    { grade: "3", semester: "1", name: "3-1 택5", courses: ["물리학", "화학", "생명과학", "지구과학", "세계사", "경제"] },
+    { grade: "3", semester: "2", name: "3-2 택1", courses: ["확률과 통계", "인공지능 수학"] },
+    { grade: "3", semester: "2", name: "3-2 택5", courses: ["정치", "법과 사회", "윤리와 사상"] }
+  ];
+  const groupOf = (name) => groups.find((group) => group.courses.includes(name));
+  ctx.applicationGroupForCourse = (course) => { const group = groupOf(course.name); return group ? { name: group.name, semester: group.semester } : null; };
+  ctx.courseGroupLabel = (course) => { const group = groupOf(course.name); return `${group.semester}학기 ${group.name}`; };
+  // 웹 신청 순서: 2학기 택1 → 1학기 택1 → 2학기 택5 → 1학기 택5, 묶음 안도 뒤섞임
+  const picked = ["인공지능 수학", "기하", "윤리와 사상", "정치", "경제", "물리학", "세계사", "화학", "지구과학"];
+  const student = { grade: "2", classroom: "1", number: "1", name: "가명", totalCredits: 30, selections: picked.map((name) => ({ name, credits: 3 })) };
+  const ordered = JSON.parse(JSON.stringify(ctx.certificateGroupedSelections(student, groups)));
+  assert.deepEqual(ordered.map((group) => group.name), ["1학기 3-1 택1", "1학기 3-1 택5", "2학기 3-2 택1", "2학기 3-2 택5"]);
+  assert.deepEqual(ordered[1].courses.map((course) => course.name), ["물리학", "화학", "지구과학", "세계사", "경제"]);
+  assert.deepEqual(ordered[3].courses.map((course) => course.name), ["정치", "윤리와 사상"]);
+  const markup = ctx.certificateMarkup(student, true, groups);
+  assert.ok(markup.indexOf("기하") < markup.indexOf("물리학") && markup.indexOf("물리학") < markup.indexOf("인공지능 수학"));
+});
+
+test("certificate course names drop the two-semester tag because the group column already shows the semester", () => {
+  const ctx = markupContext({ "#schoolYear": "2026", "#round": "1차", "#confirmDate": "", "#schoolName": "학교" });
+  ctx.applicationCourseLabel = (subject) => `${subject.subject}(${subject.kind})`;
+  assert.equal(ctx.certificateCourseName({ applicationSubject: { subject: "과학의 역사와 문화 (2학기)", kind: "융합" } }), "과학의 역사와 문화(융합)");
+  assert.equal(ctx.certificateCourseName({ name: "물리학" }), "물리학");
+});

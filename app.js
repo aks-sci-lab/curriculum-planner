@@ -3835,24 +3835,55 @@
       return `현 ${student.grade}학년 ${student.classroom}반 ${student.number}번`;
     }
 
-    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
+    // 확인서 선택군 순서: 학기(1 → 2 → 학기 없음) → 그룹 설정 순서(편제표 순서) → 그룹 안 과목은 그룹 설정의 과목 순서.
+    // 학생이 고른 순서(웹 신청 순서)대로 두면 학기·묶음이 뒤섞인다.
+    function certificateGroupedSelections(student, groupSettings) {
+      const settings = Array.isArray(groupSettings) ? groupSettings : [];
+      const target = String(Number(student.grade) + 1);
+      const compact = (name) => (typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(String(name ?? "")) : String(name ?? ""))
+        .replace(/\s*\([12]학기\)/g, "").replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
       const groups = [];
-      for (const course of student.selections) {
+      (student.selections || []).forEach((course, order) => {
         const groupName = courseGroupLabel(course, student.grade, groupSettings);
+        const info = typeof applicationGroupForCourse === "function" ? applicationGroupForCourse(course, student.grade, groupSettings) : null;
+        const semester = String(info?.semester || (typeof resolveSemesterKey === "function" ? resolveSemesterKey(course) : "") || "");
+        const settingIndex = info ? settings.findIndex((item) => item.name === info.name && String(item.grade) === target &&
+          (!info.semester || String(item.semester) === String(info.semester))) : -1;
+        const setting = settingIndex >= 0 ? settings[settingIndex] : null;
+        const inGroup = setting ? (setting.courses || []).findIndex((name) => compact(name) === compact(course.name)) : -1;
+        const column = typeof courseIndexByColumn === "function" ? courseIndexByColumn(course.column) : -1;
         let group = groups.find((item) => item.name === groupName);
-        if (!group) { group = { name: groupName, courses: [] }; groups.push(group); }
-        group.courses.push(course);
-      }
+        if (!group) {
+          group = { name: groupName, courses: [], semesterRank: semester === "1" ? 1 : semester === "2" ? 2 : 3,
+            groupRank: Infinity, order };
+          groups.push(group);
+        }
+        // 그룹 설정에 없으면(웹 신청에서 받은 그룹 등) 과목 열 순서(편제표 순서)로 그룹 순서를 정한다.
+        group.groupRank = Math.min(group.groupRank, settingIndex >= 0 ? settingIndex : 5000 + (column >= 0 ? column : order));
+        group.courses.push({ course, rank: inGroup >= 0 ? inGroup : 10000 + (column >= 0 ? column : order) });
+      });
+      groups.sort((a, b) => a.semesterRank - b.semesterRank || a.groupRank - b.groupRank || a.order - b.order);
+      return groups.map((group) => ({ name: group.name, courses: group.courses.sort((a, b) => a.rank - b.rank).map((item) => item.course) }));
+    }
+
+    // 확인서 과목명: 선택군 칸에 학기가 있으므로 두 학기 과목 꼬리표 '(2학기)'는 뗀다('과학의 역사와 문화 (2학기)(융합)' → '과학의 역사와 문화(융합)').
+    function certificateCourseName(course) {
+      const label = course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name;
+      return String(label ?? "").replace(/\s*\([12]학기\)/g, "");
+    }
+
+    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
+      const groups = certificateGroupedSelections(student, groupSettings);
       const body = groups.length
         ? groups.map((group) => group.courses.map((course, index) => `
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
-              <td class="course-cell">${escapeHtml(course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
+              <td class="course-cell">${escapeHtml(certificateCourseName(course))}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
       const coreCredits = student.selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
       const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
       const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span title="이번에 신청한 ${student.totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
       </div>` : "";
       // 과목이 많은 학생은 인쇄용 행 높이를 더 줄여 한 장에 담는다(학교명·서명 줄이 다음 장으로 넘어가지 않게).
@@ -4054,6 +4085,51 @@
     // 교사 결정이 없으면 기준을 충족한 과목은 개설, 기준 미달 과목은 미정으로 본다(확정 스냅샷과 같은 기준).
     function aggregateClosureDecision(closures, key, atRisk) {
       return Object.hasOwn(closures || {}, key) ? closures[key] : atRisk ? "" : "open";
+    }
+
+    // 이 차수의 개설/폐강 결정 + 앞 차수에서 교사가 정한 결정(같은 현 학년·같은 과목명)을 이어받은 것.
+    // 이 차수에 직접 정한 값(미정 "" 포함)이 있으면 그것이 우선이고, 이어받은 값은 메뉴에서 바꿀 수 있다.
+    // 이어받은 키는 숨은 속성 inherited(Map 키 → 앞 차수 번호)로 알려 준다(목록·저장에는 나오지 않음).
+    function effectiveRoundClosures(round) {
+      round = String(round);
+      const own = state.roundClosures?.[round] || {};
+      const compute = () => {
+        const merged = { ...own };
+        const inherited = new Map();
+        const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : Object.keys(state.rounds || {});
+        const earlier = rounds.filter((item) => Number(item) < Number(round)).sort((a, b) => Number(b) - Number(a));
+        const data = state.rounds?.[round];
+        if (earlier.length && data?.courses?.length) {
+          const normalize = (name) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name || "").replace(/\s+/g, "");
+          const courseName = (course) => course.subjectName || course.applicationSubject?.subject || course.name;
+          for (const prev of earlier) {
+            const prevData = state.rounds?.[prev];
+            if (!prevData?.courses?.length) continue;
+            const byName = new Map();
+            for (const [key, verdict] of Object.entries(state.roundClosures?.[prev] || {})) {
+              if (verdict !== "open" && verdict !== "closed") continue;
+              const separator = key.indexOf(":");
+              const grade = key.slice(0, separator);
+              const course = prevData.courses.find((item) => String(item.column) === key.slice(separator + 1) &&
+                (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === grade));
+              if (course) byName.set(`${grade}:${normalize(courseName(course))}`, verdict);
+            }
+            for (const course of data.courses) {
+              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
+              for (const grade of grades) {
+                const key = `${grade}:${course.column}`;
+                const verdict = byName.get(`${grade}:${normalize(courseName(course))}`);
+                if (!verdict || Object.hasOwn(merged, key)) continue;
+                merged[key] = verdict;
+                inherited.set(key, prev);
+              }
+            }
+          }
+        }
+        Object.defineProperty(merged, "inherited", { value: inherited, enumerable: false });
+        return merged;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("effectiveRoundClosures", round, compute) : compute();
     }
 
     // 택n 그룹의 총 학급수는 n × 학급 수와 같아야 한다. 택 수를 모르는 그룹(미분류 등)은 목표가 없다.
@@ -4280,7 +4356,7 @@
       const classBases = typeof nextYearClassBases === "function" ? nextYearClassBases() : {};
       const round = String(state.currentRound);
       const locked = typeof isRoundLocked === "function" && isRoundLocked(round);
-      const closures = state.roundClosures?.[round] || {};
+      const closures = (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {});
       const aggregate = aggregateRecords(
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases, closures
@@ -4346,7 +4422,7 @@
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
         typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-        state.roundClosures?.[round] || {}
+        (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {})
       );
       const report = aggregate.reports.find((item) => String(item.summary.grade) === String(grade));
       if (!report) return null;
@@ -4649,6 +4725,22 @@
     }
     getApplicationCohortYear = applicationCohortYear;
 
+    // 원본 엑셀(IndexedDB curriculum-original-workbooks)이 이 브라우저에 있는지. 백업에는 원본을 넣지 않으므로 복원 뒤에는 없을 수 있다.
+    const curriculumArchivePresence = new Map();
+    function curriculumArchiveNote(layout) {
+      if (!layout || layout.derived || layout.officeImport) return "";
+      const id = layout.archiveId;
+      if (id && !curriculumArchivePresence.has(id) && typeof curriculumArchiveStore === "function") {
+        curriculumArchivePresence.set(id, null);
+        curriculumArchiveStore("has", id).then((key) => {
+          curriculumArchivePresence.set(id, key !== undefined && key !== null);
+          if (!curriculumArchivePresence.get(id)) renderCurriculumCohortUploads();
+        }).catch(() => curriculumArchivePresence.delete(id));
+      }
+      const missing = !id || curriculumArchivePresence.get(id) === false;
+      return missing ? '<p class="curriculum-cohort-file is-warn" title="원본 엑셀은 백업에 들어가지 않습니다. 엑셀 내보내기는 기본 양식으로 저장됩니다.">원본 엑셀 없음(다시 올리면 학교 양식으로 내보냄)</p>' : "";
+    }
+
     function renderCurriculumCohortUploads() {
       const schoolYear = Number($("#schoolYear").value);
       if (!Number.isInteger(schoolYear) || schoolYear < 2000 || schoolYear > 2100) return;
@@ -4671,7 +4763,7 @@
         return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
           <h4>${year}학년도 입학생 · ${grade === "0" ? "내년도 신입생" : `현 ${grade}학년`}</h4>
           <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
-          <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>
+          <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>${fileName && typeof curriculumArchiveNote === "function" ? curriculumArchiveNote(active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}
           <div>${typeof curriculumReconvertCardHtml === "function" ? curriculumReconvertCardHtml(year, active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}<button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
         </article>`;
@@ -6366,6 +6458,8 @@
         if (overDivision) lines.push(`분반기준 초과: 학급당 ${average}명이 분반기준 ${Number(summary.divisionLimit || 0).toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.`);
         if (prereqCount) lines.push(`위계 경고 ${prereqCount}명: 선이수 과목 없이 신청한 학생이 있습니다.`);
         if (!course.closed && decision === "") lines.push("교사 결정이 미정입니다. 개설 또는 폐강을 고르세요.");
+        const inheritedFrom = closures?.inherited?.get?.(key);
+        if (inheritedFrom) lines.push(`${inheritedFrom}차에서 정한 결정(${decision === "closed" ? "폐강" : "개설"})을 이어받았습니다. 바꾸려면 아래에서 고르세요.`);
         if (!lines.length) lines.push("충족: 개설기준 이상이고 학급당 인원이 기준 안에 있습니다.");
         const status = { key, decision, over, overDivision, prereqCount, lines, focus: attention ? attention.courses.has(key) : null };
         statuses.set(course, status);
@@ -6626,7 +6720,7 @@
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
         typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-        state.roundClosures?.[state.currentRound] || {}
+        (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(state.currentRound) : state.roundClosures?.[state.currentRound] || {})
       );
       // 4단계에서 학년 탭을 고르면 그 학년 시트만 만든다(시트 내용은 학교 서식 그대로).
       const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
@@ -7057,6 +7151,42 @@
       return rows;
     }
 
+    // 원본 교체 전 요약: 과목(이름 기준) 추가·삭제·학점 변경 수와, 이 편제표를 쓰는 확정 차수·신청 결과. 영향이 없으면 null.
+    function curriculumReplaceImpact(oldLayout, newLayout) {
+      const subjectsOf = (layout) => typeof planDataSubjects === "function" && layout?.planData ? planDataSubjects(layout.planData) : [];
+      const before = subjectsOf(oldLayout);
+      if (!before.length) return null;
+      const key = (name) => typeof planDataNameKey === "function" ? planDataNameKey(name) : String(name || "").replace(/\s+/g, "");
+      const signature = (item) => JSON.stringify([item.credits || {}, item.cross || null, item.category || "", item.area || ""]);
+      const map = (list) => new Map(list.map((item) => [key(item.name), item]));
+      const oldMap = map(before), newMap = map(subjectsOf(newLayout));
+      const added = [...newMap.keys()].filter((name) => !oldMap.has(name)).map((name) => newMap.get(name).name.trim());
+      const removed = [...oldMap.keys()].filter((name) => !newMap.has(name)).map((name) => oldMap.get(name).name.trim());
+      const changed = [...newMap.keys()].filter((name) => oldMap.has(name) && signature(oldMap.get(name)) !== signature(newMap.get(name))).length;
+      const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : [];
+      const locked = rounds.filter((round) => typeof isRoundLocked === "function" && isRoundLocked(round));
+      const withResults = rounds.filter((round) => state.rounds?.[round]?.students?.length);
+      const groups = typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+      const removedKeys = new Set(removed.map(key));
+      const touchedGroups = groups.filter((group) => (group.courses || []).some((name) => removedKeys.has(key(name)))).length;
+      if (!added.length && !removed.length && !changed) return null;
+      if (!locked.length && !withResults.length && !groups.length) return null;
+      return { added, removed, changed, locked, withResults, touchedGroups, groups: groups.length };
+    }
+
+    function curriculumReplaceMessage(impact, fileName) {
+      const list = (items) => items.length ? `${items.slice(0, 6).join(", ")}${items.length > 6 ? ` 외 ${items.length - 6}개` : ""}` : "";
+      return [`'${fileName}'(으)로 원본을 교체하면 편제표가 바뀝니다.`, "",
+        `· 학점·영역이 바뀌는 과목 ${impact.changed}개`,
+        impact.added.length ? `· 새로 생기는 과목 ${impact.added.length}개: ${list(impact.added)}` : "",
+        impact.removed.length ? `· 없어지는 과목 ${impact.removed.length}개: ${list(impact.removed)}` : "",
+        impact.locked.length ? `· 확정한 차수: ${impact.locked.map((round) => `${round}차`).join(", ")} — 확정 결과는 그대로지만 편제표와 맞지 않을 수 있습니다` : "",
+        impact.withResults.length && !impact.locked.length ? `· 신청 결과가 있는 차수: ${impact.withResults.map((round) => `${round}차`).join(", ")}` : "",
+        impact.groups ? `· 2단계 선택 그룹 ${impact.groups}개${impact.touchedGroups ? `(없어지는 과목이 든 그룹 ${impact.touchedGroups}개)` : ""}의 과목 구성이 바뀔 수 있습니다` : "",
+        "", "교체할까요? (취소하면 지금 편제표를 그대로 둡니다. 교체 뒤에도 변경 이력·실행취소로 되돌릴 수 있습니다.)"]
+        .filter((line, index, all) => line || (all[index - 1] && all[index + 1])).join("\n");
+    }
+
     function handleCurriculumPlanWorkbook(file) {
       if (!file) return;
       if (!requireLocalWorkspaceAccess()) return;
@@ -7131,6 +7261,13 @@
             if (plan.length) break;
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
+          // 이미 신청·확정에 쓰는 편제표를 교체하면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 보여 주고 확인을 받는다.
+          const impact = typeof curriculumReplaceImpact === "function" ? curriculumReplaceImpact(state.curriculumImportedLayout, importedLayout) : null;
+          if (impact && !window.confirm(curriculumReplaceMessage(impact, file.name))) {
+            status.style.color = "#5c6982";
+            status.textContent = "원본 교체를 취소했습니다. 지금 편제표를 그대로 둡니다.";
+            return;
+          }
           importedLayout.archiveId = await storeCurriculumArchive(reader.result);
           // 원본을 새 변환기로 다시 읽을 때 업로드 뒤 고친 곳을 가려내도록 업로드 시점 데이터를 함께 둔다(curriculum-reconvert.js).
           if (typeof storeCurriculumOrigin === "function") await storeCurriculumOrigin(importedLayout).catch(() => {});
