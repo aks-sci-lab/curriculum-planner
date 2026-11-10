@@ -1073,6 +1073,9 @@
     .course-group-course-chip:active { cursor:grabbing; }
     /* 넓은 카드에서만 한 줄로: 그룹명 칸이 선택 수·단추에 밀려 16px로 줄지 않게 최소 폭을 둔다. */
     .course-group-grid .course-group-name input { min-width:120px; }
+    /* '선택 수' 글자가 한 글자씩 세로로 꺾이지 않게, 연동 안내(nowrap)가 셋째 열을 넓혀 칩이 카드 밖으로 넘치지 않게 안내는 아래 줄에 줄바꿈해 둔다. */
+    .course-group-grid .course-group-count { white-space:nowrap; }
+    .course-group-grid .course-group-linked-note { grid-column:1 / -1; white-space:normal; min-width:0; }
     @container (min-width:560px) {
       .course-group-grid fieldset { grid-template-columns:minmax(200px,1fr) auto auto; }
       .course-group-grid .course-group-name { grid-column:1; grid-row:1; }

@@ -1774,3 +1774,11 @@ test("'신청 마감'은 한 번 묻고(통합 신청이면 두 학년 모두 �
   assert.ok(handler.indexOf("if (event.is_open && !window.confirm(closeEventQuestion(event))) return;") > 0);
   assert.ok(handler.indexOf("window.confirm") < handler.indexOf('rpc("manage_course_event"'));
 });
+
+test("그룹 카드 칸 폭: 그룹명 최소 120px(16px로 줄지 않음), '선택 수' 글자 꺾임 없음, 연동 안내는 아래 줄에 줄바꿈(칩이 카드 밖으로 넘치지 않게)", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "legacy.css"), "utf8");
+  assert.match(css, /\.course-group-grid \.course-group-name input \{ min-width:120px; \}/);
+  assert.match(css, /@container \(min-width:560px\) \{\n\s*\.course-group-grid fieldset \{ grid-template-columns:minmax\(200px,1fr\) auto auto; \}/);
+  assert.match(css, /\.course-group-grid \.course-group-count \{ white-space:nowrap; \}/);
+  assert.match(css, /\.course-group-grid \.course-group-linked-note \{ grid-column:1 \/ -1; white-space:normal; min-width:0; \}/);
+});
