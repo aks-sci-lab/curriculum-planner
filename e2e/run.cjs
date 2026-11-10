@@ -384,6 +384,11 @@ async function stepAggregate({ page, h, report }, round) {
     h.check(mismatch.every((v) => v === 0), "경미", "4단계", `${round}차 자동 조정 뒤에도 목표 학급수 불일치 그룹이 남음`, { expected: 0, actual: mismatch, note: "34명 이하로는 맞출 수 없음 — 협의회 결정 필요 안내가 뜨는 그룹 포함" });
     const overMax = courses.filter((c) => c.classes > 0 && c.count / c.classes > 34);
     h.check(!overMax.length, "중요", "4단계", `${round}차 자동 조정 뒤 학급당 34명 초과 과목`, { actual: overMax.map((c) => `${c.label} ${c.count}명/${c.classes}학급`) });
+    if (round > 1) {
+      const closed1 = new Set((report.data.closed1 || []).map((c) => `${c.grade}:${c.name}`));
+      const wrong = courses.filter((c) => c.decision === "closed" && !decisions.some((d) => d.key === c.key && d.choice === "closed") && !closed1.has(`${c.key.split(":")[0]}:${courseName(c.label)}`));
+      h.check(!wrong.length, "치명", "4단계", `${round}차: 앞 차수에서 폐강하지 않은 과목이 폐강으로 이어짐(이름만 같은 두 학기 과목) ${wrong.length}개`, { actual: wrong.map((c) => `${c.label} ${c.count}명 · 개설 ${c.classes}`), closed1: [...closed1] });
+    }
     const closedShown = courses.filter((c) => c.decision === "closed").length;
     h.check(closedShown === decisions.filter((d) => d.choice === "closed").length, "중요", "4단계", `${round}차 폐강 결정 수가 화면 표시와 다름`, { expected: decisions.filter((d) => d.choice === "closed").length, actual: closedShown });
     result.prereq = [...after.matchAll(/위계 경고 (\d+)명/g)].map((m) => Number(m[1]));
@@ -551,12 +556,6 @@ async function stepHours({ page, h, report }) {
     await page.locator("#hoursNonTeaching-상담").fill("1");
     await page.locator("#hoursNonTeaching-상담").press("Tab");
     await sleep(300);
-    // 전년도 교사 수만 넣고(올해 교사 수 입력 전) 증감 메모가 저절로 생기지 않아야 함
-    const prevInputs = page.locator("[data-hours-previous-teachers]");
-    const prevCount = await prevInputs.count();
-    for (let i = 0; i < Math.min(prevCount, 4); i++) { await prevInputs.nth(i).fill(String(3 + i)); await prevInputs.nth(i).press("Tab"); await sleep(80); }
-    result.memoBeforeCounts = prevCount ? ((await text(page, "#workflowStep7Panel")).match(/[^\n]*명 (감|증)[^\n]*/) || [""])[0] : "(전년도 교사 수 칸 없음)";
-    h.check(!/명 (감|증)/.test(result.memoBeforeCounts), "중요", "5단계", "올해 교사 수를 넣기 전에 교사 증감 메모가 저절로 작성됨 [수정 대기]", { actual: result.memoBeforeCounts, pending: true });
     {
       const dialogText = await text(page, "#hoursSettingsDialog");
       if (CLASSES_BY["1"] !== NEXT_CLASSES) {
@@ -567,17 +566,51 @@ async function stepHours({ page, h, report }) {
     await h.screenshot(page, "hours-settings");
     await page.locator("#hoursSettingsDialog").getByRole("button", { name: /닫기|확인/ }).last().click().catch(() => page.keyboard.press("Escape"));
     await sleep(500);
+    // 전년도 설정 불러오기 경로: 학교 학년도를 한 해 앞(2025 → 2026학년도 시수)으로 바꿔 교사 수를 넣고, 되돌린 뒤 '전년도 설정 불러오기' →
+    // 올해 교사 수 칸을 비운 상태에서 '○○과 n명 감' 증감 메모가 저절로 작성되면 안 됨(실제 점검 재현 조건)
+    {
+      const setYear = async (y) => {
+        await page.getByRole("button", { name: /학교·학년도 설정/ }).first().click();
+        await page.locator("#schoolYear").fill(String(y)); await page.locator("#schoolYear").press("Tab");
+        await page.locator("#workspaceSettingsDialog button[type=submit]").click(); await sleep(800);
+      };
+      await setYear(YEAR - 1);
+      await gotoStep(page, 5);
+      result.previousYearCounts = await SC.setTeacherCounts(page);
+      await setYear(YEAR);
+      await gotoStep(page, 5);
+      await page.locator("#hoursLoadPrevious").click(); await sleep(800);
+      const loadStatus = await page.locator("#workflowStep7Panel").innerText().then((t) => (t.match(/[^\n]*학년도 (교사 수|시수 통계)[^\n]*(불러왔습니다|없습니다)[^\n]*/) || [""])[0]);
+      const loadedValues = {};
+      for (const id of Object.keys(SC.TEACHER_COUNTS)) loadedValues[id] = await page.locator(`[data-hours-teachers="${id}"]`).first().inputValue().catch(() => "");
+      const loaded = Object.entries(SC.TEACHER_COUNTS).filter(([id, n]) => loadedValues[id] !== "").every(([id, n]) => Number(loadedValues[id]) === n) && Object.values(loadedValues).some((v) => v !== "");
+      result.previousLoad = { loaded, loadStatus, sample: Object.fromEntries(Object.entries(loadedValues).slice(0, 4)) };
+      h.check(loaded, "중요", "5단계", "'전년도 설정 불러오기'가 전년도 교사 수를 불러오지 못함", { actual: result.previousLoad });
+      h.check(!!loadStatus, "경미", "5단계", "'전년도 설정 불러오기' 결과 안내(불러왔습니다/자료가 없습니다)가 화면에 안 나옴 — loadPreviousHoursSettings가 선언 안 된 status(=window.status)에 씀(hours-stats.js:1231·1262)", { actual: result.previousLoad });
+      for (const id of Object.keys(SC.TEACHER_COUNTS)) {
+        const input = page.locator(`[data-hours-teachers="${id}"]`).first();
+        if (await input.count()) { await input.fill(""); await input.press("Tab"); await sleep(50); }
+      }
+      await sleep(300);
+      const panelNow = await text(page, "#workflowStep7Panel");
+      result.memoBeforeCounts = { loadStatus, memo: (panelNow.match(/[^\n]*명 (감|증)[^\n]*/) || [""])[0] };
+      h.check(!/명 (감|증)/.test(result.memoBeforeCounts.memo), "중요", "5단계", "올해 교사 수가 빈 상태에서 '○○과 n명 감' 증감 메모가 저절로 작성됨 [수정 대기]", { actual: result.memoBeforeCounts, pending: true });
+    }
     result.teacherCounts = await SC.setTeacherCounts(page);
     await sleep(300);
-    // 교사 수 추천: 정원(총 교사 62)보다 추천 합이 적어도 표가 나와야 함
+    // 교사 수 추천: 기준 교과 교사 57명·한 학기 최대 20시간(정원 모자람)에도 표가 나와야 함('최소 n명 필요'만 나오면 안 됨)
     {
       const rec = page.getByRole("button", { name: /교사 수 추천/ }).first();
       if (await rec.count()) {
         await rec.click(); await sleep(500);
         const dialog = page.locator("#hoursRecommendDialog");
+        await dialog.locator("#hoursRecommendTotal").fill("57"); await dialog.locator("#hoursRecommendTotal").press("Tab"); await sleep(300);
+        await dialog.locator("#hoursMaxHours").fill("20"); await dialog.locator("#hoursMaxHours").press("Tab"); await sleep(400);
         const rowsShown = await dialog.locator("table tbody tr").count().catch(() => 0);
-        result.recommend = { rows: rowsShown, text: (await dialog.innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300) };
-        h.check(rowsShown > 0, "중요", "5단계", "교사 수 추천 팝업에 표가 나오지 않음(추천 합이 정원보다 적은 경우) [수정 대기]", { actual: result.recommend, pending: true });
+        result.recommend = { inputs: [await dialog.locator("#hoursRecommendTotal").inputValue().catch(() => ""), await dialog.locator("#hoursMaxHours").inputValue().catch(() => "")], needed: ((await dialog.innerText().catch(() => "")).match(/최소 [\d.]+명[^.\n]*/) || [""])[0], rows: rowsShown, text: (await dialog.innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 400) };
+        h.check(rowsShown > 0, "중요", "5단계", "교사 수 추천(기준 57명·최대 20시간): 표 없이 '최소 n명 필요'만 나옴 [수정 대기]", { actual: result.recommend, pending: true });
+        await dialog.locator("#hoursRecommendTotal").fill(""); await dialog.locator("#hoursRecommendTotal").press("Tab");
+        await dialog.locator("#hoursMaxHours").fill(""); await dialog.locator("#hoursMaxHours").press("Tab"); await sleep(300);
         await dialog.getByRole("button", { name: /닫기/ }).last().click().catch(() => page.keyboard.press("Escape"));
         await sleep(300);
       }
@@ -1531,6 +1564,7 @@ async function main() {
         h.check(summary.includes(`현재 ${grade}학년 ${roster[grade].length}명`) && summary.includes(`${Number(grade) + 1}학년`), "중요", "2단계",
           `명렬 요약 표기(현 ${grade}학년 → ${Number(grade) + 1}학년) 이상`, { expected: `현재 ${grade}학년 ${roster[grade].length}명 · 신청 대상: ${Number(grade) + 1}학년만`, actual: summary });
         // 명렬 업로드 뒤 그룹 탭으로 넘어가므로: 그룹명 칸 폭, 온라인 탭에서 '수강신청 생성' 단추가 보이는지
+        await page.locator("#applicationGroupsTab").click(); await sleep(300);
         const nameWidths = await page.locator("#courseGroupEditor .course-group-name input").evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().width)));
         h.check(nameWidths.length && nameWidths.every((w) => w > 40), "중요", "2단계", `그룹명 칸이 너무 좁음(폭 ${Math.min(...nameWidths)}px ≤ 40px)`, { actual: nameWidths });
         await page.locator("#applicationOnlineTab").click();
