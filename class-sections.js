@@ -2177,8 +2177,11 @@ function classSectionsCompare(input, modes) {
     if (results[mode]) continue;
     results[mode] = classSectionsSolve({ ...input, mode, suggest: false }, base.placement && Object.fromEntries(Object.entries(base.placement)));
   }
-  const rows = list.map((mode) => ({ mode, label: CLASS_SECTIONS_MODE_LABELS[mode], ...results[mode].metrics }));
-  const recommendation = classSectionsRecommend(rows, Boolean(input.previous));
+  // recommendExclude: 비교표에는 보이되 추천에서는 뺄 방식(예: 내년 반 배정표가 없을 때의 담임반 묶기 — 진급 때 반이 바뀌면 효과 없음).
+  const exclude = new Set(Array.isArray(input.recommendExclude) ? input.recommendExclude : []);
+  const rows = list.map((mode) => ({ mode, label: CLASS_SECTIONS_MODE_LABELS[mode], excluded: exclude.has(mode), ...results[mode].metrics }));
+  const candidates = rows.filter((row) => !row.excluded);
+  const recommendation = classSectionsRecommend(candidates.length ? candidates : rows, Boolean(input.previous));
   return { results, rows, recommended: recommendation.mode, reason: recommendation.reason };
 }
 
@@ -2323,7 +2326,25 @@ function classSectionsNeisExport(result, opts) {
       rows.push(row);
     }
   }
+  // 학급 단위 과목: 내년 반이 있는 학생만 그 반의 과목으로 한 줄(개설강의실 'N(학년 N반)'), 없으면 반 배정표를 올린 뒤.
+  let classUnitWaiting = 0;
+  if (options.classUnit && Object.keys(options.classUnit.byClass || {}).length) {
+    for (const info of options.students || []) {
+      const classroom = classSectionsText(info.classroom).replace(/반$/, "");
+      if (!classroom) { classUnitWaiting += 1; continue; }
+      const courseKey = options.classUnit.byClass[classroom];
+      const course = courseKey ? options.classUnit.courses?.[courseKey] || {} : null;
+      if (!course) continue;
+      const credits = Number(course.credits) || "";
+      const row = [classSectionsText(options.year), classSectionsText(options.semester), grade, classSectionsText(course.family),
+        `${course.name || courseKey}${credits !== "" ? `(${credits})` : ""}`, `${classroom}(${grade}학년 ${classroom}반)`, grade ? `${grade}학년` : "",
+        `${classroom}반`, classSectionsText(info.number), classSectionsText(info.name)];
+      if (reference) row.push(classSectionsText(info.key));
+      rows.push(row);
+    }
+  }
   const warnings = ["나이스 '조회' 파일 양식을 따랐습니다. 실제 업로드 양식과 다를 수 있으니 확인하세요."];
+  if (classUnitWaiting) warnings.push(`학급 단위 과목: 내년 반이 없는 학생 ${classUnitWaiting}명은 행을 만들지 않았습니다(과목별 반 수만 확정, 학생 배정은 반 배정표를 올린 뒤).`);
   if (missingClass) warnings.push(`내년 반·번호가 없는 학생 ${missingClass}명: 반·번호 칸을 비웠습니다(참고 열의 현 학년-반-번호로 확인). 내년 반 배정표를 올리면 채워집니다.`);
   if (rows.slice(2).some((row) => !row[3])) warnings.push("편제명(교과군)이 빈 행이 있습니다.");
   return { rows, warnings };

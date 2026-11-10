@@ -615,3 +615,11 @@ test("regression: synthetic real-size groups keep their section totals and block
     assert.equal(result.explain.feasible, true);
   }
 });
+
+test("compare: a mode can be shown but kept out of the recommendation (homeroom grouping without next-year classes)", () => {
+  const ctx = context();
+  const input = synthetic({ courses: EIGHT, choose: 3, students: 240, capacity: 30, sizeFor: 25, seed: 14, homerooms: 8 });
+  const compared = plain(ctx.classSectionsCompare({ ...input, recommendExclude: ["homeroom"] }));
+  assert.equal(compared.rows.find((row) => row.mode === "homeroom").excluded, true);
+  assert.notEqual(compared.recommended, "homeroom");
+});
