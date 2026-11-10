@@ -675,3 +675,41 @@ test("6차·7차 계산: 서명에서 다른 학년 점유 제외, 학생 키 �
   assert.ok(types.includes("check-teachers"));
   assert.match(shortResult.explain.suggestions.find((item) => item.type === "check-teachers").message, /물리 교사가 그 시간에 모자랍니다/);
 });
+
+test("real-scale teacher shortages are actually solved by a verified suggestion (수학 11 > 10, 제2외국어 11 > 2, 지리 교사 2)", () => {
+  const ctx = context();
+  const random = rng(31);
+  void random;
+  // 과목별 인원을 정해 둔다(분반 정원 34 안): names[k]를 counts[k]명이 신청.
+  const studentsOf = (names, counts, count, grade) => Array.from({ length: count }, (_, i) => {
+    let pick = 0;
+    for (let acc = counts[0]; i >= acc && pick < names.length - 1; acc += counts[pick + 1]) pick += 1;
+    return { key: `${grade}-${1 + (i % 11)}-${1 + Math.floor(i / 11)}`, courses: [names[pick]] };
+  });
+  const verifiedFix = (input) => {
+    const result = plain(ctx.classSectionsSolve(input));
+    assert.equal(result.explain.feasible, false, "the shortage is detected");
+    const fixes = result.explain.suggestions.filter((item) => item.verified && ["more-blocks", "class-unit"].includes(item.type));
+    assert.ok(fixes.length, JSON.stringify(result.explain.suggestions.map((item) => item.message)));
+    assert.ok(result.explain.suggestions.some((item) => item.type === "check-teachers"));
+    return fixes;
+  };
+  // 2-2 택1 한 블록: 확률과 통계 6 + 기하 5 = 수학 11분반 > 교사 10명 → 블록 2개면 해결
+  const math = { blocks: 1, maxSectionsPerBlock: 11, defaultCapacity: 34, departmentTeachers: { 수학: 10 }, seed: 1,
+    courses: [{ key: "확률과 통계", sections: 6, department: "수학" }, { key: "기하", sections: 5, department: "수학" }],
+    students: studentsOf(["확률과 통계", "기하"], [200, 170], 370, 1) };
+  assert.ok(verifiedFix(math).some((item) => item.type === "more-blocks"));
+  // 3-1 택1: 일본어 6 + 중국어 5 = 제2외국어 11 > 교사 2명 → 둘 다 학급 단위로
+  const lang = { blocks: 1, maxSectionsPerBlock: 11, defaultCapacity: 34, departmentTeachers: { 제2외국어: 2 }, seed: 1,
+    courses: [{ key: "일본어", sections: 6, department: "제2외국어" }, { key: "중국어", sections: 5, department: "제2외국어" }],
+    students: studentsOf(["일본어", "중국어"], [190, 150], 330, 2) };
+  const langFix = verifiedFix(lang).find((item) => item.type === "class-unit");
+  assert.deepEqual(plain(langFix.courseKeys).sort(), ["일본어", "중국어"]);
+  // 택3 그룹: 세계지리 4분반이 지리 교사 2명보다 많이 한 블록에 몰리지 않게 — 블록 시간이 같은 다른 학년이 지리 교사 1명을 쓰고 있음
+  const geo = synthetic({ courses: [{ name: "세계지리", department: "지리", sections: 4 }, { name: "물리학", department: "물리" }, { name: "화학", department: "화학" }, { name: "생명과학", department: "생명" }],
+    choose: 2, students: 140, capacity: 30, sizeFor: 26, seed: 12 });
+  geo.blocks = [{ id: "a", times: ["월1"] }, { id: "b", times: ["화1"] }];
+  geo.departmentTeachers = { 지리: 2 };
+  geo.occupied = [{ label: "3학년 a블록", times: ["월1"], departments: { 지리: 1 } }, { label: "3학년 b블록", times: ["화1"], departments: { 지리: 1 } }];
+  verifiedFix(geo);
+});

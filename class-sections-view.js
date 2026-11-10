@@ -441,6 +441,22 @@ async function classSectionsSolveCurrent(kind = "solve") {
   }
 }
 
+// 함께 배정한 교사·그룹 간 이슈: 원인 그룹(분반이 실제 속한 그룹, issue.groups·분반 id 접두 '그룹id::')에만 오류로 붙이고,
+// 같은 학기 다른 그룹에는 '참고'(severity info)로만 붙인다 — 배정이 다 된 그룹이 다른 그룹 교사 부족 때문에 '불가'가 되지 않게.
+function classSectionsJointIssuesFor(issues, groupId) {
+  const prefix = `${groupId}::`;
+  const own = [];
+  for (const issue of issues) {
+    const mine = Array.isArray(issue.groups) ? issue.groups.includes(groupId)
+      : issue.sectionId ? String(issue.sectionId).startsWith(prefix) : issue.severity !== "error";
+    if (mine) own.push(issue);
+    else if (issue.severity === "error" && ["teacher-shortage", "teacher-cross", "cohort-clash"].includes(issue.type)) {
+      own.push({ ...issue, severity: "info", type: `${issue.type}-other`, message: `참고: 같은 시간 다른 그룹 — ${issue.message}` });
+    }
+  }
+  return own;
+}
+
 // 같은 차수·학기의 모든 그룹(학년)을 함께 푼다(classSectionsSolveAll). 그룹 순서는 화면 순서(학기·학년·그룹)로 고정이라
 // 어느 그룹 화면에서 누르든 결과가 같다. 교사는 모든 그룹을 함께 배정한다.
 async function classSectionsSolveSemesterCurrent() {
@@ -463,15 +479,19 @@ async function classSectionsSolveSemesterCurrent() {
     const batch = `all-${new Date().toISOString()}`;
     all.groups.forEach((item, index) => {
       const result = item.result;
-      const prefix = `${inputs[index].groupId}::`;
-      // 함께 배정한 교사 이슈: 이 그룹 분반('그룹id::분반id')·이 그룹이 나오는 학년 간 겹침·분반과 무관한 안내만 붙인다.
-      const own = (all.issues || []).filter((issue) => (issue.type === "teacher-cross" ? String(issue.message).includes(inputs[index].label)
-        : !issue.sectionId || String(issue.sectionId).startsWith(prefix)));
+      const own = classSectionsJointIssuesFor(all.issues || [], inputs[index].groupId);
       result.issues = [...(result.issues || []), ...own];
       const hard = result.issues.filter((issue) => issue.severity === "error" && issue.type !== "unassigned");
       if (hard.length && result.explain?.feasible) {
         result.explain = { ...result.explain, feasible: false,
           summary: `${result.unassigned.length ? result.explain.summary : "학생은 모두 배정했지만 확인 필요 —"} 오류 ${hard.length}건: ${hard.slice(0, 2).map((issue) => issue.message).join(" / ")}` };
+      }
+      // 함께 계산에서 생긴 학년 간 교사 부족: 블록 시간 추천 실행·교사 수 확인 제안을 붙인다.
+      if (own.some((issue) => issue.type === "teacher-shortage" && issue.severity === "error")) {
+        const extra = [{ type: "recommend-times", verified: false, message: "블록 시간 추천을 실행해 다른 학년 블록과 같은 교과 교사가 겹치지 않는 시간으로 바꿔 보세요." },
+          { type: "check-teachers", verified: false, message: `교사 명단·5단계 교사 수를 확인하세요: ${[...new Set(own.filter((issue) => issue.type === "teacher-shortage").map((issue) => issue.department))].join(", ")} 교사가 그 시간에 모자랍니다.` }];
+        const have = new Set((result.explain?.suggestions || []).map((item) => item.type));
+        result.explain = { ...result.explain, suggestions: [...(result.explain?.suggestions || []), ...extra.filter((item) => !have.has(item.type))] };
       }
       if (!result.explain?.feasible) problems += 1;
       classSectionsSaveResult(classSectionsEntry(round, groups[index].key, true), result, inputs[index], groups[index], source, batch);
@@ -852,12 +872,13 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
     ${classSectionsOtherChangedHtml(round, group, result)}
     <p class="cs-summary" id="classSectionsSummary" data-feasible="${explain.feasible ? "true" : "false"}">${esc(explain.summary || "")}</p>
     <p class="cs-note" id="classSectionsMetrics">미배정 ${metrics.unassignedStudents || 0}명 · <span title="같은 과목 분반 인원의 최대 − 최소(과목 중 가장 큰 값)">분반 인원 차이 최대 ${metrics.maxSpread || 0}명</span> · <span title="같은 담임반 학생이 같은 분반에 모인 비율(과목·반마다 가장 많이 모인 분반 기준)">같은 반끼리 ${Math.round((metrics.sameHomeroomRatio || 0) * 100)}%(같은 담임반 학생이 같은 분반에 모인 비율)</span>${metrics.moved !== null && metrics.moved !== undefined ? ` · 앞 편성 대비 이동 ${metrics.moved}` : ""}</p>
+    ${unassigned ? `<details open id="classSectionsUnassigned"><summary>미배정 ${result.unassigned.length}건</summary><table class="cs-table"><thead><tr><th>학생</th><th>과목</th><th>사유</th></tr></thead><tbody>${unassigned}</tbody></table></details>` : ""}
     ${causes ? `<h5>원인</h5><ul class="cs-list">${causes}</ul>` : ""}
     ${suggestions ? `<h5>제안</h5><ul class="cs-list" id="classSectionsSuggestions">${suggestions}</ul>` : ""}
     ${errors.length ? `<h5>오류 ${errors.length}건</h5><ul class="cs-list is-error">${errors.slice(0, 30).map((issue) => `<li>${esc(issue.message)}</li>`).join("")}</ul>` : ""}
     ${warnings.length ? `<details><summary>확인 ${warnings.length}건</summary><ul class="cs-list">${warnings.slice(0, 50).map((issue) => `<li>${esc(issue.message)}</li>`).join("")}</ul></details>` : ""}
     <div class="cs-blocks" data-scroll-key="cs-blocks">${blocks}</div>
-    ${unassigned ? `<details open><summary>미배정 ${result.unassigned.length}건</summary><table class="cs-table"><thead><tr><th>학생</th><th>과목</th><th>사유</th></tr></thead><tbody>${unassigned}</tbody></table></details>` : ""}
+
     <div class="cs-fields">
       <label>학생 찾기 <input class="cs-text" type="search" id="classSectionsStudentSearch" value="${esc(query)}" placeholder="1-3-12" data-focus-key="cs-search" aria-label="학생 찾기(현학년-반-번호)"></label>
     </div>
@@ -994,7 +1015,10 @@ function classSectionsApplySuggestion(index) {
   } else if (item.type === "more-blocks") {
     entry.blocks = item.blocks;
   } else if (item.type === "class-unit") {
-    classSectionsCourseConf(classSectionsSettings(), "courseModes", context.group.grade)[item.courseKey] = "class";
+    // 제안은 지금 블록 수로 다시 풀어 확인한 것이므로, 학급 단위로 바꿔도 블록 수 기본값이 줄지 않게 지금 값을 고정한다.
+    if (!Number(entry.blocks)) entry.blocks = classSectionsGroupSettings(context.source, context.group, entry).blocks;
+    const modes = classSectionsCourseConf(classSectionsSettings(), "courseModes", context.group.grade);
+    for (const key of item.courseKeys || [item.courseKey]) modes[key] = "class";
   } else if (item.type === "recommend-times") {
     return void classSectionsRecommendTimesCurrent();
   } else if (item.type === "block-limit") {
@@ -1140,6 +1164,25 @@ function classSectionsHandleTeacherEvent(event) {
 }
 
 // ---- 내보내기 ----
+// 학급 단위 과목 반별 명렬(내년 반을 알 때만: 배정표 또는 '그대로 올라감'). 시트 이름 '학급 단위 N반'.
+function classSectionsClassUnitRosterSheets(group, entry, settings, names) {
+  const effective = classSectionsEffectiveClassMap(group);
+  if (!effective.map) return [];
+  const plan = classSectionsClassUnitPlan(group, entry, settings);
+  const nameOf = new Map(group.courses.map((course) => [course.key, course.name]));
+  const byRoom = new Map(plan.homerooms.map((room) => [room, []]));
+  for (const student of group.gradeStudents || group.students) {
+    const info = effective.map[student.key];
+    if (info?.classroom && byRoom.has(info.classroom)) byRoom.get(info.classroom).push({ key: student.key, number: info.number });
+  }
+  return plan.homerooms.map((room) => {
+    const list = byRoom.get(room).sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999) || a.key.localeCompare(b.key, "ko", { numeric: true }));
+    return { name: `학급 단위 ${room}반`, orientation: "portrait", widths: [8, 16, 10, 14], freeze: "A3",
+      rows: [[`내년 ${group.targetGrade}학년 ${room}반 · ${nameOf.get(plan.assign[room]) || "(과목 미정)"} ${list.length}명`], ["새 번호", "현 학년-반-번호", "현 반", "성명"],
+        ...list.map((item) => [item.number || "", item.key, Number(item.key.split("-")[1]) || item.key.split("-")[1], names.get(item.key) || ""])] };
+  });
+}
+
 // '학급 단위 과목' 시트: 내년 반 → 과목, 반별 학생 수(내년 반을 알 때만), 비고.
 function classSectionsClassUnitSheet(group, entry, settings) {
   const plan = classSectionsClassUnitPlan(group, entry, settings);
@@ -1182,15 +1225,16 @@ function classSectionsMergeClassMap(map) {
     const target = store.classMaps[grade];
     let changed = 0;
     let missing = 0;
+    // 차수 자료에 없는 학생(결과 미제출·전입 예정 등)도 저장해 둔다. 반영 인원은 화면의 'n/N명'(실제 일치 수)으로 따로 보인다.
     for (const [key, value] of list) {
-      if (known.size && !known.has(key)) { missing += 1; continue; }
+      if (known.size && !known.has(key)) missing += 1;
       target[key] = { classroom: classSectionsKeyPart(value.classroom), number: classSectionsKeyPart(value.number) };
       changed += 1;
     }
     const kept = Object.keys(target).length - changed;
     updated += changed;
     unmatched += missing;
-    parts.push(`현 ${grade}학년 갱신 ${changed}명 · 유지 ${kept}명${missing ? ` · 명단에 없는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
+    parts.push(`현 ${grade}학년 ${list.length}명 읽음 · 갱신 ${changed}명 · 유지 ${kept}명${missing ? ` · 이 차수 결과에 없는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
   }
   return { updated, unmatched, text: `내년 반 배정표: ${parts.join(" / ") || "읽은 학생 0명"}` };
 }
@@ -1202,7 +1246,7 @@ async function classSectionsReadClassMap(file) {
     const { map, errors } = classSectionsClassMapFromRows(sheets[0]?.rows || []);
     const result = classSectionsMergeClassMap(map);
     if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
-    classSectionsSetStatus(`${result.text}${errors.length ? ` · 확인 ${errors.length}건(${errors.slice(0, 2).join(" ")})` : ""}`, errors.length > 0 || result.unmatched > 0 || !result.updated);
+    classSectionsSetStatus(`${result.text}${errors.length ? ` · 확인 ${errors.length}건(${errors.slice(0, 2).join(" ")})` : ""}`, errors.length > 0 || !result.updated);
   } catch (error) {
     classSectionsSetStatus(`내년 반 배정표를 읽지 못했습니다: ${error?.message || error}`, true);
   }
@@ -1250,8 +1294,10 @@ function classSectionsExport(kind) {
         rows: [[`${section.roomName} (${section.courseName}) ${list.length}명`], ["번호", "현 학년-반-번호", "현 반", "현 번호", "성명"],
           ...list.map((key, index) => { const [, classroom, number] = key.split("-"); return [index + 1, key, Number(classroom) || classroom, Number(number) || number, names.get(key) || ""]; })] };
     });
-    // '학급 단위 과목' 시트는 맨 뒤(분반 시트는 앞에 분반마다 하나).
-    return downloadBlob(createWorkbookBlob([...sheets, ...(unitSheet ? [unitSheet] : [])]), `${base}_분반명렬표.xlsx`);
+    // '학급 단위 과목' 시트는 맨 뒤(분반 시트는 앞에 분반마다 하나). 내년 반을 알면 반별 학생 명렬 시트도 붙인다.
+    const unitRosters = unitSheet ? classSectionsClassUnitRosterSheets(group, entry, settingsForUnits, names) : [];
+    const all = [...sheets, ...(unitSheet ? [unitSheet] : []), ...unitRosters];
+    return downloadBlob(createWorkbookBlob(all.length ? all : [{ name: "분반 없음", rows: [["이 그룹에는 이동 분반이 없습니다."]] }]), `${base}_분반명렬표.xlsx`);
   }
   if (kind === "neis") {
     const settings = classSectionsSettings();

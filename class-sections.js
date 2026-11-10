@@ -858,6 +858,8 @@ function classSectionsPlacementMove(model, place, r, rng, co) {
   const S = model.sections.length;
   const free = (s) => model.sections[s].fixedBlock < 0;
   const changes = [];
+  // 블록이 하나뿐이면(택1) 옮길 곳이 없다.
+  if (B < 2) return changes;
   const tryMove = (s, target) => {
     if (!free(s) || place.blockOf[s] === target) return false;
     const from = place.blockOf[s];
@@ -968,7 +970,7 @@ function classSectionsPlace(model, rng, deadline, startPlace) {
   const co = classSectionsCooccurrence(model);
   let steps = 0;
   let timedOut = false;
-  const freeSections = model.sections.some((section) => section.fixedBlock < 0);
+  const freeSections = model.blocks.length > 1 && model.sections.some((section) => section.fixedBlock < 0);
   for (; steps < maxSteps && curOver > 0 && freeSections; steps += 1) {
     if (deadline && classSectionsNow() > deadline) { timedOut = true; break; }
     const snap = classSectionsRouterSnapshot(r);
@@ -1491,7 +1493,7 @@ function classSectionsValidateAcross(groups, teachersRaw) {
     if (String(a.input.grade ?? "") !== String(b.input.grade ?? "") || String(a.input.semester ?? "") !== String(b.input.semester ?? "")) continue;
     for (const x of a.result.blocks || []) for (const y of b.result.blocks || []) {
       const shared = (x.times || []).filter((slot) => (y.times || []).includes(slot));
-      if (shared.length) issues.push({ type: "cohort-clash", severity: "error", groupId: a.input.groupId,
+      if (shared.length) issues.push({ type: "cohort-clash", severity: "error", groupId: a.input.groupId, groups: [a.input.groupId, b.input.groupId],
         message: `${a.input.label || a.input.groupId} ${x.letter}블록과 ${b.input.label || b.input.groupId} ${y.letter}블록이 같은 시간(${shared.map((slot) => slot.replace(":", "")).join(", ")})입니다 — 같은 학생이 두 과목을 동시에 들어야 합니다.` });
     }
   }
@@ -1507,7 +1509,7 @@ function classSectionsValidateAcross(groups, teachersRaw) {
         const key = `${teacherId}|${slot}`;
         const other = busy.get(key);
         if (other && other.group !== (input.groupId || "")) {
-          issues.push({ type: "teacher-cross", severity: "error", teacherId, slot,
+          issues.push({ type: "teacher-cross", severity: "error", teacherId, slot, groups: [other.group, input.groupId || ""],
             message: `${names.get(teacherId) || teacherId} 선생님: ${slot.replace(":", "요일 ")}교시에 ${other.label}와 ${input.label || input.groupId} ${section.courseName}가 겹칩니다.` });
         } else if (!other) busy.set(key, { group: input.groupId || "", label: `${input.label || input.groupId} ${section.courseName}` });
       }
@@ -1629,12 +1631,25 @@ function classSectionsTeacherSuggestions(model, result, input, deadline) {
     if (ok(trial)) out.push({ type: "more-blocks", verified: true, blocks: blockCount + 1,
       message: `블록을 ${blockCount + 1}개로 늘리면(새 블록 시간은 따로 정함) 교사 수 안에서 모두 배정됩니다.` });
   }
-  for (const course of model.courses.filter((item) => departments.includes(item.department)).sort((a, b) => a.demand - b.demand)) {
-    if (late() || out.some((item) => item.type === "class-unit")) break;
-    const courses = (input.courses || []).map((raw) => (classSectionsText(raw.key ?? raw.name) === course.key ? { ...raw, mode: "class" } : raw));
-    const trial = classSectionsSolve({ ...input, courses, suggest: false });
-    if (ok(trial)) out.push({ type: "class-unit", verified: true, courseKey: course.key, courseName: course.name,
-      message: `${course.name}을(를) 학급 단위로 운영하면(이동 블록에서 빠짐) 교사 수 안에서 모두 배정됩니다.` });
+  // 학급 단위로: 과목 하나씩 → 안 되면 모자라는 교과의 과목 전부(예: 제2외국어 일본어·중국어 11분반 > 교사 2명).
+  const shortCourses = model.courses.filter((item) => departments.includes(item.department)).sort((a, b) => a.demand - b.demand);
+  const trySet = (list) => {
+    const keys = new Set(list.map((course) => course.key));
+    const courses = (input.courses || []).map((raw) => (keys.has(classSectionsText(raw.key ?? raw.name)) ? { ...raw, mode: "class" } : raw));
+    return ok(classSectionsSolve({ ...input, courses, suggest: false }));
+  };
+  for (const course of shortCourses) {
+    if (late()) break;
+    if (trySet([course])) {
+      out.push({ type: "class-unit", verified: true, courseKey: course.key, courseKeys: [course.key], courseName: course.name,
+        message: `${course.name}을(를) 학급 단위로 운영하면(이동 블록에서 빠짐) 교사 수 안에서 모두 배정됩니다.` });
+      break;
+    }
+  }
+  if (!out.some((item) => item.type === "class-unit") && shortCourses.length > 1 && !late() && trySet(shortCourses)) {
+    out.push({ type: "class-unit", verified: true, courseKey: shortCourses[0].key, courseKeys: shortCourses.map((course) => course.key),
+      courseName: shortCourses.map((course) => course.name).join("·"),
+      message: `${shortCourses.map((course) => course.name).join("·")}을(를) 모두 학급 단위로 운영하면(담임반마다 한 과목) 교사 수 안에서 모두 배정됩니다.` });
   }
   if (model.blocks.some((block) => block.times.length) || (input.occupied || []).length) {
     out.push({ type: "recommend-times", verified: false,
@@ -1929,7 +1944,7 @@ function classSectionsSolveAll(spec) {
   runs.sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1] || a.score[2] - b.score[2] || orders.indexOf(a.order) - orders.indexOf(b.order));
   const best = runs[0].run;
   const shortages = classSectionsTeacherShortages(best.results, spec, fixedSlots);
-  const shortageIssues = shortages.map((item) => ({ type: "teacher-shortage", severity: "error", department: item.department, slot: item.slot, message: item.message }));
+  const shortageIssues = shortages.map((item) => ({ type: "teacher-shortage", severity: "error", department: item.department, slot: item.slot, groups: item.groups, message: item.message }));
   // 그룹 결과 순서는 입력 순서로 돌려준다.
   const byGroup = new Map(best.results.map((item) => [item.input.groupId, item]));
   const ordered = base.map(({ group }) => byGroup.get(group.groupId)).filter(Boolean);
@@ -2082,9 +2097,10 @@ function classSectionsTeacherShortages(results, spec, fixedSlots) {
           const department = departmentOf.get(section?.courseKey);
           if (!department) continue;
           const key = `${department}|${slot}`;
-          if (!demand.has(key)) demand.set(key, { department, slot, count: 0, parts: new Map() });
+          if (!demand.has(key)) demand.set(key, { department, slot, count: 0, parts: new Map(), groups: new Set() });
           const entry = demand.get(key);
           entry.count += 1;
+          entry.groups.add(input.groupId || "");
           const label = `${input.label || input.groupId} ${block.letter}블록`;
           entry.parts.set(label, (entry.parts.get(label) || 0) + 1);
         }
@@ -2096,7 +2112,8 @@ function classSectionsTeacherShortages(results, spec, fixedSlots) {
     const available = supply(entry.department, entry.slot);
     if (!(entry.count > available)) continue;
     const [day, period] = entry.slot.split(":");
-    list.push({ department: entry.department, slot: entry.slot, demand: entry.count, supply: available, short: entry.count - available,
+    // groups: 그 시각에 그 교과 분반을 실제로 가진 그룹(오류는 이 그룹들에만, 나머지 그룹엔 참고로).
+    list.push({ department: entry.department, slot: entry.slot, demand: entry.count, supply: available, short: entry.count - available, groups: [...entry.groups],
       message: `${entry.department}: ${day}요일 ${period}교시 분반 ${entry.count}개(${[...entry.parts].map(([label, count]) => `${label} ${count}`).join(", ")}) > 가능한 교사 ${available}명 → ${entry.count - available}명 모자람` });
   }
   return list.sort((a, b) => b.short - a.short || a.slot.localeCompare(b.slot) || a.department.localeCompare(b.department));
