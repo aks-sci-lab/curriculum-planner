@@ -278,7 +278,12 @@ test("too many courses, closed courses and unknown courses are reported, not sil
   const result = plain(ctx.classSectionsSolve(input));
   const reasons = new Set(result.unassigned.map((item) => item.reason));
   assert.ok(reasons.has("too-many"));
-  if (input.students.some((student) => student.courses.includes("지구과학"))) assert.ok(reasons.has("closed"));
+  // 폐강 과목 신청은 미배정이 아니라 재신청 대상으로 따로 센다
+  assert.ok(!reasons.has("closed"));
+  if (input.students.some((student) => student.courses.includes("지구과학"))) {
+    assert.ok(result.closedRequests.length > 0);
+    assert.match(result.explain.summary, /재신청 대상 \d+명\(폐강 과목 \d+건\)/);
+  }
   assert.ok(result.issues.some((issue) => issue.type === "unknown-course"));
   assert.ok(result.explain.causes.some((cause) => cause.type === "too-many"));
   assert.ok(result.assign["1-9-50"].length === 2);
@@ -622,4 +627,51 @@ test("compare: a mode can be shown but kept out of the recommendation (homeroom 
   const compared = plain(ctx.classSectionsCompare({ ...input, recommendExclude: ["homeroom"] }));
   assert.equal(compared.rows.find((row) => row.mode === "homeroom").excluded, true);
   assert.notEqual(compared.recommended, "homeroom");
+});
+
+test("6차·7차 계산: 서명에서 다른 학년 점유 제외, 학생 키 정규화, 학급 단위 반 번호, 같은 학생 그룹 시간 겹침, 폐강 신청 분리, 교사 부족 제안", () => {
+  const ctx = context();
+  const input = synthetic({ courses: SCIENCE, choose: 2, students: 60, capacity: 30, sizeFor: 25, seed: 7 });
+  // 서명: occupied는 사용자 입력이 아니므로 빠진다
+  assert.equal(ctx.classSectionsSignature(input), ctx.classSectionsSignature({ ...input, occupied: [{ times: ["월1"], departments: { 물리: 2 } }] }));
+  // 학생 키·배정표 정규화('01반'·'3번'·앞 0)
+  assert.equal(ctx.classSectionsStudentKey("1", "01반", "03번"), "1-1-3");
+  const mapped = plain(ctx.classSectionsClassMapFromRows([["현 학년", "현 반", "현 번호", "새 반", "새 번호"], ["1학년", "01반", "07", "02반", "05번"]]));
+  assert.deepEqual(mapped.map, { "1-1-7": { classroom: "2", number: "5" } });
+  // 나이스 학급 단위 행: 새 반 '01'도 1반으로, 과목이 없는 반은 경고
+  const neis = plain(ctx.classSectionsNeisExport({ sections: [], assign: {} }, { targetGrade: 3, reference: false,
+    students: [{ key: "2-1-1", classroom: "01", number: "1" }, { key: "2-1-2", classroom: "12", number: "2" }],
+    classUnit: { byClass: { "1": "일본어" }, courses: { 일본어: { name: "일본어", credits: 2 } } } }));
+  assert.equal(neis.rows.length, 3);
+  assert.equal(neis.rows[2][5], "1(3학년 1반)");
+  assert.ok(neis.warnings.some((text) => /내년 12반에 정한 과목이 없어 1명분/.test(text)));
+  // 같은 현 학년·학기 그룹끼리 블록 시간 겹침
+  const one = { ...input, blocks: [{ id: "a", times: ["월1", "수1"] }, { id: "b", times: ["화1", "목1"] }], cohortTimes: [{ label: "2-2 택1 a블록", times: ["수1"] }] };
+  const clash = plain(ctx.classSectionsSolve(one));
+  assert.ok(clash.issues.some((issue) => issue.type === "cohort-clash" && /2-2 택1 a블록/.test(issue.message)));
+  assert.equal(clash.explain.feasible, false);
+  assert.match(clash.explain.summary, /^학생은 모두 배정했지만 확인 필요/);
+  const across = plain(ctx.classSectionsValidateAcross([
+    { input: { groupId: "g1", label: "2-2 택3", grade: 1, semester: 2 }, result: { blocks: [{ id: "a", letter: "a", times: ["월:1"] }], sections: [] } },
+    { input: { groupId: "g2", label: "2-2 택1", grade: 1, semester: 2 }, result: { blocks: [{ id: "a", letter: "a", times: ["월:1"] }], sections: [] } },
+    { input: { groupId: "g3", label: "3-2 택5", grade: 2, semester: 2 }, result: { blocks: [{ id: "a", letter: "a", times: ["월:1"] }], sections: [] } }], []));
+  assert.equal(across.filter((issue) => issue.type === "cohort-clash").length, 1, "only the same-grade pair clashes");
+  // 폐강 과목 신청은 재신청 대상으로 따로(편성 가능 여부·미배정에 넣지 않음)
+  const closed = { ...input, courses: [...input.courses, { key: "천문학", name: "천문학", sections: 0 }] };
+  closed.students = input.students.map((student, index) => (index < 5 ? { ...student, courses: [...student.courses.slice(0, 1), "천문학"] } : student));
+  const closedResult = plain(ctx.classSectionsSolve(closed));
+  assert.equal(closedResult.unassigned.length, 0);
+  assert.equal(closedResult.closedRequests.length, 5);
+  assert.equal(closedResult.explain.feasible, true);
+  assert.match(closedResult.explain.summary, /재신청 대상 5명\(폐강 과목 5건\)/);
+  // 교사 부족: 블록 늘리기(다시 풀어 확인)·교사 수 확인 안내
+  const short = { ...input, courses: input.courses.map((course) => (course.key === "물리학" ? { ...course, sections: 3 } : course)), departmentTeachers: { 물리: 1 } };
+  const shortResult = plain(ctx.classSectionsSolve(short));
+  assert.ok(shortResult.issues.some((issue) => ["teacher-count", "placement-forced"].includes(issue.type)));
+  assert.equal(shortResult.explain.feasible, false);
+  const types = shortResult.explain.suggestions.map((item) => item.type);
+  assert.ok(types.includes("more-blocks"), JSON.stringify(shortResult.explain.suggestions));
+  assert.equal(shortResult.explain.suggestions.find((item) => item.type === "more-blocks").verified, true);
+  assert.ok(types.includes("check-teachers"));
+  assert.match(shortResult.explain.suggestions.find((item) => item.type === "check-teachers").message, /물리 교사가 그 시간에 모자랍니다/);
 });
