@@ -52,7 +52,10 @@ async function readScreen(page) {
       const times = head?.querySelector("em")?.textContent || "";
       for (const li of block.querySelectorAll("li.cs-section")) {
         const [size, capacity] = (li.querySelector(".cs-size")?.textContent || "").match(/\d+/g) || [];
-        sections.push({ id: li.dataset.sectionId, room: li.querySelector("strong")?.textContent.trim(), course: li.querySelector("span")?.textContent.trim(), letter, times,
+        // 5차부터 카드 굵은 글자는 '물리학 ②', 나이스 강의실 이름은 .cs-neis('나이스 a물리학2')
+        const neis = li.querySelector(".cs-neis")?.textContent.replace(/^\s*나이스\s*/, "").trim();
+        const label = li.querySelector("strong")?.textContent.trim() || "";
+        sections.push({ id: li.dataset.sectionId, room: neis || label, label, course: (li.dataset.sectionId || "").replace(/#\d+$/, "") || li.querySelector("span")?.textContent.trim(), letter, times,
           size: Number(size), capacity: Number(capacity), teacher: li.querySelector("select option")?.textContent || "" });
       }
     }
@@ -60,7 +63,10 @@ async function readScreen(page) {
     return { sections, unassignedRows: unassigned ? Number(unassigned[1]) : 0, stale: !!document.querySelector("#classSectionsStale"),
       header: document.querySelector('section[aria-label="편성 결과"] h4')?.textContent.replace(/\s+/g, " ") || "",
       classUnit: [...document.querySelectorAll("[data-cs-unit-room]")].map((e) => [e.getAttribute("data-cs-unit-room"), e.options[e.selectedIndex]?.textContent || ""]),
-      badge: document.querySelector("#classSectionsRoundBadge")?.textContent || "" };
+      badge: document.querySelector("#classSectionsRoundBadge")?.textContent || "",
+      classesLine: document.querySelector("#classSectionsClassesLine")?.textContent || "", classMapLine: document.querySelector("#classSectionsClassMapLine")?.textContent || "",
+      homeroomWarn: !!document.querySelector("#classSectionsHomeroomWarn"), metrics: document.querySelector("#classSectionsMetrics")?.textContent || "",
+      blockMax: document.querySelector('[aria-label="블록당 최대 분반 수"]')?.value || document.querySelector('[aria-label="블록당 최대 분반 수"]')?.placeholder || "" };
   });
 }
 async function download(page, name, saveAs) {
@@ -144,6 +150,7 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   const roomsOf = new Map(); for (const s of sections) for (const st of s.students) roomsOf.set(`${st}|${s.subject}`, s.room);
   for (const r of rows) {
     const subject = String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, "");
+    if (classUnitCourses.includes(subject)) continue; // 학급 단위 행은 run.cjs에서 담임반 배정과 대조
     const key = `${r[10]}|${subject}`;
     if (seen.has(key)) dups.push(key); seen.add(key);
     if (!exported.has(r[10])) exported.set(r[10], []);
@@ -209,4 +216,27 @@ function planBlockTimes(groupsInfo) {
   return out;
 }
 
-module.exports = { open6, groups, selectGroup, solve, readScreen, exportGroup, modelFromExports, checkGroup, checkAcross, planBlockTimes, readXlsxAll, parseSlots, SPREAD };
+// 블록 시간 추천 → 적용 → 이 학기 전 학년 함께 다시 계산(지금 고른 그룹의 학기)
+async function recommendAndSolveSemester(page) {
+  const out = {};
+  const button = page.locator("#classSectionsRecommendTimes");
+  if (!(await button.isVisible().catch(() => false))) { await page.getByText("블록별로 다르게 · 블록 시간(요일·교시)").click(); await sleep(250); }
+  let t0 = Date.now();
+  await button.click();
+  await page.locator("#classSectionsTimesProposal").waitFor({ timeout: 120000 });
+  out.recommendMs = Date.now() - t0;
+  out.proposal = (await page.locator("#classSectionsTimesProposal").innerText()).replace(/\s+/g, " ").slice(0, 400);
+  out.proposalCells = await page.locator("#classSectionsTimesProposal [data-cs-proposal]").evaluateAll((els) => els.map((e) => [e.dataset.csProposal, e.value ?? e.textContent]));
+  await page.locator("#classSectionsApplyTimes").click(); await sleep(400);
+  t0 = Date.now();
+  const together = page.locator("#classSectionsSolveSemester");
+  if (await together.count()) {
+    await together.click(); await sleep(200);
+    await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 300000, polling: 250 });
+    out.solveMs = Date.now() - t0;
+    out.status = await page.locator("#classSectionsStatus").innerText().catch(() => "");
+  } else out.status = "(전 학년 함께 다시 계산 단추 없음)";
+  return out;
+}
+
+module.exports = { recommendAndSolveSemester, open6, groups, selectGroup, solve, readScreen, exportGroup, modelFromExports, checkGroup, checkAcross, planBlockTimes, readXlsxAll, parseSlots, SPREAD };
