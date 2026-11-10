@@ -19,8 +19,10 @@ const args = Object.fromEntries(process.argv.slice(2).join(" ").split(/\s*--/).f
 }));
 const SEED = Number(args.seed || 1);
 const OUT = path.resolve(args.out || path.join(process.env.TMPDIR || "/tmp", `e2e-seed${SEED}`));
-const CLASSES = Number(args.classes || 11);
-const PER_CLASS = Number(args.perClass || 30);
+// 학년별 명단(사용자 학교: 현1 10학급 → 내년 2학년 11학급, 현2 11학급 그대로). --classes/--perClass는 두 학년에 같이 쓴다.
+const CLASSES_BY = { "1": Number(args.classes1 || args.classes || 10), "2": Number(args.classes2 || args.classes || 11) };
+const PER_BY = { "1": Number(args.perClass1 || args.perClass || 34), "2": Number(args.perClass2 || args.perClass || 28) };
+const NEXT_CLASSES = Number(args.nextClasses || 11);
 const CONCURRENCY = Number(args.concurrency || 1);
 const STOP_AFTER = args.stopAfter || "";
 const YEAR = 2026;
@@ -168,8 +170,8 @@ async function readAggregate(page) {
 async function setCriteria(page) {
   await page.locator("#openAggregateSettings").click();
   await page.locator("#aggregateSettingsDialog[open]").waitFor();
-  await page.locator("#nextYearClasses2").fill(String(CLASSES));
-  await page.locator("#nextYearClasses3").fill(String(CLASSES));
+  await page.locator("#nextYearClasses2").fill(String(NEXT_CLASSES));
+  await page.locator("#nextYearClasses3").fill(String(NEXT_CLASSES));
   await page.locator("#maxClassSize").fill("34");
   await page.locator("#maxClassSize").press("Tab");
   await page.locator("#closeAggregateSettings").click();
@@ -240,6 +242,16 @@ async function stepAggregate({ page, h, report }, round) {
         if (grade === "2") h.check(chip && chip.kem === expected[grade].kem, "중요", "4단계·국수영", `${round}차 현 2학년 '국수영 기준 초과 n명'이 하네스 기대값과 다름`, { expected: expected[grade].kem, actual: chip?.kem });
       });
     }
+    for (const grade of Object.keys(serverCounts)) {
+      if (CLASSES_BY[grade] === NEXT_CLASSES) continue;
+      const label = `현 ${grade}학년 명단 ${CLASSES_BY[grade]}반 → 내년 ${Number(grade) + 1}학년 ${NEXT_CLASSES}학급`;
+      h.check(panelText.includes(label), "중요", "4단계", `진급 때 학급 수 변화 표기가 없음: '${label}'`, { expected: label });
+    }
+    {
+      const m = panelText.match(/2학년\(현1학년\) 수강신청결과[\s\S]{0,200}?학급당 학생수\t([\d.]+)/);
+      const want = (totals["1"] / NEXT_CLASSES).toFixed(2);
+      if (m && totals["1"]) h.check(m[1] === want, "중요", "4단계", `현1 학급당 학생수가 내년 ${NEXT_CLASSES}학급 기준이 아님`, { expected: want, actual: m[1] });
+    }
     result.headline = panelText.split("\n").filter((line) => /^(현 [12]학년 → [23]학년 · |합계 )/.test(line)).join(" / ");
     // 화면 튐: 아래쪽 개설 학급수 칸에 값을 넣었다 지우는 동안 창 스크롤 위치가 유지되는지.
     const input = page.locator("#aggregatePanel .aggregate-class-input").nth(8);
@@ -259,7 +271,7 @@ async function stepAggregate({ page, h, report }, round) {
       h.check(Math.abs(mid - before.y) < 40 && Math.abs(after.y - before.y) < 40, "중요", "4단계", "개설 학급수 입력 후 화면 스크롤 위치가 튐", { expected: before.y, actual: [mid, after.y] });
     }
     // 개설/폐강: 그룹마다 (과목 수 − 택n − 1)개까지, 개설기준(학급당 인원 × 90%) 미만인 과목부터 폐강, 나머지 위험 과목은 개설.
-    const perClass = (grade) => totals[grade] / CLASSES;
+    const perClass = (grade) => totals[grade] / NEXT_CLASSES;
     const decisions = [];
     const byGroup = new Map();
     for (const c of courses) {
@@ -466,13 +478,20 @@ async function stepHours({ page, h, report }) {
     report.timings.step5Enter = await gotoStep(page, 5);
     await page.getByRole("button", { name: "시수 설정" }).click();
     await page.locator("#hoursSettingsDialog[open]").waitFor();
-    for (const grade of [1, 2, 3]) { await page.locator(`#hoursClasses${grade}`).fill(String(CLASSES)); await page.locator(`#hoursClasses${grade}`).press("Tab"); }
+    for (const grade of [1, 2, 3]) { await page.locator(`#hoursClasses${grade}`).fill(String(NEXT_CLASSES)); await page.locator(`#hoursClasses${grade}`).press("Tab"); }
     await page.locator("#hoursTotalTeachers").fill("62");
     await page.locator("#hoursTotalTeachers").press("Tab");
     await page.locator("#hoursNonTeaching-보건").fill("1");
     await page.locator("#hoursNonTeaching-상담").fill("1");
     await page.locator("#hoursNonTeaching-상담").press("Tab");
     await sleep(300);
+    {
+      const dialogText = await text(page, "#hoursSettingsDialog");
+      if (CLASSES_BY["1"] !== NEXT_CLASSES) {
+        const label = `현 1학년 명단 ${CLASSES_BY["1"]}반 → 내년 2학년 ${NEXT_CLASSES}학급으로 계산`;
+        h.check(dialogText.includes(label), "중요", "5단계", `시수 설정에 학급 수 변화 표기가 없음: '${label}'`, { actual: (dialogText.match(/현 1학년 명단[^\n]*/) || [""])[0] });
+      }
+    }
     await h.screenshot(page, "hours-settings");
     await page.locator("#hoursSettingsDialog").getByRole("button", { name: /닫기|확인/ }).last().click().catch(() => page.keyboard.press("Escape"));
     await sleep(500);
@@ -480,7 +499,7 @@ async function stepHours({ page, h, report }) {
     await sleep(300);
     const panel = await text(page, "#workflowStep7Panel");
     result.title = (panel.match(/\d{4}학년도 교과별 시수 통계 \(총\d+학급\)/) || [""])[0];
-    h.check(result.title.includes(`총${CLASSES * 3}학급`), "중요", "5단계", "시수 통계 총 학급 수가 설정과 다름", { expected: `총${CLASSES * 3}학급`, actual: result.title });
+    h.check(result.title.includes(`총${NEXT_CLASSES * 3}학급`), "중요", "5단계", "시수 통계 총 학급 수가 설정과 다름", { expected: `총${NEXT_CLASSES * 3}학급`, actual: result.title });
     // 학교 지정 과목(학급 수만큼)이 표에 있는지
     const schoolSubjects = ["문학", "대수", "영어Ⅰ", "독서와 작문", "화법과 언어"];
     const missing = schoolSubjects.filter((name) => !panel.includes(name));
@@ -674,7 +693,7 @@ async function stepStudentScreen({ page, h, report, roster, downloads }, grade) 
   return h.step(`2-2b. 현 ${grade}학년 학생 화면 직접 신청(위계 위반·국수영 초과 5%, 정상, 미제출)`, async () => {
     const eventId = report.data.events[grade];
     const codes = (await readCodes(downloads, 0)).filter((c) => c.grade === grade);
-    const last = codes.filter((c) => c.classroom === String(CLASSES));
+    const last = codes.filter((c) => c.classroom === String(CLASSES_BY[grade]));
     const rng = Core.createRng(SEED * 131 + Number(grade));
     const violators = Math.min(last.length - 3, Math.ceil(roster[grade].length * 0.05));
     const plan = last.map((student, index) => ({ student, kind: index < violators ? "violate" : index < last.length - 3 ? "normal" : "skip" }));
@@ -842,7 +861,7 @@ async function step6Draft(page, h, report) {
   return out;
 }
 
-async function stepClassSections({ page, h, report }) {
+async function stepClassSections({ page, h, report, roster }) {
   return h.step("6. 분반 편성: 교사·시간·전 그룹 편성·학급 단위·재신청 부분 재계산·엑셀 검증", async () => {
     const result = { groups: {}, solves: [] };
     report.timings.step6Enter = await S6.open6(page);
@@ -862,41 +881,105 @@ async function stepClassSections({ page, h, report }) {
       await S6.selectGroup(page, g.key);
       info.push({ key: g.key, grade: String(Number(g.key[0]) + 1), semester: g.key.split(":")[1], blocks: Number(await page.getByLabel("블록 수", { exact: true }).inputValue()), credit: SC.groupCredit(g.key) });
     }
-    const times = S6.planBlockTimes(info);
-    result.blockTimes = times;
-    // 첫 그룹: 방식 비교·추천 → 추천 방식으로 편성
-    for (const [index, g] of info.entries()) {
+    // 첫 그룹: 방식 비교·추천 → 추천 방식으로 편성(내년 반 배정표 전: '같은 담임반끼리 묶기'는 추천에서 빠져야 함)
+    {
+      const g = info[0];
       await S6.selectGroup(page, g.key);
-      await SC.setBlockTimes(page, times[g.key]);
-      let r;
-      if (index === 0) {
-        const tc = Date.now();
-        await page.locator("#classSectionsCompare").click();
-        await page.locator('section[aria-label="편성 방식 비교"]').waitFor({ timeout: 120000 });
-        await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
-        report.timings.step6Compare = Date.now() - tc;
-        const compare = await page.locator('section[aria-label="편성 방식 비교"]').innerText();
-        result.compare = compare.replace(/\s+/g, " ").slice(0, 400);
-        const rec = page.locator('section[aria-label="편성 방식 비교"] tr.is-recommended [data-cs-use-mode]');
-        h.check(await rec.count() === 1, "중요", "6단계", "방식 비교에서 추천 방식이 하나가 아님", { actual: result.compare });
-        r = await S6.solve(page, 'section[aria-label="편성 방식 비교"] tr.is-recommended [data-cs-use-mode]');
-        result.recommendedMode = await page.getByLabel("편성 방식", { exact: true }).inputValue();
-      } else r = await S6.solve(page);
-      const log = { group: g.key, ms: r.ms, feasible: r.feasible, applied: [] };
-      // 불가면 '제안 적용'을 차례로(최대 3번)
-      for (let tries = 0; r.feasible === false && tries < 3; tries++) {
+      const scr = await S6.readScreen(page);
+      result.classesLine = scr.classesLine; result.classMapLineBefore = scr.classMapLine; result.homeroomWarnBefore = scr.homeroomWarn; result.blockMax = scr.blockMax;
+      const nextOf = (key) => NEXT_CLASSES, rosterOf = (key) => CLASSES_BY[key[0]];
+      h.check(new RegExp(`${rosterOf(g.key)}학급 → 내년 ${g.grade}학년 ${nextOf(g.key)}학급`).test(scr.classesLine), "중요", "6단계", `학급 수 안내가 '현 ${g.key[0]}학년 ${rosterOf(g.key)}학급 → 내년 ${g.grade}학년 ${nextOf(g.key)}학급'이 아님`, { actual: scr.classesLine });
+      h.check(String(scr.blockMax) === String(NEXT_CLASSES), "중요", "6단계", `블록당 최대 분반 기본값이 내년 학급 수(${NEXT_CLASSES})가 아님`, { actual: scr.blockMax });
+      const tc = Date.now();
+      await page.locator("#classSectionsCompare").click();
+      await page.locator('section[aria-label="편성 방식 비교"]').waitFor({ timeout: 120000 });
+      await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+      report.timings.step6Compare = Date.now() - tc;
+      const compare = await page.locator('section[aria-label="편성 방식 비교"]').innerText();
+      result.compare = compare.replace(/\s+/g, " ").slice(0, 500);
+      const rec = page.locator('section[aria-label="편성 방식 비교"] tr.is-recommended [data-cs-use-mode]');
+      h.check(await rec.count() === 1, "중요", "6단계", "방식 비교에서 추천 방식이 하나가 아님", { actual: result.compare });
+      const recommended = await rec.first().getAttribute("data-cs-use-mode").catch(() => "");
+      if (CLASSES_BY[g.key[0]] !== NEXT_CLASSES) h.check(scr.homeroomWarn || /추천 제외/.test(result.compare), "중요", "6단계", "진급 때 학급 수가 바뀌는데(내년 반 배정표 없음) '같은 담임반끼리 묶기'에 지금 반 기준 경고·추천 제외 표시가 없음", { actual: { line: scr.classMapLine, compare: result.compare } });
+      if (CLASSES_BY[g.key[0]] !== NEXT_CLASSES) h.check(recommended !== "homeroom", "중요", "6단계", "내년 반 배정표가 없는데 '같은 담임반끼리 묶기'가 추천됨", { actual: result.compare });
+      const r = await S6.solve(page, 'section[aria-label="편성 방식 비교"] tr.is-recommended [data-cs-use-mode]');
+      result.recommendedMode = await page.getByLabel("편성 방식", { exact: true }).inputValue();
+      result.solves.push({ group: g.key, ms: r.ms, feasible: r.feasible, applied: [], summary: r.summary.slice(0, 300), via: "비교·추천" });
+    }
+    // 진급 때 반 편성 설정(예정 기능): 있으면 현2 = 그대로 올라감
+    const promotion = page.getByLabel(/진급 때 반 편성/);
+    result.promotionSetting = await promotion.count();
+    // 학기마다: 블록 시간 추천 → 적용 → 전 학년 함께 다시 계산
+    result.semesters = {};
+    for (const semester of ["1", "2"]) {
+      const g = info.find((x) => x.semester === semester);
+      if (!g) continue;
+      await S6.selectGroup(page, g.key);
+      const r = await S6.recommendAndSolveSemester(page);
+      result.semesters[semester] = r;
+      h.check(/함께 다시 계산했습니다/.test(r.status), "중요", "6단계", `${semester}학기 '전 학년 함께 다시 계산'이 끝나지 않음`, { actual: r.status });
+      h.check((r.solveMs || 0) < 60000, "경미", "6단계", `${semester}학기 전 학년 함께 계산이 오래 걸림 ${((r.solveMs || 0) / 1000).toFixed(1)}초`, { actual: r.solveMs });
+    }
+    const times = {};
+    // 그룹별 상태, 불가면 '제안 적용'(최대 3번) 뒤 다시 계산
+    for (const g of info) {
+      await S6.selectGroup(page, g.key);
+      times[g.key] = await page.locator("[data-cs-block-times]").evaluateAll((els) => els.map((e) => e.value));
+      let feasible = (await page.locator("#classSectionsSummary").getAttribute("data-feasible").catch(() => null)) === "true";
+      let summary = await page.locator("#classSectionsSummary").innerText().catch(() => "");
+      const log = { group: g.key, feasible, applied: [], summary: summary.slice(0, 300), times: times[g.key] };
+      for (let tries = 0; !feasible && tries < 3; tries++) {
         const apply = page.locator("[data-cs-apply]").first();
         if (!(await apply.count())) break;
         log.applied.push((await apply.locator("xpath=..").innerText()).replace(/\s+/g, " ").slice(0, 160));
         await apply.click(); await sleep(300);
-        r = await S6.solve(page);
-        log.feasibleAfter = r.feasible;
+        const r = await S6.solve(page);
+        feasible = r.feasible; summary = r.summary;
+        log.feasibleAfter = feasible;
       }
-      log.summary = r.summary.slice(0, 300);
-      if (r.feasible === false && /^모든 학생 배정/.test(r.summary)) h.issue("경미", "6단계", `${g.key}: 요약은 '모든 학생 배정…'인데 결과는 불가(data-feasible=false)로 표시`, { actual: { summary: r.summary, status: r.status, applied: log.applied } });
+      log.summary = summary.slice(0, 300);
+      log.foreign = !feasible && /^모든 학생 배정/.test(summary) && /오류 \d+건: .*\((현\d → \d학년 \d학기 · [^)]*)/.test(summary) && !summary.includes(g.key.split(":")[2]) ? summary.match(/\((현\d → \d학년 \d학기 · [^ )]*[^)]*)/)?.[1] : "";
+      log.teacherNote = await page.locator('section[aria-label="편성 결과"]').innerText().then((t) => (t.match(/교사 부족[^\n]*/) || [""])[0]).catch(() => "");
       result.solves.push(log);
-      h.check(r.ms < 15000, "경미", "6단계", `${g.key} 편성 계산이 오래 걸림 ${(r.ms / 1000).toFixed(1)}초`, { actual: r.ms });
-      if (r.feasible === false) h.issue(log.applied.length ? "중요" : "경미", "6단계", `${g.key}: 편성 불가${log.applied.length ? "(제안 적용 뒤에도)" : "(적용할 제안 없음)"}`, { actual: { summary: log.summary, applied: log.applied } });
+      if (!feasible) h.issue(log.applied.length ? "중요" : "경미", "6단계", `${g.key}: 편성 불가${log.applied.length ? "(제안 적용 뒤에도)" : "(적용할 제안 없음)"}`, { actual: { summary: log.summary, applied: log.applied, teacherNote: log.teacherNote } });
+      if (!feasible && /^모든 학생 배정/.test(summary)) h.issue("경미", "6단계", `${g.key}: 요약은 '모든 학생 배정…'인데 불가로 표시${log.foreign ? `(다른 그룹 오류: ${log.foreign})` : ""}`, { actual: summary });
+    }
+    // 내년 반 배정표(현1 10반 → 새 11반으로 섞음, 고정 양식: 현 학년·현 반·현 번호·새 반·새 번호)
+    const classMap = new Map();
+    result.classMap = {};
+    for (const grade of ["1", "2"]) {
+      const g1 = info.find((g) => g.key.startsWith(`${grade}:`));
+      if (!g1) continue;
+      // 현1: 10반 → 새 11반으로 섞음(새로 편성) / 현2: 11반 → 11반 그대로(그대로 올라감)
+      const same = CLASSES_BY[grade] === NEXT_CLASSES;
+      const rng = Core.createRng(SEED * 4243);
+      const students = same ? roster[grade].slice() : Core.shuffle(roster[grade].slice(), rng);
+      const counters = {};
+      const mine = [];
+      students.forEach((st, i) => {
+        const nc = same ? String(st.classroom) : String((i % NEXT_CLASSES) + 1);
+        counters[nc] = (counters[nc] || 0) + 1;
+        const value = { classroom: nc, number: same ? String(st.number) : String(counters[nc]) };
+        classMap.set(`${grade}-${st.classroom}-${st.number}`, value);
+        mine.push([grade, st.classroom, st.number, value.classroom, value.number]);
+      });
+      const rows = [["현 학년", "현 반", "현 번호", "새 반", "새 번호"], ...mine];
+      const file = path.join(OUT, `classmap-grade${grade}.xlsx`);
+      fs.writeFileSync(file, writeXlsx([{ name: "내년 반 배정", rows }]));
+      await S6.selectGroup(page, g1.key);
+      await page.locator("#classSectionsClassMap").setInputFiles(file);
+      await sleep(800);
+      const scr = await S6.readScreen(page);
+      const cm = { line: scr.classMapLine, warn: scr.homeroomWarn, status: await page.locator("#classSectionsStatus").innerText().catch(() => "") };
+      result.classMap[grade] = cm;
+      const m = cm.line.match(/(\d+)\/(\d+)명/);
+      h.check(m && m[1] === m[2] && new RegExp(`${roster[grade].length}명 읽음`).test(cm.status), "중요", "6단계", `현 ${grade}학년 내년 반 배정표를 올렸는데 반영 인원이 맞지 않음`, { expected: `${roster[grade].length}명 읽음, 그룹 학생 전부`, actual: cm });
+      h.check(!scr.homeroomWarn, "경미", "6단계", "내년 반 배정표를 올린 뒤에도 '담임반 묶기: 지금 반 기준' 경고가 남음", { actual: cm });
+      if (grade !== "1") continue;
+      await page.locator("#classSectionsCompare").click();
+      await page.locator('section[aria-label="편성 방식 비교"]').waitFor({ timeout: 120000 });
+      await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+      result.compareWithMap = (await page.locator('section[aria-label="편성 방식 비교"]').innerText()).replace(/\s+/g, " ").slice(0, 400);
     }
     // 학급 단위 과목: 3학년 택1(일본어/중국어)
     const unitGroup = info.find((g) => /택1/.test(g.key) && g.grade === "3");
@@ -911,7 +994,7 @@ async function stepClassSections({ page, h, report }) {
       result.classUnit = { group: unitGroup.key, feasible: r.feasible, summary: r.summary.slice(0, 200), card: unit.replace(/\s+/g, " ").slice(0, 500) };
       const rooms = await page.locator("[data-cs-unit-room]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-cs-unit-room"), e.options[e.selectedIndex]?.textContent]));
       result.classUnit.rooms = rooms;
-      h.check(rooms.length === CLASSES && rooms.every(([, v]) => v), "중요", "6단계", "학급 단위 과목: 담임반마다 과목이 배분되지 않음", { expected: `${CLASSES}개 반`, actual: rooms });
+      h.check(rooms.length === NEXT_CLASSES && rooms.every(([, v]) => v), "중요", "6단계", "학급 단위 과목: 담임반마다 과목이 배분되지 않음", { expected: `내년 ${NEXT_CLASSES}개 반`, actual: rooms });
       await h.screenshot(page, "step6-class-unit");
     }
     // 그룹별 엑셀 검증 + 그룹 간 시간 검증
@@ -927,11 +1010,28 @@ async function stepClassSections({ page, h, report }) {
       const sel = new Map([...selections].filter(([key]) => key.startsWith(`${g.key[0]}-`)));
       const classUnitCourses = screen.classUnit.length ? [...new Set(screen.classUnit.map(([, v]) => v))] : [];
       const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses });
+      // 나이스 반·번호: 배정표가 있는 현1은 새 반·번호, 없으면 비우고 참고 열(현 학년-반-번호)
+      {
+        const neisRows = files.neis[0].rows.slice(2).filter((r) => r.some(Boolean));
+        const wrong = [];
+        for (const r of neisRows) {
+          const want = classMap.get(r[10]);
+          const gotClass = String(r[7] || "").replace(/반$/, ""), gotNo = String(r[8] || "");
+          if (!(want && gotClass === want.classroom && gotNo === want.number)) wrong.push({ ref: r[10], class: r[7], no: r[8], want });
+        }
+        check.neisClassWrong = wrong.length;
+        h.check(!wrong.length, "중요", "6단계", `${g.key}: 나이스 반·번호가 내년 반 배정표(새 반·번호)와 다름 ${wrong.length}줄`, { actual: wrong.slice(0, 5) });
+      }
       if (classUnitCourses.length) {
         check.classUnit = screen.classUnit;
-        const neisSubjects = new Set(files.neis[0].rows.slice(2).map((r) => String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "")));
-        const missingUnit = classUnitCourses.filter((c) => !neisSubjects.has(c));
-        h.check(!missingUnit.length, "중요", "6단계", `${g.key}: 학급 단위로 바꾼 과목(${missingUnit.join("·")})이 나이스 편성 엑셀·분반 명렬표에 없음(담임반 배정 학생 행 없음)`, { actual: { classUnit: screen.classUnit, neisRows: files.neis[0].rows.length - 2, rosterSheets: files.rosters.length } });
+        // 나이스: 학급 단위 행 = 그룹 학생 수, 과목 = 그 학생의 내년 반에 배정된 과목
+        const unitOf = new Map(screen.classUnit);
+        const unitRows = files.neis[0].rows.slice(2).filter((r) => classUnitCourses.includes(String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "")));
+        const wrongUnit = unitRows.filter((r) => unitOf.get(String(r[7]).replace(/반$/, "")) !== String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, ""));
+        const groupStudents = [...sel.keys()].length;
+        check.classUnitNeis = { rows: unitRows.length, students: groupStudents, wrong: wrongUnit.length, rosterSheets: files.rosters.length };
+        h.check(unitRows.length === groupStudents && !wrongUnit.length, "중요", "6단계", `${g.key}: 학급 단위 과목 나이스 행이 담임반(내년 반) 배정과 다름(행 ${unitRows.length}/${groupStudents}명, 반·과목 불일치 ${wrongUnit.length})`, { actual: wrongUnit.slice(0, 5) });
+        h.check(files.rosters.length > 0, "경미", "6단계", `${g.key}: 학급 단위 과목만 있는 그룹은 분반 명렬표·블록표가 비어 있음(나이스 엑셀에는 있음)`, { actual: check.classUnitNeis });
       }
       sectionsByGroup[g.key] = sections;
       result.groups[g.key] = check;
@@ -954,7 +1054,7 @@ async function stepClassSections({ page, h, report }) {
       result.overlapProbe = { group: a.key, with: b.key, times: overlap.join(","), feasible: r.feasible, warned: /겹|같은 시간|충돌/.test(body + r.summary + r.status), summary: r.summary.slice(0, 200) };
       h.check(result.overlapProbe.warned, "경미", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 학생 시간 겹침 경고가 없음`, { actual: result.overlapProbe });
       await SC.setBlockTimes(page, times[a.key]);
-      await S6.solve(page);
+      if (await page.locator("#classSectionsSolveSemester").count()) await S6.solve(page, "#classSectionsSolveSemester"); else await S6.solve(page);
     }
     report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
     // 재신청 시뮬레이션: 2차 확정 해제 → 학생 3명 선택 변경(교사 화면) → 재확정 → '바뀐 학생만 다시 계산'
@@ -1133,7 +1233,7 @@ print(json.dumps([[str(c.value) if c.value is not None else "" for c in r] for r
 async function main() {
   const h = await startHarness({ outDir: OUT, seed: SEED, headless: !args.headed });
   const { report } = h;
-  report.config = { seed: SEED, classes: CLASSES, perClass: PER_CLASS, concurrency: CONCURRENCY, year: YEAR };
+  report.config = { seed: SEED, classes: CLASSES_BY, perClass: PER_BY, nextClasses: NEXT_CLASSES, concurrency: CONCURRENCY, year: YEAR };
   const page = await h.context.newPage();
   const dialogs = [];
   page.on("dialog", async (dialog) => { dialogs.push({ type: dialog.type(), message: dialog.message() }); await dialog.accept(dialog.type() === "prompt" ? dialog.defaultValue() : undefined); });
@@ -1212,7 +1312,7 @@ async function main() {
 
     const roster = {};
     for (const grade of ["1", "2"]) {
-      roster[grade] = Core.generateRoster({ grade, classes: CLASSES, perClass: PER_CLASS });
+      roster[grade] = Core.generateRoster({ grade, classes: CLASSES_BY[grade], perClass: PER_BY[grade] });
       const file = path.join(OUT, `roster-grade${grade}.xlsx`);
       fs.writeFileSync(file, writeXlsx([{ name: `${grade}학년`, rows: [["학년", "반", "번호", "성명"], ...roster[grade].map((s) => [Number(s.grade), Number(s.classroom), Number(s.number), s.name])] }]));
     }
@@ -1254,7 +1354,7 @@ async function main() {
         await waitText(bot, "#botBridgeStatus", /받았|명/, 20000);
         // 마지막 반은 하네스가 학생 화면으로 직접 신청한다(위계 위반·국수영 초과 5%, 정상, 미제출).
         await bot.locator("#botScope").selectOption("class");
-        await bot.locator("#botScopeClasses").fill(Array.from({ length: CLASSES - 1 }, (_, i) => i + 1).join(","));
+        await bot.locator("#botScopeClasses").fill(Array.from({ length: CLASSES_BY[grade] - 1 }, (_, i) => i + 1).join(","));
         await bot.locator("#botConcurrency").fill(String(CONCURRENCY));
         await bot.locator("#botPopularity").selectOption("skewed");
         await bot.locator("#botWrongPercent").fill("4");

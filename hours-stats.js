@@ -157,7 +157,25 @@ function hoursDefaultDepartment(subject, area = "") {
 
 // 현 학년(내년도 학년 − 1)의 수강신청 결과 중 시수 통계 근거로 쓸 차수를 고른다.
 // 지정 차수 → 가장 최근에 확정된 차수 → 결과가 있는 가장 최근 차수(미확정) 순서다.
-function hoursSourceResult(currentGrade, settings) {
+// 확정 전 차수는 지금 4단계 기준으로 집계한다(buildRoundSnapshot). 기준 비율 칸이 잘못되면 aggregateThresholds가 예외를 내므로
+// 5단계 전체를 멈추지 않고 그 차수만 건너뛴다. failed: 건너뛴 차수 번호를 모으는 Set(선택).
+function hoursRoundSnapshot(round, failed = null) {
+  if (isRoundLocked(round) && state.roundStatuses?.[round]?.snapshot) return state.roundStatuses[round].snapshot;
+  try {
+    return buildRoundSnapshot(round);
+  } catch (error) {
+    failed?.add(String(round));
+    return null;
+  }
+}
+
+function hoursThresholdIssue(rounds, what) {
+  const list = [...rounds].sort((a, b) => Number(a) - Number(b)).map((round) => `${round}차`).join("·");
+  return { level: "warning", action: "4", thresholdRounds: [...rounds].join(","),
+    text: `${list} 기준 설정 값이 올바르지 않아 ${what}를 읽지 못했습니다. 4단계 '기준 설정'에서 개설·분반 기준(%)을 고치세요.` };
+}
+
+function hoursSourceResult(currentGrade, settings, failed = null) {
   const rounds = applicationRoundNumbers().slice().reverse();
   const hasGrade = (round) => roundStatusData(round)?.students?.some((student) => String(student.grade) === currentGrade);
   const pinned = String(settings.sourceRounds?.[String(Number(currentGrade) + 1)] || "");
@@ -167,23 +185,20 @@ function hoursSourceResult(currentGrade, settings) {
         state.roundStatuses[item]?.snapshot?.rows?.some((row) => row.grade === currentGrade)) ||
       rounds.find(hasGrade);
   if (!round) return null;
-  const snapshot = isRoundLocked(round) && state.roundStatuses[round]?.snapshot
-    ? state.roundStatuses[round].snapshot
-    : buildRoundSnapshot(round);
+  const snapshot = hoursRoundSnapshot(round, failed?.source);
   const rows = (snapshot?.rows || []).filter((row) => row.grade === currentGrade);
   if (!rows.length) return null;
-  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, earlierClosed: hoursEarlierClosed(currentGrade, round) };
+  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
 }
 
 // 근거 차수보다 앞 차수에서 폐강한 과목(정규화 이름 → { round, semesters }). 2차 재신청 결과에는 1차에 폐강한 과목이
 // 아예 없으므로, 이것이 없으면 '결과에 없음(과목명 불일치?)'으로 잘못 경고한다.
-function hoursEarlierClosed(currentGrade, round) {
+function hoursEarlierClosed(currentGrade, round, failed = null) {
   const closed = new Map();
   for (const earlier of applicationRoundNumbers()) {
     if (!(Number(earlier) < Number(round))) continue;
-    const snapshot = isRoundLocked(earlier) && state.roundStatuses?.[earlier]?.snapshot
-      ? state.roundStatuses[earlier].snapshot
-      : roundStatusData(earlier)?.students?.length ? buildRoundSnapshot(earlier) : null;
+    const snapshot = (isRoundLocked(earlier) && state.roundStatuses?.[earlier]?.snapshot) || roundStatusData(earlier)?.students?.length
+      ? hoursRoundSnapshot(earlier, failed) : null;
     for (const row of snapshot?.rows || []) {
       if (row.grade !== currentGrade || row.decision !== "closed") continue;
       const key = normalizeResultCourseName(row.name);
@@ -485,8 +500,14 @@ function computeHoursStats(year = hoursTargetYear()) {
     const currentGrade = String(Number(grade) - 1);
     const needsResults = entries.some((entry) => entry.kind === "선택" || entry.kind === "소인수");
     if (needsResults && grade !== "1") {
-      info.source = hoursSourceResult(currentGrade, settings);
-      if (!info.source) {
+      const failed = { source: new Set(), closed: new Set() };
+      info.source = hoursSourceResult(currentGrade, settings, failed);
+      for (const [rounds, what] of [[failed.source, "수강신청 결과"], [failed.closed, "폐강 정보"]]) {
+        if (rounds.size && !issues.some((issue) => issue.thresholdRounds === [...rounds].join(",") && issue.text.includes(what))) issues.push(hoursThresholdIssue(rounds, what));
+      }
+      if (!info.source && failed.source.size) {
+        // 결과는 있는데 기준 설정 때문에 읽지 못한 경우: '결과가 없다'고 하지 않는다(위 확인 항목으로 알림).
+      } else if (!info.source) {
         issues.push({ level: "error", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
       } else if (info.source.confirmed && typeof roundSnapshotDrift === "function") {
         // 확정 뒤 학급 수·기준 비율이 바뀌면 선택과목은 확정 시점 값, 지정 과목은 현재 학급 수로 계산돼 서로 어긋난다.
