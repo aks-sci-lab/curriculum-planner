@@ -610,10 +610,16 @@ function classSectionsPrintHandleChange(event) {
     const result = context?.entry?.sectionResult;
     if (!result) return;
     if (!result.roomPins || typeof result.roomPins !== "object") result.roomPins = {};
+    const before = { ...(classSectionsRoomPlan(context.round, context.group.semester)?.assign?.[context.group.key] || {}) };
     if (target.value) result.roomPins[target.dataset.csRoomPick] = target.value; else delete result.roomPins[target.dataset.csRoomPick];
     const plan = classSectionsRoomPlan(context.round, context.group.semester);
     const clash = (plan?.issues || []).filter((issue) => issue.severity === "error" && (issue.sectionId === target.dataset.csRoomPick || issue.otherSectionId === target.dataset.csRoomPick));
-    classSectionsSetStatus(clash.length ? `교실 겹침: ${clash.map((issue) => issue.message).join(" / ")}` : target.value ? `${target.value} 교실로 바꿨습니다.` : "교실을 자동 추천으로 되돌렸습니다.", clash.length > 0);
+    // 직접 고른 교실을 쓰던 다른 분반은 자동으로 다른 교실로 옮겨진다(고정한 분반끼리만 겹침).
+    const label = (id) => plan?.roomById?.get(id)?.label || id;
+    const moved = result.sections.filter((section) => section.id !== target.dataset.csRoomPick && before[section.id] && plan?.assign?.[context.group.key]?.[section.id] !== before[section.id])
+      .map((section) => `${section.roomName} ${label(before[section.id])} → ${label(plan.assign[context.group.key][section.id] || "미정")}`);
+    classSectionsSetStatus(clash.length ? `교실 겹침: ${clash.map((issue) => issue.message).join(" / ")}`
+      : `${target.value ? `${label(target.value)} 교실로 바꿨습니다.` : "교실을 자동 추천으로 되돌렸습니다."}${moved.length ? ` 함께 옮긴 분반: ${moved.join(", ")}` : ""}`, clash.length > 0);
   } else if (target.id === "classSectionsAttendanceDays") s.print.attendanceDays = Math.max(1, Math.min(40, Number(target.value) || 17));
   else if (target.id === "classSectionsTimetableClass") { CLASS_SECTIONS_PRINT_VIEW.timetableClass = target.value; return; }
   else if (target.id === "classSectionsTimetablePerPage") s.print.perPage = [2, 3, 4].includes(Number(target.value)) ? Number(target.value) : 2;
