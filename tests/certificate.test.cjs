@@ -256,7 +256,8 @@ test("separate (소인수·공동) selections left in older imported results are
   const plain = ctx.certificateMarkup(student(3), true, []);
   assert.doesNotMatch(plain, /paper-separate-note/, "숨긴 과목이 없으면 안내도 없음");
   assert.equal(ctx.applicationSelections(student(3)).length, 3);
-  // 인쇄 한 장 유지: 안내가 있으면 귀하 줄 위 여백을 줄인다.
-  assert.match(css, /\.print-page \.paper-separate-note \+ \.paper-school \{ margin-top: 8mm; \}/);
-  assert.match(css, /\.print-page\.paper-dense \.paper-separate-note \+ \.paper-school \{ margin-top: 4mm; \}/);
+  // '총 n과목' 줄 바로 아래(서명란 위), 점검란 이수 학점 줄과 같은 크기(인쇄 10px, 조밀 9px).
+  assert.match(markup, /확인합니다\.<\/p>\s*<p class="paper-separate-note">[^<]*<\/p>\s*<div class="paper-signature">/);
+  assert.match(css, /\.print-page \.paper-separate-note \{ margin-top: \.5mm; font-size: 10px;/);
+  assert.match(css, /\.print-page\.paper-dense \.paper-separate-note \{ margin-top: 0; font-size: 9px;/);
 });

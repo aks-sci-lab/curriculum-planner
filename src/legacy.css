@@ -983,8 +983,8 @@
     .paper-credit-gauge-track.core span, .student-summary-track.core span { background:#6c55c7; }
     .paper-signature { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; margin: 44px 4px 0 0; font-size: 14px; }
     .paper-school { margin: 55px 0 0; font-size: 17px; font-weight: 750; letter-spacing: 1px; }
-    .paper-separate-note { margin: 14px 0 0; font-size: 11px; line-height: 1.3; color: #5b6472; text-align: right; }
-    .paper-separate-note + .paper-school { margin-top: 36px; }
+    /* 따로 신청(소인수·공동) 안내: '총 n과목' 줄 바로 아래, 점검란(이수 학점 줄)과 같은 크기. */
+    .paper-separate-note { margin: 2px 0 0; font-size: 12px; line-height: 1.5; color: #3d4757; }
     .placeholder {
       display: flex; min-height: 600px; flex-direction: column; align-items: center; justify-content: center;
       padding: 32px; color: var(--muted); text-align: center;
@@ -1298,11 +1298,8 @@
       .print-page .paper-total { margin-top: 6mm; font-size: 12px; line-height: 1.6; }
       .print-page .paper-signature { gap: 2.5mm; margin-top: 9mm; font-size: 12px; }
       .print-page .paper-school { margin-top: 12mm; font-size: 15px; }
-      .print-page .paper-separate-note { margin-top: 2mm; font-size: 9px; }
-      .print-page .paper-separate-note + .paper-school { margin-top: 8mm; }
-      .print-page.paper-compact .paper-separate-note + .paper-school { margin-top: 6mm; }
-      .print-page.paper-dense .paper-separate-note { margin-top: 1mm; font-size: 8px; }
-      .print-page.paper-dense .paper-separate-note + .paper-school { margin-top: 4mm; }
+      .print-page .paper-separate-note { margin-top: .5mm; font-size: 10px; line-height: 1.35; }
+      .print-page.paper-dense .paper-separate-note { margin-top: 0; font-size: 9px; line-height: 1.25; }
       /* 15과목 이상: 행 높이를 줄인다. */
       .print-page.paper-compact .paper-title { margin-bottom: 4mm; font-size: 22px; }
       .print-page.paper-compact .certificate-table th, .print-page.paper-compact .certificate-table td { height: 6.4mm; padding: .4mm 2mm; }

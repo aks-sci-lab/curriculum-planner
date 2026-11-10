@@ -1049,6 +1049,29 @@
     // afterWrite: 자료를 실제로 교체한 직후(새로고침 직전)에 한 번 부른다. 파일 연결처럼 교체가 끝난 뒤에만 해야 하는 일에 쓴다.
     // confirmed: 호출한 쪽에서 이미 교체 확인을 받았을 때(PC 파일이 바뀌어 불러올 때) 확인 창을 다시 띄우지 않는다.
     async function restoreWorkspaceBackup(file, afterWrite = null, { confirmed = false } = {}) {
+      // 확인 창 문구(학생 수는 현재 차수 명단 기준, 성명은 싣지 않는다).
+      function restoreBackupConfirmText(backup, fileName) {
+        const created = new Date(backup.createdAt);
+        const pad = (value) => String(value).padStart(2, "0");
+        const when = Number.isFinite(created.getTime())
+          ? `${created.getFullYear()}. ${created.getMonth() + 1}. ${created.getDate()}. ${pad(created.getHours())}:${pad(created.getMinutes())}`
+          : "알 수 없음";
+        const students = Array.isArray(backup.workspace?.students) ? backup.workspace.students : [];
+        const byGrade = new Map();
+        for (const student of students) byGrade.set(String(student.grade), (byGrade.get(String(student.grade)) || 0) + 1);
+        const round = backup.workspace?.currentRound ? `${backup.workspace.currentRound}차 ` : "";
+        const counts = students.length
+          ? `${round}${[...byGrade].sort().map(([grade, count]) => `현 ${grade}학년 ${count}명`).join(" · ")}`
+          : "학생 결과 없음";
+        return [
+          `백업 파일${fileName ? ` '${fileName}'` : ""}의 편제표·차수·선택 그룹으로 이 브라우저의 자료를 바꿉니다.`,
+          "",
+          `· 저장 시각: ${when}`,
+          `· 학생: ${counts}`,
+          "",
+          "현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다."
+        ].join("\n");
+      }
       if (!file) return false;
       const previous = new Map();
       const written = [];
@@ -1087,7 +1110,14 @@
           );
           entries.push([key, value]);
         }
-        if (!confirmed && !window.confirm("백업에 포함된 편제표·차수·선택 그룹으로 이 브라우저의 자료를 교체합니다. 현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다.")) return false;
+        if (!confirmed) {
+          // 복원 확인은 앱 확인 창(appConfirm): 파일 이름·저장 시각·학생 수를 보여 준다(앱 확인 창이 없으면 브라우저 confirm).
+          const text = restoreBackupConfirmText(backup, file?.name);
+          const ok = typeof appConfirm === "function"
+            ? await appConfirm(text, { title: "백업 복원", ok: "복원", cancel: "취소" })
+            : window.confirm(text);
+          if (!ok) return false;
+        }
         entries.push([WORKSPACE_SAVED_AT_KEY, String(Date.now())]);
         // 새 저장소를 쓰면 작업 자료는 IndexedDB에 통째로 바꿔 쓰고(한 번에), localStorage에는 그룹 설정과 작은 기록만 쓴다.
         const useStore = typeof workspaceStoreState !== "undefined" && workspaceStoreState.active;
@@ -4005,12 +4035,12 @@
           ${gauge}
           <div class="paper-closing">
           <p class="paper-total">총 ${selections.length}과목(${totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
+          ${hiddenSeparate ? '<p class="paper-separate-note">소인수·공동교육과정은 따로 신청합니다.</p>' : ""}
           <div class="paper-signature">
             <div>${escapeHtml(String($("#confirmDate").value || "").trim() || "　　　년　　월　　일")}</div>
             <div>학생: ${escapeHtml(student.name)}&nbsp;&nbsp;&nbsp; (인)</div>
             <div>학부모:　　　　　　　　　(인)</div>
           </div>
-          ${hiddenSeparate ? '<p class="paper-separate-note">소인수·공동교육과정은 따로 신청합니다.</p>' : ""}
           <p class="paper-school">${escapeHtml(String($("#schoolName").value || "").trim() || "　　　　　　　　　　")}&nbsp; 귀하</p>
           </div>
         </div>
