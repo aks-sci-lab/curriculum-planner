@@ -1101,6 +1101,8 @@ test("the shared guidance banner says the shortfall note only on step 4 and give
   const six = banner(8);
   assert.doesNotMatch(six, /기준 미달/);
   assert.match(six, /6단계는 4단계에서 정한 개설 과목·분반 수로/);
+  assert.doesNotMatch(six, /위 '차수'/, "머리 줄 '결과 차수'와 헷갈리지 않게 6단계 화면의 차수를 가리킨다");
+  assert.equal(el("#workspaceRound").disabled, true, "6단계에서는 머리 줄 결과 차수를 잠근다");
   assert.equal(el("#workflowNextAction").textContent, "집계·개설 확정으로", "확정 전이면 확정하러 가기");
   ctx.locked = true;
   banner(8);
@@ -1127,4 +1129,45 @@ test("지금 반 수와 내년 학급 수가 다르면 4단계·5단계 화면�
   vm.runInContext(hoursStats.slice(hoursStats.indexOf("function hoursRosterClasses("), hoursStats.indexOf("function hoursItemKey(")), hours);
   assert.equal(hours.hoursRosterClasses({ grade: "2", source: { round: "2" } }), 10);
   assert.equal(hours.hoursRosterClasses({ grade: "1", source: null }), null);
+});
+
+test("5단계: 확정 전 차수를 4단계 기준 비율이 잘못돼 읽지 못하면 그 차수만 건너뛰고 확인 항목으로 알린다", () => {
+  const entries = [
+    { grade: "2", semester: "1", subject: "문학", area: "국어", credit: 4, kind: "지정", names: 1, nameIndex: 0 },
+    { grade: "2", semester: "1", subject: "지구과학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 }
+  ];
+  const confirmed = { rows: [{ grade: "1", name: "물리학", semester: "1", classCount: 2, enrollment: 45, decision: "open" }] };
+  const locked = { "1": false, "2": true };
+  const layout = { rows: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: () => null },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
+      roundStatuses: { "2": { status: "confirmed", snapshot: confirmed } } },
+    $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
+    curriculumCohortLayout: (year) => year === "2026" ? layout : null,
+    curriculumPlanEntries: () => ({ entries, issues: [] }),
+    applicationRoundNumbers: () => ["1", "2"],
+    roundStatusData: () => ({ students: [{ grade: "1" }] }),
+    isRoundLocked: (round) => locked[round],
+    // 확정 전 차수는 지금 4단계 기준으로 집계한다 → 기준 비율 칸이 잘못되면 aggregateThresholds가 예외를 낸다.
+    buildRoundSnapshot: () => { throw new Error("개설 기준은 1~200%, 분반 기준은 1~300%의 정수로 입력하세요."); },
+    roundSnapshotDrift: () => [],
+    normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "").toLowerCase(),
+    resultExampleList: (items) => items.join(", "),
+    columnName: (index) => String.fromCharCode(65 + index),
+    escapeHtml: String
+  });
+  vm.runInContext(hoursStats, ctx);
+  // 근거 2차(확정)는 읽고, 앞 차수 1차(확정 전)의 폐강 정보만 건너뛴다.
+  const stats = ctx.computeHoursStats("2027");
+  assert.equal(stats.items.find((item) => item.subject === "문학").classes, 10, "5단계 표는 계속 계산된다");
+  const note = stats.issues.find((issue) => issue.thresholdRounds);
+  assert.ok(note && note.level === "warning" && note.action === "4");
+  assert.match(note.text, /^1차 기준 설정 값이 올바르지 않아 폐강 정보를 읽지 못했습니다/);
+  // 근거 차수 자체가 확정 전이면: 그 차수만 건너뛰고 '결과가 없다'고 하지 않는다.
+  locked["2"] = false;
+  const unconfirmed = ctx.computeHoursStats("2027");
+  assert.ok(unconfirmed.issues.some((issue) => /^2차 기준 설정 값이 올바르지 않아 수강신청 결과를 읽지 못했습니다/.test(issue.text)));
+  assert.equal(unconfirmed.issues.some((issue) => /수강신청 결과가 없어/.test(issue.text)), false);
+  assert.equal(unconfirmed.items.find((item) => item.subject === "문학").classes, 10);
 });

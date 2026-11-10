@@ -57,6 +57,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(300);
   console.log("compare:", (await page.locator('section[aria-label="편성 방식 비교"]').innerText()).replace(/\s+/g, " ").slice(0, 400));
   await shot("03-compare.png");
+  // 진급 때 반 편성: 기본(학급 수 같음) '아직 모름' → '그대로 올라감'이면 담임반 묶기도 추천 대상
+  console.log("promotion default:", await page.getByLabel("현 1학년 진급 때 반 편성").inputValue(), "|", await page.locator("#classSectionsClassMapLine").innerText());
+  await page.getByLabel("현 1학년 진급 때 반 편성").selectOption("same"); await sleep(400);
+  await page.getByRole("button", { name: "방식 비교·추천" }).click(); await sleep(300);
+  await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
+  console.log("compare with 그대로:", (await page.locator('section[aria-label="편성 방식 비교"] p.cs-note').first().innerText()).slice(0, 120),
+    "| excluded tags:", await page.locator('section[aria-label="편성 방식 비교"] .cs-tag', { hasText: "추천 제외" }).count());
+  await page.getByLabel("현 1학년 진급 때 반 편성").selectOption("unknown"); await sleep(300);
+  await page.getByLabel("편성 방식", { exact: true }).selectOption("move"); await sleep(300);
   // 교사·시간 설정: 5단계 교사 수로 명단, 한 교사 불가 시간, 창체 고정
   await page.getByRole("button", { name: "교사·시간 설정" }).click();
   await page.getByRole("button", { name: "5단계 교사 수로 명단 만들기" }).click();
