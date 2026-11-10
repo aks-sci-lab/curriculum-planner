@@ -865,8 +865,8 @@ function courseClient_() {
       <h2 id="aggregateSettingsTitle">집계 기준 설정</h2>
       <p class="note" id="aggregateSettingsLockNote"></p>
       <div class="aggregate-settings">
-        <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90"></div>
-        <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110"></div>
+        <div class="field"><label for="openingPercent">개설 기준 (%)</label><input id="openingPercent" type="number" min="1" max="200" step="1" value="90" aria-describedby="openingPercentError"><p class="field-error" id="openingPercentError" role="alert" hidden></p></div>
+        <div class="field"><label for="divisionPercent">분반 기준 (%)</label><input id="divisionPercent" type="number" min="1" max="300" step="1" value="110" aria-describedby="divisionPercentError"><p class="field-error" id="divisionPercentError" role="alert" hidden></p></div>
         <div class="field"><label for="maxClassSize">반별 최대 인원 (명)</label><input id="maxClassSize" type="number" min="1" max="99" step="1" value="34"></div>
         <div class="field"><label for="nextYearClasses2">내년 2학년 학급 수</label><input id="nextYearClasses2" class="next-year-class-input" data-next-grade="2" type="number" min="0" max="40" step="1" placeholder="명단 반 수"></div>
         <div class="field"><label for="nextYearClasses3">내년 3학년 학급 수</label><input id="nextYearClasses3" class="next-year-class-input" data-next-grade="3" type="number" min="0" max="40" step="1" placeholder="명단 반 수"></div>

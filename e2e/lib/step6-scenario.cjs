@@ -28,7 +28,14 @@ async function setupTeachers(page) {
   await page.locator("#classSectionsTeachersOpen").click();
   await page.locator("#classSectionsTeacherDialog[open]").waitFor();
   await page.getByRole("button", { name: "5단계 교사 수로 명단 만들기" }).click(); await sleep(300);
-  let count = await page.locator("[data-cs-t$='|name']").count();
+  // 만들기 → 두 명 삭제 → 다시 만들기: 교사 id·이름이 겹치지 않아야 한다
+  const first = await page.locator("[data-cs-t$='|name']").count();
+  for (let k = 0; k < 2; k++) { await page.locator("[data-cs-t-remove]").first().click(); await sleep(200); }
+  await page.getByRole("button", { name: "5단계 교사 수로 명단 만들기" }).click(); await sleep(400);
+  const names = await page.locator("[data-cs-t$='|name']").evaluateAll((els) => els.map((e) => e.value));
+  const idWarning = await page.locator("#classSectionsTeacherIdWarning").innerText().catch(() => "");
+  const rebuild = { first, afterRebuild: names.length, duplicateNames: names.filter((n, i) => n && names.indexOf(n) !== i), idWarning };
+  let count = names.length;
   const fromHours = count;
   for (const t of SPECIAL_TEACHERS) {
     await page.getByRole("button", { name: "교사 추가" }).click(); await sleep(200);
@@ -43,7 +50,7 @@ async function setupTeachers(page) {
   await page.getByRole("button", { name: "창체·진로 금 6·7교시 넣기" }).click(); await sleep(300);
   const dialogText = await page.locator("#classSectionsTeacherDialog").innerText();
   await page.locator("#classSectionsTeacherDialog").getByRole("button", { name: "닫기" }).first().click(); await sleep(300);
-  return { fromHours, total: await page.locator("[data-cs-t$='|name']").count().catch(() => count), dialogHasFixed: /금6|금 6/.test(dialogText) };
+  return { rebuild, fromHours, total: await page.locator("[data-cs-t$='|name']").count().catch(() => count), dialogHasFixed: /금6|금 6/.test(dialogText) };
 }
 
 // 그룹 키 '현학년:학기:그룹명' → 편제표 묶음(학점)
