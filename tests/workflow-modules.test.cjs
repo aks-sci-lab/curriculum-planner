@@ -1174,3 +1174,14 @@ test("5단계: 확정 전 차수를 4단계 기준 비율이 잘못돼 읽지 �
   assert.equal(second.label, "2학년(2026 입학 · 현 1학년 · 4단계 기준 설정 오류)", "'결과 없음'이 아니라 기준 설정 오류");
   assert.match(ctx.hoursSettingsSummary(unconfirmed), /data-hours-thresholds="2"[^>]*>현1 · 4단계 기준 설정 오류</);
 });
+
+test("5단계 담당 교과: 교과(군) '기술·가정/정보'는 과목명으로 나눈다(기술⋅가정이 정보 행에 들어가지 않게)", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(hoursStats.slice(hoursStats.indexOf("function hoursDefaultDepartment("), hoursStats.indexOf("function hoursSourceResult(")), ctx);
+  assert.equal(ctx.hoursDefaultDepartment("기술⋅가정", "기술·가정/정보"), "기술가정");
+  assert.equal(ctx.hoursDefaultDepartment("기술·가정", "기술·가정/정보"), "기술가정");
+  assert.equal(ctx.hoursDefaultDepartment("정보", "기술·가정/정보"), "정보");
+  assert.equal(ctx.hoursDefaultDepartment("인공지능 기초", "기술·가정/정보"), "정보");
+  assert.equal(ctx.hoursDefaultDepartment("로봇과 공학세계", "기술·가정/정보"), "기술가정");
+  assert.equal(ctx.hoursDefaultDepartment("일본어", "제2외국어"), "제2외국어");
+});

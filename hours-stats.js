@@ -140,6 +140,9 @@ function hoursDefaultDepartment(subject, area = "") {
   if (/음악/.test(name)) return "음악";
   if (/미술/.test(name)) return "미술";
   if (/일본어|중국어|프랑스어|독일어|스페인어|러시아어|아랍어|베트남어|한문/.test(name)) return "제2외국어";
+  // 교과(군) '기술·가정/정보'는 두 교과를 묶은 이름이라 과목명으로 먼저 나눈다(기술⋅가정이 정보 행에 들어가지 않게).
+  if (/기술.?가정|가정과학|생활과학|로봇|공학|창의.?공학|지식재산/.test(name)) return "기술가정";
+  if (/정보|인공지능|데이터|소프트웨어|프로그래밍|컴퓨터/.test(name)) return "정보";
   if (/국어/.test(field)) return "국어";
   if (/수학/.test(field)) return "수학";
   if (/영어/.test(field)) return "영어";
@@ -148,8 +151,8 @@ function hoursDefaultDepartment(subject, area = "") {
   if (/과학/.test(field)) return "과학-공통";
   if (/체육/.test(field)) return "체육";
   if (/예술/.test(field)) return /미술/.test(name) ? "미술" : "음악";
-  if (/정보/.test(field)) return "정보";
   if (/기술/.test(field)) return "기술가정";
+  if (/정보/.test(field)) return "정보";
   if (/외국어|한문/.test(field)) return "제2외국어";
   if (/교양/.test(field)) return "교양";
   return "기타";

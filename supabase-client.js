@@ -544,13 +544,20 @@ var updateRetakeReadiness;
     gradeTabs.forEach((tab) => tab.setAttribute("aria-disabled", "true"));
     byId("cloudRosterInput").disabled = true;
     byId("cloudTeacherMessage").textContent = "처리 중…";
-    byId("teacherLoginMessage").textContent = "로그인 처리 중…";
+    // 머리 줄 문구: 로그인 전(로그인·토큰 교환 중)에만 '로그인 처리 중…'을 보이고, 끝나면 원래 문구로 되돌린다.
+    const loginMessage = byId("teacherLoginMessage");
+    const loginBefore = loginMessage.textContent;
+    const loginBusyText = "로그인 처리 중…";
+    if (!session) loginMessage.textContent = loginBusyText;
+    let failed = false;
     try {
       await action();
     } catch (error) {
+      failed = true;
       byId("cloudTeacherMessage").textContent = error.message;
-      byId("teacherLoginMessage").textContent = error.message;
+      loginMessage.textContent = error.message;
     } finally {
+      if (!failed && loginMessage.textContent === loginBusyText) loginMessage.textContent = session ? "" : (loginBefore === loginBusyText ? "" : loginBefore);
       teacherBusy = false;
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
       gradeTabs.forEach((tab) => tab.removeAttribute("aria-disabled"));

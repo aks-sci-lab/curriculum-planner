@@ -576,6 +576,11 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.ok(f.storage.has("curriculum-teacher-session-v1"));
   assert.equal(f.history[0], "https://school.example/app/");
   assert.equal(f.step, 2);
+  // 로그인(토큰 교환)이 끝나면 머리 줄의 '로그인 처리 중…'을 지우고, 로그인 뒤 다른 작업에서는 다시 쓰지 않는다.
+  assert.notEqual(f.elements.teacherLoginMessage.textContent, "로그인 처리 중…");
+  await f.fire("cloudRefreshEvents", "click");
+  await f.settle();
+  assert.notEqual(f.elements.teacherLoginMessage.textContent, "로그인 처리 중…");
   f.elements.schoolName.value = "가상학교";
   f.elements.schoolYear.value = "2026";
   f.roster = Array.from({length:350},(_,index)=>{
