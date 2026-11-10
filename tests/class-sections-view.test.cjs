@@ -112,9 +112,12 @@ test("restore keeps settings and round entries only; app wiring stores classSect
 test("plan 교과(군) gives the department default and the NEIS 편제명; class-unit subjects lower the suggested block count", () => {
   const ctx = context();
   ctx.collectApplicationSubjects = ({ currentGrade }) => currentGrade === "1"
-    ? { "2": [{ subject: "지구과학", area: "사회(역사/도덕 포함)", credit: "4" }, { subject: "물리학", area: "과학", credit: 3 }] } : null;
+    ? { "2": [{ subject: "지구과학", area: "사회(역사/도덕 포함)", credit: "4" }, { subject: "물리학", area: "과학", credit: 6, onceCredit: 3 }] } : null;
   const group = ctx.classSectionsSource("1").groups[0];
   const earth = group.courses.find((course) => course.key === "지구과학");
+  // 한 행 두 학기 과목(행 학점 6 = 학기마다 3): 신청 학점이 없을 때 예비값은 그 학기 칸 학점(onceCredit)
+  assert.equal(group.courses.find((course) => course.key === "물리학").planCredits, 3);
+  assert.equal(earth.planCredits, 4);
   assert.equal(earth.area, "사회(역사/도덕 포함)");
   assert.equal(earth.department, "과학-지구", "name rule first");
   assert.equal(ctx.classSectionsNeisFamily(earth.area, earth.department), "사회(역사/도덕포함)");

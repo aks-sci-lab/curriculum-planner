@@ -148,7 +148,7 @@ function classSectionsPlanSubjects(grade) {
   try { subjects = collectApplicationSubjects({ includeExcluded: true, currentGrade: String(grade) }); } catch { subjects = null; }
   for (const item of subjects?.[String(Number(grade) + 1)] || []) {
     const name = key(item.subject);
-    if (name && !map.has(name)) map.set(name, { area: String(item.area || "").trim(), credit: Number(String(item.credit || "").match(/\d+/)?.[0]) || 0 });
+    if (name && !map.has(name)) map.set(name, { area: String(item.area || "").trim(), credit: Number(String(item.onceCredit || item.credit || "").match(/\d+/)?.[0]) || 0 });
   }
   return map;
 }
