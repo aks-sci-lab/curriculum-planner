@@ -158,7 +158,7 @@ function parseResultSheet(sheet, options) {
       merged.students.push({ id: `app-${grade}-${entry.classroom}-${entry.number}-${entry.name}`, ...entry, selections: [], totalCredits: 0 });
     }
     sortResultStudents(merged.students);
-    return { ...base, data: { students: merged.students, courses: merged.courses } };
+    return { ...base, separatedCourses: merged.separated || [], data: { students: merged.students, courses: merged.courses } };
   }
   base.format = "wide";
   let data;
@@ -192,6 +192,23 @@ function countResultSelections(students, courses) {
   return counts;
 }
 
+// 소인수·공동교육과정은 따로 신청하므로(1단계 편제표 학기 칸 메모·편성 영역 '소인수·공동') 결과 파일에 있어도 뺀다.
+// items = 그 학년 신청 과목 목록(collectApplicationSubjects includeExcluded, 따로 신청 과목은 separate: true). 뺀 과목 이름을 돌려준다.
+function stripSeparateResultCourses(data, items) {
+  const separate = new Set((items || []).filter((item) => item.separate).map((item) => normalizeResultCourseName(item.subject)));
+  if (!separate.size || !data?.courses?.length) return [];
+  const removed = data.courses.filter((course) => separate.has(normalizeResultCourseName(course.name)));
+  if (!removed.length) return [];
+  const columns = new Set(removed.map((course) => String(course.column)));
+  data.courses = data.courses.filter((course) => !columns.has(String(course.column)));
+  for (const student of data.students || []) {
+    if (!(student.selections || []).some((selection) => columns.has(String(selection.column)))) continue;
+    student.selections = student.selections.filter((selection) => !columns.has(String(selection.column)));
+    student.totalCredits = student.selections.reduce((total, selection) => total + (Number(selection.credits) || 0), 0);
+  }
+  return removed.map((course) => course.name);
+}
+
 function analyzeResultCandidate(candidate, options) {
   const issues = { blocking: [], warnings: [], info: [], actions: [] };
   const addAction = (target, label) => {
@@ -204,6 +221,11 @@ function analyzeResultCandidate(candidate, options) {
   const grade = String(options.grade);
   const targetGrade = String(Number(grade) + 1);
   const target = resultTargetLabel(grade);
+  const separated = [...new Set([...(candidate.separatedCourses || []),
+    ...stripSeparateResultCourses(candidate.data, options.subjects?.[targetGrade])])];
+  if (separated.length) {
+    issues.info.push(`소인수·공동교육과정 ${separated.length}과목은 따로 신청하므로 결과에서 뺐습니다: ${resultExampleList(separated)}. 개설 여부와 반 수는 5단계 시수 통계에서 직접 입력하세요.`);
+  }
   const plan = options.cohortYear ? `${options.cohortYear}학년도 입학생 편제표(${targetGrade}학년 열)` : `${targetGrade}학년 편제표`;
   const students = candidate.data.students;
   const courses = candidate.data.courses.filter((course) =>
