@@ -1660,18 +1660,70 @@ function classSectionsClassUnitTrial(input, unitKeys) {
   const homerooms = [...ids].sort((a, b) => (Number(a) - Number(b)) || a.localeCompare(b)).map((id) => ({ id }));
   const keys = new Set(unitKeys);
   const courses = (input.courses || []).map((raw) => ({ ...raw, key: classSectionsText(raw.key ?? raw.name) }));
-  const split = classSectionsClassUnitSplit({ allowMove: true, homerooms,
-    courses: courses.filter((course) => keys.has(course.key)).map((course) => ({ key: course.key, sections: course.sections ?? course.classCount })), students });
+  const unitCourses = courses.filter((course) => keys.has(course.key)).map((course) => ({ key: course.key, sections: course.sections ?? course.classCount }));
+  // 내년 반을 모르면(배정표 없음·새로 편성) 학생의 반은 지금 반이라 반별 희망을 쓸 수 없다: 화면과 같이 반을 차례로 나누고,
+  // 희망과 다른 학생·재신청 학생은 학교 전체 희망 비율로 어림한다(없는 반을 '이동'으로 공짜로 잡지 않음).
+  const roomsKnown = input.classUnitRoomsKnown !== false;
+  const split = classSectionsClassUnitSplit({ allowMove: true, homerooms, courses: unitCourses, students: roomsKnown ? students : [] });
   const choose = Number(input.choose) || (Array.isArray(input.blocks) ? input.blocks.length : Number(input.blocks)) || 1;
-  const moved = classSectionsClassUnitStudents({ students, choose, unitKeys: [...keys], byClass: split.assign });
   const allUnit = Object.values(split.assign).length && Object.values(split.assign).every(Boolean);
   const blockCount = Array.isArray(input.blocks) ? input.blocks.length : Number(input.blocks) || choose;
   const blocks = allUnit ? Math.max(1, blockCount - 1) : blockCount;
-  const trialInput = { ...input, courses: courses.map((course) => (keys.has(course.key) ? { ...course, mode: "class" } : course)), students: moved.students,
-    blocks: Array.isArray(input.blocks) ? input.blocks.slice(0, blocks) : blocks, classUnit: { choose, unitOf: moved.unitOf }, suggest: false };
-  const result = classSectionsSolve(trialInput);
   const unitRooms = Object.values(split.assign).filter(Boolean).length;
+  const trialCourses = courses.map((course) => (keys.has(course.key) ? { ...course, mode: "class" } : course));
+  const trialBlocks = Array.isArray(input.blocks) ? input.blocks.slice(0, blocks) : blocks;
+  if (!roomsKnown) {
+    const result = classSectionsSolve({ ...input, courses: trialCourses, blocks: trialBlocks, suggest: false });
+    const total = students.length;
+    const wish = (student) => classSectionsStudentCourseList(student).some((value) => keys.has(value));
+    const wishers = students.filter(wish).length;
+    // 반 하나 = 학생 1/count. 학급 단위 반의 비희망자 + 이동 반의 희망자.
+    const retake = Math.round(wishers * (count - unitRooms) / count);
+    const mismatched = Math.round((total - wishers) * unitRooms / count) + retake;
+    return { result, mismatched, total, rooms: { unit: unitRooms, move: count - unitRooms }, split, estimated: true, retakeEstimate: retake };
+  }
+  const moved = classSectionsClassUnitStudents({ students, choose, unitKeys: [...keys], byClass: split.assign });
+  const result = classSectionsSolve({ ...input, courses: trialCourses, students: moved.students, blocks: trialBlocks, classUnit: { choose, unitOf: moved.unitOf }, suggest: false });
   return { result, mismatched: moved.mismatched, total: moved.total, rooms: { unit: unitRooms, move: count - unitRooms }, split };
+}
+
+// 학급 단위 과목이 하나이고 '이동' 반 학생 중 그 과목을 고른 학생이 있으면(재신청 필요): 이동 반도 모두 학급 단위로 하면 어떻게 되는지 풀어 본다.
+// 재신청은 없어지지만 이동 반에서 그 과목을 고르지 않은 학생은 희망과 다르게 된다(그 수를 함께 알림).
+function classSectionsClassUnitRoomsSuggestion(result, input, deadline) {
+  const missed = (result.unassigned || []).filter((item) => item.reason === "class-unit-other-room");
+  if (!missed.length || !input?.classUnit?.unitOf || (deadline && classSectionsNow() > deadline)) return null;
+  const unitCourses = (input.courses || []).filter((course) => course.mode === "class");
+  if (unitCourses.length !== 1) return null;
+  const course = unitCourses[0];
+  const key = classSectionsText(course.key ?? course.name);
+  const unitOf = input.classUnit.unitOf;
+  const rooms = new Set();
+  const moveRooms = new Set();
+  let newlyMismatched = 0;
+  const students = (input.students || []).map((raw) => {
+    const studentKey = classSectionsText(raw.key);
+    const room = classSectionsKeyPart(classSectionsHomeroomOf(raw));
+    if (room) rooms.add(room);
+    const { classUnitMissed, ...rest } = raw;
+    const wishes = classSectionsStudentCourseList(raw);
+    if (unitOf[studentKey]) return { ...rest, courses: [...wishes, unitOf[studentKey]] };
+    if (room) moveRooms.add(room);
+    const missing = (classUnitMissed || []).map(classSectionsText);
+    if (!missing.length) newlyMismatched += 1;
+    return { ...rest, courses: [...wishes, ...missing] };
+  });
+  const count = Math.max(Number(input.homeroomCount) || 0, rooms.size);
+  if (!moveRooms.size || !count) return null;
+  const trial = classSectionsClassUnitTrial({ ...input, classUnitRoomsKnown: true, classUnit: undefined, students,
+    courses: (input.courses || []).map((item) => (item === course ? { ...item, sections: count } : item)) }, [key]);
+  if (!trial || trial.rooms.move) return null;
+  const others = trial.result.unassigned.filter((item) => item.reason !== "class-unit-other-room");
+  if (others.length || trial.result.issues.some((issue) => issue.severity === "error" && issue.type !== "unassigned")) return null;
+  const name = classSectionsText(course.name ?? key);
+  const retake = new Set(missed.map((item) => item.studentKey)).size;
+  const from = Number(course.sections ?? course.classCount) || 0;
+  return { type: "class-unit-rooms", verified: true, courseKey: key, courseName: name, sections: count, fromSections: from, mismatched: newlyMismatched, retake,
+    message: `'이동' 반 ${moveRooms.size}개도 ${classSectionsJosa(name, "을/를")} 학급 단위로 하면(${name} 학급 ${from}→${count}개, 모든 반 전원) 재신청이 필요한 학생 ${retake}명이 없어집니다 · 대신 그 반에서 ${classSectionsJosa(name, "을/를")} 고르지 않은 학생 ${newlyMismatched}명이 희망과 다르게 됩니다.` };
 }
 
 function classSectionsTeacherSuggestions(model, result, input, deadline) {
@@ -1698,7 +1750,7 @@ function classSectionsTeacherSuggestions(model, result, input, deadline) {
     // 성립 = 이동 반 학생의 이동 과목이 모두 배정되고 오류가 없음. 학급 단위 과목을 골랐는데 이동 반인 학생은 '재신청 필요'로 따로 알린다.
     const others = trial.result.unassigned.filter((item) => item.reason !== "class-unit-other-room");
     const hard = trial.result.issues.filter((issue) => issue.severity === "error" && issue.type !== "unassigned");
-    trial.retake = new Set(trial.result.unassigned.filter((item) => item.reason === "class-unit-other-room").map((item) => item.studentKey)).size;
+    trial.retake = trial.estimated ? trial.retakeEstimate : new Set(trial.result.unassigned.filter((item) => item.reason === "class-unit-other-room").map((item) => item.studentKey)).size;
     return !others.length && !hard.length ? trial : null;
   };
   const pct = (n, total) => (total ? Math.round(n / total * 100) : 0);
@@ -1716,9 +1768,10 @@ function classSectionsTeacherSuggestions(model, result, input, deadline) {
     const { list, trial } = best;
     const names = list.map((course) => course.name).join("·");
     const rooms = `${trial.rooms.unit}개 반 전원이 그 과목${trial.rooms.move ? `, 나머지 ${trial.rooms.move}개 반은 이동` : ""}`;
+    const about = trial.estimated ? "약 " : "";
     out.push({ type: "class-unit", verified: true, courseKey: list[0].key, courseKeys: list.map((course) => course.key), courseName: names,
-      mismatched: trial.mismatched, total: trial.total, rooms: trial.rooms, retake: trial.retake,
-      message: `${classSectionsJosa(names, "을/를")} ${list.length > 1 ? "모두 " : ""}학급 단위로 운영하면(${rooms}) 교사 수 안에서 배정됩니다 · 희망과 다른 학생 ${trial.mismatched}명(${pct(trial.mismatched, trial.total)}%)${trial.retake ? ` · 그중 이동 반이라 그 과목을 못 들어 재신청이 필요한 학생 ${trial.retake}명` : ""}.` });
+      mismatched: trial.mismatched, total: trial.total, rooms: trial.rooms, retake: trial.retake, estimated: Boolean(trial.estimated),
+      message: `${classSectionsJosa(names, "을/를")} ${list.length > 1 ? "모두 " : ""}학급 단위로 운영하면(${rooms}) 교사 수 안에서 배정됩니다 · 희망과 다른 학생 ${about}${trial.mismatched}명(${pct(trial.mismatched, trial.total)}%)${trial.retake ? ` · 그중 이동 반이라 그 과목을 못 들어 재신청이 필요한 학생 ${about}${trial.retake}명` : ""}${trial.estimated ? " — 내년 반 배정표가 없어 학교 전체 희망 비율로 어림했습니다(배정표를 올리면 반별 희망으로 정해짐)" : ""}.` });
   }
   // 블록 시간을 바꿔서 풀리는 경우만(한 블록의 그 교과 분반이 그 교과 교사 전체보다 많으면 어느 시간이든 모자람).
   const totalTeachers = (dept) => {
@@ -1806,6 +1859,8 @@ function classSectionsSuggest(model, place, result, rng, deadline, input) {
   // 교사 수 부족(그 시간 가능한 교사 < 블록의 교과 분반): 블록 늘리기·학급 단위로 운영을 다시 풀어 확인, 시간 추천·교사 수 확인은 안내.
   suggestions.push(...classSectionsTeacherSuggestions(model, result, input, deadline));
   if (!result.unassigned.length) return suggestions;
+  const unitRooms = classSectionsClassUnitRoomsSuggestion(result, input, deadline);
+  if (unitRooms) suggestions.push(unitRooms);
   const structuralReasons = ["closed", "too-many", "class-unit-other-room"];
   const structural = result.unassigned.some((item) => structuralReasons.includes(item.reason));
   const onlyStructural = result.unassigned.every((item) => structuralReasons.includes(item.reason));
@@ -2657,7 +2712,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
   return [classSectionsText, classSectionsCompact, classSectionsNow, classSectionsRng, classSectionsSlot, classSectionsSlots, classSectionsOverlap,
     classSectionsStable, classSectionsHash, classSectionsSignature, classSectionsStudentCourseList, classSectionsHomeroomOf, classSectionsChangedStudents,
     classSectionsNormalize, classSectionsSupply, classSectionsPlacementNew, classSectionsCanPlace, classSectionsPut, classSectionsCooccurrence,
-    classSectionsInitialPlacement, classSectionsJosa, classSectionsClassUnitTrial, classSectionsClassUnitStudents, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
+    classSectionsInitialPlacement, classSectionsJosa, classSectionsClassUnitTrial, classSectionsClassUnitRoomsSuggestion, classSectionsClassUnitStudents, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
     classSectionsUnitDelta, classSectionsUnitApply, classSectionsUnitPlaceOne, classSectionsRouterRebuild, classSectionsRouterRecount,
     classSectionsRouterCost, classSectionsRouterSnapshot, classSectionsRouterRestore, classSectionsRouterSearch, classSectionsRouterSnapshotY,
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,
