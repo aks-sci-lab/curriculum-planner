@@ -208,14 +208,29 @@
     }
 
     let toastTimer = null;
+    // 알림: 몇 초 뒤(긴 문구는 조금 더) 사라지고, 닫기 단추·단계 이동(hideAppToast)으로 바로 닫는다.
+    // 알림이 떠 있는 동안에도 뒤의 단추를 누를 수 있게 알림 자체는 클릭을 받지 않는다(닫기 단추만).
     function showAppToast(message, kind = "success") {
       const toast = document.getElementById("appToast");
       if (!toast) return;
       toast.textContent = message;
+      if (typeof document.createElement === "function" && typeof toast.append === "function") {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "app-toast-close";
+        close.setAttribute("aria-label", "알림 닫기");
+        close.addEventListener("click", hideAppToast);
+        toast.append(close);
+      }
       toast.classList.toggle("error", kind === "error");
       toast.classList.add("visible");
       if (toastTimer !== null) clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove("visible"), 3000);
+      toastTimer = setTimeout(hideAppToast, Math.min(8000, 3000 + String(message).length * 40));
+    }
+
+    function hideAppToast() {
+      if (toastTimer !== null) { clearTimeout(toastTimer); toastTimer = null; }
+      document.getElementById("appToast")?.classList.remove("visible");
     }
     window.showAppToast = showAppToast;
 
@@ -1258,6 +1273,8 @@
     function switchWorkflowStep(step, skipPersist = false) {
       const next = Number(step);
       state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8].includes(next) ? next : 1;
+      // 앞 단계의 알림(예: 4단계 학급수 조정)이 다음 단계 단추를 가리지 않게 닫는다.
+      if (typeof hideAppToast === "function") hideAppToast();
       renderWorkflowLayout();
       $("#workflowMenuToggle").setAttribute("aria-expanded", "false");
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;

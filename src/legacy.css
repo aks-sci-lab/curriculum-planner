@@ -94,6 +94,11 @@
       opacity: 0; transform: translateY(-8px); pointer-events: none; transition: opacity .18s ease, transform .18s ease;
     }
     .app-toast.visible { opacity: 1; transform: translateY(0); }
+    .app-toast { padding-right: 38px; }
+    .app-toast-close { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; pointer-events: auto; }
+    .app-toast-close::before { content: "×"; font-size: 18px; line-height: 1; }
+    .app-toast:not(.visible) .app-toast-close { pointer-events: none; }
+    .app-toast-close:hover, .app-toast-close:focus-visible { background: #ffffff2e; }
     .app-toast.error { background: #9c3029; border-color: #7f241f; }
     .file-name { overflow: hidden; max-width: 100%; margin-top: 10px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
     .privacy-note { display: flex; gap: 7px; margin: 13px 0 0; color: #6d7890; font-size: 11px; line-height: 1.55; }
