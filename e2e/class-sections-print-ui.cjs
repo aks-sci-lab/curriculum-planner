@@ -396,6 +396,71 @@ function attendanceInfo(sheet) {
   const sameGrade = hrOptions.filter((text) => text.split(" ").slice(0, 2).join(" ") === hrOptions[0].split(" ").slice(0, 2).join(" ")).length;
   check(gradePrint === sameGrade, `학년 전체 인쇄: 반 ${sameGrade}개 = 현황 반 ${gradePrint}개`);
 
+  // 현2 → 3학년(택5 등 블록 열이 많음): 한 학기 현황은 두 장 안(9pt 두 줄 → 한 줄 '과목 · 교실' + 범례 → 8pt → 그래도 넘으면 세 장 + 상태 줄 알림)
+  console.log("▶ 현2 담임반 현황(블록 열 많음)");
+  const seniorIndex = hrOptions.findIndex((text) => /내년 3학년|현 2학년/.test(text));
+  check(seniorIndex >= 0, "현2 담임반이 목록에 있음", hrOptions.slice(-3));
+  if (seniorIndex >= 0) {
+    await page.getByLabel("담임반 고르기").selectOption({ index: seniorIndex }); await sleep(700);
+    const seniorCols = await page.locator("#classSectionsHomeroomTable thead tr:last-child th").count();
+    const seniorCount = Number(hrOptions[seniorIndex].match(/\((\d+)명/)?.[1]);
+    await page.getByRole("button", { name: "이 반 인쇄" }).click(); await sleep(900);
+    const sp = await page.evaluate(() => {
+      const pages = [...document.querySelectorAll("#printBatch .cs-hr-page")];
+      return { pages: pages.length, level: pages[0]?.dataset.level, font: pages[0]?.dataset.font, labels: pages.map((el) => el.dataset.page),
+        rows: pages.map((el) => [...el.querySelectorAll("tbody tr")].filter((tr) => !tr.querySelector('td[data-kind="left"]')).length),
+        legend: pages.map((el) => el.querySelectorAll('tbody td[data-kind="left"]').length),
+        legendText: document.querySelector('#printBatch .cs-hr-page td[data-kind="left"]')?.textContent.slice(0, 160) || "",
+        cell: document.querySelector("#printBatch .cs-hr-page tbody tr td:nth-child(4)")?.textContent || "",
+        att: document.querySelectorAll("#printBatch .cs-att-page").length, status: document.getElementById("classSectionsStatus")?.textContent || "" };
+    });
+    await page.emulateMedia({ media: "print" });
+    const seniorFont = await page.evaluate(() => { const td = document.querySelector("#printBatch .cs-hr-page tbody td"); return td ? parseFloat(getComputedStyle(td).fontSize) : 0; });
+    await page.emulateMedia({ media: null });
+    const seniorPdfPath = path.join(OUT, "16-homeroom-senior-print.pdf");
+    const seniorPdf = await page.pdf({ path: seniorPdfPath, format: "A4", preferCSSPageSize: true });
+    const seniorPdfPages = (seniorPdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length;
+    execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "192", "-png", "-singlefile", seniorPdfPath, path.join(OUT, "16-homeroom-senior-page1")]);
+    report.checks.seniorHomeroom = { option: hrOptions[seniorIndex], blockCols: seniorCols - 5, ...sp, cssFontPx: seniorFont, pdfPages: seniorPdfPages };
+    check(sp.pages <= 2, `현2 반 현황 ${sp.pages}쪽(두 장 이하) · ${sp.level}단계 ${sp.font}pt · 블록 열 ${seniorCols - 5}개`, report.checks.seniorHomeroom);
+    check(sp.rows.reduce((a, b) => a + b, 0) === seniorCount, `현2 반 현황 학생 ${sp.rows.join(" + ")} = ${seniorCount}명`);
+    check(seniorPdfPages === sp.pages + sp.att, `현2 반 인쇄 PDF ${seniorPdfPages}쪽 = 현황 ${sp.pages} + 분반 출석부 ${sp.att}(넘침 없음)`);
+    check(Math.abs(seniorFont - (sp.font === "8" ? 10.67 : 12)) < 0.1, `현2 반 인쇄 칸 글자 ${seniorFont}px = ${sp.font}pt`);
+    if (sp.level !== "1") {
+      check(sp.legend.at(-1) > 0 && sp.legend.slice(0, -1).every((n) => n === 0) && /^범례 — 강의실\(과목, 교실\) → 선생님:/.test(sp.legendText) && !/\n/.test(sp.cell) && / · /.test(sp.cell),
+        "한 줄 칸 '과목 · 교실' + 마지막 쪽 표 아래 범례", { cell: sp.cell, legend: sp.legendText });
+      check(/두 장에 맞추려고 한 줄 칸/.test(sp.status), "상태 줄에 한 줄 칸 안내", sp.status.slice(0, 160));
+    }
+    // 학년 전체(현2) 현황 쪽 수: 반마다 두 장 이하
+    await page.getByRole("button", { name: /^.+학년 전체 인쇄$/ }).click(); await sleep(1500);
+    const sg = await page.evaluate(() => {
+      const by = new Map();
+      for (const el of document.querySelectorAll("#printBatch .cs-hr-page")) {
+        const item = by.get(el.dataset.homeroom) || { pages: 0, level: el.dataset.level, font: el.dataset.font };
+        item.pages += 1; by.set(el.dataset.homeroom, item);
+      }
+      const list = [...by.values()];
+      const levels = {};
+      for (const item of list) levels[`${item.level}단계 ${item.font}pt`] = (levels[`${item.level}단계 ${item.font}pt`] || 0) + 1;
+      return { rooms: list.length, statusPages: list.reduce((a, b) => a + b.pages, 0), maxPages: Math.max(0, ...list.map((item) => item.pages)), levels,
+        status: document.getElementById("classSectionsStatus")?.textContent || "" };
+    });
+    report.checks.seniorGrade = sg;
+    check(sg.maxPages <= 2, `현2 학년 전체: 반 ${sg.rooms}개 · 현황 ${sg.statusPages}쪽(반마다 최대 ${sg.maxPages}쪽) · ${JSON.stringify(sg.levels)}`, sg);
+    // 엑셀(담임학급별 zip의 그 반 파일): 같은 단계 규칙, 엑셀 쪽 수 ≥ 인쇄 쪽 수, 배율 = 단계 최소 이상
+    const seniorLabel = hrOptions[seniorIndex].split(" (")[0].replace(/\s+/g, "");
+    const seniorFile = hrFiles.find((name) => name.includes(`_${seniorLabel}_`));
+    if (seniorFile) {
+      const setup = hrSetup(hrXml(path.join(OUT, "downloads", "homeroom", seniorFile), 1));
+      const sheetRows = readXlsxAll(path.join(OUT, "downloads", "homeroom", seniorFile))[0].rows;
+      const legendRow = sheetRows.find((row) => /^범례 — /.test(row[0] || ""));
+      report.checks.seniorExcel = { file: seniorFile, ...setup, legend: Boolean(legendRow) };
+      check(setup.breaks.length + 1 >= sp.pages && setup.scale >= 80 && (sp.level === "1" || Boolean(legendRow) || setup.breaks.length + 1 > 2),
+        `현2 반 엑셀: ${setup.breaks.length + 1}쪽(≥ 인쇄 ${sp.pages}) · 배율 ${setup.scale}% · 범례 ${legendRow ? "있음" : "없음"}`, report.checks.seniorExcel);
+    } else check(false, "현2 반 엑셀 파일 찾기", { seniorLabel, sample: hrFiles.slice(-3) });
+    await page.getByLabel("담임반 고르기").selectOption({ index: 0 }); await sleep(700);
+  }
+
   // ⑤ 학생 배부용 '이동수업 안내' 쪽지: 미리 보기(첫 학생) · 한 장에 4장 · 이 반 인쇄 PDF 쪽 수 = ceil(학생/4) · 6장 확인 · 학년 전체
   console.log("▶ 학생 배부용 쪽지");
   const handout = page.locator("#classSectionsHandoutPreview");

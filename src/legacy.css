@@ -2429,6 +2429,13 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 .cs-hr-measure .cs-att-table td, .cs-hr-measure .cs-att-table th { height:auto; padding:.2mm .8mm; line-height:1.2; border-color:#444; overflow-wrap:anywhere; }
 .cs-hr-measure .cs-att-table td[data-kind="title"] { height:7mm; font-size:16px; }
 .cs-hr-measure .cs-att-table td[data-kind="note"] { font-size:12px; }
+/* 담임 현황 단계(classSectionsHomeroomStatusChoose): 8pt 단계 = 10.67px, 범례 줄은 왼쪽 정렬 — 인쇄·재기 모두 */
+@media print {
+  .print-page.cs-hr-page[data-font="8"] .cs-att-table, .print-page.cs-hr-page[data-font="8"] .cs-att-table td[data-kind="note"] { font-size:10.67px; }
+  .print-page.cs-hr-page .cs-att-table td[data-kind="left"] { text-align:left; white-space:pre-line; line-height:1.3; }
+}
+.cs-hr-measure[data-font="8"] .cs-att-table, .cs-hr-measure[data-font="8"] .cs-att-table td[data-kind="note"] { font-size:10.67px; }
+.cs-hr-measure .cs-att-table td[data-kind="left"] { text-align:left; white-space:pre-line; line-height:1.3; }
 /* 학생 배부용 '이동수업 안내' 쪽지(classSectionsHandoutHtml): 글자 크기는 --ho-font(인쇄 장마다 classSectionsHandoutLayout이 정함) */
 .cs-ho-box { margin-top:8px; padding-top:6px; border-top:1px solid #d7deed; }
 .cs-ho { box-sizing:border-box; padding:3mm 4mm; border:1px dashed #777; font-size:var(--ho-font, 12px); color:#111; background:#fff; display:flex; flex-direction:column; overflow:hidden; min-width:0; }

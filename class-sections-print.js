@@ -265,11 +265,18 @@ function classSectionsHomerooms(infos, roster, extras = {}) {
 }
 
 // ① 그 반 '이동수업 현황' 시트: 행 = 학생, 열 = 블록(그룹·블록·시간), 칸 = 과목 강의실 / 교실 · 교사. A4 가로.
-// 인쇄는 칸 글자 9pt 이상 + 쪽 나눔(classSectionsHomeroomStatusPlan): 학생을 번호순으로 고르게 나눠 1~3쪽, 쪽마다 제목·머리글 반복.
-// 엑셀은 같은 나눔을 수동 쪽 나눔(rowBreaks) + 배율(scale, 90% 이상 = 10pt 글자가 9pt 이상) + 머리글 행 반복 + 오른쪽 위 '쪽/전체'로.
-// 칸 줄 수는 열 폭과 글자 수로 어림한다(한글 1.95, 그 밖 1.1, 띄어쓰기 0.6 폭 단위; 폭 단위 = 엑셀 열 너비 1, 90% 배율 기준).
+// 한 학기 현황은 두 장 안에(사용자 결정). 단계: 1) 9pt 두 줄 칸 → 2) 9pt 한 줄 칸 '과목 · 교실' + 표 아래 범례(강의실 → 교사, 분반마다 한 번)
+// → 3) 한 줄 칸 8pt → 4) 그래도 넘으면 세 장 이상(상태 줄에 알림). classSectionsHomeroomStatusChoose가 단계를 고른다.
+// 쪽 나눔(classSectionsHomeroomStatusPlan): 학생을 번호순으로 고르게 나눠 쪽마다 제목·머리글 반복, 범례는 마지막 쪽 표 아래.
+// 인쇄는 브라우저에서 잰 높이로, 엑셀은 어림으로(행 높이 고정이라 넉넉히 → 엑셀 쪽 수 ≥ 인쇄 쪽 수) 같은 단계 규칙을 따른다.
+// 엑셀: 수동 쪽 나눔(rowBreaks) + 배율(scale: 9pt 단계 90% 이상, 8pt 단계 80% 이상 — 10pt 글자 × 배율) + 머리글 행 반복 + 오른쪽 위 '쪽/전체'.
+// 칸 줄 수는 열 폭과 글자 수로 어림한다(한글 1.95, 그 밖 1.1, 띄어쓰기 0.6 폭 단위; 폭 단위 = 엑셀 열 너비 1).
 var CLASS_SECTIONS_HR_PRINT = { maxUnits: 160, fixed: [5, 11, 9], unitWidth: 10, retakeWidth: 16, emptyWidth: 7.5, minBlock: 10, maxBlock: 40,
-  pagePt: 597, linePt: 13, padPt: 1.5, titlePt: 22, notePt: 14, maxPages: 3, minScale: 90, pageWidthPt: 805, pageHeightPt: 538, fontPt: 9 };
+  pagePt: 597, linePt: 13, padPt: 1.5, titlePt: 22, notePt: 14, maxPages: 2, minScale: 90, pageWidthPt: 805, pageHeightPt: 538, fontPt: 9 };
+// 글자 크기마다: 열 폭 합 상한(엑셀 배율 안), 한 쪽 높이(시트 pt = 538 ÷ 배율), 엑셀 최소 배율.
+var CLASS_SECTIONS_HR_FONTS = { 9: { maxUnits: 160, pagePt: 597, minScale: 90 }, 8: { maxUnits: 180, pagePt: 672, minScale: 80 } };
+// 약칭(short)은 8pt 단계에서만, 칸에 안 들어갈 때만 쓴다(9pt 한 줄 칸은 긴 과목명이 칸 안에서 접힘).
+var CLASS_SECTIONS_HR_MODES = [{ level: 1, compact: false, fontPt: 9 }, { level: 2, compact: true, fontPt: 9 }, { level: 3, compact: true, fontPt: 8, short: true }];
 
 function classSectionsTextUnits(text) {
   let units = 0;
@@ -282,41 +289,82 @@ function classSectionsTextLines(text, width) {
   return String(text ?? "").split("\n").reduce((n, line) => n + Math.max(1, Math.ceil(classSectionsTextUnits(line) / avail)), 0);
 }
 
-function classSectionsHomeroomStatusLayout(homeroom) {
+// 한 줄 칸의 교실: '3학년 11반' → '3-11'(특별실 이름은 그대로).
+function classSectionsHrShortRoom(label) {
+  const text = classSectionsPrintText(label);
+  const match = text.match(/^(\d+)\s*학년\s*(\d+)\s*반$/);
+  return match ? `${match[1]}-${match[2]}` : text;
+}
+
+// 한 줄 칸 과목 약칭(8pt 단계에서 칸에 안 들어갈 때만): 5단계 시수표 약칭(hoursShortSubject)이 있으면 그것, 없으면 띄어쓰기를 뺀 이름.
+function classSectionsHrShortCourse(name) {
+  const text = classSectionsPrintText(name);
+  const short = typeof hoursShortSubject === "function" ? classSectionsPrintText(hoursShortSubject(text)) : "";
+  return short.length >= 2 && short.length < text.replace(/\s+/g, "").length ? short : text.replace(/\s+/g, "");
+}
+
+function classSectionsHomeroomStatusLayout(homeroom, mode = CLASS_SECTIONS_HR_MODES[0]) {
   const C = CLASS_SECTIONS_HR_PRINT;
+  const font = CLASS_SECTIONS_HR_FONTS[mode.fontPt] || CLASS_SECTIONS_HR_FONTS[9];
   const emptyUnit = !homeroom.students.some((student) => student.unit.length);
   const emptyRetake = !homeroom.students.some((student) => student.retake.length || student.unsubmitted);
   const unitWidth = emptyUnit ? C.emptyWidth : C.unitWidth;
   const retakeWidth = emptyRetake ? C.emptyWidth : C.retakeWidth;
   const fixed = C.fixed.reduce((a, b) => a + b, 0) + unitWidth + retakeWidth;
   const k = homeroom.columns.length;
-  const blockWidth = Math.max(C.minBlock, Math.min(C.maxBlock, Math.floor((C.maxUnits - fixed) / Math.max(1, k))));
+  const blockWidth = Math.max(C.minBlock, Math.min(C.maxBlock, Math.floor((font.maxUnits - fixed) / Math.max(1, k))));
   const widths = [...C.fixed, ...homeroom.columns.map(() => blockWidth), unitWidth, retakeWidth];
   const head = ["번호", "현 학년-반-번호", "성명", ...homeroom.columns.map((col) => `${col.groupCategory} ${col.blockLetter}블록\n${classSectionsPrintTimesText(col.times) || "시간 미정"}`),
     emptyUnit ? "학급\n단위" : "학급 단위", emptyRetake ? "재신청\n미배정" : "재신청·미배정"];
+  const legend = new Map(); // 한 줄 칸: 분반마다 한 번 '강의실(과목, 교실) → 교사'
+  const compactCell = (col, cell) => {
+    const room = classSectionsHrShortRoom(cell.roomLabel);
+    const text = room ? `${cell.courseName} · ${room}` : cell.courseName;
+    const key = `${col.key}|${cell.roomName}`;
+    if (!legend.has(key)) legend.set(key, { order: homeroom.columns.indexOf(col), roomName: cell.roomName, text: `${cell.roomName}(${cell.courseName}${room ? `, ${room}` : ""}) → ${cell.teacher || "교사 미정"}` });
+    if (!mode.short || classSectionsTextLines(text, blockWidth) <= 1) return text;
+    const short = classSectionsHrShortCourse(cell.courseName);
+    return room ? `${short} · ${room}` : short;
+  };
   const body = homeroom.students.map((student) => [classSectionsPrintNumber(student.number), student.key, student.name,
     ...homeroom.columns.map((col) => {
       const cell = student.cells[col.key];
-      return cell ? `${cell.courseName} ${cell.roomName}\n${[cell.roomLabel, cell.teacher].filter(Boolean).join(" · ")}` : "";
+      if (!cell) return "";
+      return mode.compact ? compactCell(col, cell) : `${cell.courseName} ${cell.roomName}\n${[cell.roomLabel, cell.teacher].filter(Boolean).join(" · ")}`;
     }),
     student.unit.join(", "),
     [student.unsubmitted ? "미제출" : "", ...student.retake.map((item) => `${item.courseName}${item.reason ? `(${item.reason})` : ""}`)].filter(Boolean).join(", ")]);
   const rowLines = (row) => Math.max(1, ...row.map((value, c) => (value === "" || value === null || value === undefined ? 1 : classSectionsTextLines(value, widths[c]))));
-  return { widths, head, body, headLines: rowLines(head), lines: body.map(rowLines), emptyUnit, emptyRetake, blockWidth };
+  // 범례 줄: 표 폭에 맞춰 항목을 이어 붙인다(항목 사이 ' / ').
+  const total = widths.reduce((a, b) => a + b, 0) - 2;
+  const legendRows = [];
+  const entries = [...legend.values()].sort((a, b) => a.order - b.order || String(a.roomName).localeCompare(String(b.roomName), "ko", { numeric: true }));
+  let line = entries.length ? "범례 — 강의실(과목, 교실) → 선생님:" : "";
+  for (const entry of entries) {
+    const next = `${line}${line.endsWith(":") ? " " : "  /  "}${entry.text}`;
+    if (classSectionsTextUnits(next) <= total || !line) line = next;
+    else { legendRows.push(line); line = entry.text; }
+  }
+  if (line) legendRows.push(line);
+  return { mode, widths, head, body, headLines: rowLines(head), lines: body.map(rowLines), legend: legendRows, legendLines: legendRows.map((text) => classSectionsTextLines(text, total + 2)),
+    emptyUnit, emptyRetake, blockWidth };
 }
 
-// 쪽 나눔: 학생을 번호순으로 쪽마다 고르게(31명 → 16 + 15) 나누되, 쪽 수는 쪽마다 학생 줄 높이 합(칸 줄 수마다 따로)이
-// (쪽 높이 − 제목·부제·안내·머리글)에 들어가는 가장 적은 수. 2줄 칸이면 한 쪽 19명까지.
-// options.measured = { header, rows: [학생마다], page } (같은 단위, 인쇄는 브라우저에서 잰 mm): 있으면 어림 대신 잰 높이로 나눈다(엑셀은 늘 어림 = 더 안전).
+// 쪽 나눔: 학생을 번호순으로 쪽마다 고르게(31명 → 16 + 15) 나누되, 쪽 수는 쪽마다 학생 줄 높이 합(+ 마지막 쪽은 범례)이
+// (쪽 높이 − 제목·부제·안내·머리글)에 들어가는 가장 적은 수. 9pt 두 줄 칸이면 한 쪽 19명까지(어림).
+// options.measured = { header, rows: [학생마다], legend, page } (같은 단위, 인쇄는 브라우저에서 잰 mm): 있으면 어림 대신 잰 높이로.
 function classSectionsHomeroomStatusPlan(homeroom, layout = classSectionsHomeroomStatusLayout(homeroom), options = {}) {
   const C = CLASS_SECTIONS_HR_PRINT;
+  const font = CLASS_SECTIONS_HR_FONTS[layout.mode?.fontPt] || CLASS_SECTIONS_HR_FONTS[9];
   const rowPt = (lines) => lines * C.linePt + C.padPt;
   const note = homeroom.basis === "none" || homeroom.basis === "same";
   const headerPt = C.titlePt + C.notePt + (note ? C.notePt : 0) + rowPt(layout.headLines);
+  const legendPt = (layout.legendLines || []).reduce((sum, lines) => sum + rowPt(lines), 0);
   const maxLines = Math.max(1, ...layout.lines);
   const n = homeroom.students.length;
   const measured = options.measured && Array.isArray(options.measured.rows) && options.measured.rows.length === homeroom.students.length ? options.measured : null;
-  const avail = measured ? measured.page - measured.header : C.pagePt - headerPt;
+  const avail = measured ? measured.page - measured.header : font.pagePt - headerPt;
+  const legend = measured ? Number(measured.legend) || 0 : legendPt;
   const split = (count) => {
     const list = [];
     for (let i = 0, from = 0; i < count; i += 1) {
@@ -327,24 +375,41 @@ function classSectionsHomeroomStatusPlan(homeroom, layout = classSectionsHomeroo
     return list;
   };
   const height = (part) => (measured ? measured.rows.slice(part.from, part.to).reduce((sum, mm) => sum + mm, 0)
-    : layout.lines.slice(part.from, part.to).reduce((sum, lines) => sum + rowPt(lines), 0));
-  // 9pt로 세 장을 넘으면 그대로 더 나누고 overflow로 알린다(글자를 줄이지 않음)
+    : layout.lines.slice(part.from, part.to).reduce((sum, lines) => sum + rowPt(lines), 0)) + (part.to === n ? legend : 0);
   let pages = 1;
   while (pages < Math.max(1, n) && !split(pages).every((part) => height(part) <= avail)) pages += 1;
-  const need = pages;
   const parts = split(pages);
   const rowsPerPage = Math.max(1, Math.floor(avail / rowPt(maxLines)));
   const widthPt = layout.widths.reduce((sum, w) => sum + (w * 7 + 5) * 0.75, 0);
-  const tallest = Math.max(0, ...parts.map((part) => layout.lines.slice(part.from, part.to).reduce((sum, lines) => sum + rowPt(lines), 0)));
+  const tallest = Math.max(0, ...parts.map((part) => layout.lines.slice(part.from, part.to).reduce((sum, lines) => sum + rowPt(lines), 0) + (part.to === n ? legendPt : 0)));
   const fit = Math.floor(Math.min(100, (C.pageWidthPt / widthPt) * 100, (C.pageHeightPt / (headerPt + tallest)) * 100));
-  return { pages, parts, rowsPerPage, maxLines, headerPt, measured: Boolean(measured), overflow: need > C.maxPages || fit < C.minScale, scale: Math.max(C.minScale, fit), fontPt: C.fontPt };
+  return { pages, parts, rowsPerPage, maxLines, headerPt, measured: Boolean(measured), level: layout.mode?.level || 1, fontPt: layout.mode?.fontPt || 9,
+    overflow: pages > C.maxPages || fit < font.minScale, scale: Math.max(font.minScale, fit) };
 }
 
+// 단계 고르기: 두 장(CLASS_SECTIONS_HR_PRINT.maxPages) 안에 드는 첫 단계, 없으면 마지막 단계(8pt 한 줄)로 더 나눔.
+// options.measure(sheet, mode) → { header, rows, legend, page } | null(인쇄: 브라우저에서 잼), 없으면 어림(엑셀).
+function classSectionsHomeroomStatusChoose(homeroom, options = {}) {
+  let chosen = null;
+  for (const mode of CLASS_SECTIONS_HR_MODES) {
+    const layout = classSectionsHomeroomStatusLayout(homeroom, mode);
+    const measured = typeof options.measure === "function"
+      ? options.measure(classSectionsHomeroomStatusSheet(homeroom, { layout, plan: { pages: 1, parts: [{ from: 0, to: homeroom.students.length }], scale: 100 } }), mode) : null;
+    const plan = classSectionsHomeroomStatusPlan(homeroom, layout, { measured });
+    chosen = { layout, plan, mode };
+    if (plan.pages <= CLASS_SECTIONS_HR_PRINT.maxPages) break;
+  }
+  return chosen;
+}
+
+// options: layout·plan(이미 고른 단계) / mode(단계 고정, 화면 표는 1단계) / part(쪽 하나) / sheetName. 없으면 어림으로 단계를 고른다(엑셀).
 function classSectionsHomeroomStatusSheet(homeroom, options = {}) {
   const C = CLASS_SECTIONS_HR_PRINT;
-  const layout = options.layout || classSectionsHomeroomStatusLayout(homeroom);
-  const plan = options.plan || classSectionsHomeroomStatusPlan(homeroom, layout);
-  const part = options.part || { from: 0, to: homeroom.students.length };
+  const chosen = options.layout ? null : options.mode ? { layout: classSectionsHomeroomStatusLayout(homeroom, options.mode) } : classSectionsHomeroomStatusChoose(homeroom);
+  const layout = options.layout || chosen.layout;
+  const plan = options.plan || chosen?.plan || classSectionsHomeroomStatusPlan(homeroom, layout);
+  const n = homeroom.students.length;
+  const part = options.part || { from: 0, to: n };
   const cols = layout.widths.length;
   const last = classSectionsPrintColumn(cols - 1);
   const rows = [[{ v: `${homeroom.label} 이동수업 현황`, s: 1 }]];
@@ -364,19 +429,24 @@ function classSectionsHomeroomStatusSheet(homeroom, options = {}) {
     rows.push(layout.body[part.from + i].map((v, c) => ({ v, s: c === cols - 1 ? retakeStyle : 4 })));
     heights.push(layout.lines[part.from + i] * C.linePt + C.padPt);
   });
+  // 범례(한 줄 칸 단계): 마지막 쪽 표 아래, 표 폭 한 칸에 이어 붙인 줄들.
+  const legendRows = part.to === n ? layout.legend || [] : [];
+  legendRows.forEach((text, i) => {
+    rows.push([{ v: text, s: 3 }]);
+    merges.push(`A${rows.length}:${last}${rows.length}`);
+    heights.push((layout.legendLines?.[i] || 1) * C.linePt + C.padPt);
+  });
   // 엑셀(나누지 않은 시트): 쪽마다 끝 행 뒤에 수동 쪽 나눔. 쪽 맞춤(fitToPage)은 수동 나눔을 무시하므로 배율로.
-  const rowBreaks = options.part ? [] : plan.parts.slice(0, -1).map((item) => headerRow + item.to);
+  const rowBreaks = options.part ? [] : (plan.parts || []).slice(0, -1).map((item) => headerRow + item.to);
   return { name: options.sheetName || "이동수업 현황", rows, merges, heights, widths: layout.widths, orientation: "landscape", fitToHeight: plan.pages,
     scale: plan.scale, rowBreaks, headerText: "&R&P/&N", printTitles: `$1:$${headerRow}`, freeze: `D${headerRow + 1}`, headerRow,
-    studentKeys: students.map((student) => student.key),
-    printPlan: { pages: plan.pages, parts: plan.parts.map((item) => item.to - item.from), rowsPerPage: plan.rowsPerPage, maxLines: plan.maxLines, overflow: plan.overflow, scale: plan.scale } };
+    studentKeys: students.map((student) => student.key), legendRows: legendRows.length, level: layout.mode?.level || 1, fontPt: layout.mode?.fontPt || 9,
+    printPlan: { pages: plan.pages, parts: (plan.parts || []).map((item) => item.to - item.from), rowsPerPage: plan.rowsPerPage, maxLines: plan.maxLines, overflow: plan.overflow, scale: plan.scale, level: layout.mode?.level || 1 } };
 }
 
-// 인쇄용: 쪽마다 시트 하나(제목·부제·머리글 반복) + 오른쪽 위 '1/2'.
+// 인쇄용: 단계를 고르고(options.measure = 브라우저에서 잼) 쪽마다 시트 하나(제목·부제·머리글 반복) + 오른쪽 위 '1/2'.
 function classSectionsHomeroomStatusPages(homeroom, options = {}) {
-  const layout = classSectionsHomeroomStatusLayout(homeroom);
-  const measured = typeof options.measure === "function" ? options.measure(classSectionsHomeroomStatusSheet(homeroom, { layout })) : null;
-  const plan = classSectionsHomeroomStatusPlan(homeroom, layout, { measured });
+  const { layout, plan } = classSectionsHomeroomStatusChoose(homeroom, options);
   return plan.parts.map((part, index) => ({ ...classSectionsHomeroomStatusSheet(homeroom, { layout, plan, part }), pageIndex: index + 1, pageCount: plan.pages, pageLabel: `${index + 1}/${plan.pages}` }));
 }
 
@@ -1309,7 +1379,7 @@ function classSectionsHomeroomViewHtml(round, group) {
   if (!homerooms.length) return "";
   const { index, homeroom, student } = classSectionsHomeroomCurrent(round, group, homerooms);
   const gradeUnsub = unsubmitted?.[homeroom.grade];
-  const sheet = classSectionsHomeroomStatusSheet(homeroom);
+  const sheet = classSectionsHomeroomStatusSheet(homeroom, { mode: CLASS_SECTIONS_HR_MODES[0] }); // 화면은 늘 두 줄 칸
   const options = homerooms.map((item, i) => `<option value="${esc(item.id)}"${i === index ? " selected" : ""}>${esc(`${item.label} (${item.students.length}명, 분반 ${item.sections.length})`)}</option>`).join("");
   const retake = homeroom.students.filter((item) => item.retake.length).length;
   return `<details class="cs-att-view" id="classSectionsAttendanceView"${open ? " open" : ""}><summary>이동 출석부 보기 <span class="cs-note">담임반 ${index + 1}/${homerooms.length} · ${esc(homeroom.label)}</span></summary>
@@ -1354,13 +1424,17 @@ function classSectionsHomeroomStatusMeasurer() {
   box.style.cssText = "position:absolute;left:-10000px;top:0;visibility:hidden;width:273mm;";
   document.body.appendChild(box);
   const mm = (px) => (px * 25.4) / 96;
-  const measure = (sheet) => {
+  // sheet = 나누지 않은 시트(학생 줄 뒤에 범례 줄), mode.fontPt = 그 단계 글자(인쇄와 같은 data-font 규칙)
+  const measure = (sheet, mode = {}) => {
+    box.dataset.font = String(mode.fontPt || 9);
     box.innerHTML = classSectionsSheetHtml(sheet);
     const body = [...box.querySelectorAll("tbody tr")];
     const table = box.querySelector("table");
-    if (!table || !body.length) return null;
+    const count = (sheet.studentKeys || []).length;
+    if (!table || !body.length || body.length < count) return null;
     const top = table.getBoundingClientRect().top;
-    return { header: mm(body[0].getBoundingClientRect().top - top), rows: body.map((tr) => mm(tr.getBoundingClientRect().height)), page: 187 };
+    const heights = body.map((tr) => mm(tr.getBoundingClientRect().height));
+    return { header: mm(body[0].getBoundingClientRect().top - top), rows: heights.slice(0, count), legend: heights.slice(count).reduce((a, b) => a + b, 0), page: 187 };
   };
   measure.done = () => box.remove();
   return measure;
@@ -1378,19 +1452,22 @@ function classSectionsHomeroomPrint(kind) {
   let sheets = 0;
   let statusPages = 0;
   const overflow = [];
+  const levels = {};
   const measure = classSectionsHomeroomStatusMeasurer();
   target.innerHTML = chosen.map((item) => {
     const attendance = classSectionsHomeroomAttendanceSheets(item, { days });
     const pages = classSectionsHomeroomStatusPages(item, { measure });
     statusPages += pages.length;
     if (pages.length > 2) overflow.push(`${item.label} ${pages.length}쪽`);
+    levels[pages[0]?.level || 1] = (levels[pages[0]?.level || 1] || 0) + 1;
     sheets += pages.length + attendance.length;
     const id = classSectionsPrintEsc(item.id);
-    return pages.map((sheet) => `<div class="print-page cs-hr-page" data-homeroom="${id}" data-page="${sheet.pageLabel}"><div class="cs-hr-pageno">${sheet.pageLabel}</div>${classSectionsSheetHtml(sheet)}</div>`).join("")
+    return pages.map((sheet) => `<div class="print-page cs-hr-page" data-homeroom="${id}" data-page="${sheet.pageLabel}" data-level="${sheet.level}" data-font="${sheet.fontPt}"><div class="cs-hr-pageno">${sheet.pageLabel}</div>${classSectionsSheetHtml(sheet)}</div>`).join("")
       + attendance.map((sheet) => `<div class="print-page cs-att-page" data-homeroom="${id}">${classSectionsSheetHtml(sheet)}</div>`).join("");
   }).join("");
   measure?.done?.();
-  classSectionsSetStatus(`담임반 ${chosen.length}개(현황 ${statusPages}쪽 + 분반 출석부 ${sheets - statusPages}장)를 인쇄합니다.${overflow.length ? ` 블록 열이 많아 세 쪽 이상: ${overflow.join(", ")}.` : ""}`);
+  const levelNote = [levels[2] ? `한 줄 칸 9pt ${levels[2]}개 반` : "", levels[3] ? `한 줄 칸 8pt ${levels[3]}개 반` : ""].filter(Boolean).join(", ");
+  classSectionsSetStatus(`담임반 ${chosen.length}개(현황 ${statusPages}쪽 + 분반 출석부 ${sheets - statusPages}장)를 인쇄합니다.${levelNote ? ` 두 장에 맞추려고 ${levelNote}(강의실·선생님은 표 아래 범례).` : ""}${overflow.length ? ` 8pt 한 줄 칸으로도 두 장을 넘어 세 쪽 이상: ${overflow.join(", ")}.` : ""}`, Boolean(overflow.length));
   if (typeof window !== "undefined" && typeof window.print === "function") window.print();
 }
 
@@ -1630,7 +1707,7 @@ if (typeof document !== "undefined") {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { classSectionsAttendanceSheet, classSectionsAttendanceFileName, classSectionsAttendanceBundles, classSectionsStudentTimetable, classSectionsSheetHtml, classSectionsAttendanceListSheet, classSectionsAttendanceSheetNames, classSectionsHomerooms, classSectionsHomeroomStatusSheet, classSectionsHomeroomAttendanceSheets,
-    classSectionsHomeroomStatusLayout, classSectionsHomeroomStatusPlan, classSectionsHomeroomStatusPages, classSectionsTextLines,
+    classSectionsHomeroomStatusLayout, classSectionsHomeroomStatusPlan, classSectionsHomeroomStatusPages, classSectionsHomeroomStatusChoose, classSectionsTextLines,
     classSectionsHandoutSlips, classSectionsHandoutLayout, classSectionsHandoutHtml, classSectionsHandoutPagesHtml, classSectionsHandoutHeight,
     classSectionsTimetableHtml, classSectionsTimetableSheet, classSectionsStudentTimetableYear, classSectionsRoomSpecFromSettings };
 }
