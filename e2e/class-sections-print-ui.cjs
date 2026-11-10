@@ -388,7 +388,8 @@ function attendanceInfo(sheet) {
   check(hrFont >= 12, `현황 인쇄 칸 글자 ${hrFont}px(9pt = 12px 이상)`);
   check(hrPages === n + hrPrint.att && boxes.slice(0, n).every((box) => box === "가로") && boxes.slice(n).every((box) => box === "세로"),
     `이 반 인쇄 PDF ${hrPages}쪽 = 현황 ${n}쪽(가로) + 분반 출석부 ${hrPrint.att}장(세로)`, report.checks.homeroomPrint);
-  check(n === firstSetup.breaks.length + 1, `인쇄 쪽 수 ${n} = 엑셀 쪽 나눔 ${firstSetup.breaks.length} + 1`);
+  // 인쇄는 브라우저에서 잰 높이로, 엑셀은 어림(행 높이 고정이라 넉넉히)으로 나눈다 → 엑셀 쪽 수 ≥ 인쇄 쪽 수
+  check(firstSetup.breaks.length + 1 >= n, `엑셀 ${firstSetup.breaks.length + 1}쪽 ≥ 인쇄 ${n}쪽(엑셀은 어림이라 같거나 많음)`);
   execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "192", "-png", "-singlefile", hrPdfPath, path.join(OUT, "11-homeroom-status-page1")]);
   await page.getByRole("button", { name: /^.+학년 전체 인쇄$/ }).click(); await sleep(1200);
   const gradePrint = await page.evaluate(() => new Set([...document.querySelectorAll("#printBatch .cs-hr-page")].map((el) => el.dataset.homeroom)).size);
@@ -421,6 +422,31 @@ function attendanceInfo(sheet) {
   };
   const clip4 = await clipped();
   check(!clip4.length, `한 장에 4장: 잘린 쪽지 없음(${hoPrint.slips}명)`, clip4.slice(0, 5));
+  // (page.pdf는 afterprint로 #printBatch를 비우므로 그 전에 읽는다)
+  // 표: 학기·블록·과목(아래 강의실)·교실·선생님 5열, 한 학기 안 블록 이름이 겹치지 않음(그룹이 둘 이상이면 '택3 a블록'처럼)
+  const hoTable = await page.evaluate(() => {
+    const slips = [...document.querySelectorAll("#printBatch .cs-ho")].filter((el) => !el.classList.contains("is-unsubmitted"));
+    const heads = [...(slips[0]?.querySelectorAll("thead th") || [])].map((th) => th.textContent);
+    const dup = [];
+    let labeled = 0;
+    for (const el of slips) {
+      let sem = "";
+      const seen = new Map();
+      for (const tr of el.querySelectorAll("tbody tr")) {
+        const th = tr.querySelector("th");
+        if (th) { sem = th.textContent; seen.clear(); }
+        const block = (tr.querySelector("td")?.textContent || "").split(" · ")[0];
+        if (!/블록$/.test(block)) continue;
+        if (/^택\S* /.test(block) || /^\S+ \S+ /.test(block)) labeled += 1;
+        if (seen.has(block)) dup.push(`${el.dataset.student} ${sem} ${block}`);
+        seen.set(block, true);
+      }
+    }
+    return { heads, dup, labeled, rooms: document.querySelectorAll("#printBatch .cs-ho .cs-ho-course .cs-ho-room").length };
+  });
+  report.checks.handoutTable = { ...hoTable, dup: hoTable.dup.slice(0, 5) };
+  check(hoTable.heads.join("|") === "학기|블록(요일·교시)|과목(강의실)|교실|선생님" && hoTable.rooms > 0, "쪽지 표 5열, 강의실은 과목 칸 아래 작은 글씨", report.checks.handoutTable);
+  check(!hoTable.dup.length, `한 학기 안 같은 블록 이름 없음(그룹 표시 ${hoTable.labeled}칸)`, report.checks.handoutTable);
   const hoPdfPath = path.join(OUT, "12-handout-print.pdf");
   const hoPdf = await page.pdf({ path: hoPdfPath, format: "A4", preferCSSPageSize: true });
   const hoPdfText = hoPdf.toString("latin1");
@@ -429,7 +455,7 @@ function attendanceInfo(sheet) {
   report.checks.handoutPrint = { ...hoPrint, first: hoPrint.first.slice(0, 200), pdfPages: hoPages };
   check(hoPrint.slips === firstOptionCount && hoPrint.per === "4" && hoPrint.pages === Math.ceil(firstOptionCount / 4), `쪽지 ${hoPrint.slips}명 = 반 ${firstOptionCount}명, 한 장에 4장 → ${hoPrint.pages}장`, report.checks.handoutPrint);
   check(hoPages === Math.ceil(firstOptionCount / 4) && hoBoxes.every((box) => box === "세로"), `쪽지 인쇄 PDF ${hoPages}쪽 = ceil(${firstOptionCount}/4), A4 세로`);
-  check(parseFloat(hoPrint.font) >= 8, `쪽지 글자 ${hoPrint.font}(8pt 이상)`);
+  check(parseFloat(hoPrint.font) >= 9, `한 장에 4장 쪽지 글자 ${hoPrint.font}(9pt 이상)`);
   const squash = (text) => String(text || "").replace(/\s+/g, "");
   check(squash(hoPrint.first) === squash(firstSlip.whole), "인쇄 첫 쪽지 = 미리 보기(글자)", { print: hoPrint.first.slice(0, 80), preview: firstSlip.whole.slice(0, 80) });
   execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "192", "-png", "-singlefile", hoPdfPath, path.join(OUT, "13-handout-page1")]);

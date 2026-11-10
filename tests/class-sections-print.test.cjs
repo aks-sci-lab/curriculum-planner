@@ -682,6 +682,23 @@ test("담임용 이동수업 현황: 31명 → 두 장(16 + 15), 쪽마다 제�
   const C = pr.CLASS_SECTIONS_HR_PRINT || vm.runInNewContext(`${printSource}; CLASS_SECTIONS_HR_PRINT`, { console });
   const used = plan.headerPt + homeroom.students.slice(0, 16).length * (plan.maxLines * C.linePt + C.padPt);
   assert.ok(used <= C.pagePt, `첫 쪽 높이 ${used}pt ≤ ${C.pagePt}`);
+  // 한 쪽 줄 수: 칸이 두 줄이면 한 쪽 19명 → 38명도 두 장(19 + 19), 39명부터 세 장. 쪽 나눔은 쪽마다 줄 높이 합으로 판단.
+  const big = pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(38, 3));
+  assert.equal(big.maxLines, 2);
+  assert.deepEqual(big.parts.map((part) => part.to - part.from), [19, 19]);
+  assert.equal(pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(39, 3)).pages, 3);
+  // 한 학생만 세 줄(재신청 사유가 길어도)이면 그 쪽만 조금 줄어들 뿐 쪽 수는 같다
+  const one = syntheticHomeroom(36, 3);
+  one.students[0].retake = [{ courseName: "인공지능 기초와 활용 심화", reason: "정원 부족" }, { courseName: "화학", reason: "정원 부족" }];
+  assert.equal(pr.classSectionsHomeroomStatusPlan(one).pages, 2);
+  // 인쇄는 브라우저에서 잰 높이(measure)로 나눔: 머리 25mm + 학생 줄 8mm, 한 쪽 187mm → 한 쪽 20명, 엑셀(어림)은 따로
+  const wideReal = syntheticHomeroom(38, 4);
+  const estimatePages = pr.classSectionsHomeroomStatusPlan(wideReal).pages;
+  const measuredPages = pr.classSectionsHomeroomStatusPages(wideReal, { measure: (sheet) => ({ header: 25, rows: sheet.studentKeys.map(() => 8), page: 187 }) });
+  assert.deepEqual(measuredPages.map((sheet) => sheet.studentKeys.length), [19, 19]);
+  assert.ok(estimatePages >= measuredPages.length, `엑셀 어림 ${estimatePages}쪽 ≥ 인쇄 ${measuredPages.length}쪽`);
+  assert.equal(pr.classSectionsHomeroomStatusPages(syntheticHomeroom(41, 4), { measure: (sheet) => ({ header: 25, rows: sheet.studentKeys.map(() => 8), page: 187 }) }).length, 3);
+  assert.equal(pr.classSectionsHomeroomStatusPages(syntheticHomeroom(31, 4), { measure: () => null }).length, pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(31, 4)).pages, "잴 수 없으면 어림");
   // 적으면 한 장
   const small = pr.classSectionsHomeroomStatusPages(syntheticHomeroom(14, 4));
   assert.deepEqual(small.map((item) => item.pageLabel), ["1/1"]);
@@ -700,7 +717,8 @@ test("담임용 이동수업 현황: 31명 → 두 장(16 + 15), 쪽마다 제�
 
 test("담임용 현황: 빈 열(학급 단위·재신청)은 그 반에 값이 없으면 좁게, 있으면 원래 폭 · 인쇄 글자 9pt(12px) 이상", () => {
   const empty = pr.classSectionsHomeroomStatusLayout(syntheticHomeroom(10, 3));
-  assert.deepEqual(plain(empty.widths.slice(-2)), [6.5, 6.5]);
+  assert.deepEqual(plain(empty.widths.slice(-2)), [7.5, 7.5]);
+  assert.equal(empty.headLines, 2, "좁은 열 머리글도 두 줄 안");
   assert.deepEqual(plain(empty.head.slice(-2)), ["학급\n단위", "재신청\n미배정"]);
   const full = pr.classSectionsHomeroomStatusLayout(syntheticHomeroom(10, 3, { retake: 1, unit: true }));
   assert.deepEqual(plain(full.widths.slice(-2)), [10, 16]);
@@ -743,7 +761,7 @@ function handoutSemesters() {
   return [{ semester: "1", homeroom: s1 }, { semester: "2", homeroom: s2 }];
 }
 
-test("학생 배부용 쪽지: 1·2학기 한 쪽지, 표(학기·블록·과목·강의실·교실·선생님), 학급 단위 한 줄, 재신청 굵게, 미제출 안내, 내년 반 미정", () => {
+test("학생 배부용 쪽지: 1·2학기 한 쪽지, 표(학기·블록·과목(아래 강의실)·교실·선생님), 학급 단위 한 줄, 재신청 굵게, 미제출 안내, 내년 반 미정, 그룹이 둘이면 블록에 그룹 표시", () => {
   const slips = pr.classSectionsHandoutSlips(handoutSemesters());
   assert.deepEqual(slips.map((slip) => slip.key), ["1-1-11", "1-2-4"], "현 반·번호순");
   const [a, b] = slips;
@@ -756,10 +774,27 @@ test("학생 배부용 쪽지: 1·2학기 한 쪽지, 표(학기·블록·과목
   const html = pr.classSectionsHandoutHtml(a);
   assert.match(html, /<h4>2027학년도 이동수업 안내<\/h4>/);
   assert.match(html, /현 1학년 1반 11번 가명가 → 내년 2학년 1반 3번/);
-  assert.match(html, /<th>학기<\/th><th>블록\(요일·교시\)<\/th><th>과목<\/th><th>강의실<\/th><th>교실<\/th><th>선생님<\/th>/);
-  assert.match(html, /rowspan="3">1학기<\/th><td>A블록 · 월3, 수5<\/td><td>물리학<\/td><td>A물리학1<\/td><td>2학년 1반<\/td><td>김교사<\/td>/);
-  assert.match(html, /<td>정보<\/td><td colspan="3">학급 단위\(우리 반 교실\)<\/td>/);
-  assert.match(html, /<td>지구과학<\/td><td colspan="3"><strong>재신청 필요\(정원 부족\)<\/strong><\/td>/);
+  assert.match(html, /<thead><tr><th>학기<\/th><th>블록\(요일·교시\)<\/th><th>과목\(강의실\)<\/th><th>교실<\/th><th>선생님<\/th><\/tr><\/thead>/);
+  assert.equal((html.match(/<col style/g) || []).length, 5);
+  assert.match(html, /rowspan="3">1학기<\/th><td>A블록 · 월3, 수5<\/td><td class="cs-ho-course">물리학<small class="cs-ho-room">A물리학1<\/small><\/td><td>2학년 1반<\/td><td>김교사<\/td>/);
+  assert.match(html, /<td>정보<\/td><td colspan="2">학급 단위\(우리 반 교실\)<\/td>/);
+  assert.match(html, /<td>지구과학<\/td><td colspan="2"><strong>재신청 필요\(정원 부족\)<\/strong><\/td>/);
+  // 한 학기 그룹 하나 → 블록에 그룹 표시 없음
+  assert.doesNotMatch(html, /택\d A블록/);
+  // 2학기에 그룹 둘(택3 + 택1 수학): 같은 'a블록'이 두 번 → '택3 a블록'·'택1 a블록'
+  const two = handoutSemesters();
+  const sem2 = two[1].homeroom;
+  sem2.columns = [{ key: "g2|a", groupKey: "g2", groupCategory: "2-2 택3", blockLetter: "a", times: ["월:6"], order: 0 }, { key: "g3|a", groupKey: "g3", groupCategory: "2-2 택1", blockLetter: "a", times: ["월:3"], order: 1 }];
+  sem2.students[0].cells = { "g2|a": { courseName: "정치", roomName: "a정치", roomLabel: "2학년 5반", teacher: "김교사" }, "g3|a": { courseName: "미적분Ⅰ", roomName: "a미적분Ⅰ1", roomLabel: "2학년 1반", teacher: "이교사" } };
+  const labeled = pr.classSectionsHandoutSlips(two)[0].rows.filter((row) => row.semester === "2" && row.kind === "section").map((row) => [row.block, row.courseName]);
+  assert.deepEqual(labeled, [["택3 a블록 · 월6", "정치"], ["택1 a블록 · 월3", "미적분Ⅰ"]]);
+  assert.ok(pr.classSectionsHandoutSlips(two)[0].rows.filter((row) => row.semester === "1" && row.kind === "section").every((row) => /^A블록|^B블록/.test(row.block)), "1학기는 그룹 하나 → 표시 없음");
+  // 짧은 표시가 다르면 짧게, 같으면(둘 다 '택3') 그룹 이름 그대로
+  sem2.columns[1].groupCategory = "2-2 택3(과학)";
+  sem2.columns[0].groupCategory = "2-2 택3";
+  assert.equal(pr.classSectionsHandoutSlips(two)[0].rows.find((row) => row.courseName === "미적분Ⅰ").block, "택3(과학) a블록 · 월3");
+  sem2.columns[1].groupCategory = "2-2 택3";
+  assert.equal(pr.classSectionsHandoutSlips(two)[0].rows.find((row) => row.courseName === "미적분Ⅰ").block, "2-2 택3 a블록 · 월3", "짧은 표시가 같으면 그룹 이름 그대로");
   assert.match(html, /교실·시간은 바뀔 수 있습니다\. 바뀌면 다시 안내합니다\./);
   assert.equal(b.unsubmitted, true);
   assert.match(pr.classSectionsHandoutHtml(b), /수강신청 미제출 — 담임 선생님께 확인하세요/);
