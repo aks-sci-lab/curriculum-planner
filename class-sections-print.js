@@ -1101,7 +1101,7 @@ function classSectionsHomeroomRosterNote(homeroom, gradeUnsub, info) {
   const date = info?.uploadedAt ? new Date(info.uploadedAt).toLocaleDateString("ko-KR") : "";
   const basis = info?.source === "roster" ? `명렬${date ? ` ${date}` : ""} 기준` : info?.source === "map" ? "내년 반 배정표 기준" : "";
   const upload = typeof importApplicationRosterFile === "function"
-    ? ` <label class="button">명렬 올리기(이 PC에만 저장)<input id="classSectionsRosterUpload" type="file" accept=".xlsx" data-grade="${grade}" hidden></label>` : "";
+    ? ` <label class="button">명렬 올리기(이 PC에만 저장)<input id="classSectionsRosterInput" type="file" accept=".xlsx" data-grade="${grade}" hidden></label>` : "";
   const unknown = gradeUnsub === null;
   return `<p class="cs-note${homeroom.unsubmitted || unknown ? " is-warn" : ""}" id="classSectionsHomeroomUnsubmitted" data-count="${homeroom.unsubmitted || 0}" data-basis="${esc(info?.source || "none")}">이 반 학생 ${homeroom.students.length}명 · ${unknown ? "미제출 확인 불가" : `미제출 ${homeroom.unsubmitted || 0}명`}${unknown
     ? ` — 현 ${grade}학년 명렬·내년 반 배정표가 없어 미제출 학생은 알 수 없습니다(웹 신청 결과에는 제출한 학생만 옵니다). 명렬을 올리면 반 명단에 넣습니다.${upload}`
@@ -1202,11 +1202,15 @@ function classSectionsPrintHandleChange(event) {
       : `${target.value ? `${label(target.value)} 교실로 바꿨습니다.` : "교실을 자동 추천으로 되돌렸습니다."}${moved.length ? ` 함께 옮긴 분반: ${moved.join(", ")}` : ""}`, clash.length > 0);
   } else if (target.id === "classSectionsAttendanceDays") s.print.attendanceDays = Math.max(1, Math.min(40, Number(target.value) || 17));
   else if (target.id === "classSectionsTimetableClass") { CLASS_SECTIONS_PRINT_VIEW.timetableClass = target.value; return; }
-  else if (target.id === "classSectionsRosterUpload") {
+  else if (target.id === "classSectionsRosterInput") {
     const file = target.files?.[0];
     if (!file || typeof importApplicationRosterFile !== "function") return;
-    return void Promise.resolve(importApplicationRosterFile(file, target.dataset.grade)).then(() => classSectionsAttendanceRerender(),
-      (error) => classSectionsSetStatus(`명렬을 올리지 못했습니다: ${error?.message || error}`, true));
+    target.value = "";
+    // app.js importApplicationRosterFile → Promise<{ count, message }>(실패하면 count 0, message에 이유)
+    return void Promise.resolve(importApplicationRosterFile(file, target.dataset.grade)).then((done) => {
+      classSectionsSetStatus(done?.message || (done?.count ? `명렬 ${done.count}명을 저장했습니다.` : "명렬을 저장하지 못했습니다."), !(done?.count > 0));
+      classSectionsAttendanceRerender();
+    }, (error) => classSectionsSetStatus(`명렬을 올리지 못했습니다: ${error?.message || error}`, true));
   }
   else if (target.id === "classSectionsHomeroomPick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsAttendancePick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }

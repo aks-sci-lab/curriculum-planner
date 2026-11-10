@@ -591,9 +591,9 @@ test("담임반 현황 명단: 명렬만 / 배정표만 / 둘 다 / 둘 다 없�
   assert.equal(sum(data), 40);
   assert.equal(data.unsubmitted["1"], null);
   assert.match(view(), /미제출 확인 불가 — 현 1학년 명렬·내년 반 배정표가 없어/);
-  assert.doesNotMatch(view(), /classSectionsRosterUpload/);
+  assert.doesNotMatch(view(), /classSectionsRosterInput/);
   ctx.importApplicationRosterFile = async () => {};
-  assert.match(view(), /id="classSectionsRosterUpload" type="file" accept=".xlsx" data-grade="1"/);
+  assert.match(view(), /id="classSectionsRosterInput" type="file" accept=".xlsx" data-grade="1"/);
 
   // ② 명렬만(진급 반 '아직 모름' → 내년 반 미정 = 현재 반 기준): 합 = 명렬 42 + 명렬에 없는 1 = 43, 미제출 3, 성명은 명렬에서
   ctx.applicationRosterFor = (grade) => (grade === "1" ? roster : null);
