@@ -1771,8 +1771,9 @@ test("'신청 마감'은 한 번 묻고(통합 신청이면 두 학년 모두 �
   assert.match(ctx.closeEventQuestion({ round: 1, subjects: { "2": ["a"], "3": ["b"] } }), /두 학년 모두 마감됩니다/);
   // 마감(열려 있을 때)만 묻고, 묻는 줄이 서버 요청보다 앞에 있다.
   const handler = source.slice(source.indexOf('button(event.is_open ? "신청 마감" : "다시 열기"'), source.indexOf('button("신청 결과 저장"'));
-  assert.ok(handler.indexOf("if (event.is_open && !window.confirm(closeEventQuestion(event))) return;") > 0);
-  assert.ok(handler.indexOf("window.confirm") < handler.indexOf('rpc("manage_course_event"'));
+  // 앱 대화상자(window.appConfirm)로 묻고, 없을 때만 브라우저 confirm. 묻는 줄이 서버 요청보다 앞에 있다.
+  assert.match(handler, /if \(event\.is_open && !\(await \(typeof window\.appConfirm === "function"\n\s*\? window\.appConfirm\(closeEventQuestion\(event\), \{ title: "신청 마감", ok: "신청 마감" \}\)/);
+  assert.ok(handler.indexOf("window.appConfirm") > 0 && handler.indexOf("window.appConfirm") < handler.indexOf('rpc("manage_course_event"'));
 });
 
 test("그룹 카드 칸 폭: 그룹명 최소 120px(16px로 줄지 않음), '선택 수' 글자 꺾임 없음, 연동 안내는 아래 줄에 줄바꿈(칩이 카드 밖으로 넘치지 않게)", () => {

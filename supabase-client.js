@@ -652,7 +652,9 @@ var updateRetakeReadiness;
       }), "button button-quiet"));
       section.appendChild(button(event.is_open ? "신청 마감" : "다시 열기", () => teacherAction(async () => {
         // 마감은 학생 화면을 바로 닫으므로 한 번 묻는다(다시 열기로 되돌릴 수 있음).
-        if (event.is_open && !window.confirm(closeEventQuestion(event))) return;
+        if (event.is_open && !(await (typeof window.appConfirm === "function"
+          ? window.appConfirm(closeEventQuestion(event), { title: "신청 마감", ok: "신청 마감" })
+          : Promise.resolve(window.confirm(closeEventQuestion(event)))))) return;
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: event.is_open ? "close" : "open" }, true);
         await refreshEvents();
         await syncLinkedResults();

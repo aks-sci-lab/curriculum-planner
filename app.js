@@ -234,6 +234,24 @@
     }
     window.showAppToast = showAppToast;
 
+    // 브라우저 기본 confirm 대신 앱 대화상자(#appConfirmDialog)로 묻는다. Promise<boolean>. 대화상자가 없으면(테스트·옛 화면) confirm.
+    function appConfirm(text, { title = "확인", ok = "확인", cancel = "취소" } = {}) {
+      const dialog = typeof document !== "undefined" ? document.getElementById("appConfirmDialog") : null;
+      if (!dialog || typeof dialog.showModal !== "function") return Promise.resolve(window.confirm(text));
+      if (dialog.open) dialog.close("cancel");
+      dialog.querySelector("#appConfirmTitle").textContent = title;
+      dialog.querySelector("#appConfirmText").textContent = text;
+      dialog.querySelector("#appConfirmOk").textContent = ok;
+      dialog.querySelector("#appConfirmCancel").textContent = cancel;
+      dialog.returnValue = "";
+      return new Promise((resolve) => {
+        dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+        dialog.showModal();
+        dialog.querySelector("#appConfirmCancel")?.focus();
+      });
+    }
+    window.appConfirm = appConfirm;
+
     // 편제표·결과 업로드·집계·통계는 브라우저 안에서만 처리하므로 로그인 없이 사용한다.
     // 교사 로그인은 서버에 자료를 만드는 웹 수강신청 기능에서만 요구한다.
     function requireLocalWorkspaceAccess() {
@@ -7235,11 +7253,24 @@
       if (!before.length) return null;
       const key = (name) => typeof planDataNameKey === "function" ? planDataNameKey(name) : String(name || "").replace(/\s+/g, "");
       const signature = (item) => JSON.stringify([item.credits || {}, item.cross || null, item.category || "", item.area || ""]);
-      const map = (list) => new Map(list.map((item) => [key(item.name), item]));
+      // 과목 키 단위로 비교한다: 'A, B' 한 행은 A·B 두 과목, 같은 과목이 여러 행이면 행 모양을 모아 한 과목으로(개수와 목록이 맞게).
+      const names = (item) => typeof planDataSubjectNames === "function" ? planDataSubjectNames(item.name) : String(item.name || "").split(/\s*,\s*/);
+      const map = (list) => {
+        const result = new Map();
+        for (const item of list) for (const name of names(item)) {
+          const id = key(name);
+          if (!id) continue;
+          const entry = result.get(id) || { name: String(name).trim(), signatures: [] };
+          entry.signatures.push(signature(item));
+          result.set(id, entry);
+        }
+        for (const entry of result.values()) entry.signature = entry.signatures.sort().join("|");
+        return result;
+      };
       const oldMap = map(before), newMap = map(subjectsOf(newLayout));
-      const added = [...newMap.keys()].filter((name) => !oldMap.has(name)).map((name) => newMap.get(name).name.trim());
-      const removed = [...oldMap.keys()].filter((name) => !newMap.has(name)).map((name) => oldMap.get(name).name.trim());
-      const changed = [...newMap.keys()].filter((name) => oldMap.has(name) && signature(oldMap.get(name)) !== signature(newMap.get(name))).length;
+      const added = [...newMap.keys()].filter((name) => !oldMap.has(name)).map((name) => newMap.get(name).name);
+      const removed = [...oldMap.keys()].filter((name) => !newMap.has(name)).map((name) => oldMap.get(name).name);
+      const changed = [...newMap.keys()].filter((name) => oldMap.has(name) && oldMap.get(name).signature !== newMap.get(name).signature).length;
       const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : [];
       const locked = rounds.filter((round) => typeof isRoundLocked === "function" && isRoundLocked(round));
       const withResults = rounds.filter((round) => state.rounds?.[round]?.students?.length);
@@ -7348,14 +7379,16 @@
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
           // 다른 입학연도 편제표를 이 카드에 올리는 실수를 막는다(제목의 'YYYY학년도 신입생'과 카드 연도 대조).
           const titleYear = typeof curriculumTitleYearMismatch === "function" ? curriculumTitleYearMismatch(importedLayout, file.name, cohortYear) : "";
-          if (titleYear && !window.confirm(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`)) {
+          const ask = (text, options) => typeof appConfirm === "function" ? appConfirm(text, options) : Promise.resolve(window.confirm(text));
+          if (titleYear && !(await ask(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`,
+            { title: "입학연도 확인", ok: `${cohortYear}학년도로 올리기` }))) {
             status.style.color = "#a44939";
             status.textContent = `업로드를 취소했습니다. ${titleYear}학년도 입학생 편제표는 ${titleYear}학년도 카드에 올리세요.`;
             return;
           }
           // 이미 신청·확정에 쓰는 편제표를 교체하면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 보여 주고 확인을 받는다.
           const impact = typeof curriculumReplaceImpact === "function" ? curriculumReplaceImpact(state.curriculumImportedLayout, importedLayout) : null;
-          if (impact && !window.confirm(curriculumReplaceMessage(impact, file.name))) {
+          if (impact && !(await ask(curriculumReplaceMessage(impact, file.name), { title: "원본 교체", ok: "교체" }))) {
             status.style.color = "#5c6982";
             status.textContent = "원본 교체를 취소했습니다. 지금 편제표를 그대로 둡니다.";
             return;

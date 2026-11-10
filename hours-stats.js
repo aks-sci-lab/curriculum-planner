@@ -1314,7 +1314,7 @@ function hoursFinishChange(message) {
   hoursNotify(message, true);
 }
 
-function applyHoursRecommendation() {
+async function applyHoursRecommendation() {
   const stats = computeHoursStats();
   const recommendation = stats.recommendation;
   if (!recommendation?.ok) {
@@ -1327,7 +1327,9 @@ function applyHoursRecommendation() {
     return;
   }
   const list = changes.map((row) => `${hoursDepartmentName(row.id)} ${row.current ?? "빈칸"}→${row.recommended}`).join(", ");
-  if (!window.confirm(`교과별 교사 수를 추천값으로 바꿀까요? (${list})\n교사 수는 정원·표시과목에 따라 학교가 정하는 값입니다. '되돌리기'로 이전 값으로 돌릴 수 있습니다.`)) return;
+  const question = `교과별 교사 수를 추천값으로 바꿀까요? (${list})\n교사 수는 정원·표시과목에 따라 학교가 정하는 값입니다. '되돌리기'로 이전 값으로 돌릴 수 있습니다.`;
+  const agreed = typeof appConfirm === "function" ? await appConfirm(question, { title: "교사 수 추천 적용", ok: "추천 적용" }) : window.confirm(question);
+  if (!agreed) return;
   const settings = hoursSettings(stats.year, true);
   hoursRememberUndo(settings, "추천 적용", ["teachers"]);
   for (const row of changes) settings.teachers[row.id] = row.recommended;

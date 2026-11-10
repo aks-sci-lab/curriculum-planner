@@ -822,6 +822,16 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
+  <dialog class="curriculum-subject-dialog app-confirm-dialog" id="appConfirmDialog" aria-labelledby="appConfirmTitle" aria-describedby="appConfirmText">
+    <form method="dialog">
+      <h2 id="appConfirmTitle">확인</h2>
+      <div class="note" id="appConfirmText" style="white-space:pre-line"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" type="submit" value="cancel" id="appConfirmCancel">취소</button>
+        <button class="button button-primary" type="submit" value="ok" id="appConfirmOk">확인</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog round-confirm-dialog" id="roundConfirmDialog" aria-labelledby="roundConfirmTitle" aria-describedby="roundConfirmText">
     <form method="dialog">
       <h2 id="roundConfirmTitle">차수 확정</h2>
