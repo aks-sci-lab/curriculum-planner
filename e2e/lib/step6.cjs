@@ -109,10 +109,11 @@ function modelFromExports(files, { semester }) {
 }
 
 // 그룹 하나의 결과 검증(엑셀 기준) + 화면 대조
-function checkGroup({ h, label, files, screen, selections, semester, courseNames, classUnitCourses = [] }) {
+function checkGroup({ h, label, files, screen, selections, semester, courseNames, classUnitCourses = [], unitStudents = new Set(), expectedUnassigned = 0 }) {
   const { sections, byRoom } = modelFromExports(files, { semester });
   const sel = new Map();
   for (const [student, list] of selections) {
+    if (unitStudents.has(student)) continue; // 학급 단위 반 학생: 이 그룹 과목은 학급 단위 행으로 받음
     const mine = list.filter((x) => courseNames.includes(x.subject) && (!x.semester || x.semester === semester) && !classUnitCourses.includes(x.subject)).map((x) => ({ subject: x.subject, semester }));
     if (mine.length) sel.set(student, mine);
   }
@@ -120,7 +121,7 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   const p = check.problems;
   const result = { sections: sections.length, students: sel.size, problems: Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.length])) };
   h.check(!p.unassigned.length || screen.unassignedRows === p.unassigned.length, "중요", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면 미배정 표 ${screen.unassignedRows}건)`, { actual: p.unassigned.slice(0, 8) });
-  if (p.unassigned.length) h.issue("경미", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면에 사유 표시)`, { actual: p.unassigned.slice(0, 8) });
+  if (p.unassigned.length && p.unassigned.length !== expectedUnassigned) h.issue("경미", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면에 사유 표시)`, { actual: p.unassigned.slice(0, 8) });
   h.check(!p.blockConflict.length, "치명", "6단계", `${label}: 한 학생이 같은 블록에 두 분반 ${p.blockConflict.length}건`, { actual: p.blockConflict.slice(0, 5) });
   h.check(!p.duplicate.length, "중요", "6단계", `${label}: 한 학생이 같은 과목 여러 분반 ${p.duplicate.length}건`, { actual: p.duplicate.slice(0, 5) });
   h.check(!p.overCapacity.length, "중요", "6단계", `${label}: 정원 초과 ${p.overCapacity.length}건`, { actual: p.overCapacity.slice(0, 5) });

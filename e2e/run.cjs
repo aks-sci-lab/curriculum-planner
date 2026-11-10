@@ -1207,6 +1207,33 @@ async function stepClassSections({ page, h, report, roster }) {
       }
       await h.screenshot(page, "step6-class-unit");
     }
+    // 단일 과목 학급 단위(직접 지정): 3-2 택1에서 '일본어 회화'만 학급 단위, 내년 반 앞쪽 절반만 그 과목·나머지는 '이동'
+    //  → 학생별 그룹 과목 수 = 택1(엑셀 검증에서), '이동' 반인데 일본어 회화를 고른 학생은 미배정 사유 '학급 단위 과목(그 반은 이동)'
+    const singleGroup = info.find((g) => g.key.startsWith("2:2:") && /택1/.test(g.key));
+    if (singleGroup) {
+      await S6.selectGroup(page, singleGroup.key);
+      const unitName = "일본어 회화", otherName = "중국어 회화";
+      await page.getByLabel(`${otherName} 운영 방식`, { exact: true }).selectOption("move").catch(() => {}); await sleep(250);
+      await page.getByLabel(`${unitName} 운영 방식`, { exact: true }).selectOption("class"); await sleep(400);
+      const roomSelects = page.locator("[data-cs-unit-room]");
+      const n = await roomSelects.count();
+      const unitRooms = [];
+      for (let i = 0; i < n; i++) {
+        const sel = roomSelects.nth(i);
+        const room = await sel.getAttribute("data-cs-unit-room");
+        if (i < Math.ceil(n / 2)) { await sel.selectOption({ label: unitName }); unitRooms.push(room); } else await sel.selectOption("");
+        await sleep(150);
+      }
+      const r = await S6.solve(page);
+      const unassignedText = await page.locator("#classSectionsUnassigned").innerText().catch(() => "");
+      const shownOther = (unassignedText.match(/학급 단위 과목\(그 반은 이동\)/g) || []).length;
+      // 기대: 내년 반(그대로 올라감 → 지금 반)이 '이동' 반인데 일본어 회화를 고른 학생 수
+      const mine = await finalSelections(h, report);
+      const expectedOther = [...mine].filter(([key, list]) => key.startsWith("2-") && !unitRooms.includes(key.split("-")[1]) && list.some((x) => x.subject === unitName)).length;
+      result.singleClassUnit = { group: singleGroup.key, unitRooms, feasible: r.feasible, summary: r.summary.slice(0, 200), shownOther, expectedOther };
+      h.check(shownOther === expectedOther, "중요", "6단계", `${singleGroup.key} 단일 과목 학급 단위: '이동' 반인데 ${unitName}을 고른 학생의 미배정(사유 '학급 단위 과목(그 반은 이동)') ${shownOther}건 ≠ 기대 ${expectedOther}명`, { actual: result.singleClassUnit });
+      await h.screenshot(page, "step6-single-class-unit");
+    }
     // 그룹별 엑셀 검증 + 그룹 간 시간 검증
     const selections = await finalSelections(h, report);
     const sectionsByGroup = {};
@@ -1218,8 +1245,9 @@ async function stepClassSections({ page, h, report, roster }) {
       const courseNames = [...new Set(screen.sections.map((x) => x.course))];
       const groupCourses = GROUPS.find((x) => x.field === `sem${g.grade}${g.semester}` && x.pick === Number((g.key.match(/택(\d+)/) || [])[1]))?.members.map((m) => m[2]) || courseNames;
       const sel = new Map([...selections].filter(([key]) => key.startsWith(`${g.key[0]}-`)));
-      const classUnitCourses = screen.classUnit.length ? [...new Set(screen.classUnit.map(([, v]) => v))] : [];
-      const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses });
+      const classUnitCourses = screen.classUnit.length ? [...new Set(screen.classUnit.map(([, v]) => v).filter((v) => !/^이동/.test(v)))] : [];
+      const unitStudents = new Set(files.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5]))).map((r) => r[10]));
+      const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses: [], unitStudents, expectedUnassigned: result.singleClassUnit?.group === g.key ? result.singleClassUnit.expectedOther : 0 });
       // 나이스 반·번호: 배정표가 있는 현1은 새 반·번호, 없으면 비우고 참고 열(현 학년-반-번호)
       {
         const neisRows = files.neis[0].rows.slice(2).filter((r) => r.some(Boolean));
@@ -1238,7 +1266,9 @@ async function stepClassSections({ page, h, report, roster }) {
         const unitOf = new Map(screen.classUnit);
         const unitRows = files.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5])));
         const wrongUnit = unitRows.filter((r) => unitOf.get(String(r[7]).replace(/반$/, "")) !== String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, ""));
-        const groupStudents = [...sel.keys()].length;
+        // 기대 행 수 = 내년 반이 학급 단위 반('이동' 아님)인 학생 수
+        const unitRoomSet = new Set(screen.classUnit.filter(([, v]) => !/^이동/.test(v)).map(([room]) => room));
+        const groupStudents = [...sel.keys()].filter((k) => unitRoomSet.has(String(classMap.get(k)?.classroom ?? k.split("-")[1]))).length;
         check.classUnitNeis = { rows: unitRows.length, students: groupStudents, wrong: wrongUnit.length, rosterSheets: files.rosters.length };
         h.check(unitRows.length === groupStudents && !wrongUnit.length, "중요", "6단계", `${g.key}: 학급 단위 과목 나이스 행이 담임반(내년 반) 배정과 다름(행 ${unitRows.length}/${groupStudents}명, 반·과목 불일치 ${wrongUnit.length})`, { actual: wrongUnit.slice(0, 5) });
         const unitSheet = files.rosters.find((sheet) => sheet.name === "학급 단위 과목");
@@ -1266,6 +1296,13 @@ async function stepClassSections({ page, h, report, roster }) {
           const mine = new Map([...selections].filter(([k]) => k.startsWith(`${g.key[0]}-`)));
           const mismatch = new Set();
           for (const r of rows) if (S6.CLASS_UNIT_ROOM.test(String(r[5]))) { const want = (mine.get(r[10]) || []).map((x) => x.subject); if (!want.includes(bareSubject(r))) mismatch.add(r[10]); }
+          // '이동' 반인데 학급 단위 과목을 고른 학생도 희망과 다름(그 과목을 들을 수 없음)
+          const unitRoomSet2 = new Set(screen.classUnit.filter(([, v]) => !/^이동/.test(v)).map(([room]) => room));
+          const unitCourses2 = screen.classUnit.map(([, v]) => v).filter((v) => !/^이동/.test(v));
+          for (const [k, list] of mine) {
+            const room = String(classMap.get(k)?.classroom ?? k.split("-")[1]);
+            if (!unitRoomSet2.has(room) && list.some((x) => unitCourses2.includes(x.subject) && groupCourses.includes(x.subject) && (!x.semester || x.semester === g.semester))) mismatch.add(k);
+          }
           check.classUnitMismatch = { shown: shownMismatch, computed: mismatch.size };
           h.check(shownMismatch === mismatch.size, "중요", "6단계", `${g.key}: 학급 단위 '희망과 다른 학생 n명'이 나이스 행으로 센 수와 다름`, { expected: mismatch.size, actual: shownMismatch });
         }
