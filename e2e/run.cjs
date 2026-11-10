@@ -7,6 +7,10 @@ const { startHarness, openDialogs } = require("./lib/harness.cjs");
 const { planWorkbook, choiceGroups } = require("./lib/plan-fixture.cjs");
 const { writeXlsx } = require("./lib/xlsx-write.cjs");
 const Core = require("../test-bot-core.js");
+const Expected = require("./lib/expected.cjs");
+const { buildNeis } = require("./lib/neis-fixture.cjs");
+const { GROUPS } = require("./lib/plan-fixture.cjs");
+const Timetable = require("./lib/timetable-checks.cjs");
 
 const args = Object.fromEntries(process.argv.slice(2).join(" ").split(/\s*--/).filter(Boolean).map((part) => {
   const [key, ...rest] = part.split(/\s+/); return [key, rest.join(" ") || "1"];
@@ -107,6 +111,23 @@ async function stepCertificates({ page, h, report, roster }, round) {
     }
     result.prereqFilterCount = await text(page, "#prereqFilterCount");
     report.data[`prereq3_${round}`] = Number(result.prereqFilterCount);
+    {
+      const expected = expectedChecks(rows, report.data.neisPrior || null);
+      const total = Object.values(expected).reduce((sum, e) => sum + e.warn, 0);
+      h.check(Number(result.prereqFilterCount) === total, "중요", "3단계·위계", `${round}차 확인서 '위계 경고만' 학생 수가 하네스 기대값과 다름`, { expected: total, actual: result.prereqFilterCount });
+      // 위반 학생 확인서 점검란
+      const violator = (report.data.studentScreen?.[round === 1 ? "1" : "1"] || []).find((r) => r.kind === "violate");
+      if (round === 1 && violator) {
+        const [classroom, number] = violator.seat.split("-");
+        const row = rows["1"].find((x) => x.classroom === classroom && x.number === number);
+        if (row) {
+          await page.locator(`[data-student-id="app-1-${classroom}-${number}-${row.name}"]`).click();
+          const preview = await text(page, "#preview");
+          result.violatorCertificate = preview.slice(0, 800);
+          h.check(/위계/.test(preview) && !/위계 점검 이상 없음/.test(preview), "중요", "3단계·위계", "위계 위반 학생 확인서 점검란에 경고가 없음", { actual: preview.slice(0, 400) });
+        }
+      }
+    }
     if (report.data[`prereq4_${round}`] !== undefined) h.check(Number(result.prereqFilterCount) === report.data[`prereq4_${round}`], "중요", "3·4단계", `${round}차 위계 경고 학생 수가 3단계(필터)와 4단계(머리줄)에서 다름`, { expected: report.data[`prereq4_${round}`], actual: result.prereqFilterCount });
     await h.screenshot(page, `certificate-r${round}`);
     return result;
@@ -201,6 +222,21 @@ async function stepAggregate({ page, h, report }, round) {
     for (const grade of Object.keys(serverCounts)) {
       const label = `${Number(grade) + 1}학년(현${grade}학년) 수강신청결과(${round}차)`;
       h.check(panelText.includes(label), "중요", "4단계", `집계표 양식 제목에 학년 표기 없음: ${label}`, { expected: label });
+    }
+    {
+      const expectedRows = {};
+      for (const grade of Object.keys(serverCounts)) expectedRows[grade] = await serverSelections(h, events[grade]);
+      const expected = expectedChecks(expectedRows, report.data.neisPrior || null);
+      report.data[`expected${round}`] = expected;
+      const chips = sectionChips(panelText);
+      result.chips = chips;
+      Object.keys(serverCounts).forEach((grade, index) => {
+        const chip = chips[index];
+        h.check(chip && chip.warn === expected[grade].warn, "중요", "4단계·위계", `${round}차 현 ${grade}학년 '위계 경고 n명'이 하네스 기대값과 다름`, { expected: expected[grade].warn, actual: chip?.warn, sample: expected[grade].warned });
+        h.check(chip && chip.unknown === expected[grade].unknown, "중요", "4단계·위계", `${round}차 현 ${grade}학년 '확인 불가 n명'이 하네스 기대값과 다름`, { expected: expected[grade].unknown, actual: chip?.unknown });
+        h.check(chip && chip.short === expected[grade].short, "중요", "4단계·학점", `${round}차 현 ${grade}학년 '학기 학점 부족 n명'이 하네스 기대값과 다름`, { expected: expected[grade].short, actual: chip?.short });
+        if (grade === "2") h.check(chip && chip.kem === expected[grade].kem, "중요", "4단계·국수영", `${round}차 현 2학년 '국수영 기준 초과 n명'이 하네스 기대값과 다름`, { expected: expected[grade].kem, actual: chip?.kem });
+      });
     }
     result.headline = panelText.split("\n").filter((line) => /^(현 [12]학년 → [23]학년 · |합계 )/.test(line)).join(" / ");
     // 화면 튐: 아래쪽 개설 학급수 칸에 값을 넣었다 지우는 동안 창 스크롤 위치가 유지되는지.
@@ -364,6 +400,8 @@ async function stepRetake({ page, h, report, roster }) {
       await page.locator("#cloudSendTestBot").click();
       const bot = await popupPromise;
       await waitText(bot, "#botBridgeStatus", /받았|명/, 20000);
+      // 봇은 지난 실행 설정(반 지정)을 기억하므로 재신청은 전체로 되돌린다.
+      await bot.locator("#botScope").selectOption("all");
       await bot.locator("#botConcurrency").fill(String(CONCURRENCY));
       await bot.locator("#botPopularity").selectOption("uniform");
       for (const id of ["#botWrongPercent", "#botViolationPercent"]) await bot.locator(id).fill("0");
@@ -518,6 +556,297 @@ function classifyConsole(h) {
   if (botErrors.length) h.issue("경미", "테스트봇", `봇 화면 콘솔 오류·예외 ${botErrors.length}건`, { actual: [...new Set(botErrors.map((c) => c.text))].slice(0, 10) });
 }
 
+
+// ---- 학생 화면 직접 신청(위계 위반·국수영 초과 시나리오) ----
+// 이 환경(Playwright + route)에서는 내려받기 이름이 'download'로 와서, 최근 파일부터 열어 '신청코드' 머리글이 있는 엑셀을 찾는다.
+async function readCodes(downloads, after) {
+  const { execFileSync } = require("node:child_process");
+  const end = Date.now() + 15000;
+  while (Date.now() < end) {
+    for (const item of downloads.slice(after).reverse()) {
+      if (!item.file || !fs.existsSync(item.file) || !fs.statSync(item.file).size) continue;
+      try {
+        const out = execFileSync("python3", ["-I", "-c", `import json,sys,openpyxl
+ws=openpyxl.load_workbook(sys.argv[1]).active
+print(json.dumps([[str(c.value) if c.value is not None else "" for c in r] for r in ws.iter_rows()], ensure_ascii=False))`, item.file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        const rows = JSON.parse(out);
+        const head = rows[0] || [];
+        if (!head.includes("신청코드")) continue;
+        item.kind = "codes";
+        const col = (name) => head.indexOf(name);
+        return rows.slice(1).map((r) => ({ grade: r[col("현재학년")], classroom: r[col("반")], number: r[col("번호")], name: r[col("이름")], code: r[col("신청코드")] }));
+      } catch { /* xlsx가 아님 */ }
+    }
+    await sleep(300);
+  }
+  throw new Error("학생 코드 엑셀을 내려받지 못함");
+}
+
+function groupsForTarget(targetGrade) { return GROUPS.filter((g) => g.field.startsWith(`sem${targetGrade}`)); }
+function randomValid(targetGrade, rng) {
+  const picks = [];
+  for (const g of groupsForTarget(targetGrade)) picks.push(...Core.shuffle(g.members.map((m) => m[2]), rng).slice(0, g.pick));
+  return picks;
+}
+// 위반 선택: 현1 → 2-2 '역학과 에너지'를 2-1 '물리학' 없이(+ 다른 2-2 과목), 현2 → 3-1 중국어 + 3-2 일본어 회화(위계), 국·수·영 과목을 최대로(국수영 초과).
+function violatingPicks(targetGrade, rng) {
+  const by = (field, pick) => groupsForTarget(targetGrade).find((g) => g.field === field && g.pick === pick).members.map((m) => m[2]);
+  if (targetGrade === 2) {
+    const s21 = Core.shuffle(by("sem21", 3).filter((n) => n !== "물리학"), rng).slice(0, 3);
+    const s22 = ["역학과 에너지", ...Core.shuffle(by("sem22", 3).filter((n) => n !== "역학과 에너지"), rng).slice(0, 2)];
+    return [...s21, Core.shuffle(by("sem22", 1), rng)[0], ...s22];
+  }
+  const kem = new Set(["미적분Ⅱ", "기하", "실용 통계", "심화 영어", "수학과제 탐구", "인공지능 수학", "영미 문학 읽기", "영어 발표와 토론", "언어생활 탐구"]);
+  const fill = (names, n) => { const a = names.filter((x) => kem.has(x)); for (const x of Core.shuffle(names.filter((y) => !kem.has(y)), rng)) if (a.length < n) a.push(x); return a.slice(0, n); };
+  return [...fill(by("sem31", 5), 5), "중국어", ...fill(by("sem32", 5), 5), "일본어 회화"];
+}
+
+async function studentApply(studentPage, h, eventId, student, picks) {
+  await studentPage.goto(`${h.url}index.html#event=${eventId}`);
+  await studentPage.locator("#cloudStudentClassroom").waitFor({ state: "visible" });
+  await studentPage.locator("#cloudStudentClassroom").fill(student.classroom);
+  await studentPage.locator("#cloudStudentNumber").fill(student.number);
+  await studentPage.locator("#cloudStudentCode").fill(student.code);
+  await studentPage.locator("#cloudStudentLogin button[type=submit]").click();
+  await studentPage.locator("#cloudStudentChangeCode:not(.hidden), #cloudStudentCourses:not(.hidden)").first().waitFor({ timeout: 15000 });
+  if (await studentPage.locator("#cloudStudentChangeCode:not(.hidden)").count()) {
+    const next = String(100000 + ((Number(student.classroom) * 7919 + Number(student.number) * 104729) % 899999));
+    await studentPage.locator("#cloudStudentNewCode").fill(next);
+    await studentPage.locator("#cloudStudentNewCodeConfirm").fill(next);
+    await studentPage.locator("#cloudStudentChangeCode button[type=submit]").click();
+    await studentPage.locator("#cloudStudentCourses:not(.hidden)").waitFor({ timeout: 15000 });
+  }
+  const warnings = [];
+  for (let page = 0; page < 4; page++) {
+    for (const name of picks) {
+      const box = studentPage.locator(`#cloudStudentChoices input[type=checkbox][value="${name}"]`);
+      if (await box.count() && await box.isVisible() && !(await box.isChecked())) await box.check();
+    }
+    warnings.push((await studentPage.locator("#courseCheckStudentPanel").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300));
+    if (await studentPage.locator("#cloudStudentNext").isVisible()) { await studentPage.locator("#cloudStudentNext").click(); await sleep(150); continue; }
+    break;
+  }
+  await studentPage.locator("#cloudStudentSave").click();
+  const message = await waitText(studentPage, "#cloudStudentMessage", /저장|제출|선택하세요|오류|실패/, 15000);
+  return { message, warnings };
+}
+
+async function stepStudentScreen({ page, h, report, roster, downloads }, grade) {
+  return h.step(`2-2b. 현 ${grade}학년 학생 화면 직접 신청(위계 위반·국수영 초과 5%, 정상, 미제출)`, async () => {
+    const eventId = report.data.events[grade];
+    const codes = (await readCodes(downloads, 0)).filter((c) => c.grade === grade);
+    const last = codes.filter((c) => c.classroom === String(CLASSES));
+    const rng = Core.createRng(SEED * 131 + Number(grade));
+    const violators = Math.min(last.length - 3, Math.ceil(roster[grade].length * 0.05));
+    const plan = last.map((student, index) => ({ student, kind: index < violators ? "violate" : index < last.length - 3 ? "normal" : "skip" }));
+    const context = await h.newStudentContext();
+    const studentPage = await context.newPage();
+    const results = [];
+    const t0 = Date.now();
+    for (const item of plan) {
+      if (item.kind === "skip") { results.push({ seat: `${item.student.classroom}-${item.student.number}`, kind: "skip" }); continue; }
+      const targetGrade = Number(grade) + 1;
+      const picks = item.kind === "violate" ? violatingPicks(targetGrade, rng) : randomValid(targetGrade, rng);
+      const r = await studentApply(studentPage, h, eventId, item.student, picks);
+      const saved = /저장/.test(r.message) && !/선택하세요|실패/.test(r.message);
+      h.check(saved, "중요", "웹·학생 화면", `현 ${grade}학년 ${item.student.classroom}-${item.student.number} 학생 화면 저장 실패`, { actual: r.message, picks });
+      if (item.kind === "violate") h.check(/위계|경고|선이수/.test(r.message + r.warnings.join(" ")), "중요", "웹·학생 화면", `위계 위반 저장인데 학생 화면에 경고가 없음(현 ${grade}학년 ${item.student.classroom}-${item.student.number})`, { actual: { message: r.message, panel: r.warnings } });
+      results.push({ seat: `${item.student.classroom}-${item.student.number}`, kind: item.kind, picks, message: r.message.slice(0, 200) });
+    }
+    report.timings[`studentScreen${grade}`] = { students: results.filter((r) => r.kind !== "skip").length, ms: Date.now() - t0 };
+    await h.screenshot(studentPage, `student-screen-grade${grade}`);
+    await context.close();
+    const rows = await serverSelections(h, eventId);
+    for (const r of results.filter((x) => x.picks)) {
+      const row = rows.find((x) => `${x.classroom}-${x.number}` === r.seat);
+      h.check(row && row.submitted_at && JSON.stringify([...row.selections].sort()) === JSON.stringify([...r.picks].sort()), "중요", "웹·학생 화면", `학생 화면 저장값이 서버와 다름(${r.seat})`, { expected: r.picks, actual: row?.selections });
+    }
+    report.data.studentScreen = report.data.studentScreen || {};
+    report.data.studentScreen[grade] = results;
+    return { violators, normal: results.filter((r) => r.kind === "normal").length, skipped: results.filter((r) => r.kind === "skip").length };
+  });
+}
+
+// ---- 위계·국수영 기대값(하네스 계산) ----
+function expectedChecks(rowsByGrade, prior) {
+  const out = {};
+  for (const [grade, rows] of Object.entries(rowsByGrade)) {
+    const target = Number(grade) + 1;
+    let warn = 0, unknown = 0, unknownOnly = 0, kem = 0, short = 0;
+    const need = GROUPS.filter((g) => g.field.startsWith(`sem${target}`)).reduce((sum, g) => sum + g.pick, 0);
+    const warned = [];
+    for (const row of rows.filter((r) => r.submitted_at)) {
+      const seat = `${row.classroom}-${row.number}`;
+      const p = grade === "2" && prior ? prior.get(seat) || null : null;
+      const st = Expected.prerequisiteStatus(row.selections, target, p);
+      if (st.violations.length) { warn++; warned.push(seat); }
+      if (row.selections.length < need) short++;
+      if (st.unknowns.length) { unknown++; if (!st.violations.length) unknownOnly++; }
+      if (grade === "2") {
+        const g2 = p ? [...p].filter((n) => ["미적분Ⅰ", "확률과 통계"].includes(n)) : ["미적분Ⅰ"];
+        if (Expected.kemOver(row.selections, g2)) kem++;
+      }
+    }
+    out[grade] = { warn, unknown, unknownOnly, short, kem: grade === "2" ? kem : undefined, warned: warned.slice(0, 20) };
+  }
+  return out;
+}
+
+async function openCourseCheck(page, grade) {
+  await gotoStep(page, 2);
+  await selectGradeTab(page, grade);
+  await page.locator("#applicationGroupsTab").click();
+  await page.locator("#courseCheckOpenGroups").click();
+  await page.locator("#courseCheckDialog[open]").waitFor();
+  await sleep(300);
+}
+async function readCourseCheck(page) {
+  const body = await text(page, "#courseCheckDialogBody");
+  const at = body.indexOf("현재 차수 결과 점검");
+  return { results: at >= 0 ? body.slice(at) : "", neis: await text(page, "#courseCheckNeisStatus").catch(() => ""), prior: await text(page, "#courseCheckPriorStatus").catch(() => "") };
+}
+// 점검 팝업 '현재 차수 결과 점검': "현 N학년 → M학년 과목 n명 점검 · 위계 미충족 a명 · … · 국수영 기준 초과 c명 · 확인 불가 d명"
+function dialogSection(results, grade) {
+  const line = String(results).split("\n").find((l) => l.startsWith(`현 ${grade}학년 → ${Number(grade) + 1}학년 과목`) && /점검 ·/.test(l)) || "";
+  const n = (re) => { const m = line.match(re); return m ? Number(m[1]) : null; };
+  return { line, warn: n(/위계 미충족 (\d+)명/), unknown: n(/확인 불가 (\d+)명/), kem: n(/국수영 기준 초과 (\d+)명/), short: n(/학기 학점 부족 (\d+)명/) };
+}
+const pickNumber = (textValue, pattern) => { const m = String(textValue).match(pattern); return m ? Number(m[1]) : null; };
+
+async function stepPrerequisites({ page, h, report, roster }) {
+  return h.step("2-5. 위계·국수영 점검: 하네스 기대값 대조(나이스 자료 전·후)", async () => {
+    const rows = {};
+    for (const grade of ["1", "2"]) rows[grade] = await serverSelections(h, report.data.events[grade]);
+    const before = expectedChecks(rows, null);
+    const result = { expectedBefore: before, dialog: {} };
+    for (const grade of ["1", "2"]) {
+      await openCourseCheck(page, grade);
+      const r = await readCourseCheck(page);
+      result.dialog[`before${grade}`] = r.results;
+      const sec = dialogSection(r.results, grade);
+      const warn = sec.warn;
+      result.dialog[`unknownBefore${grade}`] = sec.unknown;
+      h.check(sec.unknown === before[grade].unknown, "중요", "2단계·위계", `현 ${grade}학년 '확인 불가' 학생 수(점검 팝업, 나이스 전)가 기대값과 다름`, { expected: before[grade].unknown, actual: sec.unknown });
+      if (grade === "2") h.check(sec.kem === before[grade].kem, "중요", "2단계·국수영", "현 2학년 '국수영 기준 초과' 학생 수(점검 팝업)가 기대값과 다름", { expected: before[grade].kem, actual: sec.kem });
+      h.check(warn === before[grade].warn, "중요", "2단계·위계", `현 ${grade}학년 위계 경고 학생 수(점검 팝업, 나이스 전)가 기대값과 다름`, { expected: before[grade].warn, actual: warn, text: r.results.slice(0, 600) });
+      await page.locator("#courseCheckDialog").getByRole("button", { name: "닫기" }).last().click();
+    }
+    // 나이스 자료(현 2학년)
+    const chosen3 = new Map(rows["2"].filter((r) => r.submitted_at).map((r) => [`${r.classroom}-${r.number}`, r.selections]));
+    const neis = buildNeis({ roster: roster["2"], chosen3, seed: SEED });
+    // 이 환경의 Chromium은 한글 파일 이름을 고르면 'cancel'로 끝내므로(파일이 안 들어감) 영문 이름으로 저장한다.
+    const files = neis.files.map((f) => { const file = path.join(OUT, `neis-${f.name.match(/\d{4}_\d/)[0]}.xlsx`); fs.writeFileSync(file, f.bytes); return file; });
+    await openCourseCheck(page, "2");
+    const t0 = Date.now();
+    await upload(page, page.locator('label[for="courseCheckPriorInput"]'), files);
+    await page.locator("#courseCheckNeisStatus").waitFor({ timeout: 30000 }).catch(() => {});
+    await sleep(800);
+    report.timings.neisUpload = Date.now() - t0;
+    const open = await openDialogs(page);
+    result.neisDialogs = open.filter((d) => d.id !== "courseCheckDialog").map((d) => d.text.slice(0, 500));
+    const r = await readCourseCheck(page);
+    result.neisStatus = r.neis || r.prior;
+    h.check(/연결 330명|연결 \d+명/.test(result.neisStatus) && pickNumber(result.neisStatus, /연결 (\d+)명/) === roster["2"].length, "중요", "2단계·나이스",
+      "나이스 자료 연결 학생 수가 현 2학년 명렬과 다름", { expected: roster["2"].length, actual: result.neisStatus });
+    const after = expectedChecks(rows, neis.prior);
+    result.expectedAfter = after;
+    result.dialog.after2 = r.results;
+    const sec2 = dialogSection(r.results, "2");
+    const warn = sec2.warn;
+    h.check(sec2.kem === after["2"].kem, "중요", "2단계·나이스", "현 2학년 '국수영 기준 초과'(나이스 후)가 기대값과 다름", { expected: after["2"].kem, actual: sec2.kem });
+    h.check(warn === after["2"].warn, "중요", "2단계·나이스", "현 2학년 위계 경고 학생 수(나이스 후)가 기대값과 다름", { expected: after["2"].warn, actual: warn, text: r.results.slice(0, 600) });
+    const unknown = sec2.unknown;
+    h.check(unknown === after["2"].unknown, "중요", "2단계·나이스", "나이스 자료를 올린 뒤에도 '확인 불가' 학생이 남음(기대 0)", { expected: after["2"].unknown, actual: unknown, before: before["2"].unknown });
+    await h.screenshot(page, "course-check-neis");
+    await page.locator("#courseCheckDialog").getByRole("button", { name: "닫기" }).last().click();
+    report.data.expected1 = after;
+    report.data.neisPrior = neis.prior;
+    return { ...result, neisRows: neis.rows };
+  });
+}
+
+// 4단계 학년별 점검 칩: '위계 경고 n명 · 확인 불가 n명 · 학기 학점 부족 n명 · 국수영 기준 초과 n명'
+function sectionChips(panelText) {
+  return [...panelText.matchAll(/위계 경고 (\d+)명\n(?:확인 불가 (\d+)명\n)?학기 학점 부족 (\d+)명(?:\n국수영 기준 초과 (\d+)명)?/g)]
+    .map((m) => ({ warn: Number(m[1]), unknown: Number(m[2] || 0), short: Number(m[3]), kem: Number(m[4] || 0) }));
+}
+
+
+// ---- 6단계(분반·시간표 편성) ----
+// 6단계가 통합 브랜치에 들어오면 STEP6 단추 이름·패널·읽기(adapter)만 맞추면 된다. 지금은 '보류' 자리면 건너뛴다.
+const STEP6 = {
+  nav: '[data-workflow-step="6"]',
+  panel: "#workflowStep6Panel",
+  run: [/자동 편성|편성 실행|분반 편성|블록 생성/],   // 누를 단추 이름 후보(들어온 뒤 맞춤)
+  exportNeis: /나이스.*(내보내기|엑셀|저장)/,
+};
+async function finalSelections(h, report) {
+  // 학년별 마지막 확정 차수(2차 있으면 2차) 서버 자료 → 학생키(현학년-반-번호) → [{subject, semester}]
+  const semesterOf = new Map(GROUPS.flatMap((g) => g.members.map((m) => [m[2], g.field.slice(-1)])));
+  const map = new Map();
+  for (const grade of ["1", "2"]) {
+    const id = report.data.retakeEvents?.[grade] || report.data.events?.[grade];
+    if (!id) continue;
+    for (const row of await serverSelections(h, id)) {
+      if (!row.submitted_at) continue;
+      map.set(`${grade}-${Number(row.classroom)}-${Number(row.number)}`, row.selections.map((subject) => ({ subject, semester: semesterOf.get(subject) || "" })));
+    }
+  }
+  return map;
+}
+async function stepTimetable({ page, h, report }) {
+  return h.step("6. 분반·시간표 편성(블록·충돌·정원·교사 불가·나이스 내보내기)", async () => {
+    const nav = page.locator(STEP6.nav).first();
+    const label = (await nav.count()) ? String(await nav.textContent()).trim() : "";
+    if (!label || /보류/.test(label)) return { skipped: true, reason: `6단계 미연결(메뉴: ${label || "없음"})` };
+    report.timings.step6Enter = await gotoStep(page, 6);
+    const panelText = await text(page, STEP6.panel);
+    if (/준비 중/.test(panelText)) return { skipped: true, reason: "6단계 화면이 '준비 중'" };
+    const result = { label };
+    for (const name of STEP6.run) {
+      const button = page.locator(STEP6.panel).getByRole("button", { name }).first();
+      if (await button.count()) { const t0 = Date.now(); await button.click(); await page.waitForLoadState("networkidle").catch(() => {}); await sleep(1500); report.timings.step6Run = Date.now() - t0; break; }
+    }
+    await h.screenshot(page, "step6");
+    result.panel = (await text(page, STEP6.panel)).slice(0, 3000);
+    const selections = await finalSelections(h, report);
+    // 화면 모델 읽기: 6단계가 들어오면 여기서 sections·unavailable을 화면/엑셀에서 읽는다(adapter).
+    const model = typeof globalThis.__step6Adapter === "function" ? await globalThis.__step6Adapter(page) : null;
+    if (model) {
+      const check = Timetable.checkTimetable({ ...model, selections });
+      result.check = check;
+      const p = check.problems;
+      h.check(!p.unassigned.length, "중요", "6단계", `미배정 ${p.unassigned.length}건(설명 없음)`, { actual: p.unassigned.slice(0, 10) });
+      h.check(!p.blockConflict.length, "치명", "6단계", `학생 블록 충돌 ${p.blockConflict.length}건`, { actual: p.blockConflict.slice(0, 10) });
+      h.check(!p.overCapacity.length, "중요", "6단계", `분반 정원 초과 ${p.overCapacity.length}건`, { actual: p.overCapacity.slice(0, 10) });
+      h.check(!p.teacherUnavailable.length && !p.teacherConflict.length, "중요", "6단계", `교사 불가 시간·중복 배정 ${p.teacherUnavailable.length + p.teacherConflict.length}건`, { actual: [...p.teacherUnavailable, ...p.teacherConflict].slice(0, 10) });
+      h.check(!p.duplicate.length, "중요", "6단계", `한 학생이 같은 과목 분반 여러 개 ${p.duplicate.length}건`, { actual: p.duplicate.slice(0, 10) });
+    } else {
+      result.note = "6단계 화면 읽기(adapter) 미작성 — 단추·표 구조가 들어오면 맞춤";
+    }
+    const exportButton = page.locator(STEP6.panel).getByRole("button", { name: STEP6.exportNeis }).first();
+    if (await exportButton.count()) {
+      const download = page.waitForEvent("download");
+      await exportButton.click();
+      const file = await savedCopy(await (await download).path(), "step6-neis.xlsx");
+      result.neisExport = await inspectXlsx(file);
+      h.check(result.neisExport.ok, "중요", "6단계", "나이스 내보내기 파일이 열리지 않음", { actual: result.neisExport.error });
+      if (result.neisExport.ok) {
+        const { execFileSync } = require("node:child_process");
+        const rows = JSON.parse(execFileSync("python3", ["-I", "-c", `import json,sys,openpyxl
+ws=openpyxl.load_workbook(sys.argv[1]).worksheets[0]
+print(json.dumps([[str(c.value) if c.value is not None else "" for c in r] for r in ws.iter_rows()], ensure_ascii=False))`, file], { encoding: "utf8" }));
+        const neis = Timetable.checkNeisExport(rows, { selections });
+        result.neisCheck = neis;
+        h.check(!neis.error && !neis.missing.length, "중요", "6단계", "나이스 내보내기 열 구성이 수강학생 편성 형식과 다름", { expected: Timetable.NEIS_COLUMNS, actual: neis.error || neis.missing });
+        h.check(!neis.duplicates?.length, "중요", "6단계", `나이스 내보내기: 한 학생·과목이 여러 줄 ${neis.duplicates?.length}건`, { actual: neis.duplicates?.slice(0, 10) });
+        h.check(!neis.mismatchCount, "중요", "6단계", `나이스 내보내기 과목이 최종 수강신청과 다른 학생 ${neis.mismatchCount}명`, { actual: neis.mismatch?.slice(0, 5) });
+      }
+    } else result.neisExportNote = "나이스 내보내기 단추를 찾지 못함";
+    return result;
+  });
+}
+
 async function main() {
   const h = await startHarness({ outDir: OUT, seed: SEED, headless: !args.headed });
   const { report } = h;
@@ -527,10 +856,17 @@ async function main() {
   page.on("dialog", async (dialog) => { dialogs.push({ type: dialog.type(), message: dialog.message() }); await dialog.accept(dialog.type() === "prompt" ? dialog.defaultValue() : undefined); });
   const downloads = [];
   page.on("download", async (download) => {
-    const file = path.join(OUT, "downloads", `${downloads.length + 1}-${download.suggestedFilename()}`);
+    // 이 환경에서는 이름이 'download'로 오기도 한다 → 엑셀(zip)이면 .xlsx를 붙여 저장(openpyxl은 확장자를 본다).
+    const index = downloads.push({ name: download.suggestedFilename(), file: "" }) - 1;
+    let file = path.join(OUT, "downloads", `${index + 1}-${download.suggestedFilename()}`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     await download.saveAs(file).catch(() => {});
-    downloads.push({ name: download.suggestedFilename(), file });
+    try {
+      const head = fs.readFileSync(file).subarray(0, 2).toString("latin1");
+      if (!path.extname(file) && head === "PK") { fs.renameSync(file, `${file}.xlsx`); file = `${file}.xlsx`; }
+      else if (!path.extname(file) && head.startsWith("{")) { fs.renameSync(file, `${file}.json`); file = `${file}.json`; }
+    } catch { /* 저장 실패 */ }
+    downloads[index].file = file;
   });
   report.data.downloads = downloads;
   report.data.dialogs = dialogs;
@@ -633,7 +969,9 @@ async function main() {
         const bot = await popupPromise;
         await bot.waitForLoadState("domcontentloaded");
         await waitText(bot, "#botBridgeStatus", /받았|명/, 20000);
-        await bot.locator("#botScope").selectOption("all").catch(() => {});
+        // 마지막 반은 하네스가 학생 화면으로 직접 신청한다(위계 위반·국수영 초과 5%, 정상, 미제출).
+        await bot.locator("#botScope").selectOption("class");
+        await bot.locator("#botScopeClasses").fill(Array.from({ length: CLASSES - 1 }, (_, i) => i + 1).join(","));
         await bot.locator("#botConcurrency").fill(String(CONCURRENCY));
         await bot.locator("#botPopularity").selectOption("skewed");
         await bot.locator("#botWrongPercent").fill("4");
@@ -669,6 +1007,7 @@ async function main() {
         await bot.close();
         return { event: event.id, submitted: submitted.length, total: rows.length, stats: stats.replace(/\s+/g, " ") };
       });
+      await stepStudentScreen({ page, h, report, roster, downloads }, grade);
     }
     await h.step("2-3. 신청 마감·집계표 반영 확인", async () => {
       const result = {};
@@ -692,7 +1031,8 @@ async function main() {
       result.syncStatus = await text(page, "#cloudSyncStatus");
       return result;
     });
-    if (args.explore) { await require(path.resolve(args.explore))({ page, h, text, sleep, gotoStep, upload, waitText, report, OUT }); return; }
+    if (args.explore) { await require(path.resolve(args.explore))({ page, h, text, sleep, gotoStep, upload, waitText, report, OUT, roster, selectGradeTab }); return; }
+    await stepPrerequisites({ page, h, report, roster });
     const ctx = { page, h, report, roster, dialogs, downloads };
     await stepCertificates(ctx, 1);
     if (STOP_AFTER === "3") return;
@@ -702,6 +1042,7 @@ async function main() {
     await stepCertificates(ctx, 2);
     if (STOP_AFTER === "4") return;
     await stepHours(ctx);
+    await stepTimetable(ctx);
     await stepPersistence(ctx);
     if (args.explore2) await require(path.resolve(args.explore2))({ page, h, text, sleep, gotoStep, upload, waitText, report, OUT });
   } finally {

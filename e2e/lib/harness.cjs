@@ -53,6 +53,13 @@ async function startHarness({ outDir, seed, headless = true, hardened = true }) 
   let shot = 0;
   const h = {
     mock, url, browser, context, report, outDir, net,
+    // 학생용 별도 브라우저 창(교사 로그인·작업 자료와 섞이지 않게). 같은 모의 서버를 쓴다.
+    async newStudentContext() {
+      const student = await browser.newContext({ viewport: { width: 1100, height: 900 }, locale: "ko-KR", timezoneId: "Asia/Seoul" });
+      await attachMockSupabase(student, mock, { baseUrl: url });
+      student.on("page", (page) => watch(page, "student"));
+      return student;
+    },
     async screenshot(page, name) {
       const file = path.join(outDir, `${String(++shot).padStart(2, "0")}-${name}.png`);
       await page.screenshot({ path: file, fullPage: false }).catch(() => {});
