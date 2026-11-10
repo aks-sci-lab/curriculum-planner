@@ -425,8 +425,10 @@ function hoursShortSubject(subject) {
 // 메모 '◈ 2027학년도 ⇒ 국어과, 기술가정과 각1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증'.
 // rows: [{ name, previous, current }] (교과 순서). 전년도 교사 수가 하나도 없으면 빈 문자열.
 function hoursTeacherChangeLine(year, rows) {
-  const list = (rows || []).filter((row) => Number.isFinite(row.previous) || Number.isFinite(row.current));
-  if (!list.some((row) => Number.isFinite(row.previous))) return "";
+  // 올해 교사 수를 아직 넣지 않은 교과는 비교하지 않는다(빈칸을 0명으로 보면 '국어과 8명 감'처럼 잘못 적힌다).
+  // 올해 교사 수가 하나도 없으면 증감 줄을 만들지 않는다.
+  const list = (rows || []).filter((row) => Number.isFinite(row.current) && (Number.isFinite(row.previous) || Number(row.current) > 0));
+  if (!list.length || !list.some((row) => Number.isFinite(row.previous))) return "";
   const groups = [];
   for (const sign of [-1, 1]) {
     const changes = list.map((row) => ({ name: row.name, delta: Math.round(((Number(row.current) || 0) - (Number(row.previous) || 0)) * 100) / 100 }))

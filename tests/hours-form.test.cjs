@@ -177,9 +177,13 @@ test("교사 증감 메모 문구와 배분 메모 줄임말은 원래 양식과
   const ctx = statsContext(baseSettings(), plan);
   const rows = [
     { name: "국어과", previous: 9, current: 8 }, { name: "수학과", previous: 10, current: 10 }, { name: "영어과", previous: 9, current: 7 },
-    { name: "물리", previous: 2, current: 3 }, { name: "일반사회", previous: 2, current: 3 }, { name: "기술가정과", previous: 1, current: NaN }
+    { name: "물리", previous: 2, current: 3 }, { name: "일반사회", previous: 2, current: 3 }, { name: "기술가정과", previous: 1, current: 0 }
   ];
   assert.equal(ctx.hoursTeacherChangeLine("2026", rows), "◈ 2026학년도 ⇒ 국어과, 기술가정과 각1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증");
+  // 올해 교사 수가 빈칸(아직 입력 전)인 교과는 비교하지 않는다(0명으로 입력하면 '감'). 하나도 없으면 증감 줄 없음.
+  assert.equal(ctx.hoursTeacherChangeLine("2026", rows.map((row) => row.name === "기술가정과" ? { ...row, current: NaN } : row)),
+    "◈ 2026학년도 ⇒ 국어과 1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증");
+  assert.equal(ctx.hoursTeacherChangeLine("2026", rows.map((row) => ({ ...row, current: NaN }))), "", "올해 교사 수가 비어 있으면 증감 줄 없음");
   assert.equal(ctx.hoursTeacherChangeLine("2026", rows.map((row) => ({ ...row, previous: NaN }))), "", "전년도 값이 없으면 빈 줄");
   assert.equal(ctx.hoursTeacherChangeLine("2026", [{ name: "국어과", previous: 8, current: 8 }]), "◈ 2026학년도 ⇒ 교과 교사 수 변동 없음");
   assert.deepEqual(plain(["통합과학1", "과학탐구실험2", "융합과학 탐구", "기후변화와 환경생태", "통합사회2", "사회문제 탐구", "기후변화와 지속가능한 세계", "역사로 탐구하는 현대세계"]

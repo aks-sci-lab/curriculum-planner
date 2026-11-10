@@ -4056,6 +4056,51 @@
       return Object.hasOwn(closures || {}, key) ? closures[key] : atRisk ? "" : "open";
     }
 
+    // 이 차수의 개설/폐강 결정 + 앞 차수에서 교사가 정한 결정(같은 현 학년·같은 과목명)을 이어받은 것.
+    // 이 차수에 직접 정한 값(미정 "" 포함)이 있으면 그것이 우선이고, 이어받은 값은 메뉴에서 바꿀 수 있다.
+    // 이어받은 키는 숨은 속성 inherited(Map 키 → 앞 차수 번호)로 알려 준다(목록·저장에는 나오지 않음).
+    function effectiveRoundClosures(round) {
+      round = String(round);
+      const own = state.roundClosures?.[round] || {};
+      const compute = () => {
+        const merged = { ...own };
+        const inherited = new Map();
+        const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : Object.keys(state.rounds || {});
+        const earlier = rounds.filter((item) => Number(item) < Number(round)).sort((a, b) => Number(b) - Number(a));
+        const data = state.rounds?.[round];
+        if (earlier.length && data?.courses?.length) {
+          const normalize = (name) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name || "").replace(/\s+/g, "");
+          const courseName = (course) => course.subjectName || course.applicationSubject?.subject || course.name;
+          for (const prev of earlier) {
+            const prevData = state.rounds?.[prev];
+            if (!prevData?.courses?.length) continue;
+            const byName = new Map();
+            for (const [key, verdict] of Object.entries(state.roundClosures?.[prev] || {})) {
+              if (verdict !== "open" && verdict !== "closed") continue;
+              const separator = key.indexOf(":");
+              const grade = key.slice(0, separator);
+              const course = prevData.courses.find((item) => String(item.column) === key.slice(separator + 1) &&
+                (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === grade));
+              if (course) byName.set(`${grade}:${normalize(courseName(course))}`, verdict);
+            }
+            for (const course of data.courses) {
+              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
+              for (const grade of grades) {
+                const key = `${grade}:${course.column}`;
+                const verdict = byName.get(`${grade}:${normalize(courseName(course))}`);
+                if (!verdict || Object.hasOwn(merged, key)) continue;
+                merged[key] = verdict;
+                inherited.set(key, prev);
+              }
+            }
+          }
+        }
+        Object.defineProperty(merged, "inherited", { value: inherited, enumerable: false });
+        return merged;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("effectiveRoundClosures", round, compute) : compute();
+    }
+
     // 택n 그룹의 총 학급수는 n × 학급 수와 같아야 한다. 택 수를 모르는 그룹(미분류 등)은 목표가 없다.
     function aggregateGroupTarget(group, classes) {
       const count = Number(group?.choiceCount);
@@ -4280,7 +4325,7 @@
       const classBases = typeof nextYearClassBases === "function" ? nextYearClassBases() : {};
       const round = String(state.currentRound);
       const locked = typeof isRoundLocked === "function" && isRoundLocked(round);
-      const closures = state.roundClosures?.[round] || {};
+      const closures = (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {});
       const aggregate = aggregateRecords(
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases, closures
@@ -4346,7 +4391,7 @@
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
         typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-        state.roundClosures?.[round] || {}
+        (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {})
       );
       const report = aggregate.reports.find((item) => String(item.summary.grade) === String(grade));
       if (!report) return null;
@@ -6366,6 +6411,8 @@
         if (overDivision) lines.push(`분반기준 초과: 학급당 ${average}명이 분반기준 ${Number(summary.divisionLimit || 0).toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.`);
         if (prereqCount) lines.push(`위계 경고 ${prereqCount}명: 선이수 과목 없이 신청한 학생이 있습니다.`);
         if (!course.closed && decision === "") lines.push("교사 결정이 미정입니다. 개설 또는 폐강을 고르세요.");
+        const inheritedFrom = closures?.inherited?.get?.(key);
+        if (inheritedFrom) lines.push(`${inheritedFrom}차에서 정한 결정(${decision === "closed" ? "폐강" : "개설"})을 이어받았습니다. 바꾸려면 아래에서 고르세요.`);
         if (!lines.length) lines.push("충족: 개설기준 이상이고 학급당 인원이 기준 안에 있습니다.");
         const status = { key, decision, over, overDivision, prereqCount, lines, focus: attention ? attention.courses.has(key) : null };
         statuses.set(course, status);
@@ -6626,7 +6673,7 @@
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
         typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-        state.roundClosures?.[state.currentRound] || {}
+        (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(state.currentRound) : state.roundClosures?.[state.currentRound] || {})
       );
       // 4단계에서 학년 탭을 고르면 그 학년 시트만 만든다(시트 내용은 학교 서식 그대로).
       const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
