@@ -477,11 +477,16 @@ async function stepPersistence({ page, h, report, dialogs }) {
     await sleep(800);
     result.usage = await text(page, "#workspaceStorageUsage");
     result.estimate = await page.evaluate(async () => { const e = await navigator.storage.estimate(); return { usage: e.usage, quota: e.quota, localStorage: JSON.stringify(localStorage).length }; });
+    // 이 환경의 Playwright는 blob 링크 내려받기 이름을 'download'로만 알려 주므로, 앱이 붙인 파일 이름(a.download)을 지켜본다(동작은 그대로).
+    await page.evaluate(() => {
+      const click = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { window.__lastDownloadName = this.download; return click.call(this); };
+    });
     const backupDownload = page.waitForEvent("download");
     await page.locator("#downloadWorkspaceBackup").click();
     const backupEvent = await backupDownload;
     // 백업은 gzip(.json.gz)으로 내려받는다(CompressionStream 지원 브라우저). 내려받은 이름 그대로 저장해 복원에 쓴다.
-    result.backupName = backupEvent.suggestedFilename();
+    result.backupName = await page.evaluate(() => window.__lastDownloadName || "") || backupEvent.suggestedFilename();
     const backupFile = await savedCopy(await backupEvent.path(), /\.gz$/.test(result.backupName) ? "workspace-backup.json.gz" : "workspace-backup.json");
     result.backupBytes = fs.statSync(backupFile).size;
     const head = fs.readFileSync(backupFile).subarray(0, 2);
