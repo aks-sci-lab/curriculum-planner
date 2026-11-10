@@ -172,7 +172,28 @@ function hoursSourceResult(currentGrade, settings) {
     : buildRoundSnapshot(round);
   const rows = (snapshot?.rows || []).filter((row) => row.grade === currentGrade);
   if (!rows.length) return null;
-  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows };
+  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, earlierClosed: hoursEarlierClosed(currentGrade, round) };
+}
+
+// 근거 차수보다 앞 차수에서 폐강한 과목(정규화 이름 → { round, semesters }). 2차 재신청 결과에는 1차에 폐강한 과목이
+// 아예 없으므로, 이것이 없으면 '결과에 없음(과목명 불일치?)'으로 잘못 경고한다.
+function hoursEarlierClosed(currentGrade, round) {
+  const closed = new Map();
+  for (const earlier of applicationRoundNumbers()) {
+    if (!(Number(earlier) < Number(round))) continue;
+    const snapshot = isRoundLocked(earlier) && state.roundStatuses?.[earlier]?.snapshot
+      ? state.roundStatuses[earlier].snapshot
+      : roundStatusData(earlier)?.students?.length ? buildRoundSnapshot(earlier) : null;
+    for (const row of snapshot?.rows || []) {
+      if (row.grade !== currentGrade || row.decision !== "closed") continue;
+      const key = normalizeResultCourseName(row.name);
+      const found = closed.get(key) || { round: earlier, semesters: new Set() };
+      found.round = earlier;
+      found.semesters.add(String(row.semester || ""));
+      closed.set(key, found);
+    }
+  }
+  return closed;
 }
 
 // 내년도 G학년 한 줄 설명: 입학연도 편제표와 선택과목 근거(현 G−1학년 결과)를 함께 보여 준다.
@@ -525,8 +546,13 @@ function computeHoursStats(year = hoursTargetYear()) {
           item.basis = `현 ${currentGrade}학년 ${info.source.round}차${info.source.confirmed ? " 확정" : " 미확정"} 결과${closed ? " · 폐강" : ""}`;
         } else {
           item.autoClasses = 0;
-          item.basis = info.source ? "신청 결과에서 찾지 못함" : "신청 결과 없음";
-          if (info.source) {
+          const earlier = info.source?.earlierClosed?.get(normalizeResultCourseName(entry.subject));
+          const closedBefore = earlier && (earlier.semesters.has(entry.semester) || earlier.semesters.has(""));
+          item.basis = closedBefore ? `현 ${currentGrade}학년 ${earlier.round}차 폐강`
+            : info.source ? "신청 결과에서 찾지 못함" : "신청 결과 없음";
+          if (closedBefore) {
+            issues.push({ level: "info", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 현 ${currentGrade}학년 ${earlier.round}차에서 폐강해 개설반 0으로 계산했습니다.` });
+          } else if (info.source) {
             issues.push({ level: entry.kind === "소인수" ? "info" : "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}${entry.kind === "소인수" ? "(소인수)" : ""}: 현 ${currentGrade}학년 ${info.source.round}차 결과에 없어 개설반 0으로 계산했습니다. 과목명이 다르면 상세 표에서 개설반을 입력하세요.` });
           }
         }

@@ -594,3 +594,32 @@ test("test bot 정리: 끝나면 묻기 — 앱이 만든 [테스트] 신청은 
   assert.match(js, /const preferred = testEvent \? "delete" : "close";/);
   assert.match(js, /addEventListener\("cancel", \(\) => finish\("close"\)/);
 });
+
+test("test bot: 폐강 학생만 재신청에서 대상 아닌 학생은 실패가 아니라 '대상 아님'으로 따로 센다", async () => {
+  const replies = {
+    target: { open: true, reselectionAllowed: true, courses: [{ subject: "물리학" }, { subject: "화학" }],
+      groups: [{ name: "택1", semester: "1", count: 1, courses: ["물리학", "화학"] }], selections: [] },
+    other: { open: false, reselectionAllowed: false, courses: [], groups: [], selections: ["물리학"] },
+    closed: { open: false, courses: [], groups: [], selections: [] },
+  };
+  const make = (kind, number) => {
+    const saved = { selections: [] };
+    const rpc = async (name, args) => {
+      if (name === "save_course_selection" || /save/.test(name)) { saved.selections = args.p_selections || []; return { data: { ok: true }, ms: 1 }; }
+      return { data: { ...replies[kind], selections: kind === "target" ? saved.selections : replies[kind].selections }, ms: 1 };
+    };
+    return Core.runVirtualStudent({ grade: "1", classroom: "1", number: String(number), name: `가상${number}`, code: "123456", plan: {} },
+      { rpc, eventId: "e", mode: "hardened", rng: Core.createRng(1) });
+  };
+  const records = [await make("target", 1), await make("other", 2), await make("other", 3), await make("closed", 4)];
+  assert.equal(records[0].ok, true, records[0].failure);
+  assert.equal(records[1].status, "대상 아님");
+  assert.equal(records[1].ok, false);
+  assert.equal(records[3].status, "접수 마감", "대상 표시 없이 닫힌 신청은 여전히 실패");
+  const summary = Core.summarize(records);
+  assert.equal(summary.skipped, 2);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.reasons.some(([reason]) => reason.includes("재선택 대상")), false);
+  const info = Core.resultSheets(records).find((sheet) => sheet.name === "요약").rows;
+  assert.deepEqual(info.find((row) => row[0] === "대상 아님(건너뜀)"), ["대상 아님(건너뜀)", 2]);
+});

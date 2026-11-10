@@ -302,6 +302,58 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.ok(overallocated.issues.some((issue) => issue.level === "error" && issue.text.includes("과학 세부 교과")));
 });
 
+test("hours stats treat a course closed in an earlier round as closed, not as a missing result", () => {
+  const entries = [
+    { grade: "2", semester: "1", subject: "물리학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
+    { grade: "2", semester: "1", subject: "지구과학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
+    { grade: "2", semester: "2", subject: "화학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 }
+  ];
+  const snapshots = {
+    "1": { rows: [
+      { grade: "1", name: "물리학", semester: "1", classCount: 2, enrollment: 45, decision: "open" },
+      { grade: "1", name: "지구과학", semester: "1", classCount: 0, enrollment: 6, decision: "closed" },
+      { grade: "1", name: "화학", semester: "2", classCount: 2, enrollment: 50, decision: "open" }
+    ] },
+    "2": { rows: [
+      { grade: "1", name: "물리학", semester: "1", classCount: 2, enrollment: 48, decision: "open" },
+      { grade: "1", name: "화학", semester: "2", classCount: 2, enrollment: 53, decision: "open" }
+    ] }
+  };
+  const layout = { rows: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: () => null },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
+      roundStatuses: { "1": { status: "confirmed", snapshot: snapshots["1"] }, "2": { status: "confirmed", snapshot: snapshots["2"] } } },
+    $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
+    curriculumCohortLayout: (year) => year === "2026" ? layout : null,
+    curriculumPlanEntries: () => ({ entries, issues: [] }),
+    applicationRoundNumbers: () => ["1", "2"],
+    roundStatusData: () => ({ students: [{ grade: "1" }] }),
+    isRoundLocked: () => true,
+    buildRoundSnapshot: (round) => snapshots[round],
+    roundSnapshotDrift: () => [],
+    normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "").toLowerCase(),
+    resultExampleList: (items) => items.join(", "),
+    columnName: (index) => String.fromCharCode(65 + index),
+    escapeHtml: String
+  });
+  vm.runInContext(hoursStats, ctx);
+  const stats = ctx.computeHoursStats("2027");
+  const earth = stats.items.find((item) => item.subject === "지구과학");
+  assert.equal(earth.classes, 0);
+  assert.equal(earth.basis, "현 1학년 1차 폐강");
+  const texts = stats.issues.map((issue) => issue.text);
+  assert.equal(texts.some((text) => text.includes("지구과학") && text.includes("결과에 없어")), false);
+  const closedIssue = stats.issues.find((issue) => issue.text.includes("지구과학"));
+  assert.equal(closedIssue.level, "info");
+  assert.ok(closedIssue.text.includes("1차에서 폐강"));
+  // 앞 차수 폐강이 아닌 과목이 근거 차수에 없으면 여전히 과목명 확인 경고를 낸다.
+  snapshots["1"].rows[1].decision = "open";
+  const missing = ctx.computeHoursStats("2027").issues.find((issue) => issue.text.includes("지구과학"));
+  assert.equal(missing.level, "warning");
+  assert.ok(missing.text.includes("2차 결과에 없어"));
+});
+
 test("aggregate reports prefer positive planned class bases and otherwise use roster classes", () => {
   const ctx = vm.createContext({
     collectApplicationSubjects: () => [],
@@ -726,6 +778,24 @@ function aggregateHelpers(extra = {}) {
   vm.runInContext(functionSource(app, "function aggregateThresholds(", "function renderAggregate("), ctx);
   return { ctx, values };
 }
+
+test("4단계 기준 미달 요약은 교사 결정(미정·폐강·개설)을 나눠 보여 '처리할 것만'과 같은 기준으로 미정만 남은 일로 센다", () => {
+  const { ctx } = aggregateHelpers();
+  const course = (column, atRisk) => ({ column, atRisk, enrollment: atRisk ? 3 : 40, classCount: atRisk ? 0 : 2, capacity: 34 });
+  const report = { summary: { grade: "1", classes: 10, students: 300, openingLimit: 20 }, semesters: [{ name: "1학기", groups: [
+    { category: "택1", courses: [course("A", true), course("B", true), course("C", true), course("D", false)], totalClasses: 2 }] }] };
+  assert.deepEqual(plain(ctx.aggregateRiskCounts(report, {})), { risk: 3, undecided: 3, closed: 0, opened: 0 });
+  assert.equal(ctx.aggregateRiskText(ctx.aggregateRiskCounts(report, {})), "기준 미달 3과목(폐강 확정 아님)");
+  const closures = { "1:A": "closed", "1:B": "open", "1:D": "closed" };
+  const counts = ctx.aggregateRiskCounts(report, closures);
+  assert.deepEqual(plain(counts), { risk: 3, undecided: 1, closed: 1, opened: 1 });
+  assert.equal(ctx.aggregateRiskText(counts), "기준 미달 3과목(미정 1 · 폐강 결정 1 · 개설 결정 1)");
+  assert.equal(ctx.aggregateRiskText(counts, { short: true }), "미달 3(미정 1)");
+  assert.equal(ctx.aggregateRiskText({ risk: 0 }), "기준 미달 0과목");
+  // 미정 수는 '처리할 것만'의 미정 기준 미달 과목과 같다.
+  const attention = ctx.aggregateAttention(report, closures, 34, null);
+  assert.equal([...attention.courses].filter((key) => ["1:A", "1:B", "1:C"].includes(key)).length, counts.undecided);
+});
 
 test("class-count adjustment meets n × classes, gives extra classes to the fullest course, and leaves impossible groups alone", () => {
   const { ctx } = aggregateHelpers();

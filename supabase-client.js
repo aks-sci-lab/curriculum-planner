@@ -536,10 +536,12 @@ var updateRetakeReadiness;
   async function teacherAction(action) {
     if (teacherBusy) return;
     teacherBusy = true;
-    const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button"),
-      byId("applicationGrade1Tab"), byId("applicationGrade2Tab"), byId("schoolYear")];
+    const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button"), byId("schoolYear")];
     const previous = buttons.map((button) => button.disabled);
     buttons.forEach((button) => { button.disabled = true; });
+    // 학년 탭은 disabled로 막지 않는다(누른 것이 조용히 무시됨): aria-disabled로 표시하고, 그동안 누른 학년은 끝난 뒤 바꾼다(course-groups.js).
+    const gradeTabs = [byId("applicationGrade1Tab"), byId("applicationGrade2Tab")];
+    gradeTabs.forEach((tab) => tab.setAttribute("aria-disabled", "true"));
     byId("cloudRosterInput").disabled = true;
     byId("cloudTeacherMessage").textContent = "처리 중…";
     byId("teacherLoginMessage").textContent = "로그인 처리 중…";
@@ -551,12 +553,14 @@ var updateRetakeReadiness;
     } finally {
       teacherBusy = false;
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
+      gradeTabs.forEach((tab) => tab.removeAttribute("aria-disabled"));
       byId("cloudRosterInput").disabled = false;
       byId("cloudDownloadCodes").disabled = !latestCodes;
       byId("cloudSendTestBot").disabled = !latestCodes;
       byId("cloudPrintCodes").disabled = false;
       byId("cloudCreateEvent").disabled = !pendingRoster || !session;
       updateRetakeReadiness();
+      if (typeof flushPendingApplicationMenuGrade === "function") flushPendingApplicationMenuGrade();
     }
   }
 
@@ -1106,6 +1110,8 @@ var updateRetakeReadiness;
         provider: "google", redirect_to: redirect.href, code_challenge: challenge,
         code_challenge_method: "s256", prompt: "select_account",
       }).toString();
+      // 이동 전에 작업 자료 저장을 끝내 두어 '사이트에서 나가시겠습니까?'가 뜨지 않게 한다(app.js).
+      if (typeof prepareWorkspaceNavigation === "function") await prepareWorkspaceNavigation();
       window.location.assign(authorize.href);
     });
   });
