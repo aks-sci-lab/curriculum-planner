@@ -673,8 +673,24 @@ function classSectionsHomeroomBasisKey(group) {
   return typeof classSectionsHash === "function" ? classSectionsHash(classSectionsStable({ basis, rooms })) : basis;
 }
 
+// 앞 결과의 교실 고정(roomPins: 분반 id → 교실)은 새 결과에 같은 분반 id가 있으면 이어받고, 없어진 분반의 교실은 버린다.
+// 반환: 버린 수. 버린 것이 있으면 다음 상태 문구 끝에 '교실 고정 n개 해제'를 붙인다(CLASS_SECTIONS_VIEW.statusTail).
+function classSectionsCarryRoomPins(previous, next) {
+  const pins = previous?.roomPins && typeof previous.roomPins === "object" ? previous.roomPins : null;
+  if (!pins || !next) return 0;
+  const ids = new Set((next.sections || []).map((section) => section.id));
+  const kept = {};
+  let dropped = 0;
+  for (const [id, room] of Object.entries(pins)) { if (ids.has(id)) kept[id] = room; else dropped += 1; }
+  if (Object.keys(kept).length) next.roomPins = kept;
+  return dropped;
+}
+
 function classSectionsSaveResult(entry, result, input, group, source, batch = "") {
+  const previous = entry.sectionResult;
   entry.sectionResult = classSectionsCompactResult(result, input, !source.locked);
+  const dropped = classSectionsCarryRoomPins(previous, entry.sectionResult);
+  if (dropped) CLASS_SECTIONS_VIEW.statusTail = `교실 고정 ${dropped}개 해제(없어진 분반)`;
   entry.sectionResult.batch = batch || entry.sectionResult.createdAt;
   entry.sectionResult.homeroomRoomsKey = classSectionsHomeroomBasisKey(group);
   entry.inputStudents = Object.fromEntries(group.students.map((student) => [student.key, student.courses.slice()]));
@@ -682,6 +698,7 @@ function classSectionsSaveResult(entry, result, input, group, source, batch = ""
 
 // 상태 문구는 그 문구를 만든 차수·그룹에서만 보인다(그룹을 바꾸면 다른 그룹 결과 문구가 남지 않게).
 function classSectionsSetStatus(text, error = false, scope = null) {
+  if (CLASS_SECTIONS_VIEW.statusTail) { text = `${text} · ${CLASS_SECTIONS_VIEW.statusTail}`; CLASS_SECTIONS_VIEW.statusTail = ""; }
   CLASS_SECTIONS_VIEW.status = { text, error, round: scope?.round ?? CLASS_SECTIONS_VIEW.round, group: scope?.group ?? CLASS_SECTIONS_VIEW.group };
   if (scope && (scope.round !== CLASS_SECTIONS_VIEW.round || scope.group !== CLASS_SECTIONS_VIEW.group)) return;
   const box = typeof document !== "undefined" ? document.getElementById("classSectionsStatus") : null;
