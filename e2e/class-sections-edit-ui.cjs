@@ -22,7 +22,17 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   page.on("dialog", (d) => d.type() === "prompt" ? d.accept("초기화") : d.accept());
   const shot = async (name) => page.screenshot({ path: path.join(OUT, name), fullPage: true });
   const status = () => page.locator("#classSectionsStatus").innerText().catch(() => "");
-  const waitIdle = () => page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+  // 다시 계산이 끝날 때까지(바뀐 학생이 많아 앱 확인 창이 뜨면 '적용')
+  const confirms = [];
+  const waitIdle = async () => {
+    for (let i = 0; i < 600; i += 1) {
+      if (await page.locator("#appConfirmDialog[open]").count()) { confirms.push(await page.locator("#appConfirmText").innerText()); await page.locator("#appConfirmOk").click(); }
+      if (await page.evaluate(() => !CLASS_SECTIONS_VIEW.running && !document.querySelector("#classSectionsSolve")?.disabled)) return;
+      await sleep(200);
+    }
+    throw new Error("다시 계산이 끝나지 않음");
+  };
+  const changeLine = async () => page.locator("#classSectionsEditChange").evaluate((el) => ({ text: el.textContent, changed: Number(el.dataset.changed), own: Number(el.dataset.own) })).catch(() => null);
   await page.goto(url); await page.waitForLoadState("networkidle"); await sleep(1000);
   await page.locator("#workspaceDataMenu summary").click();
   const nav = page.waitForEvent("load", { timeout: 30000 }).catch(() => null);
@@ -55,11 +65,19 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   const from = values.findIndex((v) => v > 0);
   const to = values.findIndex((v, i) => i !== from && v === 0);
   if (from >= 0 && to >= 0) {
+    // 다른 과목 학생은 그대로인지: 고치기 전 학생 찾기 결과(분반 이름) 보관 대신, 바뀐 학생 수 줄(#classSectionsEditChange)로 확인
     await inputs.nth(from).fill(String(values[from] - 1)); await inputs.nth(from).press("Tab");
     await waitIdle(); await sleep(500);
+    const first = await changeLine();
+    console.log("edit 1:", first?.text);
+    check(first && /^최근 직접 고치기: .+ · 분반이 바뀐 학생 \d+명\(.+ 학생 \d+명 포함\)/.test(first.text), "칸을 고친 뒤 '분반이 바뀐 학생 n명(이 과목 학생 m명 포함)'", first);
+    check(first && (first.changed <= Math.max(first.own * 2, first.own + 10) || confirms.length > 0), "바뀐 학생이 과목 학생의 2배를 넘으면 확인 창", { first, confirms });
     await table.locator("tbody tr").first().locator("input[data-cs-place-course]").nth(to).fill("1");
     await table.locator("tbody tr").first().locator("input[data-cs-place-course]").nth(to).press("Tab");
     await waitIdle(); await sleep(500);
+    const second = await changeLine();
+    console.log("edit 2:", second?.text);
+    check(second && (second.changed <= Math.max(second.own * 2, second.own + 10) || confirms.length > 0), "다시 늘려도 바뀐 학생은 과목 학생의 2배 이내(넘으면 확인 창)", { second, confirms });
     const after = await page.locator("#classSectionsPlacementTable tbody tr").first().locator("input[data-cs-place-course]").evaluateAll((els) => els.map((e) => Number(e.value)));
     check(after[from] === values[from] - 1 && after[to] === 1, "칸을 고치면 그 블록 분반 수로 다시 편성", { values, after });
     const pinned = await page.locator("input[data-cs-pin]:checked").count();
@@ -159,6 +177,9 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
     console.log("status:", await status());
     await search.fill(edited.key); await search.press("Enter"); await sleep(300);
     check(/고정/.test(await page.locator(".cs-lookup").innerText()), "적용하면 그 학생이 고정", await page.locator(".cs-lookup").innerText());
+    const excelChange = await changeLine();
+    console.log("excel:", excelChange?.text, "confirms:", confirms.length);
+    check(excelChange && (excelChange.changed <= Math.max(excelChange.own * 2, excelChange.own + 10) || confirms.length > 0), "엑셀 한 명 고치기: 바뀐 학생이 적거나, 많으면 확인 창", excelChange);
   } else check(false, "고칠 학생을 찾지 못함");
   await shot("05-after-import.png");
   check(!logs.length, "페이지 오류 없음", logs);
