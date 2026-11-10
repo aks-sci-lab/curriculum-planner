@@ -62,7 +62,7 @@ async function readScreen(page) {
           size: Number(li.dataset.size ?? size), capacity: Number(li.dataset.capacity ?? capacity), teacher: li.querySelector("select option")?.textContent || "" });
       }
     }
-    const unassigned = (document.querySelector('section[aria-label="편성 결과"] details summary')?.textContent || "").match(/미배정 (\d+)건/);
+    const unassigned = (document.querySelector("#classSectionsUnassigned summary")?.textContent || document.querySelector('section[aria-label="편성 결과"] details summary')?.textContent || "").match(/미배정 (\d+)건/);
     return { sections, unassignedRows: unassigned ? Number(unassigned[1]) : 0, stale: !!document.querySelector("#classSectionsStale"),
       header: document.querySelector('section[aria-label="편성 결과"] h4')?.textContent.replace(/\s+/g, " ") || "",
       classUnit: [...document.querySelectorAll("[data-cs-unit-room]")].map((e) => [e.getAttribute("data-cs-unit-room"), e.options[e.selectedIndex]?.textContent || ""]),
@@ -97,7 +97,7 @@ function modelFromExports(files, { semester }) {
   }
   const sections = [];
   for (const sheet of files.rosters) {
-    if (sheet.name === "학급 단위 과목") continue; // 맨 뒤 안내 시트(분반 아님)
+    if (/^학급 단위/.test(sheet.name)) continue; // '학급 단위 과목'·'학급 단위 N반' 시트(이동 분반 아님)
     const head = sheet.rows[0]?.[0] || "";
     const room = head.split(" (")[0];
     const students = sheet.rows.slice(2).filter((r) => r[1]).map((r) => r[1]);
