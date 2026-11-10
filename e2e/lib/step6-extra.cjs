@@ -810,8 +810,12 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
       }
       // 2·3단계(한 줄 칸 '과목 · 3-7'): 범례 '강의실(과목, 교실) → 선생님'으로 강의실 후보를 찾는다. 후보가 둘 이상(같은 과목·같은 교실 분반)이면 건너뜀.
       const left = want.slice();
-      for (const c of cells) {
-        const cand = legendCandidates(legend, c);
+      const raw = r.slice(3, r.length - 2).map((v) => String(v || ""));
+      for (const [ci, c] of raw.entries()) {
+        if (!c) continue;
+        // 강의실 이름은 블록 문자로 시작(나이스 개설강의실) → 그 열 머리글의 블록 문자로 후보를 좁힌다.
+        const letter = (String(sheet.rows[head]?.[3 + ci] || "").match(/(\S+)블록/) || [])[1] || "";
+        const cand = legendCandidates(legend, c).filter((room) => !letter || room.startsWith(letter));
         if (cand.length !== 1) { if (cand.length > 1) ambiguous++; else problems.push(`${key}: 칸 '${c}'에 맞는 범례 없음`); continue; }
         const at = left.indexOf(cand[0]);
         if (at < 0) problems.push(`${key}: 칸 '${c}' → ${cand[0]} 가 명렬표(${want.join(",")})에 없음`);
