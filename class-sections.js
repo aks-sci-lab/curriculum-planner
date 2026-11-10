@@ -327,7 +327,8 @@ function classSectionsNormalize(input) {
     teacherPins: pins.teachers || {}, issues, unassignedInput, sectionById, courseByKey: byKey,
     options: {
       placementSteps: Number(src.placementSteps) || 0, evalIterations: Number(src.evalIterations) || 0, finalIterations: Number(src.finalIterations) || 0,
-      timeLimitMs: Number(src.timeLimitMs) || 20000, suggest: src.suggest !== false
+      timeLimitMs: Number(src.timeLimitMs) || 20000, suggest: src.suggest !== false,
+      spreadWarn: Number(src.spreadWarn) > 0 ? Number(src.spreadWarn) : CLASS_SECTIONS_SPREAD_WARN
     }
   };
   model.supply = classSectionsSupply(model);
@@ -1361,7 +1362,7 @@ function classSectionsBuildResult(model, place, sectionOf, unassigned) {
 function classSectionsValidate(input, result, options) {
   const model = input && input.sections && input.sectionById ? input : classSectionsNormalize(input);
   const issues = [];
-  const spreadWarn = Number(options?.spreadWarn) || CLASS_SECTIONS_SPREAD_WARN;
+  const spreadWarn = Number(options?.spreadWarn) || model.options?.spreadWarn || CLASS_SECTIONS_SPREAD_WARN;
   const sectionById = new Map((result.sections || []).map((section) => [section.id, section]));
   const blockById = new Map((result.blocks || []).map((block) => [block.id, block]));
   const counts = new Map();
@@ -1605,6 +1606,20 @@ function classSectionsCapacitySuggestion(model, place, rng, deadline, maxRaise) 
 
 function classSectionsSuggest(model, place, result, rng, deadline, input) {
   const suggestions = [];
+  const maxTotal = model.blocks.reduce((sum, block) => sum + block.maxSections, 0);
+  if (model.sections.length > maxTotal) {
+    // 분반이 블록에 다 들어가지 않으면 정원 올리기(같은 분반 수)로는 풀리지 않는다 → 분반 수 줄이기·블록 한도 늘리기.
+    const fewer = classSectionsSectionsSuggestion(model, input, deadline);
+    if (fewer) suggestions.push(fewer);
+    const need = Math.ceil(model.sections.length / model.blocks.length);
+    if (input && !(deadline && classSectionsNow() > deadline)) {
+      const trial = classSectionsSolve({ ...input, maxSectionsPerBlock: need,
+        blocks: Array.isArray(input.blocks) ? input.blocks.map((block) => ({ ...block, maxSections: Math.max(need, Number(block.maxSections) || 0) })) : input.blocks, suggest: false });
+      if (trial.explain.feasible) suggestions.push({ type: "block-limit", verified: true, maxSectionsPerBlock: need,
+        message: `블록당 최대 분반을 ${need}개로 늘리면 지금 분반 수·정원으로 모두 배정됩니다.` });
+    }
+    return suggestions;
+  }
   if (!result.unassigned.length) return suggestions;
   const structural = result.unassigned.some((item) => item.reason === "closed" || item.reason === "too-many");
   const onlyStructural = result.unassigned.every((item) => item.reason === "closed" || item.reason === "too-many");
@@ -1642,7 +1657,7 @@ function classSectionsSuggest(model, place, result, rng, deadline, input) {
     const more = classSectionsNormalize({ ...input, maxSectionsPerBlock: Math.max(...model.blocks.map((block) => block.maxSections)) + 1,
       blocks: Array.isArray(input.blocks) ? input.blocks.map((block) => ({ ...block, maxSections: block.maxSections ? block.maxSections + 1 : block.maxSections })) : input.blocks, suggest: false });
     const found = classSectionsPlace(more, classSectionsRng(model.seed + 11), deadline, null);
-    if (found.router.overflow === 0 && found.router.impossible === 0) {
+    if (found.router.overflow === 0 && found.router.impossible === 0 && !found.issues.length) {
       suggestions.push({ type: "block-limit", verified: true, maxSectionsPerBlock: more.blocks[0].maxSections,
         message: `블록당 최대 분반을 ${more.blocks[0].maxSections}개로 늘리면 지금 정원으로 모두 배정됩니다.` });
     }
@@ -1688,16 +1703,112 @@ function classSectionsSolve(input, presetPlacement) {
   result.seed = model.seed;
   result.signature = classSectionsSignature(input);
   result.metrics = classSectionsMetrics(model, result, model.previous);
+  classSectionsAssignRoomNames(result, model.blocks.map((block) => block.id));
   result.issues = [...model.issues, ...placed.issues, ...teacherIssues, ...classSectionsValidate(model, result)];
-  const causes = result.unassigned.length ? classSectionsExplain(model, result, placed.place) : [];
-  const suggestions = model.options.suggest ? classSectionsSuggest(model, placed.place, result, classSectionsRng(model.seed + 3), deadline, input) : [];
-  result.explain = { feasible: result.unassigned.length === 0, causes, suggestions,
-    summary: result.unassigned.length
-      ? `미배정 ${result.metrics.unassignedStudents}명(${result.unassigned.length}과목). 정원 ${model.defaultCapacity}명·블록당 최대 ${Number.isFinite(model.blocks[0]?.maxSections) ? `${model.blocks[0].maxSections}개` : "제한 없음"}로는 모두 배정하는 편성을 찾지 못했습니다.`
-      : `모든 학생 배정(분반 ${model.sections.length}개, 블록별 ${result.metrics.blockSections.join("·")}개).` };
+  result.explain = classSectionsExplainResult(model, placed.place, result, deadline, input);
   result.placement = Object.fromEntries(model.sections.map((section) => [section.id, placed.place.blockOf[section.index]]));
   result.elapsedMs = Math.round(classSectionsNow() - start);
   result.stats = { placementSteps: placed.steps, routeIterations: routed.iterations, timedOut: Boolean(placed.timedOut || classSectionsNow() > deadline) };
+  return result;
+}
+
+// 결과 판정: 미배정이 없어도 오류(블록 한도 초과·교사 불가 시간 등)가 있으면 '가능'이 아니다.
+function classSectionsHardErrors(issues) {
+  return (issues || []).filter((issue) => issue.severity === "error" && issue.type !== "unassigned");
+}
+
+function classSectionsExplainResult(model, place, result, deadline, input) {
+  const hard = classSectionsHardErrors(result.issues);
+  const feasible = result.unassigned.length === 0 && hard.length === 0;
+  const causes = feasible ? [] : classSectionsExplain(model, result, place);
+  const suggestions = !feasible && model.options.suggest ? classSectionsSuggest(model, place, result, classSectionsRng(model.seed + 3), deadline, input) : [];
+  const maxText = Number.isFinite(model.blocks[0]?.maxSections) ? `${model.blocks[0].maxSections}개` : "제한 없음";
+  const parts = [];
+  if (result.unassigned.length) {
+    parts.push(`미배정 ${result.metrics.unassignedStudents}명(${result.unassigned.length}과목). 정원 ${model.defaultCapacity}명·블록당 최대 ${maxText}로는 모두 배정하는 편성을 찾지 못했습니다.`);
+  }
+  const blockLimit = causes.find((cause) => cause.type === "block-limit");
+  if (blockLimit) parts.push(`블록 한도 초과: ${blockLimit.message.replace(/^분반 /, "분반 ")}(블록별 ${result.metrics.blockSections.join("·")}개).`);
+  const otherHard = hard.filter((issue) => !["block-over", "placement-forced"].includes(issue.type) || !blockLimit);
+  if (otherHard.length) parts.push(`오류 ${otherHard.length}건: ${otherHard.slice(0, 3).map((issue) => issue.message).join(" / ")}${otherHard.length > 3 ? " …" : ""}`);
+  const summary = feasible
+    ? `모든 학생 배정(분반 ${model.sections.length}개, 블록별 ${result.metrics.blockSections.join("·")}개).`
+    : parts.join(" ");
+  return { feasible, causes, suggestions, summary };
+}
+
+// 분반 수가 블록 수 × 블록당 최대보다 많을 때: 몇 과목의 정원을 올려 분반 수를 줄이면 들어가는지 다시 풀어 확인한다.
+function classSectionsSectionsSuggestion(model, input, deadline) {
+  if (!input || (Array.isArray(input.sections) && input.sections.length)) return null;
+  const maxTotal = model.blocks.reduce((sum, block) => sum + block.maxSections, 0);
+  const excess = model.sections.length - maxTotal;
+  if (!(excess > 0) || !Number.isFinite(maxTotal)) return null;
+  for (const add of [1, 2]) {
+    const capacity = model.defaultCapacity + add;
+    const candidates = model.courses.map((course) => {
+      const need = Math.max(1, Math.ceil(course.demand / capacity));
+      return { course, need, saving: course.sections - need, fill: course.demand / (need * capacity) };
+    }).filter((item) => item.saving > 0 && item.course.demand > 0)
+      .sort((a, b) => b.saving - a.saving || a.fill - b.fill || a.course.index - b.course.index);
+    if (candidates.reduce((sum, item) => sum + item.saving, 0) < excess) continue;
+    // 고르는 순서를 바꿔 가며 최대 6가지 조합을 실제로 풀어 본다.
+    for (let start = 0; start < Math.min(6, candidates.length); start += 1) {
+      if (deadline && classSectionsNow() > deadline) return null;
+      const order = [...candidates.slice(start), ...candidates.slice(0, start)];
+      const chosen = [];
+      let saved = 0;
+      for (const item of order) { if (saved >= excess) break; chosen.push(item); saved += item.saving; }
+      if (saved < excess) continue;
+      const changed = new Map(chosen.map((item) => [item.course.key, item]));
+      const courses = (input.courses || []).map((raw) => {
+        const item = changed.get(classSectionsText(raw.key ?? raw.name));
+        return item ? { ...raw, sections: item.need, classCount: item.need, capacity, capacities: [] } : raw;
+      });
+      const trial = classSectionsSolve({ ...input, courses, suggest: false });
+      if (trial.explain.feasible) {
+        const list = chosen.map((item) => ({ courseKey: item.course.key, courseName: item.course.name, fromSections: item.course.sections,
+          toSections: item.need, capacity, demand: item.course.demand }));
+        return { type: "sections", verified: true, courses: list, capacity,
+          message: `${list.map((item) => `${item.courseName} 정원 ${capacity}명(분반 ${item.fromSections}→${item.toSections}개)`).join(", ")}으로 바꾸면 분반 ${model.sections.length - saved}개가 블록 ${model.blocks.length}개 × ${model.blocks[0].maxSections}개에 들어가고 모두 배정됩니다.` };
+      }
+    }
+  }
+  return null;
+}
+
+// 개설강의실 번호(나이스): 어느 블록에서든 그 과목 분반이 2개 이상이면 그 과목의 모든 분반에 번호, 아니면 번호 없음.
+// 번호는 교사가 모두 배정돼 있으면 과목 안 교사 순번(같은 교사 = 같은 번호, 블록 안에서 겹치지 않을 때), 아니면 블록 안 순번.
+// (사용자 나이스 파일: 물리학 a1·a2·b2·c1 — b블록 단독 분반이 2 → 교사 순번으로 해석. 확인 필요)
+function classSectionsAssignRoomNames(result, blockOrder) {
+  const order = new Map((blockOrder || result.blocks.map((block) => block.id)).map((id, index) => [id, index]));
+  const byCourse = new Map();
+  for (const section of result.sections) {
+    if (!byCourse.has(section.courseKey)) byCourse.set(section.courseKey, []);
+    byCourse.get(section.courseKey).push(section);
+  }
+  for (const list of byCourse.values()) {
+    list.sort((a, b) => (order.get(a.blockId) ?? 99) - (order.get(b.blockId) ?? 99) || a.ord - b.ord);
+    const perBlock = new Map();
+    for (const section of list) perBlock.set(section.blockId, (perBlock.get(section.blockId) || 0) + 1);
+    const numbered = [...perBlock.values()].some((count) => count > 1);
+    let numbers = null;
+    if (numbered && list.every((section) => section.teacherId)) {
+      const teacherNo = new Map();
+      for (const section of list) if (!teacherNo.has(section.teacherId)) teacherNo.set(section.teacherId, teacherNo.size + 1);
+      numbers = list.map((section) => teacherNo.get(section.teacherId));
+      const seen = new Set();
+      for (let i = 0; i < list.length; i += 1) {
+        const key = `${list[i].blockId}|${numbers[i]}`;
+        if (seen.has(key)) { numbers = null; break; }
+        seen.add(key);
+      }
+    }
+    list.forEach((section, i) => {
+      section.roomNo = numbered ? (numbers ? numbers[i] : section.noInBlock) : 0;
+      section.roomNumbering = numbered ? (numbers ? "teacher" : "block") : "none";
+      section.roomName = `${section.blockLetter}${classSectionsCompact(section.courseName)}${section.roomNo || ""}`;
+    });
+  }
   return result;
 }
 
@@ -1761,6 +1872,7 @@ function classSectionsSolveAll(spec) {
         if (section.teacherId) result.teacherOf[section.id] = section.teacherId;
       }
       result.issues = result.issues.filter((issue) => !String(issue.type).startsWith("teacher-"));
+      classSectionsAssignRoomNames(result);
     }
   }
   const across = classSectionsValidateAcross(results, spec.teachers);
@@ -1898,29 +2010,54 @@ var CLASS_SECTIONS_NEIS_HEADER = [
   ["학년도", "학기", "학년", "편제명", "개설과목(학점)", "개설강의실", "계열/학년/학과", "반", "번호", "성명"]
 ];
 
-function classSectionsNeisRows(result, opts) {
+// 반환: { rows, warnings }. 내년 반·번호를 모르면 반·번호 칸을 비우고 오른쪽에 참고 열(현 학년-반-번호)을 붙인다.
+function classSectionsNeisExport(result, opts) {
   const options = opts || {};
   const sectionById = new Map((result.sections || []).map((section) => [section.id, section]));
   const studentInfo = new Map((options.students || []).map((student) => [classSectionsText(student.key), student]));
   const grade = classSectionsText(options.targetGrade);
-  const rows = CLASS_SECTIONS_NEIS_HEADER.map((row) => row.slice());
+  const reference = options.reference !== false;
+  const rows = CLASS_SECTIONS_NEIS_HEADER.map((row) => (reference ? [...row, row === CLASS_SECTIONS_NEIS_HEADER[1] ? "참고: 현 학년-반-번호" : ""] : row.slice()));
   const keys = Object.keys(result.assign || {}).sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+  let missingClass = 0;
   for (const key of keys) {
     const info = studentInfo.get(key) || {};
-    const parts = key.split("-");
+    const classroom = classSectionsText(info.classroom).replace(/반$/, "");
+    if (!classroom) missingClass += 1;
     for (const id of result.assign[key]) {
       const section = sectionById.get(id);
       if (!section) continue;
       const course = options.courses?.[section.courseKey] || {};
       const credits = Number(course.credits) || "";
-      rows.push([classSectionsText(options.year), classSectionsText(options.semester), grade, classSectionsText(course.family),
-        `${section.courseName}${credits !== "" ? `(${credits})` : ""}`, section.roomName, grade ? `${grade}학년` : "",
-        info.classroom ? `${classSectionsText(info.classroom).replace(/반$/, "")}반` : "", classSectionsText(info.number ?? (info.classroom ? "" : "")),
-        classSectionsText(info.name)]);
+      const row = [classSectionsText(options.year), classSectionsText(options.semester), grade, classSectionsText(course.family),
+        `${course.label || ""}${section.courseName}${credits !== "" ? `(${credits})` : ""}`, section.roomName, grade ? `${grade}학년` : "",
+        classroom ? `${classroom}반` : "", classroom ? classSectionsText(info.number) : "", classSectionsText(info.name)];
+      if (reference) row.push(key);
+      rows.push(row);
     }
-    void parts;
   }
-  return rows;
+  const warnings = ["나이스 '조회' 파일 양식을 따랐습니다. 실제 업로드 양식과 다를 수 있으니 확인하세요."];
+  if (missingClass) warnings.push(`내년 반·번호가 없는 학생 ${missingClass}명: 반·번호 칸을 비웠습니다(참고 열의 현 학년-반-번호로 확인). 내년 반 배정표를 올리면 채워집니다.`);
+  if (rows.slice(2).some((row) => !row[3])) warnings.push("편제명(교과군)이 빈 행이 있습니다.");
+  return { rows, warnings };
+}
+
+function classSectionsNeisRows(result, opts) {
+  return classSectionsNeisExport(result, opts).rows;
+}
+
+// 내년 반 배정표(고정 양식): 1행 머리글, 열 = 현 학년 | 현 반 | 현 번호 | 새 반 | 새 번호. 반환 { map: { '현학년-반-번호': {classroom, number} }, errors }
+function classSectionsClassMapFromRows(rows) {
+  const map = {};
+  const errors = [];
+  (rows || []).slice(1).forEach((row, index) => {
+    const values = (row || []).map((value) => classSectionsText(value).replace(/(학년|반|번)$/, ""));
+    if (!values.some(Boolean)) return;
+    const [grade, classroom, number, nextClass, nextNumber] = values;
+    if (!grade || !classroom || !number || !nextClass) { errors.push(`${index + 2}행: 현 학년·반·번호·새 반이 필요합니다.`); return; }
+    map[`${Number(grade) || grade}-${Number(classroom) || classroom}-${Number(number) || number}`] = { classroom: nextClass, number: nextNumber || "" };
+  });
+  return { map, errors };
 }
 
 // ---- Worker 진입 ----
@@ -1956,11 +2093,12 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
     classSectionsPartialPerm, classSectionsFillCells, classSectionsAssignTeachers, classSectionsRoomName, classSectionsBuildResult, classSectionsValidate,
     classSectionsValidateAcross, classSectionsMetrics, classSectionsExplain, classSectionsCapacitySuggestion, classSectionsSuggest, classSectionsSolve,
     classSectionsTeacherSections, classSectionsSolveAll, classSectionsCompare, classSectionsRecommend, classSectionsClassUnitSplit,
-    classSectionsFromCombos, classSectionsNeisRows, classSectionsRun];
+    classSectionsFromCombos, classSectionsHardErrors, classSectionsExplainResult, classSectionsSectionsSuggestion, classSectionsAssignRoomNames,
+    classSectionsNeisExport, classSectionsNeisRows, classSectionsClassMapFromRows, classSectionsRun];
 }
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { classSectionsSolve, classSectionsSolveAll, classSectionsCompare, classSectionsValidate, classSectionsValidateAcross,
     classSectionsFromCombos, classSectionsClassUnitSplit, classSectionsAssignTeachers, classSectionsNeisRows, classSectionsSignature,
-    classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow };
+    classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow, classSectionsNeisExport, classSectionsClassMapFromRows };
 }
