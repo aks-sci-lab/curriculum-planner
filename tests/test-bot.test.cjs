@@ -387,6 +387,16 @@ test("test bot 반복: 회차 계획·코드 이어받기·회차별 오류 주�
   const wrong = Core.compareTeacherApplications({ entries: [{ ...entries[0], selections: ["화학", "기하"] }], expected, uncertain, targetKeys: keys });
   assert.deepEqual(wrong.mismatched, ["1-1 가"]);
   assert.deepEqual(wrong.courseDiff.sort(), ["물리학", "화학"]);
+  // '폐강 신청 학생만' 재신청: 대상이 아닌 학생의 기존 결과는 '예상 밖 신청'(실패)이 아니라 '유지(대상 아님)'.
+  const others = [...entries, { grade: "1", classroom: "1", number: "3", name: "다", submittedAt: "t", selections: ["지구과학"] }];
+  const scope = new Set([...keys, "1-1-3"]);
+  const wrongly = Core.compareTeacherApplications({ entries: others, expected, uncertain, targetKeys: scope });
+  assert.equal(wrongly.extra.length, 1, "예전 판정: 대상 아닌 학생을 예상 밖으로 셌다");
+  const kept = Core.compareTeacherApplications({ entries: others, expected, uncertain, targetKeys: scope, keptKeys: new Set(["1-1-3"]) });
+  assert.equal(kept.problems, 0);
+  assert.equal(kept.kept, 1);
+  assert.deepEqual(kept.extra, []);
+  assert.deepEqual(kept.courseDiff, [], "유지 학생 과목은 과목별 인원 대조에서도 뺀다");
 
   // 회차 사이 변화
   const rows = [1, 2, 3].map((round) => ({ round, averageMs: round < 3 ? 20 : 80, maxMs: 50, failed: round === 2 ? 1 : 0, mismatches: 0 }));
@@ -645,4 +655,10 @@ test("회차별 결과: '실패 단계 n개'에는 실패한 단계 이름과 �
   assert.match(rows[0].status, /^실패 단계 1개 — 교사 화면 대조: 학생 불일치 1명 \(2-1-3\)$/);
   assert.match(rows[1].status, /^실패 단계 1개 — 재신청: 실패 사유가 기록되지 않았습니다/);
   assert.equal(rows[0].failures.length, 1);
+});
+
+test("테스트봇 화면: 회차별 결과 칸과 진행 문구는 길면 줄바꿈(잘리지 않게)", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "test-bot.html"), "utf8");
+  assert.match(html, /\.bot-round-table td:nth-child\(2\) \{ white-space:normal;/);
+  assert.match(html, /#botProgressText \{ overflow-wrap:anywhere; \}/);
 });

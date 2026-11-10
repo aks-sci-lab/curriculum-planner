@@ -1441,3 +1441,10 @@ test("1단계 카드 업로드가 실패·취소되면 원래 보던 카드로 �
   assert.equal(count.curriculumOfficeSubjectRowCount({ planData: { subjects: [{ name: "가, 나" }, { name: "다" }, { fixed: true }] } }, 3), 2);
   assert.match(office, /과목 \$\{subjectRows\}개, 선택과목군/);
 });
+
+test("1단계 업로드 상태 문구의 과목 수는 표 위 'n개 과목 표시'와 같은 기준(과목 행 수)", () => {
+  const handler = functionSource(app, "function handleCurriculumPlanWorkbook(", "function certificateTodayLabel(");
+  assert.match(handler, /const subjectRows = typeof planDataSubjects === "function" && importedLayout\.planData \? planDataSubjects\(importedLayout\.planData\)\.length : plan\.length;/);
+  assert.match(handler, /편제표 \$\{subjectRows\}개 과목을 불러왔습니다/);
+  assert.match(fs.readFileSync(path.join(root, "curriculum-data-view.js"), "utf8"), /visibleItems\.filter\(\(item\) => !item\.fixed\)\.length\}개 과목 표시/, "표 쪽 기준(고정 행 뺀 과목 행)");
+});
