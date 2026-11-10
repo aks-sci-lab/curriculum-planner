@@ -1101,6 +1101,8 @@ test("the shared guidance banner says the shortfall note only on step 4 and give
   const six = banner(8);
   assert.doesNotMatch(six, /기준 미달/);
   assert.match(six, /6단계는 4단계에서 정한 개설 과목·분반 수로/);
+  assert.doesNotMatch(six, /위 '차수'/, "머리 줄 '결과 차수'와 헷갈리지 않게 6단계 화면의 차수를 가리킨다");
+  assert.equal(el("#workspaceRound").disabled, true, "6단계에서는 머리 줄 결과 차수를 잠근다");
   assert.equal(el("#workflowNextAction").textContent, "집계·개설 확정으로", "확정 전이면 확정하러 가기");
   ctx.locked = true;
   banner(8);

@@ -1294,7 +1294,8 @@
         `<option value="${round}">${round}차</option>`).join("");
       if (selector.innerHTML !== options) selector.innerHTML = options;
       selector.value = state.currentRound;
-      selector.disabled = step === 1 || step === 6 || step === 7;
+      // 5단계(7)·6단계(8)는 자기 화면에서 근거 차수를 고르므로 머리 줄 '결과 차수'는 잠근다.
+      selector.disabled = step === 1 || step === 6 || step === 7 || step === 8;
       const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
       const message = $("#workflowReadinessMessage");
       const action = $("#workflowNextAction");
@@ -1352,7 +1353,7 @@
         action.dataset.nextStep = "7";
       } else if (step === 8 && state.students.length) {
         // 6단계는 자기 화면의 '차수'에서 고른 결과로 편성한다(4단계 문구를 쓰지 않는다).
-        message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 위 '차수'에서 고른 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
+        message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 아래 6단계 화면 오른쪽의 '차수'에서 고른 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
         action.textContent = roundConfirmed ? "4단계 집계 보기" : "집계·개설 확정으로";
         action.dataset.nextStep = "4";
       } else {

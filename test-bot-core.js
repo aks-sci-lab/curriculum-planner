@@ -524,7 +524,7 @@ var TestBotCore = (() => {
         if (last && value === last[1] + 1) last[1] = value; else ranges.push([value, value]);
       }
       const label = ranges.map(([a, b]) => (a === b ? `${a}` : `${a}~${b}`)).join(", ");
-      return { limited: true, text: `대상: ${label || "반 없음"}반${count}` };
+      return { limited: true, text: label ? `대상: ${label}반${count}` : `대상: 반 지정 없음${count}` };
     }
     return { limited: false, text: `대상: 전체${count}` };
   }
