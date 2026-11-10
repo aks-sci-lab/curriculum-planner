@@ -5702,21 +5702,29 @@
       const entry = applicationRosterFor(grade);
       box.textContent = entry
         ? `이 PC에 저장한 현 ${grade}학년 명렬: ${entry.students.length}명 · ${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} (담임반 현황·출석부의 미제출 학생 확인용, 서버로 보내지 않음)`
-        : `이 PC에 저장한 현 ${grade}학년 명렬이 없습니다. 이미 만든 웹 신청이면 '명렬 다시 올리기'로 같은 명렬 파일을 올리세요(서버 변경 없음).`;
+        : `이 PC에 저장한 현 ${grade}학년 명렬이 없습니다. 웹 신청을 쓰지 않았거나 이미 만든 신청이면 '명렬 올리기'로 같은 명렬 파일을 올리세요(서버 변경 없음).`;
+    }
+
+    // 명렬 파일(웹 신청과 같은 양식)을 받아 그 현 학년 명렬로 이 PC에만 저장한다. 서버 요청 없음, 로그인 필요 없음.
+    // 다른 파일(6단계 담임반 안내 등)이 typeof 가드로 부른다. 반환 { count, message }(실패하면 count 0, message에 이유).
+    async function importApplicationRosterFile(file, grade) {
+      const gradeKey = String(grade || state.applicationMenuGrade || "1");
+      try {
+        if (!file) throw new Error("명렬 파일을 고르세요.");
+        if (!String(file.name || "").toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
+        const roster = validateApplicationRosterGrade(parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())), gradeKey);
+        const saved = storeApplicationRoster(roster, { grade: gradeKey, source: `${file.name}(명렬 올리기)` });
+        return { count: saved.students.length, message: `현 ${gradeKey}학년 명렬 ${saved.students.length}명을 이 PC에 저장했습니다(서버 변경 없음).` };
+      } catch (error) {
+        return { count: 0, message: `명렬을 저장하지 못했습니다: ${error?.message || error}` };
+      }
     }
 
     async function readApplicationRosterLocal(file) {
-      const box = document.getElementById("cloudRosterLocalSummary");
       if (!file) return;
-      try {
-        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
-        const grade = String(state.applicationMenuGrade || "1");
-        const roster = validateApplicationRosterGrade(parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())), grade);
-        const saved = storeApplicationRoster(roster, { grade, source: `${file.name}(다시 올림)` });
-        if (box) box.textContent = `현 ${grade}학년 명렬 ${saved.students.length}명을 이 PC에 저장했습니다(서버 변경 없음). ${box.textContent}`;
-      } catch (error) {
-        if (box) box.textContent = `명렬을 저장하지 못했습니다: ${error?.message || error}`;
-      }
+      const result = await importApplicationRosterFile(file, state.applicationMenuGrade || "1");
+      const box = document.getElementById("cloudRosterLocalSummary");
+      if (box) box.textContent = result.count ? `${result.message} ${box.textContent}` : result.message;
     }
 
     function downloadTextFile(text, filename, type) {
@@ -7682,7 +7690,7 @@
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
-    // 웹 신청 명렬 다시 올리기(이 PC에만 저장, 서버 변경 없음)
+    // 명렬 올리기(이 PC에만 저장, 로그인·서버 없이)
     $("#cloudRosterLocalInput")?.addEventListener("change", (event) => { const file = event.target.files[0]; event.target.value = ""; readApplicationRosterLocal(file); });
     // 파일 고르기 창을 취소하면(크롬 'cancel') 카드도 원래대로.
     curriculumPlanInput.addEventListener("cancel", () => restoreCurriculumUploadCard());
