@@ -76,12 +76,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(300);
   await page.locator("#classSectionsTeacherDialog").screenshot({ path: path.join(OUT, "04-teachers.png") });
   await page.getByRole("button", { name: "닫기" }).first().click();
-  // 블록 시간 입력
+  // 블록 시간 추천 → 추천안 표 → 한 칸 고치기 → 추천 적용
   await page.getByText("블록별로 다르게 · 블록 시간(요일·교시)").click();
-  const times = ["월1,수2,금3", "화1,목2,금4", "월3,수4,목5", "화3,목4,수5", "월5,화5,목6"];
-  const blockInputs = page.locator("[data-cs-block-times]");
-  for (let i = 0; i < await blockInputs.count(); i++) { await blockInputs.nth(i).fill(times[i] || ""); await blockInputs.nth(i).press("Tab"); }
-  await sleep(300);
+  let t0 = Date.now();
+  await page.getByRole("button", { name: "블록 시간 추천" }).click();
+  await page.locator("#classSectionsTimesProposal").waitFor({ timeout: 60000 });
+  console.log("recommend times ms:", Date.now() - t0, "|", (await page.locator("#classSectionsTimesProposal").innerText()).replace(/\s+/g, " ").slice(0, 300));
+  await page.locator("#classSectionsTimesProposal").screenshot({ path: path.join(OUT, "09-times-proposal.png") });
+  await page.getByRole("button", { name: "추천 적용" }).click(); await sleep(400);
+  console.log("block a times:", await page.getByLabel("a블록 요일·교시").inputValue());
   console.log("stale badge:", await page.locator("#classSectionsStale").count());
   await page.getByRole("button", { name: "편성 계산" }).click();
   await sleep(500);
@@ -100,8 +103,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await shot("06-other-group.png");
   // 전 학년 함께 다시 계산(1학기 그룹 3개)
   await groupButtons.first().click(); await sleep(300);
-  await page.getByRole("button", { name: "전 학년 함께 다시 계산" }).click(); await sleep(500);
+  t0 = Date.now();
+  // 계산 중에도 화면이 반응하는지(Worker): 계산을 시작한 직후 다른 입력에 글자를 넣어 본다.
+  await page.getByRole("button", { name: "전 학년 함께 다시 계산" }).click();
+  const typed = Date.now();
+  await page.getByLabel("학생 찾기(현학년-반-번호)").fill("1-2-3").catch(() => {});
+  console.log("typing during solve ms:", Date.now() - typed);
   await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+  console.log("solve semester ms:", Date.now() - t0);
   console.log("solve semester:", await page.locator("#classSectionsStatus").innerText(), "|", await page.locator("#classSectionsSummary").innerText());
   // 학급 단위로 바꾸면 블록 수 제안
   const five = page.locator("[data-cs-group]").filter({ hasText: "3-1 택5" }).first();

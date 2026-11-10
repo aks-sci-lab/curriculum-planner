@@ -2300,3 +2300,6 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-dialog h3 { margin:16px 0 6px; font-size:14px; }
     .cs-grid { border-collapse:collapse; font-size:11px; }
     .cs-grid th, .cs-grid td { padding:2px 6px; text-align:center; border:1px solid var(--line); }
+    .cs-proposal { margin-top:10px; padding:10px; border:1px dashed #b9c6dc; border-radius:10px; background:#fbfcff; }
+    .cs-proposal h5 { margin:0 0 6px; font-size:12px; }
+    .cs-table tr.is-current th { color:#2852ce; }
