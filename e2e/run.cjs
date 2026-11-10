@@ -1723,7 +1723,7 @@ async function main() {
         // 따로 신청(소인수 메모) 과목은 웹 신청 과목에 없어야 함
         const subjectsText = JSON.stringify(event.subjects || []) + JSON.stringify(event.selection_groups || []);
         report.data.separateInEvent = { ...(report.data.separateInEvent || {}), [grade]: subjectsText.includes(SMALL_CLASS.name) };
-        h.check(!subjectsText.includes(SMALL_CLASS.name), "중요", "2단계·웹", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 현 ${grade}학년 웹 신청 과목에 들어감`, { actual: (event.subjects || []).filter((x) => JSON.stringify(x).includes(SMALL_CLASS.name)).slice(0, 2) });
+        h.check(!subjectsText.includes(SMALL_CLASS.name), "중요", "2단계·웹", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 현 ${grade}학년 웹 신청 과목에 들어감`, { actual: subjectsText.slice(Math.max(0, subjectsText.indexOf(SMALL_CLASS.name) - 120), subjectsText.indexOf(SMALL_CLASS.name) + 80) });
         const groups = event.selection_groups.filter((g) => g.grade === String(Number(grade) + 1));
         const expected = choiceGroups(Number(grade) + 1);
         h.check(groups.length === expected.length && expected.every((e) => groups.some((g) => Number(g.count) === e.pick && g.semester === e.semester && e.courses.every((c) => g.courses.map(Expected.bare).includes(c)))),
