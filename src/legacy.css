@@ -2418,3 +2418,29 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   .print-page.cs-hr-page .cs-att-table td[data-kind="title"] { height:7mm; font-size:13px; }
   .print-page.cs-hr-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
 }
+/* 교실 선택 필요(학년 교실 부족 → 교사가 고름) */
+.cs-section .cs-room.is-choose { color:#a44939; font-weight:700; flex-wrap:wrap; }
+.cs-section .cs-room.is-choose select { border-color:#e3a497; background:#fff6f4; }
+.cs-section .cs-room.is-choose input { width:110px; }
+#classSectionsOutputWarnings { margin:4px 0 8px; }
+/* 학생 시간표 1·2학기 한 장(cs-tt-year): 학기마다 격자, 한 장에 1명(기본) 또는 2명 */
+.cs-tt-sem { margin-top:6px; }
+.cs-tt-sem h5 { margin:0 0 3px; font-size:12px; }
+@media print {
+  .print-page.cs-tt-page[data-per="1"] .cs-tt-year .cs-tt-grid td { height:12.5mm; }
+  .print-page.cs-tt-page[data-per="2"] { gap:3mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year { padding:4px 6px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid { font-size:8px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:5.6mm; line-height:1.05; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td small { display:none; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year header h4 { font-size:11px; }
+}
+@media print {
+  /* 한 장에 2명: 학생마다 1·2학기를 좌우로(세로 4개 격자는 한 장을 넘음) */
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year { display:grid; grid-template-columns:1fr 1fr; column-gap:3mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year > header, .print-page.cs-tt-page[data-per="2"] .cs-tt-year > .cs-tt-retake { grid-column:1 / -1; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-sem { margin-top:2px; min-width:0; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid { font-size:7.5px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:10mm; line-height:1.1; padding:1px 2px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid tbody th { width:14px; }
+}

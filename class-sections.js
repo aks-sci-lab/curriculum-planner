@@ -2838,7 +2838,7 @@ function classSectionsRoomCost(section, room, targetGrade, roomIndex) {
     return null;
   }
   if (room.kind === "class") return room.grade === targetGrade ? C.perStudent * (section.size - (section.homerooms?.[room.homeroom] || 0)) + roomIndex : null;
-  if (room.kind === "extra") return C.extra + roomIndex;
+  // 다른 교실(다목적실 등)·다른 학년 교실은 자동으로 넣지 않는다: 모자라면 '교실 선택 필요' + 후보(classSectionsAssignRooms의 choices).
   return null;
 }
 
@@ -2869,6 +2869,8 @@ function classSectionsAssignRooms(spec) {
     }
   }
   const used = []; // [{ block, roomId, sectionId }]
+  const pending = []; // 교실을 못 정한 분반(블록별) → 후보 목록
+  const choices = {};
   const takenAt = (block) => {
     const taken = new Map();
     for (const item of used) if (classSectionsRoomBlocksClash(item.block, block)) taken.set(item.roomId, item);
@@ -2926,11 +2928,24 @@ function classSectionsAssignRooms(spec) {
     });
     if (missing.length) {
       const classCount = rooms.filter((room) => room.kind === "class" && room.grade === block.targetGrade).length;
-      const extraCount = rooms.filter((room) => room.kind === "extra").length;
-      const busy = [...taken.values()].filter((item) => item.block.groupId !== block.groupId);
+      const busy = [...taken.values()].filter((item) => item.block.groupId !== block.groupId && rooms.find((room) => room.id === item.roomId)?.grade === block.targetGrade);
+      pending.push({ block, sections: missing });
       issues.push({ type: "room-short", severity: "error", groupId: block.groupId, sectionIds: missing.map((section) => section.id),
-        message: `${block.label} ${block.letter}블록: 교실이 모자라 분반 ${missing.length}개(${missing.map((section) => section.roomName || section.courseName).join(", ")})에 교실을 못 정했습니다 — 분반 ${block.sections.length}개 > ${block.targetGrade}학년 교실 ${classCount}개${extraCount ? ` + 다른 교실 ${extraCount}개` : ""}${busy.length ? `(같은 시간 다른 학년이 ${busy.length}개 사용)` : ""}. 교사·시간 설정에서 교실을 늘리거나 블록당 분반을 줄이세요.` });
+        message: `${block.label} ${block.letter}블록: 교실 ${missing.length}개가 모자랍니다 — 아래에서 교실을 고르세요(${missing.map((section) => section.roomName || section.courseName).join(", ")}; 분반 ${block.sections.length}개 > ${block.targetGrade}학년 교실 ${classCount}개${busy.length ? `, 같은 시간 다른 그룹이 ${busy.length}개 사용` : ""}).` });
     }
+  }
+  const rank = { extra: 0, class: 1, other: 2, special: 3 };
+  for (const { block, sections } of pending) {
+    const taken = takenAt(block);
+    const free = rooms.filter((room) => !taken.has(room.id))
+      .map((room) => ({ room, rank: room.kind === "class" ? (room.grade === block.targetGrade ? rank.class : rank.other) : rank[room.kind] ?? 4, index: roomById.get(room.id).index }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index);
+    if (!choices[block.groupId]) choices[block.groupId] = {};
+    sections.forEach((section, i) => {
+      choices[block.groupId][section.id] = free.map(({ room }, j) => ({ id: room.id, label: room.label, kind: room.kind === "class" && room.grade !== block.targetGrade ? "other-grade" : room.kind,
+        recommended: j === Math.min(i, free.length - 1) }));
+      reasons[block.groupId][section.id] = free.length ? "교실 선택 필요(학년 교실 부족)" : "교실 선택 필요(빈 교실 없음 — 다른 교실 이름을 넣으세요)";
+    });
   }
   if (untimed && blocks.some((block) => block.sections.some((section) => section.special)) && new Set(blocks.map((block) => block.groupId)).size > 1) {
     issues.push({ type: "no-times", severity: "info", message: "블록 시간(요일·교시)이 없는 블록이 있어 다른 학년과의 특별실 겹침은 확인하지 못했습니다. 블록 시간을 넣으면 같은 시간 겹침을 막습니다." });
@@ -2938,7 +2953,7 @@ function classSectionsAssignRooms(spec) {
   const check = classSectionsValidateRooms({ rooms, groups: spec?.groups || [] }, assign);
   const fellBack = new Set(issues.filter((item) => item.type === "special-fallback").map((item) => `${item.groupId}|${item.sectionId}`));
   const extra = check.filter((item) => item.type !== "room-missing" && !(item.type === "special-mismatch" && fellBack.has(`${item.groupId}|${item.sectionId}`)));
-  return { assign, reasons, issues: [...issues, ...extra], timed: timed > 0 && !untimed };
+  return { assign, reasons, choices, issues: [...issues, ...extra], timed: timed > 0 && !untimed };
 }
 
 function classSectionsRoomShortWhy(block, type, rooms, taken) {

@@ -111,11 +111,26 @@ test("교실 배정: 기본은 수강생이 가장 많은 내년 반 교실, 특
   const short = cs.classSectionsAssignRooms({ rooms, groups });
   const shortage = short.issues.find((issue) => issue.type === "room-short");
   assert.ok(shortage, "room shortage reported");
-  assert.match(shortage.message, /교실이 모자라 분반 2개.*분반 6개 > 2학년 교실 3개/);
-  // 다른 교실(다목적실·세미나실)을 더하면 해결.
-  const more = cs.classSectionsAssignRooms({ rooms: cs.classSectionsRoomList({ classrooms: { "2": ["2-1", "2-2", "2-3"], "3": ["3-1", "3-2"] }, special: { 과학실: ["과학실1"] }, extra: ["다목적실", "세미나실"] }), groups });
-  assert.ok(!more.issues.some((issue) => issue.type === "room-short"));
-  assert.ok(Object.values(more.assign.g2).includes("다목적실"));
+  assert.match(shortage.message, /교실 2개가 모자랍니다 — 아래에서 교실을 고르세요.*분반 6개 > 2학년 교실 3개/);
+  // 다른 교실(다목적실·세미나실)이 있어도 자동으로 넣지 않는다(사용자 결정: 교사가 고름) → '교실 선택 필요' + 후보.
+  const moreRooms = cs.classSectionsRoomList({ classrooms: { "2": ["2-1", "2-2", "2-3"], "3": ["3-1", "3-2"] }, special: { 과학실: ["과학실1"] }, extra: ["다목적실", "세미나실"] });
+  const more = cs.classSectionsAssignRooms({ rooms: moreRooms, groups });
+  assert.ok(!Object.values(more.assign.g2).some((id) => ["다목적실", "세미나실"].includes(id)), "no automatic extra room");
+  const unplaced = groups[0].sections.filter((section) => !more.assign.g2[section.id]).map((section) => section.id);
+  assert.equal(unplaced.length, 2);
+  const lists = unplaced.map((id) => plain(more.choices.g2[id]));
+  // 후보 순서(결정적): 다른 교실 → 다른 학년 교실(같은 시간 3학년 블록이 쓰는 3-x 제외) → 특별실(같은 시간 사용 중이면 제외)
+  assert.deepEqual(lists[0].map((item) => item.id), ["다목적실", "세미나실", "3-1"]);
+  assert.deepEqual(lists[0].map((item) => item.kind), ["extra", "extra", "other-grade"]);
+  assert.deepEqual(lists.map((list) => list.find((item) => item.recommended).id), ["다목적실", "세미나실"], "different recommendation per section");
+  assert.deepEqual(plain(cs.classSectionsAssignRooms({ rooms: moreRooms, groups: JSON.parse(JSON.stringify(groups)) }).choices), plain(more.choices), "deterministic");
+  assert.match(more.reasons.g2[unplaced[0]], /교실 선택 필요/);
+  // 추천대로 고르면(roomPins) 겹침 0, 교실 선택 필요 없음
+  groups[0].pins = Object.fromEntries(unplaced.map((id, i) => [id, lists[i].find((item) => item.recommended).id]));
+  const picked = cs.classSectionsAssignRooms({ rooms: moreRooms, groups });
+  assert.ok(!picked.issues.some((issue) => ["room-short", "room-double", "room-cross"].includes(issue.type)), JSON.stringify(picked.issues.map((issue) => issue.type)));
+  assert.deepEqual(plain(picked.choices), {});
+  groups[0].pins = {};
 });
 
 test("교실 배정: 블록 시간이 없으면 다른 학년 특별실 겹침은 안내만, 학년 교실은 학년별", () => {
@@ -203,7 +218,7 @@ test("학생 시간표: 요일×교시 격자(이동 칸 = 과목·분반·교�
 });
 
 // ---- 화면 연결(vm: 계산 + 화면 + 출력물) ----
-function context() {
+function context({ twoSemesters = false } = {}) {
   const students = [];
   for (let c = 1; c <= 4; c += 1) for (let n = 1; n <= 10; n += 1) {
     const pick = (c + n) % 2 ? ["c1", "c2"] : ["c2", "c3"];
@@ -222,9 +237,9 @@ function context() {
     isRoundLocked: (round) => state.roundStatuses[round]?.status === "confirmed",
     hoursDefaultDepartment: (name) => ({ 물리학: "과학-물리", 화학: "과학-화학", 지구과학: "과학-지구" })[name] || "기타",
     hoursSettings: () => ({ teachers: {} }), hoursTargetYear: () => "2027",
-    aggregateRecords: (list) => ({ reports: [{ summary: { grade: "1", classes: 4 }, semesters: [{ order: 1, groups: [{ category: "2-1 택2", choiceCount: 2,
+    aggregateRecords: (list) => ({ reports: [{ summary: { grade: "1", classes: 4 }, semesters: (twoSemesters ? [1, 2] : [1]).map((order) => ({ order, groups: [{ category: `2-${order} 택2`, choiceCount: 2,
       courses: courses.map((course) => ({ column: course.column, name: course.name, subjectName: course.name, classCount: 2,
-        enrollment: list.filter((student) => student.selections.some((selection) => selection.column === course.column)).length })) }] }] }] }),
+        enrollment: list.filter((student) => student.selections.some((selection) => selection.column === course.column)).length })) }] })) }] }),
     createWorkbookBlob: (sheets) => ({ sheets }), downloadBlob: (blob, name) => downloads.push({ blob, name })
   });
   ctx.downloads = downloads;
@@ -309,26 +324,60 @@ test("화면 연결: 출석부 인원 = 분반 명렬표, 성명은 차수 자�
   assert.match(unknown.warnings[0], /내년 반을 몰라/);
 });
 
-test("화면 연결: 학생 시간표 = 그룹 배정 + 블록 시간 + 고정 시간(창체), 재신청 학생 표시, 학생 찾기로 미리 보기", () => {
-  const ctx = context();
+test("화면 연결: 학생 시간표 1·2학기 한 장 = 학기마다 그룹 배정 + 블록 시간 + 고정 시간(창체), 재신청 학생 표시, 학생 찾기로 미리 보기", () => {
+  const ctx = context({ twoSemesters: true });
   const { group, result } = solved(ctx);
+  // 2학기 그룹도 편성(블록 시간 없음 → 그 학기는 목록)
+  const second = ctx.classSectionsSource("1").groups.find((item) => item.semester === "2");
+  const entry2 = ctx.classSectionsEntry("1", second.key);
+  const input2 = ctx.classSectionsBuildInput("1", second, entry2);
+  ctx.classSectionsSaveResult(entry2, ctx.classSectionsSolve({ ...input2, maxSectionsPerBlock: 4 }), input2, second, { locked: true });
   const settings = ctx.classSectionsSettings();
   settings.fixedSlots.push({ label: "창체", times: "금6,금7", allTeachers: true });
   const key = Object.keys(result.assign)[0];
   const [model] = ctx.classSectionsTimetableModels("1", group, [key]);
-  assert.equal(model.title, "2027학년도 1학기 · 현 1학년 → 2학년 이동수업 시간표");
+  assert.equal(model.title, "2027학년도 · 현 1학년 → 2학년 이동수업 시간표");
   assert.match(model.student, new RegExp(`^${key} 가명\\d+ · 내년 2학년 \\d반$`));
-  const moves = model.grid.flat().filter((cell) => cell.kind === "move");
-  assert.equal(moves.length, result.assign[key].length * 2, "two periods per block");
-  assert.equal(model.grid[5][4].kind, "fixed");
-  // 미배정 학생은 '재신청 필요'.
+  assert.deepEqual(plain(model.semesters.map((item) => item.semester)), ["1", "2"]);
+  const [first, two] = model.semesters;
+  assert.equal(first.grid.flat().filter((cell) => cell.kind === "move").length, result.assign[key].length * 2, "1학기: two periods per block");
+  assert.equal(first.grid[5][4].kind, "fixed");
+  assert.equal(two.grid, null, "2학기 블록 시간 없음 → 목록");
+  assert.equal(two.untimed.length, entry2.sectionResult.assign[key].length);
+  // 미배정 학생은 '재신청 필요'(학기 표시).
   result.unassigned.push({ studentKey: key, courseKey: "지구과학", reason: "capacity" });
-  assert.deepEqual(plain(ctx.classSectionsTimetableModels("1", group, [key])[0].retake), [{ courseName: "지구과학", reason: "정원 부족" }]);
+  assert.deepEqual(plain(ctx.classSectionsTimetableModels("1", group, [key])[0].retake), [{ courseName: "지구과학", reason: "정원 부족", semester: "1" }]);
   ctx.CLASS_SECTIONS_VIEW.search = key;
-  assert.match(ctx.classSectionsPrintButtonsHtml("1", group, result), /id="classSectionsTimetablePreview"[\s\S]*재신청 필요: 지구과학/);
+  const html = ctx.classSectionsPrintButtonsHtml("1", group, result);
+  assert.match(html, /id="classSectionsTimetablePreview"[\s\S]*재신청 필요: 1학기 지구과학/);
+  assert.match(html, /data-semesters="2"[\s\S]*data-semester="1"[\s\S]*data-semester="2"/);
+  assert.match(html, /aria-label="한 장에 학생 수"><option value="1" selected>1명<\/option><option value="2">2명<\/option>/);
+  // 엑셀: 학생마다 두 학기
+  const sheet = ctx.classSectionsTimetableSheet("현1-1반", [model]);
+  assert.deepEqual(plain(sheet.rows.filter((row) => /^[12]학기$/.test(row[0]?.v || "")).map((row) => row[0].v)), ["1학기", "2학기"]);
   // 반 고르기: 그 반 학생만.
   ctx.CLASS_SECTIONS_PRINT_VIEW.timetableClass = "2";
   assert.ok(ctx.classSectionsTimetableKeysFor("1", group).every((item) => item.startsWith("1-2-")));
+});
+
+test("내보내기 전 경고: 교실을 고르지 않은 분반 수·자리 이름 교사(classSectionsTeacherNameWarnings가 있을 때)", () => {
+  const ctx = context();
+  const { group, result } = solved(ctx);
+  const settings = ctx.classSectionsPrintSettings();
+  settings.classrooms["2"] = { count: 1 }; // 교실 1개 → 블록마다 분반이 남는다
+  const warnings = plain(ctx.classSectionsOutputWarnings("1", group));
+  const room = warnings.find((item) => item.type === "room");
+  assert.ok(room && room.count > 0 && /교실을 고르지 않은 분반 \d+개/.test(room.message));
+  // 카드: 교실 선택 필요 + 후보(추천) + 새 교실 이름
+  const plan = ctx.classSectionsRoomPlan("1", "1");
+  const unplaced = result.sections.find((section) => !plan.assign[group.key][section.id]);
+  const card = ctx.classSectionsRoomCardHtml("1", group, unplaced);
+  assert.match(card, /교실 선택 필요/);
+  assert.match(card, /data-cs-room-new=/);
+  assert.match(ctx.classSectionsPrintButtonsHtml("1", group, result), /id="classSectionsOutputWarnings"/);
+  ctx.classSectionsTeacherNameWarnings = () => [{ name: "사회(지리) 1" }, "과학(물리) 2"];
+  const both = plain(ctx.classSectionsOutputWarnings("1", group));
+  assert.match(both.find((item) => item.type === "teacher").message, /실제 이름이 아닌 교사 2명\(사회\(지리\) 1, 과학\(물리\) 2\)/);
 });
 
 test("createWorkbookBlob: printTitles가 있으면 시트별 인쇄 제목 줄(_xlnm.Print_Titles)", () => {
