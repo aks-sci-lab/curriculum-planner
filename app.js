@@ -4867,7 +4867,7 @@
       const annualCard = `<article class="curriculum-cohort-card curriculum-annual-card${annualActive ? " is-active" : ""}">
         <h4>${annualYear}학년도 전학년 편제표</h4>
         <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("annual", annualYear, built) : ""}
-        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => `${source.grade}학년(${source.year})`).join("·")} 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
+        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => source.grade).join("·")}학년(${missing.map((source) => source.year).join("·")}) 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
         <div><button class="button${built && !stale ? "" : " button-primary"}" type="button" data-annual-build="${annualYear}"${missing.length ? " disabled" : ""} aria-label="${annualYear}학년도 전학년 편제표 ${built ? "다시 만들기" : "만들기"}">${built ? "다시 만들기" : "만들기"}</button>
         <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
       </article>`;
