@@ -3835,24 +3835,55 @@
       return `현 ${student.grade}학년 ${student.classroom}반 ${student.number}번`;
     }
 
-    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
+    // 확인서 선택군 순서: 학기(1 → 2 → 학기 없음) → 그룹 설정 순서(편제표 순서) → 그룹 안 과목은 그룹 설정의 과목 순서.
+    // 학생이 고른 순서(웹 신청 순서)대로 두면 학기·묶음이 뒤섞인다.
+    function certificateGroupedSelections(student, groupSettings) {
+      const settings = Array.isArray(groupSettings) ? groupSettings : [];
+      const target = String(Number(student.grade) + 1);
+      const compact = (name) => (typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(String(name ?? "")) : String(name ?? ""))
+        .replace(/\s*\([12]학기\)/g, "").replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
       const groups = [];
-      for (const course of student.selections) {
+      (student.selections || []).forEach((course, order) => {
         const groupName = courseGroupLabel(course, student.grade, groupSettings);
+        const info = typeof applicationGroupForCourse === "function" ? applicationGroupForCourse(course, student.grade, groupSettings) : null;
+        const semester = String(info?.semester || (typeof resolveSemesterKey === "function" ? resolveSemesterKey(course) : "") || "");
+        const settingIndex = info ? settings.findIndex((item) => item.name === info.name && String(item.grade) === target &&
+          (!info.semester || String(item.semester) === String(info.semester))) : -1;
+        const setting = settingIndex >= 0 ? settings[settingIndex] : null;
+        const inGroup = setting ? (setting.courses || []).findIndex((name) => compact(name) === compact(course.name)) : -1;
+        const column = typeof courseIndexByColumn === "function" ? courseIndexByColumn(course.column) : -1;
         let group = groups.find((item) => item.name === groupName);
-        if (!group) { group = { name: groupName, courses: [] }; groups.push(group); }
-        group.courses.push(course);
-      }
+        if (!group) {
+          group = { name: groupName, courses: [], semesterRank: semester === "1" ? 1 : semester === "2" ? 2 : 3,
+            groupRank: Infinity, order };
+          groups.push(group);
+        }
+        // 그룹 설정에 없으면(웹 신청에서 받은 그룹 등) 과목 열 순서(편제표 순서)로 그룹 순서를 정한다.
+        group.groupRank = Math.min(group.groupRank, settingIndex >= 0 ? settingIndex : 5000 + (column >= 0 ? column : order));
+        group.courses.push({ course, rank: inGroup >= 0 ? inGroup : 10000 + (column >= 0 ? column : order) });
+      });
+      groups.sort((a, b) => a.semesterRank - b.semesterRank || a.groupRank - b.groupRank || a.order - b.order);
+      return groups.map((group) => ({ name: group.name, courses: group.courses.sort((a, b) => a.rank - b.rank).map((item) => item.course) }));
+    }
+
+    // 확인서 과목명: 선택군 칸에 학기가 있으므로 두 학기 과목 꼬리표 '(2학기)'는 뗀다('과학의 역사와 문화 (2학기)(융합)' → '과학의 역사와 문화(융합)').
+    function certificateCourseName(course) {
+      const label = course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name;
+      return String(label ?? "").replace(/\s*\([12]학기\)/g, "");
+    }
+
+    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
+      const groups = certificateGroupedSelections(student, groupSettings);
       const body = groups.length
         ? groups.map((group) => group.courses.map((course, index) => `
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
-              <td class="course-cell">${escapeHtml(course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
+              <td class="course-cell">${escapeHtml(certificateCourseName(course))}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
       const coreCredits = student.selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
       const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
       const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span title="이번에 신청한 ${student.totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
       </div>` : "";
       // 과목이 많은 학생은 인쇄용 행 높이를 더 줄여 한 장에 담는다(학교명·서명 줄이 다음 장으로 넘어가지 않게).
