@@ -182,3 +182,51 @@ test("배정 결과 엑셀: 학생마다 과목별 블록·분반 번호, 열린
   }
   assert.match(ctx.classSectionsEditReadAssign([["이름", "x"]], result, {}).error, /현 학년-반-번호/);
 });
+
+test("[회귀] 칸 하나를 바꾸면 그 과목 학생만 다시 배정(부분 재계산), 무관한 학생은 블록·분반 그대로 · 안 풀리면 전체를 다시 풀되 바뀌는 학생 최소", () => {
+  const ctx = context();
+  // 330명 택3, 블록 3개, 과목 8개(인기 차이) — 실제 규모와 비슷한 합성
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const subjects = ["A", "B", "C", "D", "E", "F", "G", "H"];
+  const weight = [3, 2.5, 2, 1.6, 1.2, 1, 0.8, 0.6];
+  const total = weight.reduce((a, b) => a + b, 0);
+  const students = [];
+  for (let n = 1; n <= 330; n += 1) {
+    const pick = new Set();
+    while (pick.size < 3) { let r = rnd() * total; let i = 0; while (r > weight[i]) { r -= weight[i]; i += 1; } pick.add(subjects[i]); }
+    students.push({ key: `1-${1 + (n % 11)}-${n}`, homeroom: String(1 + (n % 11)), courses: [...pick] });
+  }
+  const demand = (name) => students.filter((student) => student.courses.includes(name)).length;
+  const input = { blocks: 3, choose: 3, defaultCapacity: 34, maxSectionsPerBlock: 12, seed: 1, students,
+    courses: subjects.map((name) => ({ key: name, sections: Math.ceil(demand(name) / 32) })) };
+  const before = plain(ctx.classSectionsSolve(input));
+  assert.equal(before.explain.feasible, true, before.explain.summary);
+  // E 분반 하나를 다른 블록으로(표의 칸 고치기와 같은 고정)
+  const course = "E";
+  const own = before.sections.filter((section) => section.courseKey === course);
+  const counts = Object.fromEntries(before.blocks.map((block) => [block.id, own.filter((section) => section.blockId === block.id).length]));
+  const from = before.blocks.find((block) => counts[block.id] > 0).id;
+  const to = before.blocks.find((block) => block.id !== from).id;
+  counts[from] -= 1; counts[to] += 1;
+  const { pins } = plain(ctx.classSectionsEditPlacementPins(before, course, counts));
+  const previous = { sections: before.sections.map((section) => ({ id: section.id, blockId: section.blockId })), assign: before.assign };
+  const affected = [...ctx.classSectionsEditCourseStudents(before, course, students.map((student) => [student.key, student.courses]))];
+  assert.equal(affected.length, demand(course));
+  // 예전 방식(배치 고정 후 처음부터 다시 배정)
+  const old = plain(ctx.classSectionsSolve({ ...input, pins: { sections: pins }, baseline: { assign: before.assign } }));
+  const oldChanged = ctx.classSectionsEditChangedStudents(before.assign, old.assign).length;
+  // 새 방식 1단계: 그 과목 학생만 풀고 나머지는 앞 분반 그대로
+  const partial = plain(ctx.classSectionsSolve({ ...input, pins: { sections: pins }, partial: true, previous, changedStudents: affected }));
+  const changed = plain(ctx.classSectionsEditChangedStudents(before.assign, partial.assign));
+  assert.ok(ctx.classSectionsEditBadness(partial) <= ctx.classSectionsEditBadness(before), partial.explain.summary);
+  const outside = changed.filter((key) => !affected.includes(key));
+  assert.deepEqual(outside, [], "그 과목을 신청하지 않은 학생은 블록·분반 그대로");
+  assert.ok(changed.length <= affected.length);
+  assert.ok(oldChanged > 2 * changed.length, `바뀐 학생 ${oldChanged}명 → ${changed.length}명`);
+  // 2단계(전체 다시 풀기 + 바뀌는 학생에게 큰 비용)도 예전 방식보다 훨씬 적게 바꾼다
+  const full = plain(ctx.classSectionsSolve({ ...input, pins: { sections: pins }, previous, keepWeight: 200 }));
+  const fullChanged = ctx.classSectionsEditChangedStudents(before.assign, full.assign).length;
+  assert.ok(fullChanged < oldChanged / 2, `전체 다시 풀기 ${fullChanged}명 < 예전 ${oldChanged}명의 절반`);
+  console.log(`칸 하나 고치기: 바뀐 학생 예전 ${oldChanged}명 → 부분 재계산 ${changed.length}명(과목 학생 ${affected.length}명) · 전체+유지 비용 ${fullChanged}명`);
+});

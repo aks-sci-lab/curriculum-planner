@@ -71,6 +71,29 @@ function classSectionsEditPlacementPins(result, courseKey, counts) {
   return { pins, sections: ord };
 }
 
+// 직접 고친 뒤 다시 풀 때: 앞 결과와 비교해 분반이 바뀐 학생(분반 목록이 다른 학생) 목록.
+function classSectionsEditChangedStudents(before, after) {
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  const same = (a, b) => (a || []).slice().sort().join("|") === (b || []).slice().sort().join("|");
+  return [...keys].filter((key) => !same(before?.[key], after?.[key])).sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+}
+
+// 한 과목 칸을 고쳤을 때 다시 배정할 학생: 그 과목 분반에 있던 학생 + 그 과목을 신청한 학생(미배정 포함).
+function classSectionsEditCourseStudents(result, courseKey, wishes) {
+  const ids = new Set((result?.sections || []).filter((section) => section.courseKey === courseKey).map((section) => section.id));
+  const out = new Set();
+  for (const [key, list] of Object.entries(result?.assign || {})) if (list.some((id) => ids.has(id))) out.add(key);
+  for (const [key, courses] of wishes || []) if ((courses || []).includes(courseKey)) out.add(key);
+  return out;
+}
+
+// 다시 푼 결과의 '못 푼 정도': 정원·블록으로 못 넣은 미배정(폐강·블록 수 초과·이동 반 학급 단위 제외) + 정원 초과·블록 겹침·중복 오류.
+function classSectionsEditBadness(result) {
+  const structural = ["closed", "too-many", "class-unit-other-room"];
+  return (result?.unassigned || []).filter((item) => !structural.includes(item.reason)).length
+    + (result?.issues || []).filter((issue) => issue.severity === "error" && ["over-capacity", "block-conflict", "duplicate", "choice-over"].includes(issue.type)).length;
+}
+
 // 학생 한 명 옮기기 창의 표: 행 = 그 학생 이동 과목(신청 + 지금 배정), 열 = 블록, 칸 = 그 과목 분반들(인원/정원).
 function classSectionsEditStudentRows(result, studentKey, wishes) {
   const sections = result?.sections || [];
@@ -290,7 +313,8 @@ function classSectionsEditHtml(round, group, entry, result) {
   const withName = typeof classSectionsJosa === "function" ? classSectionsJosa(selectedName, "과/와") : `${selectedName}와`;
   return `<section class="cs-card" aria-label="직접 고치기">
     <h4>직접 고치기 <span class="cs-note">과목 × 블록 분반 수 · 같이 신청한 학생 · 학생 옮기기 · 배정 결과 엑셀</span></h4>
-    <p class="cs-note">칸의 분반 수를 바꾸면 그 과목 분반을 그 블록에 고정하고 지금 배치를 유지한 채 학생 배정만 다시 계산합니다. 과목 이름을 누르면 같이 신청한 학생 수를 봅니다.</p>
+    <p class="cs-note">칸의 분반 수를 바꾸면 그 과목 분반을 그 블록에 고정하고(다른 분반도 지금 블록에 고정) 그 과목 학생만 다시 배정합니다 — 나머지 학생은 지금 분반 그대로. 정원·블록 때문에 안 되면 바뀌는 학생이 가장 적게 전체를 다시 풀고, 바뀐 학생이 많으면 적용 전에 묻습니다. 과목 이름을 누르면 같이 신청한 학생 수를 봅니다.</p>
+    ${result.editChange ? `<p class="cs-note" id="classSectionsEditChange" data-changed="${result.editChange.changed}" data-own="${result.editChange.own}">최근 직접 고치기: ${esc(result.editChange.label)} · ${esc(classSectionsEditChangeText(result.editChange))}</p>` : ""}
     <p class="cs-note${pinnedCount ? " is-warn" : ""}" id="classSectionsPinNote">표에서 칸을 고치면 이 그룹의 모든 분반이 지금 블록에 고정됩니다(다시 계산해도 블록이 바뀌지 않음).${pinnedCount ? ` 지금 블록 고정 ${pinnedCount}개.` : ""}
       ${pinnedCount ? `<button class="button button-quiet" type="button" id="classSectionsUnpinAll">블록 고정 모두 풀기</button>` : ""}</p>
     <div class="cs-table-wrap" data-scroll-key="cs-place"><table class="cs-table cs-place" id="classSectionsPlacementTable" aria-label="과목 × 블록 분반 수">
@@ -316,12 +340,68 @@ function classSectionsEditApplyPlacement(courseKey, blockId, value) {
   const counts = Object.fromEntries(result.blocks.map((block) => [block.id, result.sections.filter((section) => section.courseKey === courseKey && section.blockId === block.id).length]));
   counts[blockId] = Math.max(0, Math.floor(Number(value) || 0));
   const { pins, sections } = classSectionsEditPlacementPins(result, courseKey, counts);
+  const before = { pins: { ...context.entry.pins.sections }, had: Object.prototype.hasOwnProperty.call(context.entry.classCounts, courseKey), count: context.entry.classCounts[courseKey] };
   context.entry.pins.sections = pins;
   context.entry.classCounts[courseKey] = sections;
   const name = result.sections.find((section) => section.courseKey === courseKey)?.courseName || courseKey;
-  classSectionsSetStatus(`${name} 분반을 블록별 ${result.blocks.map((block) => `${block.letter}${counts[block.id]}`).join("·")}개로 고정하고 학생 배정을 다시 계산합니다(다른 분반도 지금 블록에 고정).`);
-  if (typeof classSectionsChanged === "function") classSectionsChanged(false);
-  classSectionsSolveCurrent("solve");
+  const affected = classSectionsEditCourseStudents(result, courseKey, classSectionsEditWishes(context.group));
+  classSectionsEditSolve({ affected, scopeLabel: `${name} 학생`, label: `${name} 분반을 블록별 ${result.blocks.map((block) => `${block.letter}${counts[block.id]}`).join("·")}개로 고정`,
+    restore: () => {
+      context.entry.pins.sections = before.pins;
+      if (before.had) context.entry.classCounts[courseKey] = before.count; else delete context.entry.classCounts[courseKey];
+    } });
+}
+
+// 직접 고친 뒤 다시 계산: 앞 배정에서 바뀌는 학생이 가장 적게.
+// 1) 고친 학생(그 과목 학생·옮긴 학생)만 풀어 두고 나머지는 앞 분반 그대로(부분 재계산) → 2) 정원·블록 때문에 안 되면 전체를 다시 풀되
+// 앞 배정에서 바뀌는 학생에게 큰 비용(keepWeight) → 3) 그래도 안 되면 원인 안내(결과의 요약·제안). 고정 학생·교실 고정은 그대로.
+// 바뀐 학생이 고친 학생의 2배를 넘으면 적용 전에 묻고, 취소하면 restore()로 되돌린다.
+var CLASS_SECTIONS_EDIT_KEEP_WEIGHT = 200;
+async function classSectionsEditSolve(spec) {
+  const context = classSectionsCurrent();
+  if (!context?.entry?.sectionResult || CLASS_SECTIONS_VIEW.running) return;
+  const { round, group, entry, source } = context;
+  const scope = { round, group: group.key };
+  const previous = entry.sectionResult;
+  const prev = { sections: previous.sections.map((section) => ({ id: section.id, blockId: section.blockId })), assign: previous.assign, teacherOf: previous.teacherOf };
+  const roomNames = typeof classSectionsPreviousRoomNames === "function" ? classSectionsPreviousRoomNames(previous) : undefined;
+  const affected = [...(spec.affected || [])];
+  CLASS_SECTIONS_VIEW.running = true;
+  classSectionsSetStatus(`${spec.label} · ${spec.scopeLabel} ${affected.length}명만 다시 배정하는 중…`, false, scope);
+  renderClassSections();
+  try {
+    let input = classSectionsBuildInput(round, group, entry, { partial: true, previous: prev, changedStudents: affected, roomNames });
+    let result = await classSectionsRunSolver({ kind: "solve", input });
+    let path = "partial";
+    if (classSectionsEditBadness(result) > classSectionsEditBadness(previous)) {
+      classSectionsSetStatus(`${spec.label} · ${spec.scopeLabel}만으로는 정원·블록이 맞지 않아 바뀌는 학생이 가장 적게 전체를 다시 푸는 중…`, false, scope);
+      const fullInput = classSectionsBuildInput(round, group, entry, { previous: prev, keepWeight: CLASS_SECTIONS_EDIT_KEEP_WEIGHT, roomNames, baseline: { assign: previous.assign } });
+      // 블록 배치는 그대로(고정하지 않은 분반도 지금 블록에) — 학생 배정만 다시.
+      fullInput.pins = { ...fullInput.pins, sections: { ...Object.fromEntries(prev.sections.filter((section) => section.blockId).map((section) => [section.id, section.blockId])), ...(fullInput.pins?.sections || {}) } };
+      const full = await classSectionsRunSolver({ kind: "solve", input: fullInput });
+      if (classSectionsEditBadness(full) < classSectionsEditBadness(result)) { result = full; input = fullInput; path = "full"; }
+    }
+    const changed = classSectionsEditChangedStudents(previous.assign, result.assign);
+    const own = affected.length;
+    if (changed.length > Math.max(own * 2, own + 10)) {
+      const ok = await classSectionsConfirm(`${spec.label}: 분반이 바뀌는 학생이 ${changed.length}명으로 ${spec.scopeLabel} ${own}명보다 많습니다(정원·블록을 맞추려면 다른 학생도 옮겨야 함). 적용할까요?`, { title: "다시 계산 결과 적용", ok: "적용" });
+      if (!ok) { spec.restore?.(); classSectionsSetStatus(`${spec.label}을(를) 취소하고 앞 결과로 되돌렸습니다.`, false, scope); return; }
+    }
+    classSectionsSaveResult(entry, result, input, group, source);
+    entry.sectionResult.editChange = { label: spec.label, changed: changed.length, own, scopeLabel: spec.scopeLabel, path };
+    classSectionsSetStatus(`${spec.label} · ${classSectionsEditChangeText(entry.sectionResult.editChange)} · ${result.explain.summary}`, !result.explain.feasible, scope);
+  } catch (error) {
+    classSectionsSetStatus(`다시 계산 실패: ${error?.message || error}`, true, scope);
+  } finally {
+    CLASS_SECTIONS_VIEW.running = false;
+    if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
+    renderClassSections();
+  }
+}
+
+function classSectionsEditChangeText(change) {
+  if (!change) return "";
+  return `분반이 바뀐 학생 ${change.changed}명(${change.scopeLabel} ${change.own}명 포함)${change.path === "full" ? " — 고친 학생만으로는 풀리지 않아 전체를 다시 풀되 바뀌는 학생을 최소로" : ""}`;
 }
 
 function classSectionsEditDialog() {
@@ -430,12 +510,13 @@ async function classSectionsEditSaveMove(unpin = false) {
   const ids = classSectionsEditPickedIds();
   const check = classSectionsEditCheck({ result: move.result, studentKey: move.studentKey, ids, choose: move.group.choice, unit: move.unit, wishes: move.wishes });
   if (check.errors.length && !(await classSectionsConfirm(`${move.studentKey}: ${check.errors.join(", ")}. 그래도 이렇게 고정할까요?`, { title: "학생 옮기기", ok: "고정" }))) return;
+  const had = Object.prototype.hasOwnProperty.call(move.entry.pins.students, move.studentKey);
+  const before = move.entry.pins.students[move.studentKey];
   move.entry.pins.students[move.studentKey] = ids;
   dialog?.close();
   CLASS_SECTIONS_VIEW.move = null;
-  classSectionsSetStatus(`${move.studentKey}를 고정하고 바뀐 학생만 다시 계산합니다.`);
-  if (typeof classSectionsChanged === "function") classSectionsChanged(false);
-  classSectionsSolveCurrent("partial");
+  classSectionsEditSolve({ affected: new Set([move.studentKey]), scopeLabel: "옮긴 학생", label: `${move.studentKey} 옮기기(고정)`,
+    restore: () => { if (had) move.entry.pins.students[move.studentKey] = before; else delete move.entry.pins.students[move.studentKey]; } });
 }
 
 function classSectionsEditExport() {
@@ -472,10 +553,10 @@ async function classSectionsEditImport(file) {
     if (!read.changed.length) { classSectionsSetStatus(`배정 결과 엑셀: 바뀐 학생이 없습니다.${extra.length ? ` ${extra.join(" · ")}` : ""}${read.problems.length ? ` 확인 ${read.problems.length}건: ${read.problems.slice(0, 3).join(" / ")}` : ""}`, read.problems.length > 0); return renderClassSections(); }
     const text = `바뀐 학생 ${read.changed.length}명(예: ${read.changed.slice(0, 5).join(", ")})을 엑셀대로 고정하고 바뀐 학생만 다시 계산할까요?${read.problems.length ? `\n\n확인할 문제 ${read.problems.length}건:\n${read.problems.slice(0, 10).join("\n")}${read.problems.length > 10 ? "\n…" : ""}` : ""}${extra.length ? `\n\n${extra.join("\n")}` : ""}`;
     if (!(await classSectionsConfirm(text, { title: "배정 결과 엑셀 적용", ok: "적용" }))) { classSectionsSetStatus("배정 결과 엑셀 적용을 취소했습니다."); return renderClassSections(); }
+    const before = { ...context.entry.pins.students };
     for (const [key, ids] of Object.entries(read.changes)) context.entry.pins.students[key] = ids;
-    classSectionsSetStatus(`배정 결과 엑셀: 바뀐 학생 ${read.changed.length}명을 고정했습니다${read.problems.length ? ` · 확인 ${read.problems.length}건` : ""}. 바뀐 학생만 다시 계산합니다.`, read.problems.length > 0);
-    if (typeof classSectionsChanged === "function") classSectionsChanged(false);
-    classSectionsSolveCurrent("partial");
+    classSectionsEditSolve({ affected: new Set(read.changed), scopeLabel: "엑셀에서 고친 학생", label: `배정 결과 엑셀(고친 학생 ${read.changed.length}명 고정${read.problems.length ? ` · 확인 ${read.problems.length}건` : ""})`,
+      restore: () => { context.entry.pins.students = before; } });
   } catch (error) {
     classSectionsSetStatus(`배정 결과 엑셀을 읽지 못했습니다: ${error?.message || error}`, true);
     renderClassSections();

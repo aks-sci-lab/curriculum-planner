@@ -496,6 +496,7 @@ function computeHoursStats(year = hoursTargetYear()) {
   const grades = [];
   const items = [];
   const seen = new Set();
+  const separatePending = [];
   for (const grade of ["1", "2", "3"]) {
     const cohortYear = String(Number(year) - Number(grade) + 1);
     const layout = curriculumCohortLayout(cohortYear);
@@ -519,7 +520,11 @@ function computeHoursStats(year = hoursTargetYear()) {
       continue;
     }
     const currentGrade = String(Number(grade) - 1);
-    const needsResults = entries.some((entry) => entry.kind === "선택" || entry.kind === "소인수");
+    // 소인수·공동교육과정은 따로 신청한다(이 앱의 신청 결과에 없음): 학기 칸 메모 또는 편성 영역 '소인수·공동'(curriculumSeparateApplicationRows).
+    const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
+      ? curriculumSeparateApplicationRows(layout.planData) : null;
+    const isSeparate = (entry) => entry.kind === "공동" || entry.kind === "소인수" || Boolean(separateRows?.has(entry.rowIndex));
+    const needsResults = entries.some((entry) => entry.kind === "선택" && !isSeparate(entry));
     if (needsResults && grade !== "1") {
       const failed = { source: new Set(), closed: new Set() };
       info.source = hoursSourceResult(currentGrade, settings, failed);
@@ -550,8 +555,10 @@ function computeHoursStats(year = hoursTargetYear()) {
     const usedResults = new Set();
     const shared = [];
     for (const entry of entries) {
-      // 순증(우리 학교가 따로 1반을 더 여는) 소인수·공동교육과정은 시수에 넣는다. 그 외 공동교육과정은 다른 학교 운영이라 뺀다.
-      const netIncrease = (entry.kind === "공동" || entry.kind === "소인수") && /순증/.test(String(entry.note || ""));
+      // 소인수·공동교육과정(따로 신청)은 학교가 따로 받은 신청 결과로 개설반을 직접 입력한다(입력 전에는 1반으로 계산 + 확인 필요).
+      // 순증이 아닌 공동교육과정은 다른 학교 운영이라 시수에서 뺀다.
+      const separate = isSeparate(entry);
+      const netIncrease = separate && /순증/.test(String(entry.note || ""));
       if (entry.kind === "공동" && !netIncrease) {
         shared.push(`${entry.subject}(${entry.grade}-${entry.semester})`);
         continue;
@@ -560,7 +567,8 @@ function computeHoursStats(year = hoursTargetYear()) {
         grade, semester: entry.semester, subject: entry.subject, area: entry.area, credit: entry.credit,
         kind: entry.kind, creditSource: entry.creditSource, cohortYear, enrollment: null, basis: "",
         currentGrade: grade === "1" ? "" : currentGrade,
-        sourceRound: needsResults && grade !== "1" && entry.kind !== "지정" && info.source
+        ...(separate ? { separate: true } : {}),
+        sourceRound: needsResults && grade !== "1" && entry.kind !== "지정" && !separate && info.source
           ? `${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : ""
       };
       item.key = hoursItemKey(item);
@@ -569,7 +577,7 @@ function computeHoursStats(year = hoursTargetYear()) {
         continue;
       }
       seen.add(item.key);
-      if (entry.kind === "지정") {
+      if (entry.kind === "지정" && !separate) {
         const total = classCounts[grade] || 0;
         item.autoClasses = hoursDesignatedShare(total, entry);
         item.basis = entry.names > 1
@@ -577,11 +585,10 @@ function computeHoursStats(year = hoursTargetYear()) {
             ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`
             : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
           : "학교 지정 · 전체 학급";
-      } else if (netIncrease && (entry.kind === "공동" || grade === "1" || !(resultIndex.get(normalizeResultCourseName(entry.subject)) || [])
-        .some((row) => !row.semester || row.semester === entry.semester))) {
-        // 신청 결과에 없는 순증 과목은 1반으로 본다(0반이면 시수가 빠짐). 반 수가 다르면 상세 표에서 직접 입력.
+      } else if (separate) {
+        // 따로 신청 과목: 1반으로 보고(0반이면 시수가 빠짐) 개설반 직접 입력을 기다린다(0 = 미개설).
         item.autoClasses = 1;
-        item.basis = `${entry.kind === "공동" ? "공동교육과정" : "소인수"} 순증 · 1반으로 계산(다르면 직접 입력)`;
+        item.basis = `${entry.kind === "공동" ? "공동교육과정" : "소인수"}${netIncrease ? " 순증" : ""} · 따로 신청 · 확인 필요(1반으로 계산, 따로 받은 신청 결과로 개설반 입력)`;
       } else if (grade === "1") {
         item.autoClasses = 0;
         item.basis = "1학년 선택과목 · 개설반 직접 입력";
@@ -622,7 +629,8 @@ function computeHoursStats(year = hoursTargetYear()) {
       const override = hoursNumber(settings.classOverrides[item.key], { integer: true, max: 99 });
       item.classes = override ?? item.autoClasses;
       item.manual = override !== null;
-      if (item.manual) item.basis = `직접 입력 (자동 ${item.autoClasses})`;
+      if (item.manual) item.basis = item.separate ? `따로 신청 · 직접 입력 ${item.classes}반${item.classes ? "" : "(미개설)"}` : `직접 입력 (자동 ${item.autoClasses})`;
+      if (item.separate && !item.manual) separatePending.push(item);
       const departmentOverride = settings.departmentOverrides[normalizeResultCourseName(item.subject)];
       item.defaultDepartment = hoursDefaultDepartment(item.subject, item.area);
       item.department = HOURS_DEPARTMENTS.some((department) => department.id === departmentOverride) || hoursNonTeachingId(departmentOverride)
@@ -635,6 +643,10 @@ function computeHoursStats(year = hoursTargetYear()) {
     if (unused.length) {
       issues.push({ level: "warning", text: `현 ${currentGrade}학년 ${info.source.round}차 결과 중 ${cohortYear}학년도 입학생 편제표의 ${grade}학년 과목과 맞지 않는 과목이 있습니다(시수 미반영): ${resultExampleList(unused.map((row) => `${row.displayName || row.name}${row.semester ? `(${row.semester}학기)` : ""}`))}` });
     }
+  }
+  if (separatePending.length) {
+    const names = separatePending.map((item) => `${item.subject}(${item.grade}-${item.semester})`);
+    issues.push({ level: "warning", separate: true, text: `소인수·공동 ${separatePending.length}과목: 따로 받은 신청 결과로 개설반을 넣으세요(입력 전에는 1반으로 계산, 0 = 미개설): ${names.join(", ")}` });
   }
   for (const info of grades) info.label = hoursGradeLabel(info);
   for (const item of items) {
@@ -1106,7 +1118,7 @@ function renderHoursStatsView() {
       <td><select data-hours-department="${escapeHtml(normalizeResultCourseName(item.subject))}" data-default-department="${item.defaultDepartment}" data-focus-key="dept-${escapeHtml(item.key)}" aria-label="${escapeHtml(item.subject)} 담당 교과">${departmentOptions(item.department)}</select></td>
       <td>${hoursFormat(item.credit)}</td>
       <td>${item.enrollment ?? ""}</td>
-      <td><input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-hours-auto="${item.autoClasses}" data-focus-key="detail-item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반"></td>
+      <td><input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-hours-auto="${item.autoClasses}"${item.separate ? ' data-hours-separate="1"' : ""} data-focus-key="detail-item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반"></td>
       <td>${item.hours}</td>
       <td>${escapeHtml(item.sourceRound)}</td>
       <td class="closure-subject hours-note">${escapeHtml(item.basis)}</td>
@@ -1233,9 +1245,11 @@ function updateHoursSetting(target) {
   else if (target.dataset.hoursPrevious) set(settings.previousAverages, target.dataset.hoursPrevious, hoursNumber(target.value, { max: 100 }));
   else if (target.dataset.hoursItemClasses) {
     // 자동 값과 같게 적거나 비우면 직접 입력을 지운다(시수표 칸은 자동 값을 미리 채워 보인다).
+    // 따로 신청(소인수·공동) 과목은 1반이 자동 값과 같아도 '따로 받은 결과로 넣음'이므로 남긴다(비우면 지움).
     const value = hoursNumber(target.value, { integer: true, max: 99 });
     const auto = hoursNumber(target.dataset.hoursAuto, { integer: true, max: 99 });
-    set(settings.classOverrides, target.dataset.hoursItemClasses, value !== null && value === auto ? null : value);
+    const keep = target.dataset.hoursSeparate === "1";
+    set(settings.classOverrides, target.dataset.hoursItemClasses, value !== null && value === auto && !keep ? null : value);
   }
   else if (target.dataset.hoursDepartment) {
     set(settings.departmentOverrides, target.dataset.hoursDepartment,
@@ -1529,13 +1543,17 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
             if (!item) return;
             const column = 3 + gradeIndex * 4;
             const credit = `${L(column + 1)}${row}`, classes = `${L(column + 2)}${row}`;
-            put(row, column, { v: item.subject, k: String(item.subject).length > 9 ? "subjectSmall" : "subject" });
+            // 따로 신청(소인수·공동) 과목: 칸 구조·값은 그대로, 화면에만 작은 표시(tag)를 붙인다(엑셀은 '확인 필요' 시트로 알림).
+            put(row, column, { v: item.subject, k: String(item.subject).length > 9 ? "subjectSmall" : "subject",
+              ...(item.separate ? { tag: item.manual ? "따로 신청" : "따로 신청 · 확인 필요", tagPending: !item.manual } : {}) });
             put(row, column + 1, { v: item.credit, k: "cell" });
             put(row, column + 2, {
               v: item.classes, k: item.kind !== "지정" && item.grade !== "1" ? "cellRed" : "cell", item,
-              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
+              // 따로 신청 과목은 입력 전에는 칸을 비워(흐린 1) 두어 1을 적어도 '입력함'으로 남게 한다.
+              input: { type: "number", value: item.separate && !item.manual ? "" : item.classes, cls: `${item.manual ? " is-manual" : ""}${item.classes === 0 ? " is-zero" : ""}${item.separate ? ` is-separate${item.manual ? "" : " is-separate-pending"}` : ""}`, title: item.basis,
                 attrs: { "data-hours-item-classes": item.key, "data-hours-auto": item.autoClasses, "data-focus-key": `item-${item.key}`, min: 0, max: 99, step: 1,
-                  "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반` } }
+                  ...(item.separate ? { "data-hours-separate": "1", placeholder: item.autoClasses } : {}),
+                  "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반${item.separate ? item.manual ? " (따로 신청)" : " (따로 신청 · 확인 필요)" : ""}` } }
             });
             put(row, column + 3, { v: item.hours || "", f: `IF(PRODUCT(${credit},${classes})=0,"",PRODUCT(${credit},${classes}))`, k: "cell" });
             rowHours += item.hours;
@@ -1766,8 +1784,12 @@ function hoursFormHtml(model) {
         content = `<div class="hf-memo-fixed">${escapeHtml(cell.memo.fixed)}</div>
           <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="예시) ◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 — 전년도·올해 교사 수를 넣으면 자동으로 적습니다">${escapeHtml(cell.memo.changes)}</textarea>
           ${cell.memo.edited ? '<button class="button button-quiet hf-memo-reset" type="button" data-hours-action="reset-memo">자동 문구로</button>' : ""}`;
-      } else if (cell?.input) content = input(cell.input);
+      } else if (cell?.input) {
+        content = input(cell.input);
+      }
       else content = escapeHtml(hoursFormDisplay(cell));
+      // 소인수·공동교육과정(따로 신청): 칸 구조는 그대로 두고 과목명 칸 안에 작은 표시만 붙인다.
+      if (cell?.tag) content += `<span class="hf-separate-tag${cell.tagPending ? " is-pending" : ""}">${escapeHtml(cell.tag)}</span>`;
       html += `<td${span} class="hf-${kind}${sides.l || sides.r || sides.t || sides.b ? ` ${sideClass(sides)}` : ""}">${content}</td>`;
     }
     const rowClass = row <= 2 ? " hf-title-row" : row === 3 ? " hf-head-row hf-head-top" : row === 4 ? " hf-head-row hf-head-bottom" : model.summaryRows.includes(row) ? " hf-summary-row" : "";

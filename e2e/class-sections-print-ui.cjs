@@ -145,6 +145,54 @@ function attendanceInfo(sheet) {
   }
 
   // ④ 블록표 엑셀 교실 열
+  // ③-2 교실이 모자랄 때(사용자 결정: 교사가 고름): 2학년 교실 수를 줄이면 '교실 선택 필요' + 후보, 고르면 겹침 0, 경고 줄
+  console.log("▶ 교실 부족 → 교사가 고르기");
+  await page.getByRole("button", { name: "교사·시간 설정" }).click(); await sleep(300);
+  const gradeOfGroup = (await page.locator(`[data-cs-group="${groupKeys[0]}"]`).innerText()).match(/→\s*(\d)학년/)?.[1] || "2";
+  const countBox = page.getByLabel(`${gradeOfGroup}학년 교실 수`);
+  const before = await countBox.inputValue();
+  const perBlockMax = Math.max(0, ...(await page.locator(".cs-blocks .cs-block").evaluateAll((els) => els.map((el) => el.querySelectorAll("li.cs-section").length))));
+  await countBox.fill("5"); await countBox.press("Tab"); await sleep(400);
+  await page.getByLabel("학년 교실이 모자랄 때 쓸 다른 교실(쉼표로 구분)").fill("다목적실, 세미나실"); await page.getByLabel("학년 교실이 모자랄 때 쓸 다른 교실(쉼표로 구분)").press("Tab"); await sleep(400);
+  await page.getByRole("button", { name: "닫기" }).first().click(); await sleep(600);
+  const choose = page.locator(".cs-room.is-choose");
+  const chooseCount = await choose.count();
+  report.checks.roomChoose = { perBlockMax, chooseCount };
+  check(chooseCount > 0, `교실 5개로 줄이면 '교실 선택 필요' 분반 ${chooseCount}개(자동 배정 안 함)`);
+  const autoExtra = await page.locator(".cs-room:not(.is-choose)").evaluateAll((els) => els.filter((el) => ["다목적실", "세미나실"].includes(el.dataset.roomId)).length);
+  check(autoExtra === 0, "다른 교실(다목적실·세미나실)은 자동으로 들어가지 않음", { autoExtra });
+  const warnBox = page.locator("#classSectionsOutputWarnings li[data-type=room]");
+  check(/교실을 고르지 않은 분반 \d+개/.test(await warnBox.innerText().catch(() => "")), "출력물 위 경고 '교실을 고르지 않은 분반 n개'");
+  const teacherWarn = await page.locator("#classSectionsOutputWarnings li[data-type=teacher]").innerText().catch(() => "");
+  report.checks.teacherWarning = teacherWarn;
+  check(/실제 이름이 없는 교사 \d+명/.test(teacherWarn), "자리 이름 교사 경고(class-sections-teachers.js) 표시", teacherWarn.slice(0, 120));
+  const firstChoose = choose.first();
+  const chooseOptions = await firstChoose.locator("select option").allInnerTexts();
+  check(chooseOptions.some((text) => /\(추천\)/.test(text)) && chooseOptions[1]?.includes("(추천)"), "후보 첫 줄에 '(추천)'", chooseOptions.slice(0, 4));
+  await shot("11-room-choose.png", page.locator(".cs-blocks"));
+  // 블록표 엑셀을 누르면 상태 줄 끝에 경고(막지 않음)
+  const warnDl = await save(() => page.getByRole("button", { name: "블록표 엑셀" }).first().click(), "blocks-warn.xlsx");
+  await sleep(300);
+  check(/교실을 고르지 않은 분반/.test(await page.locator("#classSectionsStatus").innerText()) && fs.existsSync(warnDl.file), "블록표 엑셀은 내려받고 상태 줄에 경고");
+  // 남은 분반을 모두 추천 교실로 고르기 → 오류 0, 경고 없음
+  for (let guard = 0; guard < 80 && await page.locator(".cs-room.is-choose").count(); guard += 1) {
+    const box = page.locator(".cs-room.is-choose").first();
+    const select = box.locator("select");
+    const value = await select.evaluate((el) => [...el.options].find((o) => /\(추천\)/.test(o.textContent))?.value || el.options[1]?.value || "");
+    if (!value) { await box.locator("input").fill(`임시교실${guard + 1}`); await box.locator("input").press("Tab"); }
+    else await select.selectOption(value);
+    await sleep(350);
+  }
+  const errorsAfter = Number(await page.locator("#classSectionsRoomSummary").getAttribute("data-errors"));
+  check(await page.locator(".cs-room.is-choose").count() === 0 && errorsAfter === 0, "추천 교실을 모두 고르면 교실 선택 필요 0·교실 오류(겹침) 0", { errorsAfter });
+  check(await page.locator("#classSectionsOutputWarnings li[data-type=room]").count() === 0, "고른 뒤 교실 경고 없음");
+  // 되돌리기: 교실 수 원래대로, 다른 교실 비우기, 직접 고른 교실 지우기
+  await page.getByRole("button", { name: "교실 자동으로 되돌리기" }).click().catch(() => {}); await sleep(400);
+  await page.getByRole("button", { name: "교사·시간 설정" }).click(); await sleep(300);
+  await countBox.fill(before); await countBox.press("Tab"); await sleep(300);
+  await page.getByLabel("학년 교실이 모자랄 때 쓸 다른 교실(쉼표로 구분)").fill(""); await page.getByLabel("학년 교실이 모자랄 때 쓸 다른 교실(쉼표로 구분)").press("Tab"); await sleep(300);
+  await page.getByRole("button", { name: "닫기" }).first().click(); await sleep(600);
+
   console.log("▶ 블록표 엑셀");
   const blocksFile = await save(() => page.getByRole("button", { name: "블록표 엑셀" }).first().click(), "blocks.xlsx");
   const blockSheet = readXlsxAll(blocksFile.file)[0];
@@ -304,11 +352,20 @@ function attendanceInfo(sheet) {
   if (await preview.count()) {
     const text = await preview.innerText();
     report.checks.preview = text.slice(0, 400);
-    check(new RegExp(`학년도 [12]학기 · 현 ${grade}학년 → ${Number(grade) + 1}학년`).test(text), "미리 보기 제목에 '현 N학년 → N+1학년'", text.slice(0, 120));
+    check(new RegExp(`학년도 · 현 ${grade}학년 → ${Number(grade) + 1}학년 이동수업 시간표`).test(text), "미리 보기 제목 'YYYY학년도 · 현 N학년 → N+1학년'", text.slice(0, 120));
+    const sems = await preview.locator(".cs-tt-sem").evaluateAll((els) => els.map((el) => el.dataset.semester));
+    check(sems.join(",") === "1,2", "미리 보기에 1학기·2학기 두 칸", sems);
     check((await preview.locator("td[data-kind=move]").count()) > 0 || /블록:/.test(text), "이동 수업 칸(또는 목록)이 있음");
     await shot("04-timetable-preview.png", preview);
   }
   await page.getByLabel("학생 시간표 인쇄할 반(현 반)").selectOption("1"); await sleep(200);
+  check(await page.getByLabel("한 장에 학생 수").inputValue() === "1", "한 장에 학생 수 기본 1명");
+  const printsOne = await page.evaluate(() => window.__prints);
+  await page.getByRole("button", { name: "학생 시간표 인쇄" }).click(); await sleep(800);
+  const onePer = await page.evaluate(() => ({ pages: document.querySelectorAll("#printBatch .cs-tt-page").length, students: document.querySelectorAll("#printBatch .cs-tt").length }));
+  const onePdf2 = await page.pdf({ path: path.join(OUT, "05-timetable-print-1.pdf"), format: "A4", preferCSSPageSize: true });
+  const onePdfPages = (onePdf2.toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length;
+  check(await page.evaluate(() => window.__prints) === printsOne + 1 && onePer.pages === onePer.students && onePdfPages === onePer.students, `한 장에 1명: 학생 ${onePer.students}명 = PDF ${onePdfPages}쪽(1·2학기 한 장)`, onePer);
   await page.getByLabel("한 장에 학생 수").selectOption("2"); await sleep(500);
   const printsBefore = await page.evaluate(() => window.__prints);
   await page.getByRole("button", { name: "학생 시간표 인쇄" }).click(); await sleep(800);

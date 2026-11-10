@@ -4,7 +4,7 @@
 // 위쪽은 순수 계산(DOM·state 없음, 테스트에서 vm으로 올림) → `// ---- 앱 연결 ----` 아래 화면 연결.
 // 개인정보: 저장하는 것은 교실 직접 고른 값(분반 id → 교실 이름)과 출력 설정뿐. 성명은 내보낼 때 차수 자료에서 읽어 파일·인쇄에만 쓴다.
 
-var CLASS_SECTIONS_PRINT_DEFAULTS = { attendanceDays: 17, timetableFill: "", perPage: 2 };
+var CLASS_SECTIONS_PRINT_DEFAULTS = { attendanceDays: 17, timetableFill: "", perPage: 1 };
 
 function classSectionsPrintText(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -369,8 +369,34 @@ function classSectionsStudentTimetable(info) {
   return { title, student, days, periods, grid, untimed, unitCourses: (info.unitCourses || []).slice(), retake: (info.retake || []).slice() };
 }
 
-// 시간표 하나 HTML(화면 미리 보기·인쇄 공용).
+// 1·2학기를 한 장에(사용자 결정): 학기마다 classSectionsStudentTimetable 모델을 받아 한 학생 모델로.
+// 제목 '2027학년도 · 현 1학년 → 2학년 이동수업 시간표', 학기마다 격자(블록 시간이 없으면 그 학기는 목록).
+function classSectionsStudentTimetableYear(models, info = {}) {
+  const first = models[0] || {};
+  return { title: `${info.year}학년도 · 현 ${info.grade}학년 → ${info.targetGrade}학년 이동수업 시간표`, student: first.student || info.student || "",
+    semesters: models.map((model, i) => ({ ...model, semester: String(info.semesters?.[i] ?? model.semester ?? i + 1) })),
+    retake: models.flatMap((model, i) => model.retake.map((item) => ({ ...item, semester: String(info.semesters?.[i] ?? i + 1) }))) };
+}
+
+function classSectionsTimetableSemesterHtml(model) {
+  const esc = classSectionsPrintEsc;
+  const grid = model.grid ? `<table class="cs-tt-grid"><thead><tr><th></th>${model.days.map((day) => `<th scope="col">${esc(day)}</th>`).join("")}</tr></thead><tbody>
+    ${model.grid.map((row, p) => `<tr><th scope="row">${p + 1}</th>${row.map((cell) => `<td data-kind="${cell.kind}">${cell.block ? `<small>${esc(cell.block)}</small>` : ""}${cell.lines.map((line) => `<span>${esc(line)}</span>`).join("")}</td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
+  const list = model.untimed.length ? `<ul class="cs-tt-list">${model.untimed.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
+  const unit = model.unitCourses.length ? `<p class="cs-tt-unit">학급 단위 과목: ${model.unitCourses.map(esc).join(", ")}</p>` : "";
+  const empty = !model.grid && !model.untimed.length ? '<p class="cs-tt-unit">이 학기 이동 수업 배정이 없습니다.</p>' : "";
+  return `${grid}${list}${unit}${empty}`;
+}
+
+// 시간표 하나 HTML(화면 미리 보기·인쇄 공용). 두 학기 모델(semesters)이면 학기마다 격자를 위아래로.
 function classSectionsTimetableHtml(model) {
+  if (model.semesters) {
+    const esc = classSectionsPrintEsc;
+    const retake = model.retake.length
+      ? `<p class="cs-tt-retake" data-retake="${model.retake.length}">재신청 필요: ${model.retake.map((item) => esc(`${item.semester}학기 ${item.courseName}${item.reason ? `(${item.reason})` : ""}`)).join(", ")}</p>` : "";
+    return `<article class="cs-tt cs-tt-year" data-student="${esc(model.student.split(" ")[0])}" data-semesters="${model.semesters.length}"><header><h4>${esc(model.title)}</h4><p>${esc(model.student)}</p></header>${retake}
+      ${model.semesters.map((item) => `<section class="cs-tt-sem" data-semester="${esc(item.semester)}"><h5>${esc(item.semester)}학기</h5>${classSectionsTimetableSemesterHtml(item)}</section>`).join("")}</article>`;
+  }
   const esc = classSectionsPrintEsc;
   const retake = model.retake.length
     ? `<p class="cs-tt-retake" data-retake="${model.retake.length}">재신청 필요: ${model.retake.map((item) => esc(`${item.courseName}${item.reason ? `(${item.reason})` : ""}`)).join(", ")}</p>` : "";
@@ -387,9 +413,29 @@ function classSectionsTimetableSheet(name, models) {
   const rows = [];
   const merges = [];
   const heights = [];
-  const width = 1 + Math.max(5, ...models.map((model) => model.days.length));
+  const width = 1 + Math.max(5, ...models.flatMap((model) => (model.semesters || [model]).map((item) => item.days.length)));
   const last = classSectionsPrintColumn(width - 1);
-  for (const model of models) {
+  // 두 학기 모델: 학생 제목 한 번 + 학기마다 '1학기' 줄과 격자.
+  for (const year of models.filter((model) => model.semesters)) {
+    rows.push([{ v: year.title, s: 6 }]); merges.push(`A${rows.length}:${last}${rows.length}`);
+    rows.push([{ v: year.student, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`);
+    if (year.retake.length) { rows.push([{ v: `재신청 필요: ${year.retake.map((item) => `${item.semester}학기 ${item.courseName}${item.reason ? `(${item.reason})` : ""}`).join(", ")}`, s: 9 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
+    for (const model of year.semesters) {
+      rows.push([{ v: `${model.semester}학기`, s: 2 }]); merges.push(`A${rows.length}:${last}${rows.length}`);
+      if (model.grid) {
+        rows.push([{ v: "교시", s: 2 }, ...model.days.map((day) => ({ v: day, s: 2 }))]);
+        model.grid.forEach((row, p) => {
+          rows.push([{ v: p + 1, s: 2 }, ...row.map((cell) => ({ v: [cell.block ? `[${cell.block}]` : "", ...cell.lines].filter(Boolean).join("\n"), s: cell.kind === "clash" ? 9 : 4 }))]);
+          heights[rows.length - 1] = 42;
+        });
+      }
+      for (const line of model.untimed) { rows.push([{ v: line, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
+      if (model.unitCourses.length) { rows.push([{ v: `학급 단위 과목: ${model.unitCourses.join(", ")}`, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
+      if (!model.grid && !model.untimed.length) { rows.push([{ v: "이 학기 이동 수업 배정이 없습니다.", s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
+    }
+    rows.push([]);
+  }
+  for (const model of models.filter((item) => !item.semesters)) {
     rows.push([{ v: model.title, s: 6 }]); merges.push(`A${rows.length}:${last}${rows.length}`);
     rows.push([{ v: model.student, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`);
     if (model.retake.length) { rows.push([{ v: `재신청 필요: ${model.retake.map((item) => `${item.courseName}${item.reason ? `(${item.reason})` : ""}`).join(", ")}`, s: 9 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
@@ -509,11 +555,66 @@ function classSectionsRoomCardHtml(round, group, section) {
   if (!plan) return "";
   const entry = typeof classSectionsEntry === "function" ? classSectionsEntry(round, group.key, false) : null;
   const pinned = entry?.sectionResult?.roomPins?.[section.id] || "";
-  const clash = (plan.issues || []).some((issue) => issue.severity === "error" && ((issue.groupId === group.key && (issue.sectionId === section.id || (issue.sectionIds || []).includes(section.id))) || (issue.otherGroupId === group.key && issue.otherSectionId === section.id)));
-  const usable = plan.rooms.filter((item) => item.kind !== "class" || item.grade === group.targetGrade);
+  const clash = (plan.issues || []).some((issue) => issue.severity === "error" && issue.type !== "room-short" && ((issue.groupId === group.key && (issue.sectionId === section.id || (issue.sectionIds || []).includes(section.id))) || (issue.otherGroupId === group.key && issue.otherSectionId === section.id)));
+  const choices = plan.choices?.[group.key]?.[section.id];
+  // 학년 교실이 모자라 교실을 못 정한 분반: 교사가 고른다(후보 = 그 시간에 비어 있는 다른 교실 → 다른 학년 교실 → 특별실, 첫 후보 '추천').
+  if (!roomId && choices) {
+    const kindLabel = { extra: "다른 교실", "other-grade": "다른 학년 교실", special: "특별실", class: "학년 교실" };
+    const options = choices.map((item) => `<option value="${esc(item.id)}">${esc(`${item.label}${item.recommended ? " (추천)" : ""} · ${kindLabel[item.kind] || item.kind}`)}</option>`).join("");
+    return `<span class="cs-room is-choose" data-room-id="" data-choose="${choices.length}" title="${esc(reason || "")}">교실 선택 필요 <select data-cs-room-pick="${esc(section.id)}" data-focus-key="cs-room-pick-${esc(section.id)}" aria-label="${esc(section.roomName)} 교실">
+      <option value="">고르세요 (${choices.length ? `후보 ${choices.length}개` : "빈 교실 없음"})</option>${options}</select>
+      <input class="cs-text" type="text" placeholder="새 교실 이름" data-cs-room-new="${esc(section.id)}" data-focus-key="cs-room-new-${esc(section.id)}" aria-label="${esc(section.roomName)} 새 교실 이름(다른 교실 목록에 추가)"></span>`;
+  }
+  const usable = plan.rooms.filter((item) => item.kind !== "class" || item.grade === group.targetGrade || item.id === pinned);
   const options = usable.map((item) => `<option value="${esc(item.id)}"${pinned === item.id ? " selected" : ""}>${esc(item.label)}</option>`).join("");
   return `<span class="cs-room${clash ? " is-clash" : ""}" data-room-id="${esc(roomId)}" title="${esc(reason || "")}">교실 <select data-cs-room-pick="${esc(section.id)}" data-focus-key="cs-room-pick-${esc(section.id)}" aria-label="${esc(section.roomName)} 교실">
     <option value="">${pinned ? "자동으로 되돌리기" : room ? `자동(${esc(room.label)})` : "자동(미정)"}</option>${options}</select></span>`;
+}
+
+// 내보내기·인쇄 전에 보일 경고: 교실을 고르지 않은 분반(같은 학기 모든 그룹), 자리 이름 교사(6단계 세션 classSectionsTeacherNameWarnings).
+function classSectionsOutputWarnings(round, group) {
+  const out = [];
+  const plan = classSectionsRoomPlan(round, group.semester);
+  if (plan) {
+    let total = 0;
+    let mine = 0;
+    for (const item of plan.groups) for (const section of item.sections) {
+      if (plan.assign?.[item.groupId]?.[section.id]) continue;
+      total += 1;
+      if (item.groupId === group.key) mine += 1;
+    }
+    if (total) out.push({ type: "room", count: total, message: `교실을 고르지 않은 분반 ${total}개${mine !== total ? `(이 그룹 ${mine}개)` : ""} — 분반 카드에서 교실을 고르세요(출석부·시간표에는 '미정'으로 나옵니다).` });
+  }
+  if (typeof classSectionsTeacherNameWarnings === "function") {
+    let list = [];
+    try { list = classSectionsTeacherNameWarnings() || []; } catch { list = []; }
+    if (!Array.isArray(list)) list = list.teachers || [];
+    // class-sections-teachers.js는 안내 문장 배열을 돌려준다(그대로 보임). 교사 객체 배열이면 이름을 모아 한 문장으로.
+    const sentences = list.filter((item) => typeof item === "string" && item.trim());
+    for (const message of sentences) out.push({ type: "teacher", count: Number(message.match(/(\d+)명/)?.[1]) || 1, message });
+    const objects = list.filter((item) => item && typeof item === "object");
+    const names = objects.map((item) => item.name || item.alias || item.label || "").filter(Boolean);
+    if (objects.length) out.push({ type: "teacher", count: objects.length, message: `실제 이름이 아닌 교사 ${objects.length}명(${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}) — 교사 명단을 올리거나 이름을 고치세요.` });
+  }
+  return out;
+}
+
+function classSectionsOutputWarningsHtml(round, group) {
+  const list = classSectionsOutputWarnings(round, group);
+  if (!list.length) return "";
+  return `<ul class="cs-list is-error" id="classSectionsOutputWarnings" data-count="${list.length}">${list.map((item) => `<li data-type="${item.type}">${classSectionsPrintEsc(item.message)}</li>`).join("")}</ul>`;
+}
+
+// 내보내기·인쇄 상태 줄 끝에 경고를 붙인다(막지는 않음).
+function classSectionsWarnAfterOutput() {
+  if (CLASS_SECTIONS_PRINT_VIEW.busy) return void setTimeout(classSectionsWarnAfterOutput, 100); // zip 만드는 중이면 끝난 뒤
+  const context = classSectionsCurrent();
+  if (!context?.group) return;
+  const list = classSectionsOutputWarnings(context.round, context.group);
+  if (!list.length) return;
+  const box = typeof document !== "undefined" ? document.getElementById("classSectionsStatus") : null;
+  const before = box?.textContent || CLASS_SECTIONS_VIEW.status?.text || "";
+  classSectionsSetStatus(`${before ? `${before} ` : ""}⚠ ${list.map((item) => item.message).join(" ")}`, true);
 }
 
 // 블록 아래 교실 배정 요약: 이 그룹 관련 오류·확인, 내년 반을 모를 때 안내.
@@ -541,7 +642,7 @@ function classSectionsPrintButtonsHtml(round, group, result) {
   if (!result?.sections?.length) return "";
   const homerooms = [...new Set((group.gradeStudents || group.students).map((student) => student.homeroom))].sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
   const fill = classSectionsPrintOption("timetableFill");
-  const perPage = Number(classSectionsPrintOption("perPage")) || 2;
+  const perPage = Math.min(2, Number(classSectionsPrintOption("perPage")) || 1);
   const query = (typeof CLASS_SECTIONS_VIEW !== "undefined" ? CLASS_SECTIONS_VIEW.search || "" : "").trim();
   let preview = "";
   if (query) {
@@ -553,6 +654,7 @@ function classSectionsPrintButtonsHtml(round, group, result) {
   }
   return `<section class="cs-print" aria-label="출력물">
     <h5>출력물 <span class="cs-note">출석부·학생 시간표 (성명은 내려받을 때 차수 자료에서 채움, 저장하지 않음)</span></h5>
+    ${classSectionsOutputWarningsHtml(round, group)}
     <div class="cs-actions">
       <span class="cs-note">출석부 저장(${esc(group.semester)}학기):</span>
       <button class="button" id="classSectionsAttendanceFile" type="button" title="${esc(group.semester)}학기 모든 그룹·분반을 한 엑셀에(맨 앞 '목록' 시트 + 분반마다 시트)">출석부 전체 파일</button>
@@ -566,11 +668,11 @@ function classSectionsPrintButtonsHtml(round, group, result) {
     ${classSectionsAttendanceViewHtml(round, group)}
     <div class="cs-actions">
       <label>시간표 반 <select id="classSectionsTimetableClass" data-focus-key="cs-tt-class" aria-label="학생 시간표 인쇄할 반(현 반)"><option value="">전체</option>${homerooms.map((room) => `<option value="${esc(room)}"${CLASS_SECTIONS_PRINT_VIEW.timetableClass === room ? " selected" : ""}>현 ${esc(group.grade)}학년 ${esc(room)}반</option>`).join("")}</select></label>
-      <label>한 장에 <select id="classSectionsTimetablePerPage" data-focus-key="cs-tt-per" aria-label="한 장에 학생 수">${[2, 3, 4].map((n) => `<option value="${n}"${perPage === n ? " selected" : ""}>${n}명</option>`).join("")}</select></label>
+      <label>한 장에 <select id="classSectionsTimetablePerPage" data-focus-key="cs-tt-per" aria-label="한 장에 학생 수">${[1, 2].map((n) => `<option value="${n}"${perPage === n ? " selected" : ""}>${n}명</option>`).join("")}</select></label>
       <label>빈 칸 <select id="classSectionsTimetableFill" data-focus-key="cs-tt-fill" aria-label="이동 수업이 아닌 칸에 쓸 글자"><option value=""${fill ? "" : " selected"}>비움</option><option value="학급 수업"${fill === "학급 수업" ? " selected" : ""}>학급 수업</option></select></label>
       <button class="button" id="classSectionsTimetablePrint" type="button">학생 시간표 인쇄</button>
       <button class="button" id="classSectionsTimetableExcel" type="button">학생 시간표 엑셀</button>
-      <span class="cs-note">현 ${esc(group.grade)}학년 ${esc(group.semester)}학기 모든 그룹을 합친 학생별 시간표 · 학생 찾기에 '${esc(group.grade)}-3-12'처럼 넣으면 미리 보기</span>
+      <span class="cs-note">현 ${esc(group.grade)}학년 1·2학기를 한 장에(학기마다 그 학기 모든 그룹을 합친 격자) · 학생 찾기에 '${esc(group.grade)}-3-12'처럼 넣으면 미리 보기</span>
     </div>
     ${preview}
   </section>`;
@@ -594,7 +696,7 @@ function classSectionsSemesterGroups(round, grade, semester) {
 
 function classSectionsTimetableStudentKeys(round, group) {
   const keys = new Set();
-  for (const { group: item } of classSectionsSemesterGroups(round, group.grade, group.semester)) for (const student of item.students) keys.add(student.key);
+  for (const semester of ["1", "2"]) for (const { group: item } of classSectionsSemesterGroups(round, group.grade, semester)) for (const student of item.students) keys.add(student.key);
   return [...keys].sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
 }
 
@@ -611,11 +713,23 @@ function classSectionsPrintFixedSlots(settings) {
   return (settings.fixedSlots || []).map((slot) => ({ label: slot.label || "고정", times: typeof classSectionsParseTimes === "function" ? classSectionsParseTimes(slot.times) : [] })).filter((slot) => slot.times.length);
 }
 
+// 학생마다 1·2학기를 한 모델로(계산 결과가 있는 학기만). 학기 하나만 있으면 그 학기만.
+function classSectionsTimetableSemesters(round, group) {
+  return ["1", "2"].filter((semester) => classSectionsSemesterGroups(round, group.grade, semester).length);
+}
+
 function classSectionsTimetableModels(round, group, keys) {
+  const semesters = classSectionsTimetableSemesters(round, group);
+  const bySemester = semesters.map((semester) => classSectionsTimetableSemesterModels(round, group, keys, semester));
+  const year = classSectionsPrintYear();
+  return keys.map((key, i) => classSectionsStudentTimetableYear(bySemester.map((models) => models[i]), { year, grade: group.grade, targetGrade: group.targetGrade, semesters }));
+}
+
+function classSectionsTimetableSemesterModels(round, group, keys, semester = group.semester) {
   const settings = classSectionsPrintSettings();
   const names = typeof classSectionsStudentNames === "function" ? classSectionsStudentNames(round) : new Map();
   const teacherName = classSectionsTeacherNames();
-  const groups = classSectionsSemesterGroups(round, group.grade, group.semester);
+  const groups = classSectionsSemesterGroups(round, group.grade, semester);
   const days = String(settings.gridDays || "월,화,수,목,금").split(/[,\s]+/).filter(Boolean);
   const fixedSlots = classSectionsPrintFixedSlots(settings);
   const effective = typeof classSectionsEffectiveClassMap === "function" ? classSectionsEffectiveClassMap(group) : { map: null };
@@ -650,7 +764,7 @@ function classSectionsTimetableModels(round, group, keys) {
       }
     }
     entries.sort((a, b) => a.blockLetter.localeCompare(b.blockLetter) || a.groupLabel.localeCompare(b.groupLabel, "ko"));
-    return classSectionsStudentTimetable({ year, semester: group.semester, grade: group.grade, targetGrade: group.targetGrade, key, name: names.get(key) || "",
+    return classSectionsStudentTimetable({ year, semester, grade: group.grade, targetGrade: group.targetGrade, key, name: names.get(key) || "",
       nextClass: effective.map?.[key]?.classroom || "", nextNumber: effective.map?.[key]?.number || "", days, periods: Number(settings.gridPeriods) || 7,
       fill: classSectionsPrintOption("timetableFill"), fixedSlots, entries, unitCourses, retake });
   });
@@ -667,7 +781,7 @@ function classSectionsTimetablePrint() {
   const keys = classSectionsTimetableKeysFor(context.round, context.group);
   const target = document.getElementById("printBatch");
   if (!keys.length || !target) return void classSectionsSetStatus("인쇄할 학생이 없습니다(계산 결과가 있는 그룹의 학생만).", true);
-  const perPage = Number(classSectionsPrintOption("perPage")) || 2;
+  const perPage = Math.min(2, Number(classSectionsPrintOption("perPage")) || 1);
   const models = classSectionsTimetableModels(context.round, context.group, keys);
   const pages = [];
   for (let i = 0; i < models.length; i += perPage) pages.push(models.slice(i, i + perPage));
@@ -686,7 +800,7 @@ function classSectionsTimetableExcel() {
   models.forEach((model, index) => { const room = keys[index].split("-")[1]; if (!byClass.has(room)) byClass.set(room, []); byClass.get(room).push(model); });
   const sheets = [...byClass.entries()].sort((a, b) => (Number(a[0]) || 0) - (Number(b[0]) || 0)).map(([room, list]) => classSectionsTimetableSheet(`현${context.group.grade}-${room}반`, list));
   const year = classSectionsPrintYear();
-  downloadBlob(createWorkbookBlob(sheets), `${year}_${context.group.semester}학기_현${context.group.grade}학년${CLASS_SECTIONS_PRINT_VIEW.timetableClass ? `_${CLASS_SECTIONS_PRINT_VIEW.timetableClass}반` : ""}_학생시간표.xlsx`);
+  downloadBlob(createWorkbookBlob(sheets), `${year}_현${context.group.grade}학년${CLASS_SECTIONS_PRINT_VIEW.timetableClass ? `_${CLASS_SECTIONS_PRINT_VIEW.timetableClass}반` : ""}_학생시간표.xlsx`);
   classSectionsSetStatus(`학생 시간표 엑셀: ${models.length}명, 반별 시트 ${sheets.length}개.`);
 }
 
@@ -1017,7 +1131,16 @@ function classSectionsRoomSettingsEvent(event) {
 function classSectionsPrintHandleChange(event) {
   const target = event.target;
   const s = classSectionsPrintSettings();
-  if (target.dataset?.csRoomPick !== undefined) {
+  if (target.dataset?.csRoomNew !== undefined) {
+    const name = target.value.trim();
+    const result = classSectionsCurrent()?.entry?.sectionResult;
+    if (!name || !result) return;
+    const extras = classSectionsSplitNames(s.extraRooms);
+    if (!extras.includes(name)) s.extraRooms = [...extras, name].join(", ");
+    if (!result.roomPins || typeof result.roomPins !== "object") result.roomPins = {};
+    result.roomPins[target.dataset.csRoomNew] = name;
+    classSectionsSetStatus(`'${name}' 교실을 다른 교실 목록에 넣고 ${target.dataset.csRoomNew.split("#")[0]} 분반에 배정했습니다.`);
+  } else if (target.dataset?.csRoomPick !== undefined) {
     const context = classSectionsCurrent();
     const result = context?.entry?.sectionResult;
     if (!result) return;
@@ -1037,7 +1160,7 @@ function classSectionsPrintHandleChange(event) {
   else if (target.id === "classSectionsHomeroomPick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsAttendancePick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsAttendanceScope") { CLASS_SECTIONS_PRINT_VIEW.attScope = ["semester", "homeroom"].includes(target.value) ? target.value : "group"; CLASS_SECTIONS_PRINT_VIEW.attPick = ""; return void classSectionsAttendanceRerender(); }
-  else if (target.id === "classSectionsTimetablePerPage") s.print.perPage = [2, 3, 4].includes(Number(target.value)) ? Number(target.value) : 2;
+  else if (target.id === "classSectionsTimetablePerPage") s.print.perPage = [1, 2].includes(Number(target.value)) ? Number(target.value) : 1;
   else if (target.id === "classSectionsTimetableFill") s.print.timetableFill = target.value === "학급 수업" ? "학급 수업" : "";
   else return;
   if (typeof classSectionsChanged === "function") classSectionsChanged();
@@ -1046,6 +1169,10 @@ function classSectionsPrintHandleChange(event) {
 function classSectionsPrintHandleClick(event) {
   const button = event.target.closest?.("button");
   if (!button) return;
+  // 6단계 화면의 블록표·명렬표·나이스 내보내기(class-sections-view.js가 먼저 처리)와 이 파일의 출력물 단추: 끝나면 경고를 상태 줄에 붙인다.
+  if (/^classSections(ExportBlocks|ExportRosters|ExportNeis|Attendance(File|All|Teacher|Group|Homeroom|HomeroomFile|PrintOne|PrintGroup|PrintSemester)|Homeroom(PrintOne|PrintGrade)|Timetable(Print|Excel))$/.test(button.id)) {
+    setTimeout(classSectionsWarnAfterOutput, 0);
+  }
   if (button.id === "classSectionsAttendanceGroup") return void classSectionsAttendanceExport("group");
   if (button.id === "classSectionsAttendanceTeacher") return void classSectionsAttendanceExport("teacher");
   if (button.id === "classSectionsAttendanceAll") return void classSectionsAttendanceExport("sections");
@@ -1086,5 +1213,5 @@ if (typeof document !== "undefined") {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { classSectionsAttendanceSheet, classSectionsAttendanceFileName, classSectionsAttendanceBundles, classSectionsStudentTimetable, classSectionsSheetHtml, classSectionsAttendanceListSheet, classSectionsAttendanceSheetNames, classSectionsHomerooms, classSectionsHomeroomStatusSheet, classSectionsHomeroomAttendanceSheets,
-    classSectionsTimetableHtml, classSectionsTimetableSheet, classSectionsRoomSpecFromSettings };
+    classSectionsTimetableHtml, classSectionsTimetableSheet, classSectionsStudentTimetableYear, classSectionsRoomSpecFromSettings };
 }
