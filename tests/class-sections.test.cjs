@@ -757,3 +757,54 @@ test("partial recompute keeps existing room names; only new sections get the nex
   ctx.classSectionsAssignRoomNames(teacherResult, ["a", "b"], new Map([["p#1", "a물리학2"], ["p#2", "a물리학1"], ["p#3", "b물리학1"]]));
   assert.deepEqual(teacherResult.sections.map((section) => section.roomName), ["a물리학2", "a물리학1", "b물리학1"]);
 });
+
+test("[치명 회귀] 택1 한 과목만 학급 단위로: 그 반 학생은 이동 분반에서 빠져 이중 배정 0, 제안은 반 배분과 이동 반이 함께 성립할 때만 확인됨", () => {
+  const ctx = context();
+  // 내년 11반 × 31명, 택1: 인공지능 기초(정보) 4반분 · 프로그래밍(정보) 3분반 · 일본어(제2외국어) 4분반, 정보 교사 2명 → 정보 7분반이 한 블록에 몰려 부족
+  const students = [];
+  for (let room = 1; room <= 11; room += 1) for (let n = 1; n <= 31; n += 1) {
+    const pick = room <= 4 ? (n <= 26 ? "인공지능 기초" : "일본어") : room <= 7 ? (n <= 20 ? "프로그래밍" : "일본어") : (n <= 6 ? "프로그래밍" : "일본어");
+    students.push({ key: `2-${room}-${n}`, homeroom: String(room), courses: [pick] });
+  }
+  const count = (name) => students.filter((student) => student.courses[0] === name).length;
+  assert.deepEqual([count("인공지능 기초"), count("프로그래밍"), count("일본어")], [104, 84, 153]);
+  const input = { blocks: 1, choose: 1, homeroomCount: 11, maxSectionsPerBlock: 11, defaultCapacity: 35, seed: 1, departmentTeachers: { 정보: 2, 제2외국어: 6 },
+    courses: [{ key: "인공지능 기초", sections: 3, department: "정보" }, { key: "프로그래밍", sections: 3, department: "정보" },
+      { key: "일본어", sections: 5, department: "제2외국어" }], students };
+  const before = plain(ctx.classSectionsSolve(input));
+  assert.equal(before.explain.feasible, false, "정보 교사 부족");
+  const fix = before.explain.suggestions.find((item) => item.type === "class-unit" && item.verified);
+  assert.ok(fix, JSON.stringify(before.explain.suggestions.map((item) => item.message)));
+  assert.match(fix.message, /희망과 다른 학생 \d+명\(\d+%\)/);
+  assert.match(fix.message, /\d+개 반 전원이 그 과목(, 나머지 \d+개 반은 이동)?\)/);
+  assert.doesNotMatch(fix.message, /을\(를\)/, "조사 자동 처리");
+  // 제안 적용(화면과 같은 순서): 반 배분(남는 반은 이동) → 학생 이동 과목 → 풀기
+  const unitKeys = fix.courseKeys;
+  const split = plain(ctx.classSectionsClassUnitSplit({ allowMove: true, homerooms: Array.from({ length: 11 }, (_, i) => ({ id: String(i + 1) })),
+    courses: input.courses.filter((course) => unitKeys.includes(course.key)).map((course) => ({ key: course.key, sections: course.sections })), students }));
+  assert.ok(Object.values(split.assign).some((value) => value === ""), "남는 반은 이동");
+  const moved = plain(ctx.classSectionsClassUnitStudents({ students, choose: 1, unitKeys, byClass: split.assign }));
+  const after = plain(ctx.classSectionsSolve({ ...input, courses: input.courses.map((course) => (unitKeys.includes(course.key) ? { ...course, mode: "class" } : course)),
+    students: moved.students, classUnit: { choose: 1, unitOf: moved.unitOf } }));
+  let doubles = 0;
+  for (const student of students) {
+    const total = (after.assign[student.key] || []).length + (moved.unitOf[student.key] ? 1 : 0);
+    if (total > 1) doubles += 1;
+  }
+  assert.equal(doubles, 0, "한 그룹에서 2과목 이상 배정된 학생 없음");
+  assert.ok(!after.issues.some((issue) => issue.type === "choice-over"));
+  // 남은 미배정은 '이동 반이라 학급 단위 과목을 못 듣는' 학생뿐(재신청 필요, 화면 미배정 표에 사유와 함께)
+  assert.ok(after.unassigned.every((item) => item.reason === "class-unit-other-room"), JSON.stringify(after.unassigned.slice(0, 3)));
+  assert.equal(new Set(after.unassigned.map((item) => item.studentKey)).size, fix.retake || 0);
+  assert.ok(!after.issues.some((issue) => issue.severity === "error" && !["unassigned"].includes(issue.type)));
+  // 검증기는 이중 배정을 오류로 잡는다
+  const forged = plain(after);
+  const unitStudent = Object.keys(moved.unitOf).find((key) => moved.unitOf[key]);
+  forged.assign[unitStudent] = [after.sections[0].id];
+  const issues = plain(ctx.classSectionsValidate({ ...input, students: moved.students, classUnit: { choose: 1, unitOf: moved.unitOf } }, forged));
+  assert.ok(issues.some((issue) => issue.type === "choice-over" && issue.severity === "error"));
+  assert.equal(ctx.classSectionsJosa("정보", "을/를"), "정보를");
+  assert.equal(ctx.classSectionsJosa("인공지능 기초", "을/를"), "인공지능 기초를");
+  assert.equal(ctx.classSectionsJosa("일본어·중국어", "을/를"), "일본어·중국어를");
+  assert.equal(ctx.classSectionsJosa("물리학", "을/를"), "물리학을");
+});

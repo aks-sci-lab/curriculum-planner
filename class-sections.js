@@ -300,6 +300,7 @@ function classSectionsNormalize(input) {
       unassignedInput.push({ studentKey: key, courseKey: courses[dropped].key, reason: "too-many" });
     }
     for (const c of courseList) courses[c].demand += 1;
+    for (const value of raw.classUnitMissed || []) unassignedInput.push({ studentKey: key, courseKey: classSectionsText(value), reason: "class-unit-other-room" });
     const student = { index: students.length, key, homeroom, courses: courseList, classUnit, pinSec: courseList.map(() => -1), prevSec: courseList.map(() => -1), locked: false };
     const pinned = Array.isArray(studentPins[key]) ? studentPins[key] : Object.values(studentPins[key] || {});
     for (const id of pinned) {
@@ -346,6 +347,7 @@ function classSectionsNormalize(input) {
     baseline: src.baseline && typeof src.baseline === "object" ? src.baseline : previous,
     teacherPins: pins.teachers || {}, issues, unassignedInput,
     keepRoomNames: classSectionsKeepMap(src),
+    classUnitCheck: src.classUnit && src.classUnit.unitOf ? { choose: Math.max(1, Number(src.classUnit.choose) || 1), unitOf: src.classUnit.unitOf } : null,
     cohortTimes: (src.cohortTimes || []).map((item) => ({ label: classSectionsText(item.label), times: classSectionsSlots(item.times) })).filter((item) => item.times.length), sectionById, courseByKey: byKey,
     options: {
       placementSteps: Number(src.placementSteps) || 0, evalIterations: Number(src.evalIterations) || 0, finalIterations: Number(src.finalIterations) || 0,
@@ -1439,6 +1441,18 @@ function classSectionsValidate(input, result, options) {
         message: `${block.letter}블록이 같은 학생이 듣는 ${other.label}와 같은 시간(${shared.map((slot) => slot.replace(":", "")).join(", ")})입니다.` });
     }
   }
+  // 학생별 그룹 과목 수 = 이동 배정 + 학급 단위(있으면 1)는 택n을 넘으면 안 된다(이중 배정).
+  if (model.classUnitCheck) {
+    const { choose, unitOf } = model.classUnitCheck;
+    let over = 0;
+    const sample = [];
+    for (const [key, unit] of Object.entries(unitOf)) {
+      const count = (result.assign?.[key] || []).length + (unit ? 1 : 0);
+      if (count > choose) { over += 1; if (sample.length < 5) sample.push(key); }
+    }
+    if (over) issues.push({ type: "choice-over", severity: "error", count: over,
+      message: `한 그룹에서 택${choose}보다 많은 과목에 배정된 학생 ${over}명(학급 단위 + 이동 분반 이중 배정, 예: ${sample.join(", ")})` });
+  }
   const unassignedCount = (result.unassigned || []).length;
   if (unassignedCount) {
     const students = new Set((result.unassigned || []).map((item) => item.studentKey));
@@ -1596,6 +1610,8 @@ function classSectionsExplain(model, result, place) {
   if (totalSections > maxTotal) causes.push({ type: "block-limit", message: `분반 ${totalSections}개 > 블록 ${B}개 × 블록당 최대 분반 합 ${maxTotal}개` });
   const closed = model.unassignedInput.filter((item) => item.reason === "closed");
   if (closed.length) causes.push({ type: "closed", message: `분반이 0개(폐강)인 과목 신청 ${closed.length}건` });
+  const unitMissed = model.unassignedInput.filter((item) => item.reason === "class-unit-other-room");
+  if (unitMissed.length) causes.push({ type: "class-unit-other-room", message: `학급 단위 과목(${[...new Set(unitMissed.map((item) => item.courseKey))].join(", ")})을 고른 학생 ${new Set(unitMissed.map((item) => item.studentKey)).size}명이 '이동' 반이라 그 과목을 들을 수 없습니다 — 반 배정을 바꾸거나 다른 과목으로 재신청하세요.` });
   const tooMany = model.unassignedInput.filter((item) => item.reason === "too-many");
   if (tooMany.length) causes.push({ type: "too-many", message: `블록 수(${B})보다 많은 과목을 고른 학생 ${new Set(tooMany.map((item) => item.studentKey)).size}명` });
   const noBlock = result.unassigned.filter((item) => item.reason === "no-block");
@@ -1624,6 +1640,40 @@ function classSectionsExplain(model, result, place) {
   return causes;
 }
 
+// 받침에 따라 조사 고르기: classSectionsJosa('정보', '을/를') → '정보를'. 한글이 아니면 '을(를)'.
+function classSectionsJosa(word, pair) {
+  const [withFinal, withoutFinal] = pair.split("/");
+  const text = classSectionsText(word);
+  const last = text.charCodeAt(text.length - 1);
+  if (!(last >= 0xac00 && last <= 0xd7a3)) return `${text}${withFinal}(${withoutFinal})`;
+  return `${text}${(last - 0xac00) % 28 ? withFinal : withoutFinal}`;
+}
+
+// 학급 단위로 바꿨을 때를 실제로 풀어 본다: 반 배분(남는 반은 이동) → 학생 이동 과목 → 풀기. 반 정보가 없으면 null.
+function classSectionsClassUnitTrial(input, unitKeys) {
+  const students = input.students || [];
+  const rooms = [...new Set(students.map((student) => classSectionsKeyPart(classSectionsHomeroomOf(student))).filter(Boolean))];
+  const count = Math.max(Number(input.homeroomCount) || 0, rooms.length);
+  if (!count) return null;
+  const ids = new Set(rooms);
+  for (let i = 1; ids.size < count; i += 1) ids.add(String(i));
+  const homerooms = [...ids].sort((a, b) => (Number(a) - Number(b)) || a.localeCompare(b)).map((id) => ({ id }));
+  const keys = new Set(unitKeys);
+  const courses = (input.courses || []).map((raw) => ({ ...raw, key: classSectionsText(raw.key ?? raw.name) }));
+  const split = classSectionsClassUnitSplit({ allowMove: true, homerooms,
+    courses: courses.filter((course) => keys.has(course.key)).map((course) => ({ key: course.key, sections: course.sections ?? course.classCount })), students });
+  const choose = Number(input.choose) || (Array.isArray(input.blocks) ? input.blocks.length : Number(input.blocks)) || 1;
+  const moved = classSectionsClassUnitStudents({ students, choose, unitKeys: [...keys], byClass: split.assign });
+  const allUnit = Object.values(split.assign).length && Object.values(split.assign).every(Boolean);
+  const blockCount = Array.isArray(input.blocks) ? input.blocks.length : Number(input.blocks) || choose;
+  const blocks = allUnit ? Math.max(1, blockCount - 1) : blockCount;
+  const trialInput = { ...input, courses: courses.map((course) => (keys.has(course.key) ? { ...course, mode: "class" } : course)), students: moved.students,
+    blocks: Array.isArray(input.blocks) ? input.blocks.slice(0, blocks) : blocks, classUnit: { choose, unitOf: moved.unitOf }, suggest: false };
+  const result = classSectionsSolve(trialInput);
+  const unitRooms = Object.values(split.assign).filter(Boolean).length;
+  return { result, mismatched: moved.mismatched, total: moved.total, rooms: { unit: unitRooms, move: count - unitRooms }, split };
+}
+
 function classSectionsTeacherSuggestions(model, result, input, deadline) {
   const short = (result.issues || []).filter((issue) => ["teacher-count", "teacher-shortage", "placement-forced"].includes(issue.type) && issue.severity === "error");
   if (!short.length || !input) return [];
@@ -1640,26 +1690,49 @@ function classSectionsTeacherSuggestions(model, result, input, deadline) {
       message: `블록을 ${blockCount + 1}개로 늘리면(새 블록 시간은 따로 정함) 교사 수 안에서 모두 배정됩니다.` });
   }
   // 학급 단위로: 과목 하나씩 → 안 되면 모자라는 교과의 과목 전부(예: 제2외국어 일본어·중국어 11분반 > 교사 2명).
+  // 확인 = 그 과목을 듣는 반(그 반 전원)과 나머지 반(이동)이 함께 성립: 반 배분 → 학생 이동 과목 다시 만들기 → 다시 풀기.
   const shortCourses = model.courses.filter((item) => departments.includes(item.department)).sort((a, b) => a.demand - b.demand);
   const trySet = (list) => {
-    const keys = new Set(list.map((course) => course.key));
-    const courses = (input.courses || []).map((raw) => (keys.has(classSectionsText(raw.key ?? raw.name)) ? { ...raw, mode: "class" } : raw));
-    return ok(classSectionsSolve({ ...input, courses, suggest: false }));
+    const trial = classSectionsClassUnitTrial(input, list.map((course) => course.key));
+    if (!trial) return null;
+    // 성립 = 이동 반 학생의 이동 과목이 모두 배정되고 오류가 없음. 학급 단위 과목을 골랐는데 이동 반인 학생은 '재신청 필요'로 따로 알린다.
+    const others = trial.result.unassigned.filter((item) => item.reason !== "class-unit-other-room");
+    const hard = trial.result.issues.filter((issue) => issue.severity === "error" && issue.type !== "unassigned");
+    trial.retake = new Set(trial.result.unassigned.filter((item) => item.reason === "class-unit-other-room").map((item) => item.studentKey)).size;
+    return !others.length && !hard.length ? trial : null;
   };
-  for (const course of shortCourses) {
+  const pct = (n, total) => (total ? Math.round(n / total * 100) : 0);
+  // 후보: 과목 하나씩 + 모자라는 교과 과목 전부. 확인된 것 중 재신청이 필요한 학생(이동 반이라 그 과목을 못 듣는 학생) → 희망과 다른 학생이 적은 것.
+  const candidates = [...shortCourses.map((course) => [course]), ...(shortCourses.length > 1 ? [shortCourses] : [])];
+  let best = null;
+  for (const list of candidates) {
     if (late()) break;
-    if (trySet([course])) {
-      out.push({ type: "class-unit", verified: true, courseKey: course.key, courseKeys: [course.key], courseName: course.name,
-        message: `${course.name}을(를) 학급 단위로 운영하면(이동 블록에서 빠짐) 교사 수 안에서 모두 배정됩니다.` });
-      break;
-    }
+    const trial = trySet(list);
+    if (!trial) continue;
+    const score = [trial.retake, trial.mismatched, list.length];
+    if (!best || score[0] < best.score[0] || (score[0] === best.score[0] && (score[1] < best.score[1] || (score[1] === best.score[1] && score[2] < best.score[2])))) best = { list, trial, score };
   }
-  if (!out.some((item) => item.type === "class-unit") && shortCourses.length > 1 && !late() && trySet(shortCourses)) {
-    out.push({ type: "class-unit", verified: true, courseKey: shortCourses[0].key, courseKeys: shortCourses.map((course) => course.key),
-      courseName: shortCourses.map((course) => course.name).join("·"),
-      message: `${shortCourses.map((course) => course.name).join("·")}을(를) 모두 학급 단위로 운영하면(담임반마다 한 과목) 교사 수 안에서 모두 배정됩니다.` });
+  if (best) {
+    const { list, trial } = best;
+    const names = list.map((course) => course.name).join("·");
+    const rooms = `${trial.rooms.unit}개 반 전원이 그 과목${trial.rooms.move ? `, 나머지 ${trial.rooms.move}개 반은 이동` : ""}`;
+    out.push({ type: "class-unit", verified: true, courseKey: list[0].key, courseKeys: list.map((course) => course.key), courseName: names,
+      mismatched: trial.mismatched, total: trial.total, rooms: trial.rooms, retake: trial.retake,
+      message: `${classSectionsJosa(names, "을/를")} ${list.length > 1 ? "모두 " : ""}학급 단위로 운영하면(${rooms}) 교사 수 안에서 배정됩니다 · 희망과 다른 학생 ${trial.mismatched}명(${pct(trial.mismatched, trial.total)}%)${trial.retake ? ` · 그중 이동 반이라 그 과목을 못 들어 재신청이 필요한 학생 ${trial.retake}명` : ""}.` });
   }
-  if (model.blocks.some((block) => block.times.length) || (input.occupied || []).length) {
+  // 블록 시간을 바꿔서 풀리는 경우만(한 블록의 그 교과 분반이 그 교과 교사 전체보다 많으면 어느 시간이든 모자람).
+  const totalTeachers = (dept) => {
+    if ((input.teachers || []).length) return input.teachers.filter((teacher) => (teacher.departments || []).includes(dept)).length || Infinity;
+    return Number(input.departmentTeachers?.[dept] ?? Infinity);
+  };
+  const perBlock = new Map();
+  for (const issue of short) if (issue.department && issue.blockId) perBlock.set(`${issue.blockId}|${issue.department}`, issue);
+  const hopeless = short.some((issue) => {
+    if (!issue.department) return false;
+    const count = (result.sections || []).filter((section) => section.blockId === issue.blockId && model.courseByKey.get(section.courseKey)?.department === issue.department).length;
+    return count > totalTeachers(issue.department);
+  });
+  if (!hopeless && (model.blocks.some((block) => block.times.length) || (input.occupied || []).length)) {
     out.push({ type: "recommend-times", verified: false,
       message: "블록 시간 추천을 실행해 다른 학년 블록과 같은 교과 교사가 겹치지 않는 시간으로 바꿔 보세요." });
   }
@@ -1726,13 +1799,16 @@ function classSectionsSuggest(model, place, result, rng, deadline, input) {
       if (trial.explain.feasible) suggestions.push({ type: "block-limit", verified: true, maxSectionsPerBlock: need,
         message: `블록당 최대 분반을 ${need}개로 늘리면 지금 분반 수·정원으로 모두 배정됩니다.` });
     }
+    // 블록 한도와 함께 교사 수도 모자라면(예: 택1 한 블록) 블록 늘리기·학급 단위 제안도 함께.
+    suggestions.push(...classSectionsTeacherSuggestions(model, result, input, deadline).filter((item) => !suggestions.some((other) => other.type === item.type)));
     return suggestions;
   }
   // 교사 수 부족(그 시간 가능한 교사 < 블록의 교과 분반): 블록 늘리기·학급 단위로 운영을 다시 풀어 확인, 시간 추천·교사 수 확인은 안내.
   suggestions.push(...classSectionsTeacherSuggestions(model, result, input, deadline));
   if (!result.unassigned.length) return suggestions;
-  const structural = result.unassigned.some((item) => item.reason === "closed" || item.reason === "too-many");
-  const onlyStructural = result.unassigned.every((item) => item.reason === "closed" || item.reason === "too-many");
+  const structuralReasons = ["closed", "too-many", "class-unit-other-room"];
+  const structural = result.unassigned.some((item) => structuralReasons.includes(item.reason));
+  const onlyStructural = result.unassigned.every((item) => structuralReasons.includes(item.reason));
   if (onlyStructural) return suggestions;
   // 1) 같은 배치에서 정원만 올리기
   let raise = classSectionsCapacitySuggestion(model, place, rng, deadline, 2);
@@ -2357,49 +2433,93 @@ function classSectionsClassUnitSplit(spec) {
     .sort((a, b) => (Number(a.id) - Number(b.id)) || (a.id < b.id ? -1 : 1));
   const H = homerooms.length;
   const issues = [];
+  // allowMove: 학급 단위 반 수 합이 담임반 수보다 적으면 남는 반은 '이동'(그 반 학생은 이동 분반에서 다른 과목).
+  const allowMove = Boolean(spec.allowMove);
   let quotas = courses.map((course) => course.sections);
   const totalQuota = quotas.reduce((sum, value) => sum + value, 0);
-  if (totalQuota !== H && H) {
+  if (H && (totalQuota > H || (!allowMove && totalQuota !== H))) {
     issues.push({ type: "quota", severity: "warn", message: `과목 학급 수 합(${totalQuota})과 담임반 수(${H})가 달라 비율로 맞췄습니다.` });
     const base = totalQuota || courses.length || 1;
     quotas = courses.map((course) => Math.floor(H * (totalQuota ? course.sections : 1) / base));
     let rest = H - quotas.reduce((sum, value) => sum + value, 0);
     for (let i = 0; rest > 0; i = (i + 1) % courses.length) { quotas[i] += 1; rest -= 1; }
   }
+  const moveQuota = Math.max(0, H - quotas.reduce((sum, value) => sum + value, 0));
+  // 반마다: 학생 수, 학급 단위 과목별 희망 수
   const want = homerooms.map(() => new Map());
+  const size = homerooms.map(() => 0);
   const homeIndex = new Map(homerooms.map((room, i) => [room.id, i]));
   for (const student of spec.students || []) {
     const h = homeIndex.get(classSectionsHomeroomOf(student));
     if (h === undefined) continue;
+    size[h] += 1;
     for (const value of classSectionsStudentCourseList(student)) {
       const c = courses.findIndex((course) => course.key === value || classSectionsCompact(course.name) === classSectionsCompact(value));
       if (c >= 0) want[h].set(c, (want[h].get(c) || 0) + 1);
     }
   }
-  const hasWish = want.some((map) => map.size);
+  const hasWish = size.some((value) => value > 0);
   const assign = {};
   let mismatched = 0;
   if (hasWish) {
+    // 비용: 학급 단위 과목 c로 정한 반 = 그 반에서 c를 고르지 않은 학생 수, '이동' 반 = 학급 단위 과목을 고른 학생 수.
+    const choices = [...courses.map((course, c) => ({ key: course.key, quota: quotas[c], cost: (h) => size[h] - (want[h].get(c) || 0) })),
+      ...(moveQuota ? [{ key: "", quota: moveQuota, cost: (h) => [...want[h].values()].reduce((sum, value) => sum + value, 0) }] : [])];
     const source = 0;
-    const sink = 1 + H + courses.length;
+    const sink = 1 + H + choices.length;
     const edges = [];
     homerooms.forEach((room, h) => {
       edges.push([source, 1 + h, 1, 0]);
-      const total = [...want[h].values()].reduce((sum, value) => sum + value, 0);
-      courses.forEach((course, c) => edges.push([1 + h, 1 + H + c, 1, total - (want[h].get(c) || 0) + h * 1e-6 * c]));
+      choices.forEach((choice, c) => edges.push([1 + h, 1 + H + c, 1, choice.cost(h) + h * 1e-6 * (c + 1)]));
     });
-    courses.forEach((course, c) => edges.push([1 + H + c, sink, quotas[c], 0]));
+    choices.forEach((choice, c) => edges.push([1 + H + c, sink, choice.quota, 0]));
     const flow = classSectionsMinCostFlow(sink + 1, edges, source, sink);
     let at = 0;
     homerooms.forEach((room, h) => {
       at += 1;
-      courses.forEach((course, c) => { if (flow.flows[at]) { assign[room.id] = course.key; mismatched += [...want[h].entries()].reduce((sum, [k, v]) => sum + (k === c ? 0 : v), 0); } at += 1; });
+      choices.forEach((choice, c) => { if (flow.flows[at]) { assign[room.id] = choice.key; mismatched += Math.round(choice.cost(h)); } at += 1; });
     });
   } else {
     let h = 0;
     courses.forEach((course, c) => { for (let k = 0; k < quotas[c] && h < H; k += 1, h += 1) assign[homerooms[h].id] = course.key; });
+    for (; h < H; h += 1) assign[homerooms[h].id] = "";
   }
-  return { assign, ratio: quotas.join(":"), quotas: Object.fromEntries(courses.map((course, c) => [course.key, quotas[c]])), mismatched, issues };
+  const ratio = [...quotas, ...(moveQuota ? [moveQuota] : [])].join(":");
+  return { assign, ratio, quotas: Object.fromEntries(courses.map((course, c) => [course.key, quotas[c]])), moveRooms: moveQuota, mismatched, issues };
+}
+
+// 학급 단위 과목이 정해진 뒤 학생별 이동 과목: 학급 단위 반(그 반 전원이 그 과목 하나)의 학생은 학급 단위 과목을 빼고 남은 칸(택n−1)만 이동,
+// '이동' 반 학생은 학급 단위 과목을 들을 수 없으므로 그 희망을 뺀다. 같은 그룹에서 과목 수가 택n을 넘지 않게(이중 배정 방지).
+// spec: { students:[{ key, homeroom(내년 반), courses }], choose, unitKeys:[학급 단위 과목], byClass:{ 반: 과목key | "" } }
+function classSectionsClassUnitStudents(spec) {
+  const unitKeys = new Set((spec.unitKeys || []).map(classSectionsText));
+  const byClass = spec.byClass || {};
+  const choose = Math.max(1, Math.floor(Number(spec.choose) || 1));
+  const students = [];
+  const unitOf = {};
+  const lost = [];
+  let mismatched = 0;
+  for (const raw of spec.students || []) {
+    const key = classSectionsText(raw.key);
+    const wishes = classSectionsStudentCourseList(raw);
+    const room = classSectionsKeyPart(classSectionsHomeroomOf(raw));
+    const unit = classSectionsText(byClass[room] || "");
+    const moving = wishes.filter((value) => !unitKeys.has(value));
+    unitOf[key] = unit;
+    let keep = moving;
+    if (unit) {
+      if (!wishes.includes(unit)) mismatched += 1;
+      const slots = Math.max(0, choose - 1);
+      if (moving.length > slots) { lost.push({ studentKey: key, courses: moving.slice(slots), reason: "class-unit-room", unit }); keep = moving.slice(0, slots); }
+    } else {
+      const missed = wishes.filter((value) => unitKeys.has(value));
+      if (missed.length) { mismatched += 1; lost.push({ studentKey: key, courses: missed, reason: "class-unit-other-room" }); }
+    }
+    // 이동 반인데 학급 단위 과목을 골라 그 칸이 빈 학생은 미배정(재신청·다른 과목 필요)으로 계산에 넘긴다.
+    const missing = unit ? [] : wishes.filter((value) => unitKeys.has(value));
+    students.push({ ...raw, courses: keep, ...(missing.length ? { classUnitMissed: missing } : {}) });
+  }
+  return { students, unitOf, lost, mismatched, total: students.length };
 }
 
 // ---- 조합-인원 입력(총괄 검토용) ----
@@ -2537,7 +2657,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
   return [classSectionsText, classSectionsCompact, classSectionsNow, classSectionsRng, classSectionsSlot, classSectionsSlots, classSectionsOverlap,
     classSectionsStable, classSectionsHash, classSectionsSignature, classSectionsStudentCourseList, classSectionsHomeroomOf, classSectionsChangedStudents,
     classSectionsNormalize, classSectionsSupply, classSectionsPlacementNew, classSectionsCanPlace, classSectionsPut, classSectionsCooccurrence,
-    classSectionsInitialPlacement, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
+    classSectionsInitialPlacement, classSectionsJosa, classSectionsClassUnitTrial, classSectionsClassUnitStudents, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
     classSectionsUnitDelta, classSectionsUnitApply, classSectionsUnitPlaceOne, classSectionsRouterRebuild, classSectionsRouterRecount,
     classSectionsRouterCost, classSectionsRouterSnapshot, classSectionsRouterRestore, classSectionsRouterSearch, classSectionsRouterSnapshotY,
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,
