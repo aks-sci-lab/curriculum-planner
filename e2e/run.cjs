@@ -36,7 +36,7 @@ async function waitText(page, selector, pattern, timeout = 30000) {
 const tabRetries = [];
 async function selectGradeTab(page, grade) {
   for (let attempt = 0; attempt < 10; attempt++) {
-    await selectGradeTab(page, grade);
+    await page.locator(`#applicationGrade${grade}Tab`).click();
     await sleep(150);
     if (await page.locator(`#applicationGrade${grade}Tab`).getAttribute("aria-selected") === "true") {
       if (attempt) tabRetries.push({ grade, attempts: attempt + 1, at: new Date().toISOString() });
@@ -431,6 +431,9 @@ async function stepHours({ page, h, report }) {
     // 폐강 과목이 개설반으로 남지 않는지(2차 확정 결과 근거)
     result.issues = (await text(page, "#hoursIssuesBody")).slice(0, 1500);
     result.summary = (panel.match(/교과\t[^\n]*/) || [""])[0];
+    const closedNames = (report.data.closed1 || []).map((c) => c.name);
+    const misworded = closedNames.filter((name) => new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: 현 [12]학년 2차 결과에 없어`).test(result.issues));
+    h.check(!misworded.length, "경미", "5단계", "1차에서 폐강한 과목을 '결과에 없어 개설반 0 · 과목명이 다르면 입력' 확인 항목으로 안내함(폐강으로 보지 않음)", { actual: misworded });
     result.header = panel.slice(0, 600);
     await h.screenshot(page, "hours");
     const download = page.waitForEvent("download");

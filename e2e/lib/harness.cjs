@@ -17,6 +17,9 @@ const ROOT = path.join(__dirname, "..", "..");
 
 async function startHarness({ outDir, seed, headless = true, hardened = true }) {
   fs.mkdirSync(outDir, { recursive: true });
+  // 같은 폴더로 다시 돌릴 때 예전 스크린샷·내려받기가 섞이지 않게 지운다.
+  for (const name of fs.readdirSync(outDir)) if (/\.png$|^report\.json$/.test(name)) fs.rmSync(path.join(outDir, name));
+  fs.rmSync(path.join(outDir, "downloads"), { recursive: true, force: true });
   const mock = await createMockSupabase({ hardened });
   const { server, url } = await startStaticServer(ROOT);
   const browser = await chromium.launch({ headless });
