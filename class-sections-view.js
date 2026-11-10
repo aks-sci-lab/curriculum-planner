@@ -395,7 +395,7 @@ function classSectionsCompactResult(result, input, draft) {
     version: result.version, signature: classSectionsSignature(input), createdAt: new Date().toISOString(), draft: Boolean(draft),
     mode: result.mode, seed: result.seed, blocks: result.blocks, sections: result.sections, assign: result.assign, unassigned: result.unassigned,
     metrics: result.metrics, explain: result.explain, teacherOf: result.teacherOf || {}, placement: result.placement,
-    issues: (result.issues || []).slice(0, 200), elapsedMs: result.elapsedMs
+    issues: (result.issues || []).slice(0, 200), elapsedMs: result.elapsedMs, roomRenames: result.roomRenames || []
   };
 }
 
@@ -408,12 +408,14 @@ async function classSectionsSolveCurrent(kind = "solve") {
   let input;
   if (kind === "partial" && previous?.assign) {
     const before = classSectionsPlain(entry.inputStudents) ? Object.entries(entry.inputStudents).map(([key, courses]) => ({ key, courses })) : [];
-    input = classSectionsBuildInput(round, group, entry, { partial: true,
+    input = classSectionsBuildInput(round, group, entry, { partial: true, roomNames: classSectionsPreviousRoomNames(previous),
       previous: { sections: previous.sections.map((section) => ({ id: section.id, blockId: section.blockId })), assign: previous.assign, teacherOf: previous.teacherOf },
       changedStudents: before.length ? classSectionsChangedStudents(before, group.students) : group.students.map((student) => student.key) });
   } else {
     // 새로 계산: 기존 결과는 '기존 대비 이동' 비교에만 쓴다(배정을 붙잡지 않음). 그대로 두려면 '바뀐 학생만 다시 계산'.
-    input = classSectionsBuildInput(round, group, entry, previous?.assign ? { baseline: { assign: previous.assign } } : {});
+    // 블록 고정이 있으면 고정한 분반의 이름이 바뀌지 않게 기존 이름을 넘긴다.
+    const keepNames = Object.keys(entry.pins.sections || {}).length ? { roomNames: classSectionsPreviousRoomNames(previous) } : {};
+    input = classSectionsBuildInput(round, group, entry, { ...keepNames, ...(previous?.assign ? { baseline: { assign: previous.assign } } : {}) });
   }
   CLASS_SECTIONS_VIEW.running = true;
   classSectionsSetStatus(kind === "compare" ? "편성 방식 3가지를 계산하는 중…" : "분반 편성을 계산하는 중…", false, scope);
@@ -450,10 +452,9 @@ function classSectionsJointIssuesFor(issues, groupId) {
     const mine = Array.isArray(issue.groups) ? issue.groups.includes(groupId)
       : issue.sectionId ? String(issue.sectionId).startsWith(prefix) : issue.severity !== "error";
     if (mine) own.push(issue);
-    else if (issue.severity === "error" && ["teacher-shortage", "teacher-cross", "cohort-clash"].includes(issue.type)) {
-      own.push({ ...issue, severity: "info", type: `${issue.type}-other`, message: `참고: 같은 시간 다른 그룹 — ${issue.message}` });
-    }
   }
+  // 다른 그룹이 원인인 오류는 저장하지 않는다. 화면이 그릴 때 그 그룹의 지금 결과에서 '참고'로 보여 준다
+  // (원인 그룹을 고쳐 다시 계산하면 참고도 함께 사라지게).
   return own;
 }
 
@@ -468,7 +469,8 @@ async function classSectionsSolveSemesterCurrent() {
   const inputs = groups.map((item) => {
     const entry = classSectionsEntry(round, item.key, true);
     const previous = entry.sectionResult;
-    return classSectionsBuildInput(round, item, entry, { noOccupied: true, ...(previous?.assign ? { baseline: { assign: previous.assign } } : {}) });
+    const keepNames = Object.keys(entry.pins.sections || {}).length ? { roomNames: classSectionsPreviousRoomNames(previous) } : {};
+    return classSectionsBuildInput(round, item, entry, { noOccupied: true, ...keepNames, ...(previous?.assign ? { baseline: { assign: previous.assign } } : {}) });
   });
   CLASS_SECTIONS_VIEW.running = true;
   classSectionsSetStatus(`${group.semester}학기 그룹 ${groups.length}개를 함께 계산하는 중…`, false, scope);
@@ -607,6 +609,11 @@ function classSectionsApplyTimes() {
   CLASS_SECTIONS_VIEW.timesProposal = null;
   classSectionsSetStatus(`블록 ${count}개에 시간을 넣었습니다. ‘전 학년 함께 다시 계산’으로 교사 배정을 다시 하세요.`);
   classSectionsChanged();
+}
+
+// 앞 결과의 분반 id → 강의실 이름(나이스·명렬표에 이미 쓴 이름을 유지하려고 계산에 넘김).
+function classSectionsPreviousRoomNames(previous) {
+  return Object.fromEntries((previous?.sections || []).filter((section) => section.roomName).map((section) => [section.id, section.roomName]));
 }
 
 function classSectionsSaveResult(entry, result, input, group, source, batch = "") {
@@ -816,6 +823,29 @@ function classSectionsResultBasis(round, group, entry, result) {
   return same ? "확정 결과 기준(시안 때 계산 · 입력 같음)" : "확정 전 시안 · 입력 변경됨";
 }
 
+// 참고: 같은 학기 다른 그룹 결과의 그룹 간 오류(교사 부족·겹침)가 이 그룹 블록 시간과 겹치는데 원인이 그 그룹일 때.
+function classSectionsOtherGroupNotes(round, group, result) {
+  const store = classSectionsStore()[round] || {};
+  const slots = new Set((result.blocks || []).flatMap((block) => block.times || []));
+  if (!slots.size) return [];
+  const notes = [];
+  for (const other of classSectionsSource(round).groups) {
+    if (other.key === group.key || other.semester !== group.semester) continue;
+    for (const issue of store[other.key]?.sectionResult?.issues || []) {
+      if (issue.severity !== "error" || !["teacher-shortage", "teacher-cross", "cohort-clash"].includes(issue.type)) continue;
+      if (Array.isArray(issue.groups) && issue.groups.includes(`${round}:${group.key}`)) continue; // 이 그룹도 원인이면 이미 이 그룹 오류에 있음
+      if (issue.slot && !slots.has(issue.slot)) continue;
+      notes.push(`참고: 같은 시간 다른 그룹(${other.label}) — ${issue.message}`);
+    }
+  }
+  return [...new Set(notes)];
+}
+
+function classSectionsOtherGroupNotesHtml(round, group, result) {
+  const notes = classSectionsOtherGroupNotes(round, group, result);
+  return notes.length ? `<details id="classSectionsOtherNotes"><summary>참고 ${notes.length}건 · 다른 그룹 교사 부족·겹침(이 그룹은 원인 아님)</summary><ul class="cs-list">${notes.slice(0, 20).map((text) => `<li>${classSectionsEsc(text)}</li>`).join("")}</ul></details>` : "";
+}
+
 // 같은 학기 다른 학년 편성이 이 결과보다 나중에 따로 바뀌었으면(블록 시간이 있을 때만 교사 겹침에 영향) 안내한다.
 function classSectionsOtherChangedHtml(round, group, result) {
   const store = classSectionsStore()[round] || {};
@@ -870,6 +900,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   return `<section class="cs-card" aria-label="편성 결과">
     <h4>편성 결과 <span class="cs-note">${esc(CLASS_SECTIONS_MODE_LABELS?.[result.mode] || result.mode)} · ${esc(classSectionsResultBasis(round, group, entry, result))} · ${esc(new Date(result.createdAt).toLocaleString("ko-KR"))}</span></h4>
     ${classSectionsOtherChangedHtml(round, group, result)}
+    ${classSectionsOtherGroupNotesHtml(round, group, result)}
     <p class="cs-summary" id="classSectionsSummary" data-feasible="${explain.feasible ? "true" : "false"}">${esc(explain.summary || "")}</p>
     <p class="cs-note" id="classSectionsMetrics">미배정 ${metrics.unassignedStudents || 0}명 · <span title="같은 과목 분반 인원의 최대 − 최소(과목 중 가장 큰 값)">분반 인원 차이 최대 ${metrics.maxSpread || 0}명</span> · <span title="같은 담임반 학생이 같은 분반에 모인 비율(과목·반마다 가장 많이 모인 분반 기준)">같은 반끼리 ${Math.round((metrics.sameHomeroomRatio || 0) * 100)}%(같은 담임반 학생이 같은 분반에 모인 비율)</span>${metrics.moved !== null && metrics.moved !== undefined ? ` · 앞 편성 대비 이동 ${metrics.moved}` : ""}</p>
     ${unassigned ? `<details open id="classSectionsUnassigned"><summary>미배정 ${result.unassigned.length}건</summary><table class="cs-table"><thead><tr><th>학생</th><th>과목</th><th>사유</th></tr></thead><tbody>${unassigned}</tbody></table></details>` : ""}
@@ -1226,15 +1257,22 @@ function classSectionsMergeClassMap(map) {
     let changed = 0;
     let missing = 0;
     // 차수 자료에 없는 학생(결과 미제출·전입 예정 등)도 저장해 둔다. 반영 인원은 화면의 'n/N명'(실제 일치 수)으로 따로 보인다.
+    let notSubmitted = 0;
+    const knownRooms = new Set([...known].filter((key) => key.startsWith(`${grade}-`)).map((key) => key.split("-")[1]));
     for (const [key, value] of list) {
-      if (known.size && !known.has(key)) missing += 1;
+      if (known.size && !known.has(key)) {
+        // 그 학년에 있는 반·숫자 번호면 신청 결과가 없는 학생(미제출), 아니면 표기 확인이 필요한 학생.
+        const [, room, number] = key.split("-");
+        if (knownRooms.has(room) && /^\d+$/.test(number || "")) notSubmitted += 1;
+        else missing += 1;
+      }
       target[key] = { classroom: classSectionsKeyPart(value.classroom), number: classSectionsKeyPart(value.number) };
       changed += 1;
     }
     const kept = Object.keys(target).length - changed;
     updated += changed;
     unmatched += missing;
-    parts.push(`현 ${grade}학년 ${list.length}명 읽음 · 갱신 ${changed}명 · 유지 ${kept}명${missing ? ` · 이 차수 결과에 없는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
+    parts.push(`현 ${grade}학년 ${list.length}명 읽음 · 갱신 ${changed}명 · 유지 ${kept}명${notSubmitted ? ` · 이 차수 결과가 없는 학생(미제출 등) ${notSubmitted}명` : ""}${missing ? ` · 배정표에만 있는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
   }
   return { updated, unmatched, text: `내년 반 배정표: ${parts.join(" / ") || "읽은 학생 0명"}` };
 }
@@ -1312,6 +1350,7 @@ function classSectionsExport(kind) {
     const classUnit = unitCourses.length ? { byClass: classSectionsClassUnitPlan(group, entry, settings).assign,
       courses: Object.fromEntries(unitCourses.map((course) => [course.key, { name: course.name, ...courses[course.key] }])) } : null;
     const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students, classUnit });
+    if (result.roomRenames?.length) warnings.push(`강의실 이름이 바뀐 분반 ${result.roomRenames.length}개(번호 없던 과목이 한 블록에 2개가 됨 등): ${result.roomRenames.map((item) => `${item.from} → ${item.to}`).join(", ")}. 이미 나이스에 올렸으면 바뀐 이름을 확인하세요.`);
     if (effective.basis === "same") warnings.push("진급 때 반이 그대로 올라감으로 설정해 반은 지금 반으로 넣고 번호는 비웠습니다(진급 때 번호를 다시 매길 수 있음). 내년 반 배정표를 올리면 반·번호를 채웁니다.");
     const sheets = [{ name: "수강학생 편성", rows, widths: [8, 6, 6, 18, 22, 18, 12, 6, 6, 10, 16], merges: ["A1:F1", "G1:J1"], freeze: "A3" },
       { name: "확인 필요", orientation: "portrait", widths: [100], rows: [["확인 필요"], ...warnings.map((text) => [text]),

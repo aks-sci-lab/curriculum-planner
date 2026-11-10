@@ -316,9 +316,11 @@ test("6차 화면: 다른 학년 점유로 '입력 변경됨' 안 됨·다른 �
   let merged = ctx.classSectionsMergeClassMap({ "1-1-1": { classroom: "02", number: "03" }, "1-9-9": { classroom: "1" } });
   assert.equal(merged.updated, 2, "students not in this round's data are kept too");
   assert.equal(merged.unmatched, 1);
-  assert.match(merged.text, /현 1학년 2명 읽음 · 갱신 2명 · 유지 0명 · 이 차수 결과에 없는 학생 1명/);
+  assert.match(merged.text, /현 1학년 2명 읽음 · 갱신 2명 · 유지 0명 · 배정표에만 있는 학생 1명\(반·번호 표기 확인\)/);
+  // 그 학년 반·번호 모양이면 미제출로 구분
+  assert.match(ctx.classSectionsMergeClassMap({ "1-3-40": { classroom: "1" } }).text, /이 차수 결과가 없는 학생\(미제출 등\) 1명/);
   merged = ctx.classSectionsMergeClassMap({ "1-2-1": { classroom: "3" } });
-  assert.match(merged.text, /1명 읽음 · 갱신 1명 · 유지 2명/);
+  assert.match(merged.text, /1명 읽음 · 갱신 1명 · 유지 3명/);
   assert.deepEqual(plain(ctx.classSectionsClassMap("1")["1-1-1"]), { classroom: "2", number: "3" });
   // 교사 id 중복은 다시 매김
   const settings = ctx.classSectionsSettings();
@@ -356,9 +358,25 @@ test("joint solve issues: errors only on the group that owns the sections, other
   const mine = plain(ctx.classSectionsJointIssuesFor(issues, "1:2:3-1 택1"));
   assert.deepEqual(mine.map((issue) => [issue.type, issue.severity]), [["teacher-shortage", "error"], ["teacher-missing", "warn"], ["teacher-none", "info"]]);
   const other = plain(ctx.classSectionsJointIssuesFor(issues, "1:1:2-1 택3"));
-  assert.deepEqual(other.map((issue) => [issue.type, issue.severity]), [["teacher-shortage-other", "info"], ["teacher-missing", "warn"], ["teacher-none", "info"]]);
-  assert.match(other[0].message, /^참고: 같은 시간 다른 그룹/);
+  assert.deepEqual(other.map((issue) => [issue.type, issue.severity]), [["teacher-missing", "warn"], ["teacher-none", "info"]]);
   assert.ok(!other.some((issue) => issue.severity === "error"), "a fully assigned group is not marked infeasible by another group's shortage");
+  // '참고'는 저장하지 않고 그릴 때 원인 그룹의 지금 결과에서 만든다 → 원인 그룹을 다시 계산하면 사라진다
+  const source = ctx.classSectionsSource("1");
+  const group = source.groups[0];
+  const fakeOther = { key: "2:1:other", label: "현2 → 3학년 1학기 · 3-1 택1", semester: group.semester, grade: "2", courses: [], students: [] };
+  ctx.cachedByStateRevision = undefined;
+  const store = ctx.classSectionsStore();
+  store["1"] = store["1"] || {};
+  store["1"][fakeOther.key] = { sectionResult: { issues: [{ type: "teacher-shortage", severity: "error", slot: "금:2", groups: [`1:${fakeOther.key}`], message: "제2외국어: 금요일 2교시 분반 11개 > 가능한 교사 2명" }] } };
+  const realSource = ctx.classSectionsSource;
+  ctx.classSectionsSource = () => ({ ...source, groups: [...source.groups, fakeOther] });
+  const result = { blocks: [{ id: "a", times: ["금:2"] }] };
+  assert.equal(plain(ctx.classSectionsOtherGroupNotes("1", group, result)).length, 1);
+  assert.match(ctx.classSectionsOtherGroupNotesHtml("1", group, result), /참고 1건 · 다른 그룹 교사 부족·겹침\(이 그룹은 원인 아님\)/);
+  assert.equal(plain(ctx.classSectionsOtherGroupNotes("1", group, { blocks: [{ id: "a", times: ["월:1"] }] })).length, 0, "only when the time overlaps");
+  store["1"][fakeOther.key].sectionResult.issues = []; // 원인 그룹을 고쳐 다시 계산
+  assert.equal(plain(ctx.classSectionsOtherGroupNotes("1", group, result)).length, 0);
+  ctx.classSectionsSource = realSource;
 });
 
 test("class-unit-only group: roster export has the '학급 단위 과목' sheet and per-class roster sheets when next-year classes are known", () => {
