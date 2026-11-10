@@ -280,7 +280,8 @@ function classSectionsEditHtml(round, group, entry, result) {
     return `<tr class="${row.key === selected ? "is-selected" : ""}${co ? " has-co" : ""}"><th scope="row"><button class="cs-link" type="button" data-cs-co-course="${esc(row.key)}" aria-pressed="${row.key === selected}" aria-label="${esc(row.name)} 같이 신청한 학생 보기">${esc(row.name)}</button></th>
       <td>${row.demand}</td><td>${row.sections}</td><td>${row.capacity}</td>${cells}<td class="cs-co">${selected && selected !== row.key ? `${co}명${sameBlock ? " · 같은 블록" : ""}` : ""}</td></tr>`;
   }).join("");
-  const foot = model.blocks.map((block) => `<td${block.max && block.count > block.max ? ' class="is-over"' : ""}>${block.count}${block.max ? ` / ${block.max}` : ""}</td>`).join("");
+  const foot = model.blocks.map((block) => `<td${block.max && block.count > block.max ? ' class="is-over"' : ""}>${block.count}${block.max ? ` / ${block.max}` : ""}${block.max && block.count > block.max ? ` <span class="cs-tag" data-cs-block-over="${esc(block.id)}">최대 ${block.max} 초과</span>` : ""}</td>`).join("");
+  const pinnedCount = Object.keys(entry.pins?.sections || {}).length;
   const pairText = (item) => `${item.aName}·${item.bName} ${item.count}명(${item.blocks.map((id) => model.blocks.find((block) => block.id === id)?.letter || id).join("·")}블록)`;
   const conflictNote = model.conflicts.length
     ? `<p class="cs-note is-warn" id="classSectionsCoConflicts">같은 블록 하나에만 있는 두 과목을 함께 신청한 학생: ${esc(model.conflicts.slice(0, 6).map(pairText).join(", "))}${model.conflicts.length > 6 ? " …" : ""} — 한 과목을 다른 블록으로 옮기세요.</p>` : "";
@@ -290,6 +291,8 @@ function classSectionsEditHtml(round, group, entry, result) {
   return `<section class="cs-card" aria-label="직접 고치기">
     <h4>직접 고치기 <span class="cs-note">과목 × 블록 분반 수 · 같이 신청한 학생 · 학생 옮기기 · 배정 결과 엑셀</span></h4>
     <p class="cs-note">칸의 분반 수를 바꾸면 그 과목 분반을 그 블록에 고정하고 지금 배치를 유지한 채 학생 배정만 다시 계산합니다. 과목 이름을 누르면 같이 신청한 학생 수를 봅니다.</p>
+    <p class="cs-note${pinnedCount ? " is-warn" : ""}" id="classSectionsPinNote">표에서 칸을 고치면 이 그룹의 모든 분반이 지금 블록에 고정됩니다(다시 계산해도 블록이 바뀌지 않음).${pinnedCount ? ` 지금 블록 고정 ${pinnedCount}개.` : ""}
+      ${pinnedCount ? `<button class="button button-quiet" type="button" id="classSectionsUnpinAll">블록 고정 모두 풀기</button>` : ""}</p>
     <div class="cs-table-wrap" data-scroll-key="cs-place"><table class="cs-table cs-place" id="classSectionsPlacementTable" aria-label="과목 × 블록 분반 수">
       <thead><tr><th>과목</th><th>신청</th><th>분반</th><th>정원 합</th>${model.blocks.map((block) => `<th>${esc(block.letter)}블록</th>`).join("")}<th>${selected ? `${esc(withName)} 같이 신청` : "같이 신청"}</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -488,6 +491,15 @@ function classSectionsEditClick(target) {
   }
   if (target.dataset?.csMoveStudent !== undefined) { classSectionsEditOpenMove(target.dataset.csMoveStudent); return true; }
   if (target.id === "classSectionsAssignExport") { classSectionsEditExport(); return true; }
+  if (target.id === "classSectionsUnpinAll") {
+    const context = classSectionsCurrent();
+    if (!context?.entry) return true;
+    const count = Object.keys(context.entry.pins.sections || {}).length;
+    context.entry.pins.sections = {};
+    classSectionsSetStatus(`블록 고정 ${count}개를 모두 풀었습니다. '편성 계산'을 누르면 블록 배치부터 다시 찾습니다.`);
+    if (typeof classSectionsChanged === "function") classSectionsChanged();
+    return true;
+  }
   return false;
 }
 

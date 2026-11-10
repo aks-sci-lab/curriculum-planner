@@ -65,8 +65,16 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
     const pinned = await page.locator("input[data-cs-pin]:checked").count();
     check(pinned > 0, "칸을 고친 뒤 분반이 블록 고정으로 표시", pinned);
     console.log("status:", await status());
+    const over = await page.locator("#classSectionsPlacementTable tfoot td.is-over").count();
+    const overTag = await page.locator("[data-cs-block-over]").count();
+    check(over === overTag, "블록당 최대 초과 칸에는 '최대 n 초과' 표시", { over, overTag });
+    check(/모든 분반이 지금 블록에 고정/.test(await page.locator("#classSectionsPinNote").innerText()), "표 위 블록 고정 안내");
   }
   await shot("02-placement-edited.png");
+  // 블록 고정 모두 풀기
+  await page.getByRole("button", { name: "블록 고정 모두 풀기" }).click(); await sleep(400);
+  check(await page.locator("input[data-cs-pin]:checked").count() === 0, "블록 고정 모두 풀기 → 고정 0개");
+  check(/블록 고정 \d+개를 모두 풀었습니다/.test(await status()), "풀기 상태 문구", await status());
   // 학생 옮기기
   const search = page.locator("#classSectionsStudentSearch");
   await search.fill("1-1"); await search.press("Enter"); await sleep(500);
