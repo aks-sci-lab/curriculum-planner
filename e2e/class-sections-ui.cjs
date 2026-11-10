@@ -141,6 +141,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (written) fs.writeFileSync(mapFile, written);
   await page.locator("#classSectionsClassMap").setInputFiles(mapFile); await sleep(800);
   console.log("classmap status:", await page.locator("#classSectionsStatus").innerText());
+  console.log("classes line:", await page.locator("#classSectionsClassesLine").innerText(), "|", await page.locator("#classSectionsClassMapLine").innerText());
+  // 배정표가 있으면 담임반 묶기도 추천 대상
+  await page.getByRole("button", { name: "방식 비교·추천" }).click(); await sleep(300);
+  await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
+  console.log("compare with map:", (await page.locator('section[aria-label="편성 방식 비교"]').innerText()).replace(/\s+/g, " ").slice(0, 160));
   files.push(await save(() => page.getByRole("button", { name: "나이스 편성 엑셀" }).click(), "neis-mapped.xlsx"));
   console.log("downloads:", files.map((f) => `${path.basename(f)} ${fs.statSync(f).size}B`));
   // 새로고침 뒤 결과 유지

@@ -167,3 +167,52 @@ test("block time recommendation input: department demand per block (estimate bef
   assert.equal(entry.blockTimes.a.split(",").length, 3);
   assert.equal(ctx.CLASS_SECTIONS_VIEW.timesProposal, null);
 });
+
+test("promotion re-forms classes (now 4 → next year 5): next-year counts, homeroom grouping and class-unit students wait for the class map", () => {
+  const ctx = context();
+  ctx.state.roundStatuses["1"].snapshot.classBases = { "2": 5 };
+  const group = ctx.classSectionsSource("1").groups[0];
+  assert.equal(group.rosterClasses, 4);
+  assert.equal(group.nextClasses, 5);
+  assert.equal(group.classes, 5, "block limit / class-unit default = next-year classes");
+  const entry = ctx.classSectionsEntry("1", group.key);
+  assert.equal(ctx.classSectionsGroupSettings({ maxClassSize: 30 }, group, entry).maxSectionsPerBlock, 5);
+  assert.match(ctx.classSectionsClassesHtml(group, entry), /현 1학년 4학급 → 내년 2학년 5학급/);
+  // 배정표 없음: 지금 반 기준 + 추천 제외 + 담임반 방식 경고
+  let input = plain(ctx.classSectionsBuildInput("1", group, entry));
+  assert.equal(input.homeroomBasis, "current");
+  assert.deepEqual(input.recommendExclude, ["homeroom"]);
+  entry.mode = "homeroom";
+  assert.match(ctx.classSectionsClassesHtml(group, entry), /지금 반 기준 — 진급 때 반이 바뀌면 효과 없음/);
+  // 학급 단위 과목: 내년 5학급으로 반 수만 확정, 학생 배정은 배정표 뒤
+  const settings = ctx.classSectionsSettings();
+  settings.courseModes["지구과학"] = "class";
+  settings.courseModes["물리학"] = "class";
+  entry.classCounts["지구과학"] = 2; entry.classCounts["물리학"] = 3;
+  let plan = plain(ctx.classSectionsClassUnitPlan(group, entry, settings));
+  assert.deepEqual(plan.homerooms, ["1", "2", "3", "4", "5"]);
+  assert.equal(plan.mapped, false);
+  assert.equal(plan.ratio, "3:2");
+  assert.match(ctx.classSectionsClassUnitHtml(group, entry, settings), /학생 배정은 내년 반 배정표를 올린 뒤/);
+  // 내년 반 배정표를 올리면 새 반 기준
+  ctx.classSectionsStore().classMaps = { "1": Object.fromEntries(group.students.map((student, index) => [student.key, { classroom: String(1 + (index % 5)), number: String(1 + Math.floor(index / 5)) }])) };
+  input = plain(ctx.classSectionsBuildInput("1", group, entry));
+  assert.equal(input.homeroomBasis, "next");
+  assert.deepEqual(input.recommendExclude, []);
+  assert.deepEqual([...new Set(input.students.map((student) => student.homeroom))].sort(), ["1", "2", "3", "4", "5"]);
+  plan = plain(ctx.classSectionsClassUnitPlan(group, entry, settings));
+  assert.equal(plan.mapped, true);
+  // 나이스: 학급 단위 과목 행은 새 반 'N(2학년 N반)'
+  const result = ctx.classSectionsSolve({ ...input, maxSectionsPerBlock: 5 });
+  const map = ctx.classSectionsClassMap("1");
+  const exported = plain(ctx.classSectionsNeisExport(result, { year: 2027, semester: 1, targetGrade: 2,
+    students: group.students.map((student) => ({ key: student.key, classroom: map[student.key].classroom, number: map[student.key].number })),
+    classUnit: { byClass: plan.assign, courses: { 물리학: { name: "물리학", credits: 3 }, 지구과학: { name: "지구과학", credits: 3 } } } }));
+  const unitRows = exported.rows.filter((row) => /^\d\(2학년 \d반\)$/.test(row[5]));
+  assert.equal(unitRows.length, group.students.length);
+  for (const row of unitRows) assert.equal(row[5], `${row[7].replace("반", "")}(2학년 ${row[7]})`);
+  // 배정표 없는 학생은 학급 단위 행을 만들지 않고 안내
+  const waiting = plain(ctx.classSectionsNeisExport(result, { targetGrade: 2, students: [{ key: group.students[0].key }], classUnit: { byClass: plan.assign, courses: {} } }));
+  assert.ok(waiting.warnings.some((text) => /학생 배정은 반 배정표를 올린 뒤/.test(text)));
+  assert.deepEqual(plain(ctx.classSectionsRestore({ classMaps: { "1": { "1-1-1": { classroom: "2" } } } })), { classMaps: { "1": { "1-1-1": { classroom: "2" } } } });
+});
