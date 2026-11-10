@@ -1095,7 +1095,7 @@ function renderClassSectionsTeachers() {
         return `<td><input type="checkbox" data-cs-t-slot="${index}|${slot}"${(teacher.unavailable || []).includes(slot) ? " checked" : ""} aria-label="${esc(teacher.name)} ${day}요일 ${p + 1}교시 불가"></td>`;
       }).join("")}</tr>`).join("")}</tbody></table></td></tr>` : "";
     return `<tr>
-      <td><input class="cs-text" type="text" value="${esc(teacher.name || "")}" data-cs-t="${index}|name" data-focus-key="cs-t-name-${index}" aria-label="교사 ${index + 1} 이름"></td>
+      <td><input class="cs-text" type="text" value="${esc(teacher.name || "")}" data-cs-t="${index}|name" data-focus-key="cs-t-name-${index}" aria-label="교사 ${index + 1} 이름">${teacher.notInList ? ' <span class="cs-tag">명단에 없음</span>' : ""}</td>
       <td><input class="cs-text" type="text" value="${esc(teacher.alias || "")}" data-cs-t="${index}|alias" data-focus-key="cs-t-alias-${index}" aria-label="교사 ${index + 1} 별칭"></td>
       <td><select data-cs-t="${index}|department" data-focus-key="cs-t-dept-${index}" aria-label="교사 ${index + 1} 담당 교과">${deptOptions}</select></td>
       <td><input class="cs-text" type="text" value="${esc(teacher.courses || "")}" placeholder="비우면 교과 전체" data-cs-t="${index}|courses" data-focus-key="cs-t-courses-${index}" aria-label="교사 ${index + 1} 담당 과목 좁히기"></td>
@@ -1116,6 +1116,7 @@ function renderClassSectionsTeachers() {
         <span class="cs-note">${settings.teachers.filter(shown).length}/${settings.teachers.length}명 보임</span></div>
       <div class="cs-actions"><button class="button" type="button" id="classSectionsTeacherAdd">교사 추가</button>
       <button class="button" type="button" id="classSectionsTeacherFromHours">5단계 교사 수로 명단 만들기</button></div>
+      ${typeof classSectionsTeacherToolsHtml === "function" ? classSectionsTeacherToolsHtml() : ""}
       <div class="cs-scroll" data-scroll-key="cs-teachers"><table class="cs-table"><thead><tr><th>이름</th><th>별칭</th><th>교과</th><th>과목(선택)</th><th>불가 시간</th><th>사유</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7">교사 명단이 없습니다. 없으면 5단계 교과별 교사 수만으로 블록당 분반을 제한합니다.</td></tr>'}</tbody></table></div>
     </section>
     <section><h3>고정 시간 <span class="cs-note">창체·진로, 스포츠 + 창체 묶음 등</span></h3>
@@ -1275,6 +1276,7 @@ function classSectionsHandleChange(event) {
 }
 
 function classSectionsHandleTeacherEvent(event) {
+  if (typeof classSectionsTeachersEvent === "function" && classSectionsTeachersEvent(event)) return;
   const target = event.target;
   const settings = classSectionsSettings();
   if (event.type === "click") {
@@ -1457,7 +1459,9 @@ function classSectionsExport(kind) {
   if (kind === "blocks") {
     const settings = classSectionsSettings();
     const teacherName = new Map(classSectionsTeacherList(settings).map((teacher) => [teacher.id, teacher.name]));
-    const rows = [[`${group.label} 블록표 (${result.draft ? "확정 전 시안" : `${round}차 확정 결과`})`], ["블록", "요일·교시", "강의실", "과목", "인원", "정원", "담당 교사", "교실"]];
+    // 실제 이름이 없는 교사(5단계 교사 수로 만든 자리 이름)가 있으면 제목 칸에 함께 알린다(표 머리 위치는 그대로).
+    const nameWarnings = typeof classSectionsTeacherNameWarnings === "function" ? classSectionsTeacherNameWarnings() : [];
+    const rows = [[`${group.label} 블록표 (${result.draft ? "확정 전 시안" : `${round}차 확정 결과`})${nameWarnings.length ? ` · ${nameWarnings.join(" ")}` : ""}`], ["블록", "요일·교시", "강의실", "과목", "인원", "정원", "담당 교사", "교실"]];
     for (const block of result.blocks) for (const id of block.sectionIds) {
       const section = sectionById.get(id);
       rows.push([`${block.letter}블록`, classSectionsTimesText(block.times), section.roomName, section.courseName, section.size, section.capacity, teacherName.get(section.teacherId) || "",
