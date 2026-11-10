@@ -1272,7 +1272,7 @@ function classSectionsMergeClassMap(map) {
     const kept = Object.keys(target).length - changed;
     updated += changed;
     unmatched += missing;
-    parts.push(`현 ${grade}학년 ${list.length}명 읽음 · 갱신 ${changed}명 · 유지 ${kept}명${notSubmitted ? ` · 이 차수 결과가 없는 학생(미제출 등) ${notSubmitted}명` : ""}${missing ? ` · 배정표에만 있는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
+    parts.push(`현 ${grade}학년 ${list.length}명 읽음 · 갱신 ${changed}명 · 유지 ${kept}명${notSubmitted ? ` · 이 차수 결과에 없는 학생 ${notSubmitted}명(미제출 등)` : ""}${missing ? ` · 배정표에만 있는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
   }
   return { updated, unmatched, text: `내년 반 배정표: ${parts.join(" / ") || "읽은 학생 0명"}` };
 }

@@ -318,7 +318,7 @@ test("6차 화면: 다른 학년 점유로 '입력 변경됨' 안 됨·다른 �
   assert.equal(merged.unmatched, 1);
   assert.match(merged.text, /현 1학년 2명 읽음 · 갱신 2명 · 유지 0명 · 배정표에만 있는 학생 1명\(반·번호 표기 확인\)/);
   // 그 학년 반·번호 모양이면 미제출로 구분
-  assert.match(ctx.classSectionsMergeClassMap({ "1-3-40": { classroom: "1" } }).text, /이 차수 결과가 없는 학생\(미제출 등\) 1명/);
+  assert.match(ctx.classSectionsMergeClassMap({ "1-3-40": { classroom: "1" } }).text, /이 차수 결과에 없는 학생 1명\(미제출 등\)/);
   merged = ctx.classSectionsMergeClassMap({ "1-2-1": { classroom: "3" } });
   assert.match(merged.text, /1명 읽음 · 갱신 1명 · 유지 3명/);
   assert.deepEqual(plain(ctx.classSectionsClassMap("1")["1-1-1"]), { classroom: "2", number: "3" });
