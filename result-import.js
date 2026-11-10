@@ -261,7 +261,8 @@ function analyzeResultCandidate(candidate, options) {
       issues.warnings.push(`${target} 중 ${plan}에 없는 과목 ${unknown.length}개: ${resultExampleList(unknown.map((course) => course.name))}. 과목명이 편제표와 다르면 그룹 분류와 시수 통계 연결이 끊어지니 편제표 또는 파일의 과목명을 맞추세요.`);
       addAction("curriculum", "1단계 편제표 확인");
     }
-    const missing = curriculum.filter((item) => !fileNames.has(normalizeResultCourseName(item.subject)));
+    // 따로 신청(소인수·공동) 과목은 결과 파일에 없는 게 정상이므로 '없는 과목'으로 세지 않는다.
+    const missing = curriculum.filter((item) => !item.separate && !fileNames.has(normalizeResultCourseName(item.subject)));
     if (missing.length) issues.info.push(`${plan}의 ${target} 중 결과 파일에 없는 과목 ${missing.length}개: ${resultExampleList(missing.map((item) => item.subject))}.`);
   } else {
     issues.info.push(`${plan}에서 ${target}을 찾지 못해 과목명 대조를 건너뛰었습니다. 1단계에서 해당 입학연도 편제표를 확인하세요.`);
