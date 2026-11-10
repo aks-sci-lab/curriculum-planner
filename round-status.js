@@ -42,9 +42,10 @@ function buildRoundSnapshot(round) {
   const aggregate = aggregateRecords(
     data.students, data.courses, openingPercent, divisionPercent,
     data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases,
-    state.roundClosures?.[round] || {}
+    typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {}
   );
-  const closures = state.roundClosures?.[round] || {};
+  // 앞 차수에서 정한 개설/폐강(이 차수에 직접 정하지 않은 과목)도 이어받아 확정 스냅샷에 넣는다.
+  const closures = typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {};
   const rows = [];
   for (const { summary, semesters } of aggregate.reports) {
     for (const semester of semesters) {
@@ -160,7 +161,7 @@ function roundClassPlanIssues(round) {
     data.students, data.courses, openingPercent, divisionPercent,
     data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {},
     typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-    state.roundClosures?.[round] || {}
+    typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {}
   );
   return aggregateClassPlanIssues(aggregate);
 }

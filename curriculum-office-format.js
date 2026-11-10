@@ -164,7 +164,12 @@ function curriculumOfficeEntries(data, fields = OFFICE_FIELDS, { key = "" } = {}
       // 학점을 읽지 못한 묶음(0)은 구성 과목 운영학점(curriculum-data.js planDataGroupCredit)을 쓴다.
       const credit = Number(group.credit) > 0 ? Number(group.credit) : typeof planDataGroupCredit === "function" ? planDataGroupCredit(data, group) : 0;
       const values = OFFICE_FIELDS.map((field) => group.fields.includes(field) ? credit : "");
-      groupRows.get(group.id).push({ ...base, division: curriculumOfficeDivision(subject, { section: "choice" }), values });
+      // 울산 양식은 세부교과목 한 칸에 한 과목(불러올 때 이어진 같은 학점 줄을 '가, 나'로 묶은 것의 반대): 이름마다 한 줄.
+      // 선택군 소계는 택n × 학점이라 줄 수와 무관하다.
+      const names = officeSubjectNames(subject.name);
+      for (const name of names.length ? names : [base.name]) {
+        groupRows.get(group.id).push({ ...base, name, division: curriculumOfficeDivision(subject, { section: "choice" }), values });
+      }
     }
   });
   for (const group of groups) {
