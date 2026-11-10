@@ -1597,3 +1597,42 @@ test("aggregate skips separate (소인수·공동) course columns left in older 
   const names=aggregate.reports.flatMap((report)=>report.semesters.flatMap((semester)=>semester.groups.flatMap((group)=>group.courses.map((course)=>course.name))));
   assert.deepEqual(plain(names),["물리학"]);
 });
+
+test("step 2 subject list shows a two-semester course once per semester, like the selection groups", () => {
+  const container = { innerHTML: "" };
+  const ctx = vm.createContext({
+    state: { applicationMenuGrade: "2" },
+    $: (selector) => selector === "#applicationSubjectList" ? container : { value: "2026" },
+    escapeHtml: (value) => String(value), applicationCohortYear: () => "2025",
+    collectApplicationSubjects: () => ({ "1": [], "2": [], "3": [
+      { subject: "기하", semester: "1", type: "진로선택", area: "수학", credit: 3 },
+      { subject: "융합과학 탐구", semester: "1·2", type: "융합선택", area: "과학", credit: 3 },
+      { subject: "여행지리", semester: "2", type: "융합선택", area: "사회", credit: 3 }
+    ] })
+  });
+  vm.runInContext(functionSource("function renderApplicationSubjects(", "function buildApplicationPageHtml("), ctx);
+  ctx.renderApplicationSubjects();
+  const columns = container.innerHTML.split('<section class="application-semester-column">').slice(1);
+  assert.match(columns[0], /1학기 <span>2과목<\/span>/);
+  assert.match(columns[0], /융합과학 탐구 \(1학기\)/);
+  assert.match(columns[1], /2학기 <span>2과목<\/span>/);
+  assert.match(columns[1], /융합과학 탐구 \(2학기\)/);
+  assert.doesNotMatch(container.innerHTML, /1·2/);
+});
+
+test("result validation does not list separate (소인수·공동) courses as 'missing from the result file'", () => {
+  const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
+  const ctx = vm.createContext({ classifyApplicationRecords: () => [], getApplicationGroupSettings: () => [] });
+  vm.runInContext(importer.slice(importer.indexOf("function normalizeResultCourseName("), importer.indexOf("function buildResultImportPreview(")), ctx);
+  ctx.resultExampleList = (items) => items.join(", ");
+  const course = (column, name) => ({ column, name, credits: 3 });
+  const candidate = { skippedRows: [], data: {
+    courses: [course(1, "물리학"), course(2, "경제")],
+    students: [{ grade: "1", classroom: "1", number: "1", name: "가상", selections: [course(1, "물리학"), course(2, "경제")], totalCredits: 6 }]
+  } };
+  const subjects = { "2": [{ subject: "물리학" }, { subject: "경제", separate: true }, { subject: "보건", separate: true }] };
+  const result = ctx.analyzeResultCandidate(candidate, { grade: "1", subjects, cohortYear: "2026" });
+  const text = [...result.issues.warnings, ...result.issues.info].join("\n");
+  assert.match(text, /소인수·공동교육과정 1과목은 따로 신청하므로 결과에서 뺐습니다: 경제/);
+  assert.doesNotMatch(text, /결과 파일에 없는 과목/, "따로 신청 과목만 없으면 '없는 과목' 줄은 없다");
+});

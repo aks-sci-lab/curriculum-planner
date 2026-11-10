@@ -5318,9 +5318,13 @@
       container.innerHTML = [String(Number(state.applicationMenuGrade || "1") + 1)].filter((grade) => subjects[grade].length).map((grade) => {
         const bySemester = new Map();
         for (const item of subjects[grade]) {
-          const key = item.semester || "0";
-          if (!bySemester.has(key)) bySemester.set(key, []);
-          bySemester.get(key).push(item);
+          // 두 학기에 모두 편성된 과목('1·2')은 선택 그룹(getGroupedApplicationSubjects)과 같은 규칙으로
+          // 학기마다 '과목 (1학기)'·'과목 (2학기)' 한 줄씩 넣는다(예전에는 '1·2' 열이 없어 목록에서 빠졌다).
+          const semesters = String(item.semester || "").split("·").filter(Boolean);
+          for (const key of semesters.length ? semesters : ["0"]) {
+            if (!bySemester.has(key)) bySemester.set(key, []);
+            bySemester.get(key).push(semesters.length > 1 ? { ...item, subject: `${item.subject} (${key}학기)` } : item);
+          }
         }
         const semesterHtml = ["1", "2"].map((semester) => {
           const semesterCourses = bySemester.get(semester) || [];
