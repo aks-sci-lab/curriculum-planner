@@ -724,6 +724,34 @@ async function specialRoomScenario({ page, h, info, semester = "1" }) {
 
 // 담임학급별 출석부(학기 전체, 두 학년): 담임반 수 = 내년 학급 수, 반 학생 수 합 = 학년 학생 수, 현황 칸 = 분반 명렬표,
 // zip 파일 수 = 반 수, 화면 담임반 목록·표 인원, 인쇄(이 반 = 현황 1장 + 그 반 분반 출석부, 학년 전체 = 반 수)
+// 담임반 현황 시트 범례(2·3단계 한 줄 칸): '범례 — 강의실(과목, 교실) → 선생님: A심화영어1(심화 영어, 3-7) → 김  /  …'(A열, 다음 줄로 이어짐)
+// → [{ room, course, place }] 또는 범례가 없으면 null
+function readHrLegend(rows) {
+  const at = rows.findIndex((r) => String(r?.[0] ?? "").startsWith("범례 — "));
+  if (at < 0) return null;
+  const text = rows.slice(at).map((r) => String(r?.[0] ?? "")).filter(Boolean).join("  /  ").replace(/^범례 — [^:]*:\s*/, "");
+  return text.split(/\s+\/\s+/).map((e) => e.trim()).filter(Boolean).map((e) => {
+    const arrow = e.lastIndexOf(" → ");
+    const left = arrow >= 0 ? e.slice(0, arrow) : e;
+    const open = left.indexOf("("), close = left.lastIndexOf(")");
+    const inner = open >= 0 && close > open ? left.slice(open + 1, close) : "";
+    const comma = inner.lastIndexOf(", ");
+    return { room: open >= 0 ? left.slice(0, open) : left, course: comma >= 0 ? inner.slice(0, comma) : inner, place: comma >= 0 ? inner.slice(comma + 2) : "" };
+  });
+}
+// 한 줄 칸 '과목 · 교실'(또는 약칭 · 교실, 교실 없음) → 범례 강의실 후보(중복 없이)
+function legendCandidates(legend, cellText) {
+  const t = String(cellText).split("\n")[0];
+  const dot = t.lastIndexOf(" · ");
+  const course = dot >= 0 ? t.slice(0, dot) : t, place = dot >= 0 ? t.slice(dot + 3) : "";
+  const squash = (x) => String(x).replace(/\s+/g, "");
+  const sub = (a, b) => { let i = 0; for (const ch of b) if (ch === a[i]) i++; return i === a.length; }; // a가 b의 부분열(약칭)
+  const same = legend.filter((e) => e.place === place);
+  let hit = same.filter((e) => e.course === course || squash(e.course) === squash(course));
+  if (!hit.length) hit = same.filter((e) => sub(squash(course), squash(e.course)));
+  return [...new Set(hit.map((e) => e.room))];
+}
+
 async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextClasses, submitted = null, mapGrades = ["1"] }) {
   const out = {};
   const semester = groupKey.split(":")[1];
@@ -759,24 +787,43 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   h.check(file[0]?.name === "목록" && file.length === list.length + 1 && !gradeBad.length, "중요", "6단계", `담임학급 전체 파일: 담임반 수(학년별 내년 ${nextClasses}학급)·반 학생 수 합(학년 학생 수)이 다름`, { actual: out.file });
   // 현황 시트: 학생 줄 = 그 담임반 학생(내년 반), 칸의 강의실 = 명렬표
   const bad = [];
+  const levels = {};
+  let ambiguous = 0;
   for (const sheet of file.slice(1)) {
     const head = sheet.rows.findIndex((r) => r[0] === "번호" && compact(r[1]) === "현학년-반-번호");
     const title = String(sheet.rows[0]?.[0] || "");
     const m = title.match(/(내년|현) (\d)학년 (\S+)반/);
     const rows = sheet.rows.slice(head + 1).filter((r) => /^\d+-\d+-\d+$/.test(String(r[1] || "")));
+    const legend = readHrLegend(sheet.rows);
     const problems = [];
     for (const r of rows) {
       const key = String(r[1]);
       const next = classMap.get(key);
       if (m && m[1] === "내년" && next && String(next.classroom) !== m[3]) problems.push(`${key}: 내년 ${next.classroom}반인데 ${m[3]}반 시트`);
       const cells = r.slice(3, r.length - 2).map((v) => String(v || "")).filter(Boolean);
-      const got = cells.map((c) => (c.split("\n")[0].match(/(\S+)$/) || [])[1]).sort();
       const want = (roomsOf.get(key) || []).slice().sort();
-      if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${key}: 칸 ${got.join(",")} ≠ 명렬표 ${want.join(",")}`);
+      if (!legend) {
+        // 1단계(두 줄 칸): 첫 줄 마지막 낱말 = 강의실
+        const got = cells.map((c) => (c.split("\n")[0].match(/(\S+)$/) || [])[1]).sort();
+        if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${key}: 칸 ${got.join(",")} ≠ 명렬표 ${want.join(",")}`);
+        continue;
+      }
+      // 2·3단계(한 줄 칸 '과목 · 3-7'): 범례 '강의실(과목, 교실) → 선생님'으로 강의실 후보를 찾는다. 후보가 둘 이상(같은 과목·같은 교실 분반)이면 건너뜀.
+      const left = want.slice();
+      for (const c of cells) {
+        const cand = legendCandidates(legend, c);
+        if (cand.length !== 1) { if (cand.length > 1) ambiguous++; else problems.push(`${key}: 칸 '${c}'에 맞는 범례 없음`); continue; }
+        const at = left.indexOf(cand[0]);
+        if (at < 0) problems.push(`${key}: 칸 '${c}' → ${cand[0]} 가 명렬표(${want.join(",")})에 없음`);
+        else left.splice(at, 1);
+      }
+      if (cells.length !== want.length) problems.push(`${key}: 칸 ${cells.length}개 ≠ 명렬표 ${want.length}개`);
     }
+    levels[legend ? "compact" : "twoLine"] = (levels[legend ? "compact" : "twoLine"] || 0) + 1;
     if (problems.length) bad.push({ sheet: sheet.name, students: rows.length, problems: problems.slice(0, 3) });
   }
   out.statusBad = bad.length;
+  out.statusLevels = levels; out.statusAmbiguous = ambiguous;
   h.check(!bad.length, "중요", "6단계", `담임학급 이동수업 현황 시트 ${bad.length}개의 학생·칸이 내년 반·분반 명렬표와 다름`, { actual: bad.slice(0, 4) });
   // zip
   const zipFile = await saveDownload(page, () => page.locator("#classSectionsAttendanceHomeroom").click(), path.join(dir, `${safeName(groupKey)}-homeroom.zip`));
@@ -804,7 +851,8 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
       const by = new Map();
       for (const el of pages) { const id = el.dataset.homeroom; if (!by.has(id)) by.set(id, []); by.get(id).push(el.dataset.page || ""); }
       const badLabels = [...by].filter(([, labels]) => labels.some((l, i) => l !== `${i + 1}/${labels.length}`)).map(([id, labels]) => `${id}: ${labels.join(",")}`);
-      return { hr: pages.length, homerooms: by.size, perHomeroom: Object.fromEntries([...by].map(([id, l]) => [id, l.length])), multi: [...by.values()].filter((l) => l.length > 1).length, badLabels, att: document.querySelectorAll("#printBatch .cs-att-page").length, printed: (window.__prints || 0) - b,
+      const noAttr = pages.filter((el) => !el.dataset.page || !el.dataset.level || !el.dataset.font).length;
+      return { hr: pages.length, noAttr, levels: [...new Set(pages.map((el) => `${el.dataset.level}/${el.dataset.font}pt`))], homerooms: by.size, perHomeroom: Object.fromEntries([...by].map(([id, l]) => [id, l.length])), multi: [...by.values()].filter((l) => l.length > 1).length, badLabels, att: document.querySelectorAll("#printBatch .cs-att-page").length, printed: (window.__prints || 0) - b,
         status: (document.getElementById("classSectionsStatus")?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 200) };
     }, before);
     const m = r.status.match(/담임반 (\d+)개\(현황 (\d+)쪽 \+ 분반 출석부 (\d+)장\)/);
@@ -817,6 +865,7 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   h.check(one.homerooms === 1 && one.hr >= 1 && one.att === pickedSections && grade.homerooms === nextClasses && grade.hr >= nextClasses && !one.badLabels.length && !grade.badLabels.length && one.printed && grade.printed, "중요", "6단계",
     `담임반 인쇄: 이 반 현황 ${one.hr}쪽(반 ${one.homerooms})·분반 출석부 ${one.att}장(기대 ${pickedSections}), 학년 전체 현황 반 ${grade.homerooms}개(기대 ${nextClasses})·${grade.hr}쪽, 쪽 표시 오류 ${one.badLabels.length + grade.badLabels.length}`, { actual: out.print });
   // 사용자 결정: 담임반 현황은 반당 최대 두 장
+  h.check(!one.noAttr && !grade.noAttr, "중요", "6단계", `담임반 현황 인쇄 쪽에 data-page·data-level·data-font가 없는 쪽 ${one.noAttr + grade.noAttr}개`, { actual: { one: one.levels, grade: grade.levels } });
   h.check(one.maxPages <= 2 && grade.maxPages <= 2, "중요", "6단계", `담임반 현황이 반당 두 쪽을 넘음(이 반 ${one.maxPages}쪽, 학년 전체 최대 ${grade.maxPages}쪽)`, { actual: { one: one.perHomeroom, grade: grade.perHomeroom, status: grade.status } });
   h.check(one.statusOk && grade.statusOk, "중요", "6단계", "담임반 인쇄 상태 줄 '담임반 n개(현황 a쪽 + 분반 출석부 b장)'이 인쇄된 장 수와 다름", { actual: { one: one.status, grade: grade.status, counts: out.print } });
   // 담임반 화면 요약(#classSectionsHomeroomUnsubmitted): 현1 = 배정표 기준 미제출 n명, 현2 = '미제출 확인 불가'
