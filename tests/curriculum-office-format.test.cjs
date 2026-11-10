@@ -303,3 +303,25 @@ test("교육청 양식 단추·불러오기 확인 창이 화면에 있고 새 �
   assert.ok(html.indexOf("curriculum-office-format.js") > html.indexOf("curriculum-data-export.js"));
   assert.match(app, /isCurriculumOfficeProgram\(sheets\)/);
 });
+
+test("xlsb 읽기는 단계마다 진행 문구(1/3~3/3·경과 초)를 상태 줄에 보이고, 끝나거나 실패하면 읽는 중 표시를 끈다", async () => {
+  const status = { style: {}, textContent: "", attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
+  const seen = [];
+  const ctx = vm.createContext({
+    TextDecoder, setTimeout: (resolve) => { seen.push(status.textContent); resolve(); },
+    document: { getElementById: (id) => id === "status" ? status : null, addEventListener() {} },
+    state: { curriculumCohortYear: "2026", curriculumPlanType: "cohort", curriculumMutationRevision: 0 },
+    readZipDirectory: () => new Map(), readZipEntry: async () => new Uint8Array()
+  });
+  const appLink = office.slice(office.indexOf("\n// ---- 앱 연결 ----"));
+  vm.runInContext(office.slice(0, office.indexOf("\n// ---- 앱 연결 ----")), ctx);
+  vm.runInContext(appLink.slice(appLink.indexOf("function curriculumOfficeStatus("), appLink.indexOf("// 학년 시트 선택 확인 창.")), ctx);
+  const start = appLink.indexOf("async function importCurriculumOfficeXlsbFile(");
+  vm.runInContext(appLink.slice(start, appLink.indexOf("\nif (typeof document", start)), ctx);
+  const result = await ctx.importCurriculumOfficeXlsbFile({ arrayBuffer: async () => new ArrayBuffer(0) });
+  assert.equal(result, false, "빈 파일은 거절");
+  assert.deepEqual(seen.map((text) => text.match(/\((\d)\/3\)/)?.[1]), ["1", "2", "3"]);
+  assert.match(seen[0], /큰 파일은 30초쯤 걸립니다/);
+  assert.equal(status.attributes["aria-busy"], "false");
+  assert.match(status.textContent, /xlsb 파일을 읽지 못했습니다/, "실패하면 진행 문구 대신 오류");
+});

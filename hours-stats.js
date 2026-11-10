@@ -423,7 +423,7 @@ function hoursPerTeacherRange(list) {
 // 배분 메모에 쓰는 줄인 과목명(원래 양식: 통과·과탐실·융과·기환·통사·사문탐·기후지속). 목록에 없으면 낱말 첫 글자로 줄인다.
 var HOURS_SHORT_SUBJECTS = [
   [/^통합과학/, "통과"], [/^과학탐구실험/, "과탐실"], [/^융합과학/, "융과"], [/^기후변화와환경생태/, "기환"],
-  [/^통합사회/, "통사"], [/^사회문제탐구/, "사문탐"], [/^기후변화와지속가능/, "기후지속"], [/^과학의역사/, "과역"], [/^과학과제/, "과과탐"]
+  [/^통합사회/, "통사"], [/^사회문제탐구/, "사문탐"], [/^기후변화와지속가능/, "기후지속"], [/^과학의역사/, "과역"], [/^과학과제/, "과제연구"]
 ];
 function hoursShortSubject(subject) {
   const compact = String(subject ?? "").replace(/\s+/g, "");
@@ -550,7 +550,9 @@ function computeHoursStats(year = hoursTargetYear()) {
     const usedResults = new Set();
     const shared = [];
     for (const entry of entries) {
-      if (entry.kind === "공동") {
+      // 순증(우리 학교가 따로 1반을 더 여는) 소인수·공동교육과정은 시수에 넣는다. 그 외 공동교육과정은 다른 학교 운영이라 뺀다.
+      const netIncrease = (entry.kind === "공동" || entry.kind === "소인수") && /순증/.test(String(entry.note || ""));
+      if (entry.kind === "공동" && !netIncrease) {
         shared.push(`${entry.subject}(${entry.grade}-${entry.semester})`);
         continue;
       }
@@ -575,6 +577,11 @@ function computeHoursStats(year = hoursTargetYear()) {
             ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`
             : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
           : "학교 지정 · 전체 학급";
+      } else if (netIncrease && (entry.kind === "공동" || grade === "1" || !(resultIndex.get(normalizeResultCourseName(entry.subject)) || [])
+        .some((row) => !row.semester || row.semester === entry.semester))) {
+        // 신청 결과에 없는 순증 과목은 1반으로 본다(0반이면 시수가 빠짐). 반 수가 다르면 상세 표에서 직접 입력.
+        item.autoClasses = 1;
+        item.basis = `${entry.kind === "공동" ? "공동교육과정" : "소인수"} 순증 · 1반으로 계산(다르면 직접 입력)`;
       } else if (grade === "1") {
         item.autoClasses = 0;
         item.basis = "1학년 선택과목 · 개설반 직접 입력";
@@ -691,9 +698,15 @@ function computeHoursStats(year = hoursTargetYear()) {
     creative2: (totals["2"] + totals.creative) / totals.teachers,
     creativeYear: (totals["1"] + totals["2"] + 2 * totals.creative) / totals.teachers / 2
   } : null;
-  const missingTeachers = included.filter((department) => department.items.length && !department.common && !(department.teachers > 0));
+  // 빈칸(아직 안 넣음)과 0명(넣었는데 0)은 따로 알린다.
+  const needsTeachers = included.filter((department) => department.items.length && !department.common && !(department.teachers > 0));
+  const missingTeachers = needsTeachers.filter((department) => department.teachers === null || department.teachers === undefined);
+  const zeroTeachers = needsTeachers.filter((department) => department.teachers === 0);
   if (missingTeachers.length) {
     issues.push({ level: "warning", text: `시수가 있는데 교사 수가 비어 있는 교과: ${missingTeachers.map((department) => hoursDepartmentName(department.id)).join(", ")}`, action: "focus:hoursTeachers-" + missingTeachers[0].id });
+  }
+  if (zeroTeachers.length) {
+    issues.push({ level: "warning", text: `시수가 있는데 교사 수를 0명으로 넣은 교과(1인당 평균 계산 안 함): ${zeroTeachers.map((department) => hoursDepartmentName(department.id)).join(", ")}`, action: "focus:hoursTeachers-" + zeroTeachers[0].id });
   }
   for (const common of departments.filter((department) => department.common)) {
     const over = ["1", "2"].filter((semester) => common.unallocated[semester] < 0);
@@ -1410,7 +1423,7 @@ function hoursFormMemo(stats) {
     `◈ ${stats.year}학년도 비교과 교사 : ${roles.join(", ") || "없음"}`,
     "",
     "◈ 창체포함평균값",
-    `   ⇒ (교과시간총합 + 창체${count(stats.totals.creative)}시간) / ${count(stats.totals.teachers)}명`
+    `   ⇒ (교과시간총합 + 창체${count(stats.totals.creative)}시간) / ${stats.totals.teachers > 0 ? `${count(stats.totals.teachers)}명` : "교과 교사 수(미입력)"}`
   ].join("\n");
   const changeRows = stats.departments.filter((department) => department.id !== "기타")
     .map((department) => ({ name: hoursStaffName(department), previous: department.previousTeachers ?? NaN, current: department.teachers ?? NaN }));
@@ -1548,11 +1561,11 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
           const firstMember = placed.find((item) => !item.department.common)?.department === department && semester === "1";
           put(blockStart, 23, { v: note, k: "memo", split: true, input: { type: "text", value: note,
             attrs: { "data-hours-allocation-note": `${department.id}|${semester}`, "data-focus-key": `alloc-note-${department.id}-${semester}`,
-              "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 메모`, placeholder: "통과10 · 과탐실3" } } });
+              "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 메모`, placeholder: "예: 통과10 · 과탐실3" } } });
           merge(blockStart, 23, blockEnd, 26);
           put(blockStart, 27, { v: number(hoursNumber(allocation)), k: "ab", input: { type: "number", value: allocation ?? "",
             attrs: { ...(firstMember ? { id: `hoursAllocation-${department.group}` } : {}), "data-hours-allocation": `${department.id}|${semester}`,
-              "data-focus-key": `alloc-${department.id}-${semester}`, min: 0, max: 999, step: 1, placeholder: "0",
+              "data-focus-key": `alloc-${department.id}-${semester}`, min: 0, max: 999, step: 1, placeholder: "",
               "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 시수` } } });
           merge(blockStart, 27, blockEnd, 27);
         }
@@ -1727,7 +1740,7 @@ function hoursFormHtml(model) {
       let content;
       if (cell?.memo) {
         content = `<div class="hf-memo-fixed">${escapeHtml(cell.memo.fixed)}</div>
-          <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 (전년도 교사 수를 시수 설정에 넣으면 자동으로 적습니다)">${escapeHtml(cell.memo.changes)}</textarea>
+          <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="예시) ◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 — 전년도·올해 교사 수를 넣으면 자동으로 적습니다">${escapeHtml(cell.memo.changes)}</textarea>
           ${cell.memo.edited ? '<button class="button button-quiet hf-memo-reset" type="button" data-hours-action="reset-memo">자동 문구로</button>' : ""}`;
       } else if (cell?.input) content = input(cell.input);
       else content = escapeHtml(hoursFormDisplay(cell));

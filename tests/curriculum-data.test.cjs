@@ -242,3 +242,19 @@ test("내보내기 행 이동: 과목 영역 아래의 참조는 늘어난 행�
   assert.equal(ctx.planExportShiftReferences("$A$1:$N$14", mapRow), "$A$1:$N$16");
   assert.equal(ctx.planExportShiftReferences('"G13"&G13', mapRow), '"G13"&G15', "따옴표 안 글자는 그대로 둔다");
 });
+
+test("편제표 열 폭은 엑셀 열 폭을 따르되 한 열 240px를 넘지 않는다(넓은 세부과목 열 때문에 뒤 학기 열이 잘리지 않게)", () => {
+  const { ctx, layout } = converted();
+  const wide = { ...layout, columnWidths: (layout.columnWidths || []).map(() => 80) };
+  const html = ctx.curriculumDataSheetHtml(wide, {}, false, false, new Map());
+  const widths = [...html.match(/<colgroup>([\s\S]*?)<\/colgroup>/)[1].matchAll(/width:(\d+)px/g)].map((match) => Number(match[1]));
+  assert.ok(widths.length > 0);
+  assert.ok(widths.includes(240), "80자 폭 열은 240px로 줄어든다");
+  assert.ok(widths.every((width) => width <= 240), widths.join(","));
+});
+
+test("1단계 필터 선택 상자는 글자에 맞는 폭(고정 88·112px면 '전체 학년'·'전체 교육과정'이 잘림)", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "legacy.css"), "utf8");
+  assert.doesNotMatch(css, /#curriculumFilterGrade \{ width: 88px; \}/);
+  assert.match(css, /#curriculumFilterGrade, #curriculumFilterDivision, #curriculumFilterArea, #curriculumFilterDetail \{ width: auto; max-width: 190px;/);
+});

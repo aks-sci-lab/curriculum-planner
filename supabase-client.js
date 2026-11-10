@@ -590,6 +590,12 @@ var updateRetakeReadiness;
     await syncLinkedResults();
   }
 
+  // '신청 마감' 확인 문구(마감하면 학생이 신청·수정할 수 없음, 다시 열기로 되돌림).
+  function closeEventQuestion(event) {
+    const mixed = event?.subjects?.["2"]?.length && event?.subjects?.["3"]?.length;
+    return `${event?.round ?? ""}차 수강신청을 마감할까요?${mixed ? " (1·2학년 통합 신청이라 두 학년 모두 마감됩니다)" : ""}\n\n마감하면 학생이 더 이상 신청·수정할 수 없습니다. 필요하면 '다시 열기'로 되돌릴 수 있습니다.`;
+  }
+
   function renderGradeEvents() {
     const grade = String(Number(state.applicationMenuGrade || "1") + 1);
     const events = knownEvents.filter((event) => event.subjects?.[grade]?.length);
@@ -645,6 +651,8 @@ var updateRetakeReadiness;
         byId("cloudTeacherMessage").textContent = "이력의 복원 버튼은 해당 기록 시각 직전 상태로 되돌립니다.";
       }), "button button-quiet"));
       section.appendChild(button(event.is_open ? "신청 마감" : "다시 열기", () => teacherAction(async () => {
+        // 마감은 학생 화면을 바로 닫으므로 한 번 묻는다(다시 열기로 되돌릴 수 있음).
+        if (event.is_open && !window.confirm(closeEventQuestion(event))) return;
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: event.is_open ? "close" : "open" }, true);
         await refreshEvents();
         await syncLinkedResults();

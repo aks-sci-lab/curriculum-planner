@@ -844,6 +844,16 @@ function curriculumOfficeStatus(message, ok) {
   node.textContent = message;
 }
 
+// 오래 걸리는 읽기의 진행 문구(빈 글자면 끝). 상태 줄에 보이고 aria-busy로 읽는 중임을 알린다.
+function curriculumOfficeProgress(message) {
+  const node = document.getElementById("status");
+  if (!node) return;
+  node.setAttribute("aria-busy", message ? "true" : "false");
+  if (!message) return;
+  node.style.color = "#38557f";
+  node.textContent = message;
+}
+
 // 학년 시트 선택 확인 창. 고른 학년(숫자) 또는 null(취소).
 function askCurriculumOfficeGrade(options, chosen, cohortYear) {
   const dialog = document.getElementById("curriculumOfficeImportDialog");
@@ -920,14 +930,24 @@ async function importCurriculumOfficeProgram(sheets, file, verifyTarget = () => 
 async function importCurriculumOfficeXlsbFile(file) {
   const cohortYear = String(state.curriculumCohortYear), planType = state.curriculumPlanType;
   const revision = state.curriculumMutationRevision;
+  // xlsb는 큰 파일이면 30초쯤 걸린다 → 단계마다 진행 문구를 보이고(화면을 한 번 그리게 쉰 뒤) 다음 단계로.
+  const started = Date.now();
+  const progress = async (step, text) => {
+    curriculumOfficeProgress(`울산 편제 점검 프로그램 파일 읽는 중 (${step}/3) · ${text} · ${Math.round((Date.now() - started) / 1000)}초 — 큰 파일은 30초쯤 걸립니다. 창을 닫지 마세요.`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  };
   try {
+    await progress(1, "파일 여는 중");
     const buffer = await file.arrayBuffer();
     const directory = readZipDirectory(buffer);
     const entries = {};
+    await progress(2, "압축 풀기");
     for (const name of directory.keys()) {
       if (/^xl\/(workbook\.bin|_rels\/workbook\.bin\.rels|sharedStrings\.bin|worksheets\/sheet\d+\.bin)$/.test(name)) entries[name] = await readZipEntry(buffer, directory, name);
     }
+    await progress(3, "시트 읽기");
     const sheets = curriculumOfficeXlsbSheets(entries, (name) => CURRICULUM_OFFICE_SHEET_PATTERN.test(name.trim()));
+    curriculumOfficeProgress("");
     if (!isCurriculumOfficeProgram(sheets)) {
       curriculumOfficeStatus("xlsb 파일은 울산 편제 점검 프로그램 파일만 읽을 수 있습니다. 다른 편제표는 엑셀에서 '다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 바꿔 올려 주세요.", false);
       return false;
@@ -938,6 +958,7 @@ async function importCurriculumOfficeXlsbFile(file) {
       }
     });
   } catch (error) {
+    curriculumOfficeProgress("");
     curriculumOfficeStatus(`xlsb 파일을 읽지 못했습니다(${error?.message || error}). 엑셀에서 '다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 바꿔 올려 주세요.`, false);
     return false;
   }
