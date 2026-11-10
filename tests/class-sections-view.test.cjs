@@ -483,3 +483,29 @@ test("[11차] 재신청이 남은 결과 내보내기: 나이스 '확인 필요'
   assert.match(apply, /await classSectionsConfirm\(/);
   assert.match(source, /if \(typeof appConfirm === "function"\) return appConfirm\(text, options\);/);
 });
+
+test("교실 고정(roomPins)은 결과를 새로 만들어도 같은 분반 id면 이어받고, 없어진 분반은 버리며 상태 줄에 '교실 고정 n개 해제'", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key);
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  const first = ctx.classSectionsSolve(input);
+  ctx.classSectionsSaveResult(entry, first, input, group, { locked: true });
+  const ids = entry.sectionResult.sections.map((section) => section.id);
+  entry.sectionResult.roomPins = { [ids[0]]: "과학실1", "없는분반#9": "음악실" };
+  // 바뀐 학생만 다시 계산·편성 계산 등 결과를 새로 만드는 경로는 모두 classSectionsSaveResult를 거친다
+  const again = ctx.classSectionsSolve(input);
+  ctx.CLASS_SECTIONS_VIEW.statusTail = "";
+  ctx.classSectionsSaveResult(entry, again, input, group, { locked: true });
+  assert.deepEqual(plain(entry.sectionResult.roomPins), { [ids[0]]: "과학실1" });
+  assert.equal(ctx.CLASS_SECTIONS_VIEW.statusTail, "교실 고정 1개 해제(없어진 분반)");
+  ctx.classSectionsSetStatus("편성 완료");
+  assert.equal(ctx.CLASS_SECTIONS_VIEW.status.text, "편성 완료 · 교실 고정 1개 해제(없어진 분반)");
+  assert.equal(ctx.CLASS_SECTIONS_VIEW.statusTail, "");
+  // 고정이 없던 결과는 roomPins 없음
+  const empty = ctx.classSectionsEntry("1", "다른");
+  ctx.classSectionsSaveResult(empty, again, input, group, { locked: true });
+  assert.equal(empty.sectionResult.roomPins, undefined);
+  const source = fs.readFileSync(path.join(__dirname, "..", "class-sections-view.js"), "utf8") + fs.readFileSync(path.join(__dirname, "..", "class-sections-edit.js"), "utf8");
+  assert.equal((source.match(/entry\.sectionResult = classSectionsCompactResult/g) || []).length, 1, "새 결과를 만드는 곳은 classSectionsSaveResult 하나");
+});
