@@ -576,7 +576,7 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.deepEqual(plain(ctx.curriculumColorGroupOptions(layout,"2","2")),[]);
 });
 
-test("joint and small-enrollment courses are excluded from new applications, not historical imports", () => {
+test("joint and small-enrollment courses are applied for separately: excluded from applications and dropped from imported results", () => {
   const contexts = [
     {subject:"일반 과목",division:"학생선택교육과정",detail:"융합",selectionType:"융합선택",
       row:[3,3,""],grade:"2",area:"과학"},
@@ -596,11 +596,50 @@ test("joint and small-enrollment courses are excluded from new applications, not
   });
   vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("),ctx);
   assert.deepEqual(plain(ctx.selectedApplicationSubjects()["2"].map((c)=>c.subject)),["일반 과목","공동체와 인간"]);
-  assert.equal(ctx.collectApplicationSubjects({includeExcluded:true})["2"].length,5);
+  const all=ctx.collectApplicationSubjects({includeExcluded:true})["2"];
+  assert.equal(all.length,5);
+  // 결과 취합은 이름을 알아보되 따로 신청 표시(separate)로 빼낸다.
+  assert.deepEqual(plain(all.filter((c)=>c.separate).map((c)=>c.subject)),["공동 과목","소인수 과목","공동 과목 2"]);
   vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
-  const historical=ctx.mergeApplications([{grade:"1",classroom:"1",number:"1",name:"가상",selections:["소인수 과목"]}]);
+  const historical=ctx.mergeApplications([
+    {grade:"1",classroom:"1",number:"1",name:"가상",selections:["소인수 과목"]},
+    {grade:"1",classroom:"1",number:"2",name:"가상2",selections:["일반 과목","공동 과목 2"]}
+  ]);
   assert.deepEqual(plain(historical.errors),[]);
-  assert.equal(historical.students[0].selections[0].name,"소인수 과목");
+  assert.deepEqual(plain(historical.separated),["소인수 과목","공동 과목 2"]);
+  assert.ok(!historical.courses.some((course)=>/소인수|공동 과목/.test(course.name)),"따로 신청 과목은 집계 과목에 없다");
+  assert.equal(historical.students[0].selections.length,0,"따로 신청 과목만 고른 학생은 명단에 남고 과목은 비움");
+  assert.deepEqual(plain(historical.students[1].selections.map((course)=>course.name)),["일반 과목"]);
+});
+
+test("separate (소인수·공동) courses use one rule from plan data: note or plan section 'extra'", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "curriculum-compliance.js"), "utf8"), ctx);
+  const plan = { subjects: [
+    { id: "a", row: 3, name: "물리학", category: "학생 선택 교육과정" },
+    { id: "b", row: 4, name: "경제", category: "학생 선택 교육과정", note: "소인수/2학년/1학기/3학점(순증)" },
+    { id: "c", row: 5, name: "고급 화학", category: "학생 선택 교육과정", planSection: "extra", planSectionManual: true },
+    { id: "d", row: 6, name: "공동 운영", category: "공동·소인수 교육과정" },
+    { id: "e", row: 7, name: "헤더", fixed: true, note: "소인수" }
+  ], groups: [] };
+  assert.deepEqual([...ctx.curriculumSeparateApplicationRows(plan)], [4, 5, 6]);
+});
+
+test("result import drops separate (소인수·공동) course columns and tells the teacher", () => {
+  const ctx = vm.createContext({});
+  const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
+  const slice = (start, end) => importer.slice(importer.indexOf(start), importer.indexOf(end));
+  vm.runInContext(slice("function normalizeResultCourseName(", "function resultCourseSemester("), ctx);
+  vm.runInContext(slice("function stripSeparateResultCourses(", "function analyzeResultCandidate("), ctx);
+  const data = {
+    courses: [{ column: 1, name: "물리학", credits: 3 }, { column: 2, name: "경제 (1학기)", credits: 3 }],
+    students: [{ selections: [{ column: 1, name: "물리학", credits: 3 }, { column: 2, name: "경제 (1학기)", credits: 3 }], totalCredits: 6 }]
+  };
+  const removed = ctx.stripSeparateResultCourses(data, [{ subject: "물리학" }, { subject: "경제", separate: true }]);
+  assert.deepEqual(plain(removed), ["경제 (1학기)"]);
+  assert.deepEqual(plain(data.courses.map((course) => course.name)), ["물리학"]);
+  assert.equal(data.students[0].totalCredits, 3);
+  assert.equal(data.students[0].selections.length, 1);
 });
 
 test("student course classification labels leave selection identities unchanged", () => {

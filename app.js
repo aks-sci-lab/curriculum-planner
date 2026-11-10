@@ -3643,13 +3643,16 @@
       }
       // 과목 행 정보는 묶음마다 다시 만들지 않고 한 번만 만든다.
       const contexts = groups.size ? importedPlanCourseContexts(layout, columns) : [];
+      // 소인수·공동교육과정은 따로 신청: 편제표 데이터가 있으면 curriculumSeparateApplicationRows 한 기준, 없으면 행 글자로 판별.
+      const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
+        ? curriculumSeparateApplicationRows(layout.planData) : null;
       for (const group of groups.values()) {
         for (const context of contexts) {
           if (normalizeCurriculumDivision(context.division) !== "학생 선택 교육과정" ||
               !isSelectableDetail(context.selectionType || context.detail) ||
               curriculumCellFill(layout, context.rowIndex, semesterColumn).toUpperCase() !== group.fill.toUpperCase()) continue;
           const rowText = [context.subject, ...context.row].join(" ").replace(/\s+/g, "");
-          if (/공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
+          if (separateRows ? separateRows.has(context.rowIndex) : /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
           for (const subject of String(context.subject).split(/[,，]/)
             .map((name) => name.replace(/↔/g, " ").replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim())
             .filter(Boolean)) group.courses.add(subject);
@@ -3698,6 +3701,8 @@
         const semesters = [];
         for (const course of gradeCourses) {
           const applicationSubject = course.applicationSubject || aggregateApplicationSubject(course, grade, applicationSubjects);
+          // 소인수·공동교육과정은 따로 신청하므로(예전에 취합한 결과에 남아 있어도) 집계·개설·6단계 입력에서 뺀다.
+          if (applicationSubject?.separate) continue;
           const applicationSemester = applicationSubject?.semester || "";
           const applicationGroup = applicationGroupForCourse(course, grade, groupSettings, applicationSemester);
           const forcedSemester = semesterAssignments[String(course.column)];
@@ -3958,7 +3963,7 @@
           <div class="paper-signature">
             <div>${escapeHtml(String($("#confirmDate").value || "").trim() || "　　　년　　월　　일")}</div>
             <div>학생: ${escapeHtml(student.name)}&nbsp;&nbsp;&nbsp; (인)</div>
-            <div>학부형:　　　　　　　　　(인)</div>
+            <div>학부모:　　　　　　　　　(인)</div>
           </div>
           <p class="paper-school">${escapeHtml(String($("#schoolName").value || "").trim() || "　　　　　　　　　　")}&nbsp; 귀하</p>
           </div>
@@ -5126,12 +5131,17 @@
       }
       // 교차집중 과목은 학생이 고르는 과목이 아니라 학급마다 학기를 엇갈려 이수하므로 선택 그룹·신청 과목에서 뺀다.
       const crossRows = new Set((layout.planData?.subjects || []).filter((item) => !item.fixed && item.cross?.length).map((item) => item.row));
+      // 소인수·공동교육과정은 따로 신청한다(이 앱의 신청 과목이 아님). 판별 기준은 curriculumSeparateApplicationRows 하나,
+      // 편제표 데이터가 없는 예전 표만 행 글자로 판별한다. includeExcluded면 결과 취합에서 알아보고 빼도록 separate 표시를 붙여 넣는다.
+      const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
+        ? curriculumSeparateApplicationRows(layout.planData) : null;
       for (const context of contexts) {
         if (!String(context.division || "").replace(/\s+/g, "").includes("학생선택교육과정")) continue;
         if (crossRows.has(context.rowIndex)) continue;
         const rowText = [context.division, context.detail, context.subject, ...context.row]
           .map((value) => String(value ?? "").replace(/\s+/g, "")).join(" ");
-        if (!includeExcluded && /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
+        const separate = separateRows ? separateRows.has(context.rowIndex) : /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText);
+        if (!includeExcluded && separate) continue;
         // 과목명 앞뒤의 표기 기호(*★☆■)와 교차집중 표시는 신청 양식에서 제외한다.
         const subject = context.subject.replace(/↔/g, " ").replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim();
         if (!subject || subject.includes("과목명") || subject.includes("세부과목")) continue;
@@ -5216,7 +5226,8 @@
                 [sem, curriculumCellFill(layout, context.rowIndex, columns.semesters[(grade-1)*2+Number(sem)-1])])),
               semesterGroups: semesterGroupAssignments,
               hours: info.hours.join("+"),
-              credit
+              credit,
+              ...(separate ? { separate: true } : {})
             };
             seen.set(key, item);
             result[String(grade)].push(item);
@@ -5393,9 +5404,17 @@
       }
       const courses = [];
       const courseByGradeName = new Map();
+      // 소인수·공동교육과정(따로 신청) 과목은 이름만 알아보고 결과에서 뺀다(편제표에 없는 과목 오류로 보지 않음).
+      const separateNames = new Set();
+      const separated = new Set();
       let nextCourseColumn = 0;
       for (const grade of ["1", "2", "3"]) {
         for (const item of subjects[grade] || []) {
+          if (item.separate) {
+            separateNames.add(`${grade}:${item.subject}`);
+            for (const semester of String(item.semester || "").split("·").filter(Boolean)) separateNames.add(`${grade}:${item.subject} (${semester}학기)`);
+            continue;
+          }
           // 학년이 다른 동일 이름 과목은 표기에 학년을 붙여 구분한다.
           const displayName = nameCount.get(item.subject) > 1 ? `${item.subject}(${grade}학년)` : item.subject;
           const course = {
@@ -5445,12 +5464,22 @@
         const targetGrade = String(Number(grade) + 1);
         const picked = [];
         const unknown = [];
+        let skippedSeparate = 0;
         for (const subjectName of selections) {
           const course = courseByGradeName.get(`${targetGrade}:${String(subjectName).trim()}`);
           if (course) picked.push(course);
+          else if (separateNames.has(`${targetGrade}:${String(subjectName).trim()}`)) {
+            separated.add(String(subjectName).trim());
+            skippedSeparate++;
+          }
           else unknown.push(subjectName);
         }
         if (unknown.length) errors.push(`${label}: 편제표에 없는 과목 - ${unknown.join(", ")}`);
+        if (!picked.length && !unknown.length && skippedSeparate) {
+          // 따로 신청 과목만 고른 학생: 명단에는 남기고 과목은 비운다.
+          students.push({ id: `app-${grade}-${classroom}-${number}-${name}`, grade, classroom, number, name, selections: [], totalCredits: 0 });
+          return;
+        }
         if (!picked.length) {
           errors.push(`${label}: 반영된 과목이 없습니다.`);
           return;
@@ -5465,7 +5494,7 @@
       students.sort((a, b) =>
         Number(a.grade) - Number(b.grade) || Number(a.classroom) - Number(b.classroom) ||
         Number(a.number) - Number(b.number) || a.name.localeCompare(b.name, "ko"));
-      return { students, courses, errors };
+      return { students, courses, errors, separated: [...separated] };
     }
 
     function downloadApplicationForm() {
@@ -5831,6 +5860,7 @@
       status.style.color = merged.errors.length ? "#a44939" : "#287956";
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
         (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
+        (merged.separated?.length ? ` 소인수·공동교육과정 ${merged.separated.length}과목(${merged.separated.join(", ")})은 따로 신청하므로 뺐습니다.` : "") +
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${typeof describeUnclassifiedCourses === "function" ? describeUnclassifiedCourses(unclassified) : unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 

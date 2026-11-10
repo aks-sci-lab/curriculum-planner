@@ -1958,6 +1958,9 @@
 .hours-form .hf-input:focus { border-color: #2852ce; outline: 2px solid rgba(40, 82, 206, .25); outline-offset: 0; }
 .hours-form .hf-input.is-manual { background: #fff3c4; border-style: dashed; }
 .hours-form .hf-input.is-zero { color: #8a93a3; }
+.hours-form .hf-input.is-separate-pending { border: 1px dashed #d9822b; background: #fff4e5; }
+.hours-form .hf-separate-tag { display: inline-block; margin-left: 3px; padding: 0 3px; border-radius: 3px; background: #e8eef9; color: #2f4a7a; font-size: 9px; font-weight: 600; line-height: 13px; white-space: nowrap; vertical-align: middle; }
+.hours-form .hf-separate-tag.is-pending { background: #fde7cc; color: #9a4b00; }
 .hours-form .hf-memo .hf-input, .hours-form td.hf-memo { text-align: left; }
 .hours-form .hf-s .hf-input { height: 28px; font-size: 15px; font-weight: 700; }
 .hours-form td.hf-box { padding: 4px 8px; text-align: left; vertical-align: top; white-space: normal; }

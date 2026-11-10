@@ -206,6 +206,24 @@ function curriculumPlanSection(subject, plan) {
   return planSectionAuto(subject, plan);
 }
 
+// 소인수·공동교육과정 과목은 이 앱의 수강신청으로 받지 않는다(학교가 따로 신청을 받아 개설 여부·반 수를 정함).
+// 판별 기준은 한 곳: 학기 칸 메모(소인수·공동)가 있거나 편성 영역이 소인수·공동(extra)인 과목.
+// 2단계 신청 과목·결과 취합·4단계 집계·5단계 시수가 모두 이 기준을 쓴다.
+function curriculumSeparateApplication(subject, plan) {
+  if (!subject) return false;
+  if (String(subject.note ?? "").trim()) return true;
+  return curriculumPlanSection(subject, plan) === "extra";
+}
+
+// 편제표 데이터에서 따로 신청하는 과목의 행 번호(subject.row) 모음.
+function curriculumSeparateApplicationRows(plan) {
+  const rows = new Set();
+  for (const subject of plan?.subjects || []) {
+    if (!subject?.fixed && curriculumSeparateApplication(subject, plan) && Number.isInteger(subject.row)) rows.add(subject.row);
+  }
+  return rows;
+}
+
 function planComplianceNormalizeSettings(value) {
   const source = planComplianceObject(value) ? value : {};
   const number = (item, fallback, max = 400) => {
