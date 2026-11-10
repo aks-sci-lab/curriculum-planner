@@ -13,6 +13,7 @@ const { GROUPS } = require("./lib/plan-fixture.cjs");
 const Timetable = require("./lib/timetable-checks.cjs");
 const S6 = require("./lib/step6.cjs");
 const SC = require("./lib/step6-scenario.cjs");
+const X6 = require("./lib/step6-extra.cjs");
 
 const args = Object.fromEntries(process.argv.slice(2).join(" ").split(/\s*--/).filter(Boolean).map((part) => {
   const [key, ...rest] = part.split(/\s+/); return [key, rest.join(" ") || "1"];
@@ -1239,6 +1240,7 @@ async function stepClassSections({ page, h, report, roster }) {
     // 그룹별 엑셀 검증 + 그룹 간 시간 검증
     const selections = await finalSelections(h, report);
     const sectionsByGroup = {};
+    const validators = {}; // 그룹 → (엑셀, 화면, 이름) → 같은 검증(직접 고치기 뒤에 다시 씀)
     const dir = path.join(OUT, "downloads", "step6");
     for (const g of info) {
       await S6.selectGroup(page, g.key);
@@ -1258,6 +1260,12 @@ async function stepClassSections({ page, h, report, roster }) {
         && list.some((x) => unitCoursesNow.includes(x.subject) && (!x.semester || x.semester === g.semester))).length : 0;
       const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses: [], unitCourseOf, expectedUnassigned });
       check.expectedUnassigned = expectedUnassigned;
+      validators[g.key] = (files2, screen2, label2, opts = {}) => {
+        const unit2 = new Map(files2.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5])))
+          .map((r) => [r[10], Expected.bare(String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, ""))]));
+        return S6.checkGroup({ h, label: label2, files: files2, screen: screen2, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses: [], unitCourseOf: unit2, expectedUnassigned: opts.allowShownUnassigned ? screen2.unassignedRows : expectedUnassigned }).result;
+      };
+      validators[g.key].courses = groupCourses;
       // 나이스 반·번호: 배정표가 있는 현1은 새 반·번호, 없으면 비우고 참고 열(현 학년-반-번호)
       {
         const neisRows = files.neis[0].rows.slice(2).filter((r) => r.some(Boolean));
@@ -1341,7 +1349,37 @@ async function stepClassSections({ page, h, report, roster }) {
     }
     report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
     // 재신청 시뮬레이션: 2차 확정 해제 → 학생 3명 선택 변경(교사 화면) → 재확정 → '바뀐 학생만 다시 계산'
+    // 교실 배정(모든 그룹) · 교실 직접 고르기가 '바뀐 학생만 다시 계산' 뒤에도 남는지
+    await S6.open6(page);
+    result.rooms = await X6.checkRoomsAll({ page, h, info });
+    const pinA = await X6.pinRoom(page, info[0].key);
+    result.roomPinA = pinA;
+    h.check(!pinA || pinA.applied, "중요", "6단계", `${info[0].key}: 교실을 직접 골랐는데 카드 교실이 바뀌지 않음`, { actual: pinA });
     result.partial = await step6Partial({ page, h, report, groupKey: info[0].key, before: sectionsByGroup[info[0].key] });
+    if (pinA && !result.partial.skipped) {
+      await S6.open6(page);
+      result.roomPinA.afterPartial = await X6.pinKept(page, pinA);
+      h.check(result.roomPinA.afterPartial?.kept, "중요", "6단계", `${info[0].key}: 직접 고른 교실(${pinA.room} → ${pinA.value})이 '바뀐 학생만 다시 계산' 뒤 남지 않음`, { actual: result.roomPinA });
+    }
+    // 직접 고치기·출력물(현1 2학기 택3 = 이동 분반만 있는 그룹)
+    await S6.open6(page);
+    const editGroup = info.find((g) => g.key.startsWith("1:2:") && /택3/.test(g.key)) || info.find((g) => /택[2-9]/.test(g.key));
+    if (editGroup && validators[editGroup.key]) {
+      const after = await finalSelections(h, report);
+      const courses = validators[editGroup.key].courses;
+      const selE = new Map([...after].filter(([k]) => k.startsWith(`${editGroup.key[0]}-`))
+        .map(([k, list]) => [k, list.filter((x) => courses.includes(x.subject) && (!x.semester || x.semester === editGroup.semester))]).filter(([, list]) => list.length));
+      const pinE = await X6.pinRoom(page, editGroup.key);
+      result.edit = await X6.editScenario({ page, h, groupKey: editGroup.key, sel: selE, validate: validators[editGroup.key], dir });
+      result.edit.roomPin = { pin: pinE, after: await X6.pinKept(page, pinE) };
+      h.check(!pinE || result.edit.roomPin.after?.kept, "중요", "6단계", `${editGroup.key}: 직접 고른 교실(${pinE?.room} → ${pinE?.value})이 분반 수 칸 고치기·학생 옮기기·배정 결과 엑셀 올리기 뒤 남지 않음`, { actual: result.edit.roomPin });
+      result.roomsAfterEdit = await X6.checkRoomsAll({ page, h, info: [editGroup], label: " (직접 고친 뒤)" });
+      result.attendance = await X6.attendanceScenario({ page, h, groupKey: editGroup.key, dir, classMap, grade: editGroup.key[0] });
+      result.timetable = await X6.timetableScenario({ page, h, info, groupKey: editGroup.key, dir, fixed: SC.FIXED });
+      await h.screenshot(page, "step6-edit-print");
+    } else h.issue("경미", "6단계", "직접 고치기 시나리오를 돌릴 택n 그룹이 없음", { actual: info.map((g) => g.key) });
+    // 특별실: 두 학년 1학기 과학 과목에 과학실(2곳) → 같은 시간 같은 특별실 0
+    result.specialRooms = await X6.specialRoomScenario({ page, h, info, semester: "1" });
     report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
     return result;
   });
@@ -1534,6 +1572,9 @@ async function main() {
   // 앱 확인 대화상자(#appConfirmDialog, appConfirm): 브라우저 confirm 대신 쓰는 곳 → 열리면 기록하고 확인 단추를 누른다(사용자처럼).
   await page.exposeFunction("__e2eAppConfirm", (entry) => { dialogs.push({ type: "appConfirm", ...entry }); });
   await page.addInitScript(() => {
+    // 인쇄 창은 열지 않고 횟수만 센다(학생 시간표 인쇄 확인)
+    window.__prints = 0;
+    window.print = () => { window.__prints += 1; };
     const seen = new WeakSet();
     const watch = () => {
       const dialog = document.getElementById("appConfirmDialog");
