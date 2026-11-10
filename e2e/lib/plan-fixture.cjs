@@ -41,7 +41,9 @@ const GROUPS = [
   { field: "sem32", pick: 1, credit: 2, members: [["제2외국어/한문", "진로", "일본어 회화"], ["제2외국어/한문", "진로", "중국어 회화"]] },
 ];
 
-function planSheet(year, school = "가상고등학교") {
+// options.smallClass: 학기 칸 메모(소인수) 과목 한 줄 — 따로 신청(2·4·6단계에서 빠지고 5단계 "확인 필요")
+const SMALL_CLASS = { area: "사회(역사/도덕 포함)", kind: "융합", name: "금융과 경제생활", base: 4, op: 3, note: "소인수/2학년/2학기/3학점(순증)" };
+function planSheet(year, school = "가상고등학교", options = {}) {
   const W = 14;
   const blank = () => Array(W).fill("");
   const rows = []; const merges = [];
@@ -81,6 +83,10 @@ function planSheet(year, school = "가상고등학교") {
     merges.push(`${col(SEM[group.field])}${start + 1}:${col(SEM[group.field])}${rows.length}`, `M${start + 1}:M${rows.length}`);
     totals[group.field] += group.pick * group.credit;
   }
+  if (options.smallClass) {
+    const r = push({ 1: SMALL_CLASS.area, 2: SMALL_CLASS.kind, 3: SMALL_CLASS.name, 4: SMALL_CLASS.base, 5: SMALL_CLASS.op, 6: SMALL_CLASS.note, 12: SMALL_CLASS.op });
+    merges.push(`G${r + 1}:L${r + 1}`);
+  }
   merges.push(`A${choiceStart + 1}:A${rows.length}`);
   const sum = Object.values(totals).reduce((a, b) => a + b, 0);
   const footer = push({ 0: "이수학점 소계", 6: totals.sem11, 7: totals.sem12, 8: totals.sem21, 9: totals.sem22, 10: totals.sem31, 11: totals.sem32, 12: sum });
@@ -90,10 +96,10 @@ function planSheet(year, school = "가상고등학교") {
   return { name: "편제표", rows, merges, widths: [10, 12, 6, 22, 6, 6, 6, 6, 6, 6, 6, 6, 8, 8], totals };
 }
 
-function planWorkbook(year, school) { const sheet = planSheet(year, school); return { bytes: writeXlsx([sheet]), totals: sheet.totals }; }
+function planWorkbook(year, school, options = {}) { const sheet = planSheet(year, school, options); return { bytes: writeXlsx([sheet]), totals: sheet.totals }; }
 // 학년별 학생 선택 묶음(검증 기준값): 학년 2 = Y 입학생의 2학년 열, 학년 3 = Y-1 입학생의 3학년 열.
 function choiceGroups(targetGrade) {
   return GROUPS.filter((group) => group.field.startsWith(`sem${targetGrade}`))
     .map((group) => ({ field: group.field, semester: group.field.slice(-1), pick: group.pick, credit: group.credit, courses: group.members.map((m) => m[2]) }));
 }
-module.exports = { planWorkbook, planSheet, choiceGroups, GROUPS, SCHOOL, CROSS };
+module.exports = { SMALL_CLASS, planWorkbook, planSheet, choiceGroups, GROUPS, SCHOOL, CROSS };

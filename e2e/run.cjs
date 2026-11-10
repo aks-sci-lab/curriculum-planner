@@ -4,7 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { startHarness, openDialogs } = require("./lib/harness.cjs");
-const { planWorkbook, choiceGroups } = require("./lib/plan-fixture.cjs");
+const { planWorkbook, choiceGroups, SMALL_CLASS } = require("./lib/plan-fixture.cjs");
 const { writeXlsx } = require("./lib/xlsx-write.cjs");
 const Core = require("../test-bot-core.js");
 const Expected = require("./lib/expected.cjs");
@@ -1378,10 +1378,29 @@ async function stepClassSections({ page, h, report, roster }) {
       const submitted = new Map(); for (const k of after.keys()) submitted.set(k[0], (submitted.get(k[0]) || 0) + 1);
       result.homeroom = await X6.homeroomScenario({ page, h, info, groupKey: editGroup.key, dir, classMap, nextClasses: NEXT_CLASSES, submitted });
       result.timetable = await X6.timetableScenario({ page, h, info, groupKey: editGroup.key, dir, fixed: SC.FIXED });
+      result.roomShort = await X6.roomShortScenario({ page, h, info, groupKey: editGroup.key });
       await h.screenshot(page, "step6-edit-print");
     } else h.issue("경미", "6단계", "직접 고치기 시나리오를 돌릴 택n 그룹이 없음", { actual: info.map((g) => g.key) });
     // 특별실: 두 학년 1학기 과학 과목에 과학실(2곳) → 같은 시간 같은 특별실 0
     result.specialRooms = await X6.specialRoomScenario({ page, h, info, semester: "1" });
+    // 따로 신청(소인수 메모) 과목: 6단계 그룹 과목·4단계 집계표에 없고 5단계 '확인 필요'에 있음
+    result.separate = { name: SMALL_CLASS.name };
+    {
+      const in6 = Object.values(sectionsByGroup).flat().some((x) => Expected.bare(x.subject) === SMALL_CLASS.name);
+      await gotoStep(page, 4); await sleep(500);
+      const agg = await page.locator("#aggregatePanel").innerText().catch(() => "");
+      await gotoStep(page, 5); await sleep(800);
+      const open = page.locator('[data-open-dialog="hoursIssuesDialog"]').first();
+      if (await open.count()) { await open.click(); await sleep(500); }
+      const issues = await page.locator("#hoursIssuesBody").innerText().catch(() => "");
+      const hoursRow = await page.locator("#workflowStep7Panel").innerText().catch(() => "");
+      const line = issues.split("\n").find((x) => x.includes(SMALL_CLASS.name)) || "";
+      await page.keyboard.press("Escape").catch(() => {});
+      Object.assign(result.separate, { in6, in4: agg.includes(SMALL_CLASS.name), in5Issues: Boolean(line), issueLine: line.slice(0, 200), in5Form: hoursRow.includes(SMALL_CLASS.name) });
+      h.check(!in6 && !result.separate.in4, "중요", "4·6단계", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 ${in6 ? "6단계 분반" : ""}${result.separate.in4 ? " 4단계 집계표" : ""}에 들어감`, { actual: result.separate });
+      h.check(result.separate.in5Issues && /따로 신청|소인수/.test(line), "중요", "5단계", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 5단계 '확인 필요'에 없음`, { actual: result.separate });
+      await S6.open6(page);
+    }
     report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
     return result;
   });
@@ -1634,7 +1653,7 @@ async function main() {
       const result = {};
       for (const year of [YEAR, YEAR - 1]) {
         const file = path.join(OUT, `plan-${year}.xlsx`);
-        fs.writeFileSync(file, planWorkbook(year).bytes);
+        fs.writeFileSync(file, planWorkbook(year, undefined, { smallClass: year === YEAR }).bytes);
         const t0 = Date.now();
         await upload(page, page.getByRole("button", { name: `${year}학년도 신입생 3개년 편제표 업로드` }), file);
         await page.getByText(`plan-${year}.xlsx`).first().waitFor({ timeout: 20000 });
@@ -1701,6 +1720,10 @@ async function main() {
         const events = await h.mock.adminQuery("select id, round, is_open, subjects, selection_groups from public.course_events order by created_at");
         const event = events[events.length - 1];
         report.data.events[grade] = event.id;
+        // 따로 신청(소인수 메모) 과목은 웹 신청 과목에 없어야 함
+        const subjectsText = JSON.stringify(event.subjects || []) + JSON.stringify(event.selection_groups || []);
+        report.data.separateInEvent = { ...(report.data.separateInEvent || {}), [grade]: subjectsText.includes(SMALL_CLASS.name) };
+        h.check(!subjectsText.includes(SMALL_CLASS.name), "중요", "2단계·웹", `따로 신청(소인수 메모) 과목 '${SMALL_CLASS.name}'이 현 ${grade}학년 웹 신청 과목에 들어감`, { actual: (event.subjects || []).filter((x) => JSON.stringify(x).includes(SMALL_CLASS.name)).slice(0, 2) });
         const groups = event.selection_groups.filter((g) => g.grade === String(Number(grade) + 1));
         const expected = choiceGroups(Number(grade) + 1);
         h.check(groups.length === expected.length && expected.every((e) => groups.some((g) => Number(g.count) === e.pick && g.semester === e.semester && e.courses.every((c) => g.courses.map(Expected.bare).includes(c)))),

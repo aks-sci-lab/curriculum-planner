@@ -116,12 +116,19 @@ async function readPlacement(page) {
       pinNote: document.querySelector("#classSectionsPinNote")?.textContent.replace(/\s+/g, " ").trim() || "", conflicts: document.querySelector("#classSectionsCoConflicts")?.textContent.replace(/\s+/g, " ").trim() || "" };
   });
 }
+// 직접 고치기 최소 이동(edit-3): 표 위 '최근 직접 고치기'(#classSectionsEditChange data-changed·data-own)
+async function editChange(page) {
+  return page.evaluate(() => { const el = document.querySelector("#classSectionsEditChange"); return el ? { changed: Number(el.dataset.changed), own: Number(el.dataset.own), text: el.textContent.replace(/\s+/g, " ").trim().slice(0, 160) } : null; });
+}
 async function setCell(page, courseName, letter, value) {
   const input = page.getByLabel(`${courseName} ${letter}블록 분반 수`, { exact: true });
   await input.fill(String(value));
   await input.press("Tab");
   await sleep(300);
   await waitIdle(page); await sleep(400);
+  // 확인 창 '다시 계산 결과 적용'(바뀌는 학생 > 그 과목 학생)은 하네스가 '적용'을 누름 → 다시 기다림
+  await sleep(300); await waitIdle(page); await sleep(300);
+  return { course: courseName, letter, value, change: await editChange(page) };
 }
 const roomOf = (sections) => { const m = new Map(); for (const x of sections) for (const st of x.students) m.set(`${st}|${x.subject}`, x.room); return m; };
 // 블록이 바뀐 학생(같은 블록 안 분반 번호만 바뀐 것·강의실 이름 바뀜은 셈하지 않음)
@@ -198,10 +205,11 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
   }
   if (pick) {
     const name = pick.row.name, fromL = table.blocks[pick.from], toL = table.blocks[pick.to];
-    await setCell(page, name, toL, 1);
-    if (swap) await setCell(page, swap.name, toL, swap.values[pick.to].value - 1);
-    if (swap) await setCell(page, swap.name, fromL, swap.values[pick.from].value + 1);
-    await setCell(page, name, fromL, pick.row.values[pick.from].value - 1);
+    const steps = [];
+    steps.push(await setCell(page, name, toL, 1));
+    if (swap) steps.push(await setCell(page, swap.name, toL, swap.values[pick.to].value - 1));
+    if (swap) steps.push(await setCell(page, swap.name, fromL, swap.values[pick.from].value + 1));
+    steps.push(await setCell(page, name, fromL, pick.row.values[pick.from].value - 1));
     table = await readPlacement(page);
     const row = table.rows.find((x) => x.name === name);
     const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-edit-cell`);
@@ -211,13 +219,18 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     const courseStudents = new Set([...sel].filter(([, list]) => list.some((x) => x.subject === bareTerm(name) || (swap && x.subject === bareTerm(swap.name)))).map(([k]) => k));
     const othersMoved = [...moved].filter((k) => !courseStudents.has(k));
     const othersBlockMoved = [...blockMovedStudents(before.sections, after.sections)].filter((k) => !courseStudents.has(k));
+    // 칸마다 바뀐 학생 수 ≤ 그 과목 학생(+엇갈린 학생은 확인 창으로 알림)
+    const overOwn = steps.filter((x) => !x.change || x.change.changed > x.change.own);
+    out.cellSteps = steps.map((x) => ({ cell: `${x.course} ${x.letter}=${x.value}`, ...(x.change || { missing: true }) }));
+    h.check(steps.every((x) => x.change), "중요", "6단계", `${groupKey}: 분반 수 칸을 고친 뒤 '최근 직접 고치기'(#classSectionsEditChange) 표시가 없음`, { actual: out.cellSteps });
+    if (overOwn.some((x) => x.change)) h.issue("경미", "6단계", `${groupKey}: 분반 수 칸 ${overOwn.length}번에서 바뀐 학생이 그 과목 학생보다 많음(확인 창 '다시 계산 결과 적용' 뒤 적용)`, { actual: out.cellSteps });
     out.cell = { course: name, from: fromL, to: toL, table: row?.values.map((v) => v.value), excel: { [fromL]: blockCount(fromL), [toL]: blockCount(toL) }, moved: moved.size, othersMoved: othersMoved.length, othersBlockMoved: othersBlockMoved.length, courseStudents: courseStudents.size, groupStudents: sel.size, overMax: Boolean(pick.full && !swap), swap: swap ? `${swap.name} ${toL}→${fromL}` : "",
       pinNote: table.pinNote.slice(0, 160), status: (await status(page)).slice(0, 200) };
     h.check(row?.values[pick.to].value === 1 && row?.values[pick.from].value === pick.row.values[pick.from].value - 1 && blockCount(toL) === 1 && blockCount(fromL) === pick.row.values[pick.from].value - 1,
       "중요", "6단계", `${groupKey}: 분반 수 표에서 '${name}' ${fromL}→${toL}블록으로 1개 옮겼는데 표·블록표 분반 수가 다름`, { actual: out.cell });
     h.check(/블록 고정 \d+개/.test(table.pinNote), "경미", "6단계", `${groupKey}: 칸을 고친 뒤 표 위 '블록 고정 n개' 안내가 없음`, { actual: table.pinNote });
     // 다른 과목 학생: 블록이 바뀐 학생(분반 고정 → 블록은 그대로여야 함)과 같은 블록 안 분반만 바뀐 학생을 나눠 본다
-    if (othersBlockMoved.length) h.issue("중요", "6단계", `${groupKey}: 분반 수 칸(${name} ${fromL}→${toL}${swap ? `, ${swap.name} ${toL}→${fromL}` : ""})을 바꿨는데 그 과목을 신청하지 않은 학생 ${othersBlockMoved.length}명의 과목 블록이 바뀜(분반 블록 고정 상태)`, { actual: out.cell });
+    if (othersBlockMoved.length > Math.max(3, sel.size * 0.05)) h.issue("중요", "6단계", `${groupKey}: 분반 수 칸(${name} ${fromL}→${toL}${swap ? `, ${swap.name} ${toL}→${fromL}` : ""})을 바꿨는데 그 과목을 신청하지 않은 학생 ${othersBlockMoved.length}명의 과목 블록이 바뀜(분반 블록 고정 상태)`, { actual: out.cell });
     if (othersMoved.length > Math.max(5, sel.size * 0.3)) h.issue("경미", "6단계", `${groupKey}: 분반 수 칸(${name} ${fromL}→${toL}${swap ? `, ${swap.name} ${toL}→${fromL}` : ""})을 바꿨는데 그 과목을 신청하지 않은 학생 ${othersMoved.length}명(그룹 ${sel.size}명)도 같은 블록 안 다른 분반으로 바뀜(이동 최소가 아님)`, { actual: out.cell });
     out.cell.validate = validate(files, await S6.readScreen(page), `${groupKey} (분반 수 칸 고친 뒤)`, { allowShownUnassigned: true });
   } else out.cell = { skipped: "분반 2개 이상이고 빈 블록이 있는 과목 없음" };
@@ -273,6 +286,8 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     await page.locator("#classSectionsMoveDialog[open]").waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
     await sleep(300); await waitIdle(page); await sleep(500);
     out.move.status = (await status(page)).slice(0, 160);
+    out.move.change = await editChange(page);
+    h.check(!out.move.change || out.move.change.changed <= Math.max(1, out.move.change.own), "경미", "6단계", `${groupKey}: 학생 한 명 옮기기 뒤 바뀐 학생 ${out.move.change?.changed}명(그 학생 ${out.move.change?.own}명)`, { actual: out.move.change });
     await page.locator("#classSectionsStudentSearch").fill(key); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(400);
     const lookup = await page.locator(".cs-lookup").innerText().catch(() => "");
     const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-move-after`);
@@ -350,6 +365,7 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     for (let i = 0; i < 40 && !confirmText; i++) { confirmText = await page.locator("#appConfirmDialog[open] #appConfirmText").innerText({ timeout: 200 }).catch(() => ""); if (!confirmText) await sleep(100); }
     await sleep(600); await waitIdle(page); await sleep(600);
     out.assign.confirm = confirmText.slice(0, 200); out.assign.status = (await status(page)).slice(0, 200); out.assign.ms = Date.now() - dialogStart;
+    await sleep(500); await waitIdle(page); out.assign.change = await editChange(page);
     const wantN = changes.length;
     h.check(new RegExp(`바뀐 학생 ${wantN}명`).test(confirmText || out.assign.status) && changes.every((x) => (confirmText || out.assign.status).includes(x.key) || wantN > 5), "중요", "6단계",
       `${groupKey}: 배정 결과 엑셀에서 ${wantN}명을 바꿔 올렸는데 확인 창에 '바뀐 학생 ${wantN}명'(학생 키)이 없음`, { actual: { confirm: confirmText.slice(0, 200), status: out.assign.status } });
@@ -510,91 +526,166 @@ async function attendanceViewScenario({ page, h, groupKey, dir, info, groupSheet
 // 학생 시간표: 같은 현 학년·학기 모든 그룹의 배정(명렬표·블록표·화면 교실)으로 기대 칸을 만들어 인쇄 묶음과 대조
 async function timetableScenario({ page, h, info, groupKey, dir, fixed }) {
   const retakeOf = new Map();
-  const g0 = info.find((g) => g.key === groupKey);
-  const grade = groupKey[0], semester = groupKey.split(":")[1];
-  const groupsHere = info.filter((g) => g.key[0] === grade && g.key.split(":")[1] === semester);
-  const expected = new Map(); // 학생 → [{course, slot, room, teacher}]
+  const grade = groupKey[0];
+  // 두 학기(사용자 결정: 1·2학기 한 장) — 같은 현 학년 모든 그룹(두 학기)의 배정으로 기대 칸
+  const groupsHere = info.filter((g) => g.key[0] === grade);
+  const expected = new Map(); // 학생 → [{semester, course, slot, room, teacher}]
   for (const g of groupsHere) {
+    const semester = g.key.split(":")[1];
     await S6.selectGroup(page, g.key);
     const rooms = await readRooms(page);
     if (!rooms.sections.length) continue;
     const files = await S6.exportGroup(page, dir, `${safeName(g.key)}-tt`);
     const model = S6.modelFromExports(files, { semester });
-    // 재신청 표시 기대: '재신청·미배정' 시트에서 사유가 '학급 단위 과목(그 반은 이동)'만이 아닌 학생(시간표는 그 사유를 재신청으로 보이지 않음)
     const retakeSheet = files.rosters.find((x) => /^재신청/.test(x.name));
     for (const r of retakeSheet ? retakeSheet.rows.slice(2) : []) {
       if (!/^\d+-\d+-\d+$/.test(String(r[0] || ""))) continue;
       const reasons = String(r[3] || "").split(", ").filter((x) => x && x !== "학급 단위 과목(그 반은 이동)");
       if (reasons.length) retakeOf.set(String(r[0]), (retakeOf.get(String(r[0])) || 0) + 1);
     }
-    for (const s of model.sections) {
-      const card = rooms.sections.find((x) => x.room === s.room);
-      for (const st of s.students) for (const slot of s.times) expected.set(st, [...(expected.get(st) || []), { course: bareTerm(s.subject), slot, room: card?.roomLabel || "", teacher: s.teacher || "" }]);
+    for (const sec of model.sections) {
+      const card = rooms.sections.find((x) => x.room === sec.room);
+      for (const st of sec.students) for (const slot of sec.times) expected.set(st, [...(expected.get(st) || []), { semester, course: bareTerm(sec.subject), slot, room: card?.roomLabel || "", teacher: sec.teacher || "" }]);
     }
   }
   await S6.selectGroup(page, groupKey);
   const out = {};
-  // 미리 보기
   await page.locator("#classSectionsStudentSearch").fill(`${grade}-1-1`); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(500);
   const preview = await page.locator("#classSectionsTimetablePreview").innerText().catch(() => "");
-  out.preview = preview.slice(0, 160);
-  h.check(new RegExp(`[12]학기 · 현 ${grade}학년 → ${Number(grade) + 1}학년`).test(preview), "중요", "6단계", `${groupKey}: 학생 찾기 '${grade}-1-1' → 시간표 미리 보기가 없거나 제목에 '현 ${grade}학년 → ${Number(grade) + 1}학년'이 없음`, { actual: preview.slice(0, 160) });
-  // 1반 인쇄(한 장에 2명)
+  const previewSems = await page.locator("#classSectionsTimetablePreview .cs-tt-sem").evaluateAll((els) => els.map((e) => e.dataset.semester)).catch(() => []);
+  out.preview = { text: preview.slice(0, 120), semesters: previewSems };
+  h.check(new RegExp(`학년도 · 현 ${grade}학년 → ${Number(grade) + 1}학년 이동수업 시간표`).test(preview) && previewSems.join(",") === "1,2", "중요", "6단계", `${groupKey}: 학생 시간표 미리 보기가 1·2학기 두 격자(.cs-tt-sem)·제목 '현 ${grade}학년 → ${Number(grade) + 1}학년'이 아님`, { actual: out.preview });
   await page.locator("#classSectionsTimetableClass").selectOption("1"); await sleep(300);
-  await page.locator("#classSectionsTimetablePerPage").selectOption("2"); await sleep(300);
-  await page.evaluate(() => { window.__prints = window.__prints || 0; });
-  await page.locator("#classSectionsTimetablePrint").click(); await sleep(1000);
-  const printed = await page.evaluate(() => {
+  const readPrint = () => page.evaluate(() => {
     const pages = [...document.querySelectorAll("#printBatch .cs-tt-page")];
     const tables = [...document.querySelectorAll("#printBatch .cs-tt")].map((el) => {
-      const days = [...el.querySelectorAll(".cs-tt-grid thead th")].slice(1).map((th) => th.textContent.trim());
       const cells = [];
-      [...el.querySelectorAll(".cs-tt-grid tbody tr")].forEach((tr, p) => [...tr.querySelectorAll("td")].forEach((td, d) => cells.push({ slot: `${days[d]}${p + 1}`, kind: td.dataset.kind, lines: [...td.querySelectorAll("span")].map((s) => s.textContent.trim()) })));
-      return { key: el.dataset.student, cells, retake: Number(el.querySelector(".cs-tt-retake")?.dataset.retake || 0), list: [...el.querySelectorAll(".cs-tt-list li")].map((li) => li.textContent) };
+      for (const sem of el.querySelectorAll(".cs-tt-sem")) {
+        const days = [...sem.querySelectorAll(".cs-tt-grid thead th")].slice(1).map((th) => th.textContent.trim());
+        [...sem.querySelectorAll(".cs-tt-grid tbody tr")].forEach((tr, p) => [...tr.querySelectorAll("td")].forEach((td, d) => cells.push({ semester: sem.dataset.semester, slot: `${days[d]}${p + 1}`, kind: td.dataset.kind, lines: [...td.querySelectorAll("span")].map((x) => x.textContent.trim()) })));
+      }
+      return { key: el.dataset.student, semesters: [...el.querySelectorAll(".cs-tt-sem")].map((x) => x.dataset.semester), cells, retake: Number(el.querySelector(".cs-tt-retake")?.dataset.retake || 0) };
     });
     return { prints: window.__prints || 0, pages: pages.length, per: pages[0]?.dataset.per || "", tables };
   });
+  const runPrint = async (per) => {
+    await page.locator("#classSectionsTimetablePerPage").selectOption(String(per)); await sleep(300);
+    const before = await page.evaluate(() => window.__prints || 0);
+    await page.locator("#classSectionsTimetablePrint").click(); await sleep(1000);
+    const r = await readPrint();
+    return { ...r, printed: r.prints - before };
+  };
+  const p1 = await runPrint(1);
+  const p2 = await runPrint(2);
   const wantKeys = [...expected.keys()].filter((k) => k.split("-")[1] === "1");
-  const gotKeys = printed.tables.map((t) => t.key);
-  out.print = { prints: printed.prints, pages: printed.pages, students: gotKeys.length, expectedStudents: wantKeys.length };
-  h.check(printed.prints >= 1 && printed.pages === Math.ceil(gotKeys.length / 2) && gotKeys.every((k) => k.startsWith(`${grade}-1-`)) && wantKeys.every((k) => gotKeys.includes(k)), "중요", "6단계",
-    `${groupKey}: 학생 시간표 1반 인쇄(한 장에 2명) — 쪽 ${printed.pages}·학생 ${gotKeys.length}명(배정 있는 1반 학생 ${wantKeys.length}명)`, { actual: { ...out.print, missing: wantKeys.filter((k) => !gotKeys.includes(k)).slice(0, 5) } });
+  const gotKeys = p2.tables.map((t) => t.key);
+  out.print = { per1: { pages: p1.pages, students: p1.tables.length }, per2: { pages: p2.pages, students: gotKeys.length }, expectedStudents: wantKeys.length };
+  h.check(p1.printed && p2.printed && p1.pages === p1.tables.length && p2.pages === Math.ceil(gotKeys.length / 2) && gotKeys.every((k) => k.startsWith(`${grade}-1-`)) && wantKeys.every((k) => gotKeys.includes(k)), "중요", "6단계",
+    `${groupKey}: 학생 시간표 1반 인쇄 — 한 장 1명 ${p1.pages}쪽/${p1.tables.length}명, 2명 ${p2.pages}쪽/${gotKeys.length}명(배정 있는 1반 학생 ${wantKeys.length}명)`, { actual: { ...out.print, missing: wantKeys.filter((k) => !gotKeys.includes(k)).slice(0, 5) } });
   const bad = [];
   let cellsChecked = 0;
-  for (const t of printed.tables) {
+  for (const t of p2.tables) {
     const want = expected.get(t.key) || [];
-    const bySlot = new Map(t.cells.map((c) => [c.slot, c]));
+    const at = new Map(t.cells.map((c) => [`${c.semester}|${c.slot}`, c]));
     const problems = [];
+    if (t.semesters.join(",") !== "1,2") problems.push(`학기 격자 ${t.semesters.join(",")}`);
     for (const e of want) {
-      const cell = bySlot.get(e.slot);
+      const cell = at.get(`${e.semester}|${e.slot}`);
       cellsChecked++;
       const text = (cell?.lines || []).join(" | ");
-      if (!cell || cell.kind !== "move" || !compact(text).includes(compact(e.course)) || !e.room || /교실 미정/.test(text) || !text.includes(e.room) || (e.teacher && !text.includes(e.teacher))) problems.push(`${e.slot}: 기대 ${e.course}/${e.room}/${e.teacher} · 칸 ${cell?.kind || "-"} '${text}'`);
+      if (!cell || cell.kind !== "move" || !compact(text).includes(compact(e.course)) || !e.room || /교실 미정/.test(text) || !text.includes(e.room) || (e.teacher && !text.includes(e.teacher))) problems.push(`${e.semester}학기 ${e.slot}: 기대 ${e.course}/${e.room}/${e.teacher} · 칸 ${cell?.kind || "-"} '${text}'`);
     }
-    const moveCells = t.cells.filter((c) => c.kind === "move").length;
-    if (moveCells !== new Set(want.map((e) => e.slot)).size) problems.push(`이동 칸 ${moveCells} ≠ 배정 시간 ${new Set(want.map((e) => e.slot)).size}`);
-    if (t.cells.some((c) => c.kind === "clash")) problems.push(`겹친 칸 ${t.cells.filter((c) => c.kind === "clash").map((c) => c.slot).join(",")}`);
-    if (t.cells.length && fixed.some((slot) => bySlot.get(slot)?.kind !== "fixed")) problems.push(`고정 시간 ${fixed.join("·")} 칸이 '고정'이 아님(${fixed.map((s) => bySlot.get(s)?.kind).join(",")})`);
+    for (const sem of ["1", "2"]) {
+      const moveCells = t.cells.filter((c) => c.semester === sem && c.kind === "move").length;
+      const wantSlots = new Set(want.filter((e) => e.semester === sem).map((e) => e.slot)).size;
+      if (moveCells !== wantSlots) problems.push(`${sem}학기 이동 칸 ${moveCells} ≠ 배정 시간 ${wantSlots}`);
+      const semCells = t.cells.filter((c) => c.semester === sem);
+      if (semCells.length && fixed.some((slot) => at.get(`${sem}|${slot}`)?.kind !== "fixed")) problems.push(`${sem}학기 고정 시간 ${fixed.join("·")} 칸이 '고정'이 아님`);
+    }
+    if (t.cells.some((c) => c.kind === "clash")) problems.push(`겹친 칸 ${t.cells.filter((c) => c.kind === "clash").map((c) => `${c.semester}:${c.slot}`).join(",")}`);
     const wantRetake = retakeOf.get(t.key) || 0;
     if (Boolean(wantRetake) !== Boolean(t.retake)) problems.push(`재신청 표시 ${t.retake} (기대 ${wantRetake})`);
     if (problems.length) bad.push({ key: t.key, problems: problems.slice(0, 4) });
   }
-  out.cells = { checked: cellsChecked, badStudents: bad.length, fixedLabel: printed.tables[0]?.cells.find((c) => c.slot === fixed[0])?.lines.join("") || "" };
-  h.check(!bad.length, "중요", "6단계", `${groupKey}: 학생 시간표 칸이 배정 결과(과목·교실·교사)·고정 시간·재신청 표시와 다름 — 학생 ${bad.length}명`, { actual: bad.slice(0, 4) });
-  // 엑셀
+  out.cells = { checked: cellsChecked, badStudents: bad.length, fixedLabel: p2.tables[0]?.cells.find((c) => c.slot === fixed[0])?.lines.join("") || "" };
+  h.check(!bad.length, "중요", "6단계", `${groupKey}: 학생 시간표(1·2학기) 칸이 배정 결과(과목·교실·교사)·고정 시간·재신청 표시와 다름 — 학생 ${bad.length}명`, { actual: bad.slice(0, 4) });
   const tt = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsTimetableExcel").click(), path.join(dir, `${safeName(groupKey)}-timetable.xlsx`)));
-  const titles = tt.reduce((n, s) => n + s.rows.filter((row) => /이동수업 시간표$/.test(String(row[0] || ""))).length, 0);
-  out.excel = { sheets: tt.map((s) => s.name), titles };
+  const titles = tt.reduce((n, sh) => n + sh.rows.filter((row) => /이동수업 시간표$/.test(String(row[0] || ""))).length, 0);
+  out.excel = { sheets: tt.map((sh) => sh.name), titles };
   h.check(titles === gotKeys.length, "중요", "6단계", `${groupKey}: 학생 시간표 엑셀 학생 수 ${titles} ≠ 인쇄 학생 수 ${gotKeys.length}`, { actual: out.excel });
-  // 빈 칸 '학급 수업'
   await page.locator("#classSectionsTimetableFill").selectOption("학급 수업"); await sleep(400);
   await page.locator("#classSectionsStudentSearch").fill(`${grade}-1-1`); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(400);
   const filled = await page.locator('#classSectionsTimetablePreview td[data-kind="empty"]').allInnerTexts().catch(() => []);
   out.fill = { empty: filled.length, sample: filled[0] || "" };
-  h.check(!filled.length || filled.every((t) => /학급 수업/.test(t)), "경미", "6단계", `${groupKey}: 시간표 빈 칸을 '학급 수업'으로 골랐는데 빈 칸 글자가 다름`, { actual: out.fill });
+  h.check(!filled.length || filled.every((x) => /학급 수업/.test(x)), "경미", "6단계", `${groupKey}: 시간표 빈 칸을 '학급 수업'으로 골랐는데 빈 칸 글자가 다름`, { actual: out.fill });
   await page.locator("#classSectionsTimetableFill").selectOption(""); await sleep(300);
+  await page.locator("#classSectionsTimetablePerPage").selectOption("1"); await sleep(200);
   await page.locator("#classSectionsTimetableClass").selectOption(""); await sleep(200);
   await page.locator("#classSectionsStudentSearch").fill(""); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(300);
+  return out;
+}
+
+// 교실 부족: 학년 교실 수를 줄이고 '다른 교실'을 넣은 뒤 다시 계산 → '교실 선택 필요' 칸, 다른 교실 자동 배정 0 →
+// 추천으로 모두 고르면 내보내기 전 경고(data-type=room) 사라짐·겹침 0 → 설정 되돌리기
+async function roomShortScenario({ page, h, info, groupKey }) {
+  const out = {};
+  const grade = groupKey[0], target = String(Number(grade) + 1), semester = groupKey.split(":")[1];
+  const groupsHere = info.filter((g) => g.key[0] === grade && g.key.split(":")[1] === semester);
+  await S6.selectGroup(page, groupKey);
+  const before = await readRooms(page);
+  const perBlock = new Map(); for (const x of before.sections) perBlock.set(x.letter, (perBlock.get(x.letter) || 0) + 1);
+  const maxPer = Math.max(...perBlock.values());
+  const count = Math.max(1, maxPer - 2);
+  const extra = ["다목적실", "세미나실"];
+  const openSettings = async () => { await page.getByRole("button", { name: "교사·시간 설정" }).click(); await sleep(300); };
+  const closeSettings = async () => { await page.getByRole("button", { name: "닫기" }).first().click(); await sleep(300); };
+  await openSettings();
+  const countInput = page.getByLabel(`${target}학년 교실 수`, { exact: true });
+  const extraInput = page.getByLabel("학년 교실이 모자랄 때 쓸 다른 교실(쉼표로 구분)", { exact: true });
+  out.prev = { count: await countInput.inputValue(), extra: await extraInput.inputValue() };
+  await countInput.fill(String(count)); await countInput.press("Tab"); await sleep(300);
+  await extraInput.fill(extra.join(", ")); await extraInput.press("Tab"); await sleep(300);
+  await closeSettings();
+  await S6.solve(page);
+  const short = await readRooms(page);
+  const choose = await page.locator(".cs-room.is-choose").count();
+  const autoExtra = short.sections.filter((x) => !x.pick && extra.some((n) => x.roomLabel.includes(n) || x.roomId.includes(n))).map((x) => `${x.room}:${x.roomLabel}`);
+  const warnBefore = await page.locator('#classSectionsOutputWarnings li[data-type="room"]').count();
+  out.short = { classrooms: count, maxPerBlock: maxPer, choose, autoExtra, warnBefore };
+  h.check(choose > 0 && warnBefore > 0, "중요", "6단계", `${groupKey}: ${target}학년 교실 수를 ${count}개(블록당 최대 ${maxPer}분반)로 줄였는데 '교실 선택 필요' 칸(${choose})·내보내기 전 경고(${warnBefore})가 없음`, { actual: out.short });
+  h.check(!autoExtra.length, "중요", "6단계", `${groupKey}: 교실이 모자랄 때 '다른 교실'이 자동 배정됨 ${autoExtra.length}개(교사가 골라야 함)`, { actual: autoExtra.slice(0, 5) });
+  // 추천으로 모두 고르기(그룹마다)
+  out.picked = 0;
+  for (const g of groupsHere) {
+    await S6.selectGroup(page, g.key);
+    for (let i = 0; i < 40; i++) {
+      const sel = page.locator(".cs-room.is-choose select").first();
+      if (!(await sel.count())) break;
+      const value = await sel.evaluate((el) => [...el.options].find((o) => /\(추천\)/.test(o.textContent))?.value || [...el.options].find((o) => o.value)?.value || "");
+      if (!value) break;
+      await sel.selectOption(value); await sleep(400);
+      out.picked++;
+    }
+  }
+  await S6.selectGroup(page, groupKey);
+  const warnAfter = await page.locator('#classSectionsOutputWarnings li[data-type="room"]').count();
+  const chooseAfter = await page.locator(".cs-room.is-choose").count();
+  out.after = { warnAfter, chooseAfter, picked: out.picked };
+  out.rooms = await checkRoomsAll({ page, h, info: groupsHere, label: " (교실 부족 → 추천으로 고른 뒤)" });
+  h.check(!warnAfter && !chooseAfter, "중요", "6단계", `${groupKey}: '교실 선택 필요'를 추천으로 모두 골랐는데 내보내기 전 교실 경고 ${warnAfter}건·선택 필요 ${chooseAfter}칸이 남음`, { actual: out.after });
+  // 되돌리기: 설정 원래대로 + 고른 교실 풀기(교실 자동으로 되돌리기)
+  await openSettings();
+  await countInput.fill(out.prev.count); await countInput.press("Tab"); await sleep(300);
+  await extraInput.fill(out.prev.extra); await extraInput.press("Tab"); await sleep(300);
+  await closeSettings();
+  for (const g of groupsHere) {
+    await S6.selectGroup(page, g.key);
+    const reset = page.getByRole("button", { name: "교실 자동으로 되돌리기" });
+    if (await reset.count()) { await reset.first().click(); await sleep(400); }
+  }
+  await S6.selectGroup(page, groupKey);
+  await S6.solve(page);
+  out.restored = { choose: await page.locator(".cs-room.is-choose").count(), warn: await page.locator('#classSectionsOutputWarnings li[data-type="room"]').count() };
   return out;
 }
 
@@ -712,4 +803,4 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   return out;
 }
 
-module.exports = { homeroomScenario, readRooms, checkRoomsAll, pinRoom, pinKept, editScenario, attendanceScenario, timetableScenario, specialRoomScenario, readPlacement };
+module.exports = { homeroomScenario, roomShortScenario, readRooms, checkRoomsAll, pinRoom, pinKept, editScenario, attendanceScenario, timetableScenario, specialRoomScenario, readPlacement };
