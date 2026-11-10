@@ -7,6 +7,8 @@ const Timetable = require("./timetable-checks.cjs");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DAYS = ["월", "화", "수", "목", "금"];
+// 나이스 학급 단위 행의 개설강의실: '3(3학년 3반)'
+const CLASS_UNIT_ROOM = /^\d+\(\d학년 \d+반\)$/;
 const compact = (v) => String(v ?? "").replace(/\s+/g, "");
 
 function readXlsxAll(file) {
@@ -53,10 +55,11 @@ async function readScreen(page) {
       for (const li of block.querySelectorAll("li.cs-section")) {
         const [size, capacity] = (li.querySelector(".cs-size")?.textContent || "").match(/\d+/g) || [];
         // 5차부터 카드 굵은 글자는 '물리학 ②', 나이스 강의실 이름은 .cs-neis('나이스 a물리학2')
-        const neis = li.querySelector(".cs-neis")?.textContent.replace(/^\s*나이스\s*/, "").trim();
+        // 6·7차: 나이스 강의실 이름·과목·인원·정원은 data-room·data-course·data-size·data-capacity(strong은 읽기 쉬운 이름)
+        const neis = li.dataset.room || li.querySelector(".cs-neis")?.textContent.replace(/^\s*나이스\s*/, "").trim();
         const label = li.querySelector("strong")?.textContent.trim() || "";
-        sections.push({ id: li.dataset.sectionId, room: neis || label, label, course: (li.dataset.sectionId || "").replace(/#\d+$/, "") || li.querySelector("span")?.textContent.trim(), letter, times,
-          size: Number(size), capacity: Number(capacity), teacher: li.querySelector("select option")?.textContent || "" });
+        sections.push({ id: li.dataset.sectionId, room: neis || label, label, course: li.dataset.course || (li.dataset.sectionId || "").replace(/#\d+$/, ""), letter, times,
+          size: Number(li.dataset.size ?? size), capacity: Number(li.dataset.capacity ?? capacity), teacher: li.querySelector("select option")?.textContent || "" });
       }
     }
     const unassigned = (document.querySelector('section[aria-label="편성 결과"] details summary')?.textContent || "").match(/미배정 (\d+)건/);
@@ -94,6 +97,7 @@ function modelFromExports(files, { semester }) {
   }
   const sections = [];
   for (const sheet of files.rosters) {
+    if (sheet.name === "학급 단위 과목") continue; // 맨 뒤 안내 시트(분반 아님)
     const head = sheet.rows[0]?.[0] || "";
     const room = head.split(" (")[0];
     const students = sheet.rows.slice(2).filter((r) => r[1]).map((r) => r[1]);
@@ -150,7 +154,7 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   const roomsOf = new Map(); for (const s of sections) for (const st of s.students) roomsOf.set(`${st}|${s.subject}`, s.room);
   for (const r of rows) {
     const subject = String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, "");
-    if (classUnitCourses.includes(subject)) continue; // 학급 단위 행은 run.cjs에서 담임반 배정과 대조
+    if (classUnitCourses.includes(subject) || CLASS_UNIT_ROOM.test(String(r[5]))) continue; // 학급 단위 행은 run.cjs에서 담임반 배정과 대조
     const key = `${r[10]}|${subject}`;
     if (seen.has(key)) dups.push(key); seen.add(key);
     if (!exported.has(r[10])) exported.set(r[10], []);
@@ -239,4 +243,4 @@ async function recommendAndSolveSemester(page) {
   return out;
 }
 
-module.exports = { recommendAndSolveSemester, open6, groups, selectGroup, solve, readScreen, exportGroup, modelFromExports, checkGroup, checkAcross, planBlockTimes, readXlsxAll, parseSlots, SPREAD };
+module.exports = { CLASS_UNIT_ROOM, recommendAndSolveSemester, open6, groups, selectGroup, solve, readScreen, exportGroup, modelFromExports, checkGroup, checkAcross, planBlockTimes, readXlsxAll, parseSlots, SPREAD };
