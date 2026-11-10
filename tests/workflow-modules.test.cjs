@@ -510,7 +510,7 @@ test("backup status flags missing or old backups and nudges at most once per ten
     showAppToast: (message) => toasts.push(message),
     Date
   });
-  vm.runInContext(functionSource(app, "const BACKUP_TIME_KEY", "function downloadWorkspaceBackup("), ctx);
+  vm.runInContext(functionSource(app, "const BACKUP_TIME_KEY", "async function downloadWorkspaceBackup("), ctx);
   ctx.renderBackupStatus();
   assert.equal(label.classList.on, false, "nothing to protect yet");
   ctx.state.students = [{ id: "s" }];
@@ -568,7 +568,7 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
     window: { confirm: () => answers.confirm, prompt: () => answers.prompt, clearTimeout() {}, location: { reload: () => { reloaded++; } } }
   });
   vm.runInContext("var statePersistenceBlocked = false, statePersistenceTimer = null;", ctx);
-  vm.runInContext(functionSource(app, "const WORKSPACE_RESET_KEYS", "function downloadWorkspaceBackup("), ctx);
+  vm.runInContext(functionSource(app, "const WORKSPACE_RESET_KEYS", "async function downloadWorkspaceBackup("), ctx);
   answers.prompt = "취소";
   await ctx.resetWorkspaceAll();
   assert.equal(reloaded, 0);
