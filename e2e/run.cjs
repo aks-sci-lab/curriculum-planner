@@ -1248,8 +1248,16 @@ async function stepClassSections({ page, h, report, roster }) {
       const groupCourses = GROUPS.find((x) => x.field === `sem${g.grade}${g.semester}` && x.pick === Number((g.key.match(/택(\d+)/) || [])[1]))?.members.map((m) => m[2]) || courseNames;
       const sel = new Map([...selections].filter(([key]) => key.startsWith(`${g.key[0]}-`)));
       const classUnitCourses = screen.classUnit.length ? [...new Set(screen.classUnit.map(([, v]) => v).filter((v) => !/^이동/.test(v)))] : [];
-      const unitStudents = new Set(files.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5]))).map((r) => r[10]));
-      const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses: [], unitStudents, expectedUnassigned: result.singleClassUnit?.group === g.key ? result.singleClassUnit.expectedOther : 0 });
+      // 학급 단위 반 학생 → 그 반 학급 단위 과목(나이스 학급 단위 행). 택n 그룹이면 나머지 택n−1은 이동 분반.
+      const unitCourseOf = new Map(files.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5])))
+        .map((r) => [r[10], Expected.bare(String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, ""))]));
+      // 기대 미배정 = '이동' 반(내년 반)인데 이 그룹의 학급 단위 과목을 고른 학생(사유 '학급 단위 과목(그 반은 이동)')
+      const unitRoomsNow = new Set(screen.classUnit.filter(([, v]) => !/^이동/.test(v)).map(([room]) => room));
+      const unitCoursesNow = [...new Set(screen.classUnit.map(([, v]) => v).filter((v) => v && !/^이동/.test(v)))];
+      const expectedUnassigned = unitCourseOf.size ? [...sel].filter(([k, list]) => !unitRoomsNow.has(String(classMap.get(k)?.classroom ?? k.split("-")[1]))
+        && list.some((x) => unitCoursesNow.includes(x.subject) && (!x.semester || x.semester === g.semester))).length : 0;
+      const { result: check, sections } = S6.checkGroup({ h, label: g.key, files, screen, selections: sel, semester: g.semester, courseNames: groupCourses, classUnitCourses: [], unitCourseOf, expectedUnassigned });
+      check.expectedUnassigned = expectedUnassigned;
       // 나이스 반·번호: 배정표가 있는 현1은 새 반·번호, 없으면 비우고 참고 열(현 학년-반-번호)
       {
         const neisRows = files.neis[0].rows.slice(2).filter((r) => r.some(Boolean));
@@ -1378,8 +1386,10 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   const [, semester, groupName] = groupKey.split(":");
   out.changed = [];
   out.tried = 0;
+  out.editable = 0;
   for (const option of candidates) {
-    if (out.changed.length >= 3 || out.tried >= 120) break;
+    // 바꿀 칸이 있는 학생을 찾을 때까지는 명단 전체를 본다(2차는 대상 학생이 적을 수 있음).
+    if (out.changed.length >= 3 || (out.tried >= 120 && out.editable)) break;
     out.tried++;
     if (!(await page.locator("#cloudTeacherEditDialog[open]").count())) {
       await section.getByRole("button", { name: "학생 선택 과목 변경" }).click();
@@ -1392,6 +1402,7 @@ async function step6Partial({ page, h, report, groupKey, before }) {
     const fromBox = state.find((b) => b.checked && !b.disabled);
     const toBox = state.find((b) => !b.checked && !b.disabled);
     if (!fromBox || !toBox) continue;
+    out.editable++;
     await fieldset.locator(`input[value="${fromBox.value}"]`).uncheck();
     await fieldset.locator(`input[value="${toBox.value}"]`).check();
     await page.locator("#cloudTeacherEditSave").click();
@@ -1403,7 +1414,9 @@ async function step6Partial({ page, h, report, groupKey, before }) {
     const m = option.text.match(/(\d)학년 (\d+)반 (\d+)번/);
     out.changed.push({ student: m ? `${m[1]}-${m[2]}-${m[3]}` : option.text, from: fromBox.value, to: toBox.value, message: msg.trim().slice(0, 120) });
   }
-  h.check(out.changed.filter((c) => /변경했습니다/.test(c.message)).length >= 1, "중요", "2단계·웹", "교사 화면 '학생 선택 과목 변경'으로 2차 학생 선택을 바꾸지 못함", { actual: { tried: out.tried, changed: out.changed } });
+  // 이 그룹에서 바꿀 수 있는 칸(잠기지 않은 체크된 칸 + 빈 칸)이 있는 학생이 없으면 '건너뜀(대상 없음)' — 앱 문제 아님
+  out.skipped = !out.editable ? `대상 없음(학생 ${candidates.length}명 모두 이 그룹 칸이 잠김)` : "";
+  if (!out.skipped) h.check(out.changed.filter((c) => /변경했습니다/.test(c.message)).length >= 1, "중요", "2단계·웹", "교사 화면 '학생 선택 과목 변경'으로 2차 학생 선택을 바꾸지 못함", { actual: { tried: out.tried, changed: out.changed } });
   if (await page.locator("#cloudTeacherEditDialog[open]").count()) await page.locator("#cloudTeacherEditClose").click();
   await sleep(1500);
   // 재확정
@@ -1413,6 +1426,7 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   await sleep(800);
   out.reconfirmed = await text(page, "#roundConfirmState");
   h.check(/2차 · 확정/.test(out.reconfirmed), "중요", "4단계", "확정 해제 → 재확정이 되지 않음", { actual: out.reconfirmed });
+  if (out.skipped) { report.notes = [...(report.notes || []), `6단계 재신청 부분 재계산: 건너뜀 — ${out.skipped}`]; return out; }
   // 6단계: 재계산 필요 → 바뀐 학생만 다시 계산
   await S6.open6(page);
   await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
