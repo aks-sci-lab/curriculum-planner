@@ -2389,3 +2389,21 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   .print-page.cs-tt-page[data-per="4"] .cs-tt-grid td { height:13mm; }
   .print-page.cs-tt-page .cs-tt { border-color:#555; }
 }
+/* 6단계 이동 출석부 보기·인쇄(class-sections-print.js classSectionsSheetHtml: 엑셀 출석부와 같은 칸) */
+.cs-att-view { margin-top:10px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+.cs-att-view > summary { cursor:pointer; font-size:13px; font-weight:700; }
+.cs-att-scroll { margin-top:8px; overflow:auto; max-height:640px; }
+.cs-att-table { border-collapse:collapse; table-layout:fixed; font-size:11px; color:#111; background:#fff; }
+.cs-att-table th, .cs-att-table td { height:20px; padding:1px 3px; border:1px solid #777; text-align:center; white-space:nowrap; overflow:hidden; }
+.cs-att-table th { background:#e9eef6; font-weight:700; }
+.cs-att-table td[data-kind="title"] { border:0; height:30px; font-size:16px; font-weight:700; }
+.cs-att-table td[data-kind="note"] { border:0; text-align:left; color:#8a3b12; font-size:10px; }
+.cs-att-table td[data-kind="left"] { text-align:left; }
+.cs-att-table tr.is-found td { background:#fff3b0; font-weight:700; }
+@media print {
+  .print-page.cs-att-page { padding:0; }
+  .print-page.cs-att-page .cs-att-table { width:100%; font-size:9.5px; }
+  .print-page.cs-att-page .cs-att-table th, .print-page.cs-att-page .cs-att-table td { height:5.8mm; border-color:#444; }
+  .print-page.cs-att-page .cs-att-table td[data-kind="title"] { height:10mm; font-size:15px; }
+  .print-page.cs-att-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
+}

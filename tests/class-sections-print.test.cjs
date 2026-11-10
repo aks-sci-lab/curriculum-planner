@@ -343,3 +343,67 @@ test("createWorkbookBlob: printTitles가 있으면 시트별 인쇄 제목 줄(_
   assert.match(files["xl/workbook.xml"], /<definedNames><definedName name="_xlnm.Print_Titles" localSheetId="0">'a물리학1'!\$1:\$6<\/definedName><\/definedNames>/);
   assert.doesNotMatch(ctx.createWorkbookBlob([{ name: "x", rows: [] }])["xl/workbook.xml"], /definedNames/);
 });
+
+test("출석부 저장 묶음: 전체 파일 = 목록 + 분반마다 시트(시트 이름 = 강의실 이름, 학년 겹침은 학년 붙임), 학급별 = 분반마다 파일, 화면 표 = 엑셀 칸", () => {
+  const base = { year: "2027", semester: "1", grade: "1", targetGrade: "2", groupCategory: "2-1 택3", basis: "map", times: ["월:1"], roomLabel: "2학년 1반", teacherName: "김교사" };
+  const infos = [
+    { ...base, courseName: "물리학", roomName: "a물리학1", blockLetter: "a", students: [{ key: "1-1-1", classroom: "1", number: "1", name: "가명A" }, { key: "1-1-2", classroom: "1", number: "2", name: "가명B" }] },
+    { ...base, courseName: "화학", roomName: "b화학", blockLetter: "b", students: [{ key: "1-2-1", classroom: "2", number: "1", name: "가명C" }] },
+    { ...base, grade: "2", targetGrade: "3", groupCategory: "3-1 택5", courseName: "화학", roomName: "b화학", blockLetter: "b", students: [] }];
+  const [file] = pr.classSectionsAttendanceBundles(infos, "file");
+  assert.equal(file.name, "2027_1학기_이동출석부_전체.xlsx");
+  assert.equal(file.sheets.length, infos.length + 1, "목록 + 분반 수");
+  assert.deepEqual(file.sheets.map((sheet) => sheet.name), ["목록", "a물리학1", "2학년 b화학", "3학년 b화학"]);
+  const list = file.sheets[0];
+  assert.deepEqual(list.rows[1].map((cell) => cell.v), ["번호", "시트(강의실)", "수업 학년", "학기", "그룹", "과목", "교시", "교실", "교사", "인원"]);
+  assert.deepEqual(list.rows.slice(2).map((row) => [row[1].v, row[9].v]), [["a물리학1", 2], ["2학년 b화학", 1], ["3학년 b화학", 0]]);
+  const sections = pr.classSectionsAttendanceBundles(infos, "sections");
+  assert.equal(sections.length, infos.length, "학급별 파일 수 = 분반 수");
+  assert.deepEqual(plain(sections.map((item) => item.name)), plain(pr.classSectionsAttendanceBundles(infos, "all").map((item) => item.name)), "예전 이름 'all'도 같은 묶음");
+  // 화면 표: 같은 시트 모델 → 칸 글자가 엑셀 행과 같다(병합은 colspan).
+  const sheet = pr.classSectionsAttendanceSheet(infos[0], { days: 5 });
+  const html = pr.classSectionsSheetHtml(sheet, { keys: sheet.studentKeys, highlight: ["1-1-2"] });
+  const cellsOf = (row) => [...row.matchAll(/<(?:td|th)[^>]*>([^<]*)<\/(?:td|th)>/g)].map((m) => m[1]);
+  const htmlRows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => cellsOf(m[1]));
+  const sheetRows = sheet.rows.map((row) => row.map((cell) => String(cell.v ?? "")));
+  assert.equal(htmlRows.length, sheetRows.length);
+  assert.deepEqual(htmlRows[0], [sheetRows[0][0]], "title merged across");
+  assert.deepEqual(htmlRows[1], ["교시", sheetRows[1][2]], "info rows: label (A:B) + value (C:end)");
+  for (let r = sheet.headerRow - 1; r < sheetRows.length; r += 1) assert.deepEqual(htmlRows[r], sheetRows[r], `row ${r + 1} = excel row`);
+  assert.match(html, /<thead>[\s\S]*순서[\s\S]*<\/thead>/, "header rows in thead (repeat on print)");
+  assert.match(html, /<tr data-student="1-1-2" class="is-found">/);
+});
+
+test("화면 연결: 출석부 보기(이 그룹/학기 전체, 앞·뒤, 학생 찾기 연결, 재신청 안내) · 인쇄 분반마다 한 장 · 저장 단추", () => {
+  const ctx = context();
+  const { group, result } = solved(ctx);
+  const html = ctx.classSectionsPrintButtonsHtml("1", group, result);
+  for (const id of ["classSectionsAttendanceFile", "classSectionsAttendanceAll", "classSectionsAttendanceTeacher", "classSectionsAttendanceGroup", "classSectionsAttendanceView",
+    "classSectionsAttendancePick", "classSectionsAttendancePrev", "classSectionsAttendanceNext", "classSectionsAttendanceTable", "classSectionsAttendancePrintOne", "classSectionsAttendancePrintGroup", "classSectionsAttendancePrintSemester"]) {
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  }
+  assert.match(html, />출석부 전체 파일</);
+  assert.match(html, />출석부 학급별 파일\(zip\)</);
+  const { list } = ctx.classSectionsAttendanceInfos("1", group, "group");
+  assert.equal((html.match(/<option value="1:1:2-1 택2\|/g) || []).length, list.length, "분반 목록 = 분반 수");
+  // 학생 찾기: 그 학생이 있는 분반으로, 표에서 강조.
+  const key = Object.keys(result.assign).find((item) => result.assign[item].length);
+  ctx.CLASS_SECTIONS_VIEW.search = key;
+  const found = ctx.classSectionsPrintButtonsHtml("1", group, result);
+  assert.match(found, new RegExp(`<tr data-student="${key}" class="is-found">`));
+  assert.match(found, /id="classSectionsAttendanceStudent"/);
+  // 재신청 안내: 그 분반 과목의 미배정 학생.
+  ctx.CLASS_SECTIONS_VIEW.search = "";
+  const info = list[0];
+  result.unassigned.push({ studentKey: "1-4-10", courseKey: info.courseKey, reason: "capacity" });
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attPick = `${info.groupKey}|${info.sectionId}`;
+  assert.match(ctx.classSectionsPrintButtonsHtml("1", group, result), /id="classSectionsAttendanceRetake" data-count="1">재신청·미배정 1명은 이 출석부\([^)]*\)에 없습니다: 1-4-10\(정원 부족\)/);
+  // 인쇄: 분반마다 .print-page 한 장
+  const printBatch = { innerHTML: "" };
+  ctx.document = { getElementById: (id) => (id === "printBatch" ? printBatch : null) };
+  ctx.classSectionsSetStatus = () => {};
+  ctx.classSectionsAttendancePrint("group");
+  assert.equal((printBatch.innerHTML.match(/class="print-page cs-att-page"/g) || []).length, list.length);
+  ctx.classSectionsAttendancePrint("one");
+  assert.equal((printBatch.innerHTML.match(/class="print-page cs-att-page"/g) || []).length, 1);
+});

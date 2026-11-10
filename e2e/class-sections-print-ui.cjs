@@ -154,7 +154,7 @@ function attendanceInfo(sheet) {
   // ⑤ 출석부(이 그룹): 분반마다 시트, 위 3줄, 날짜 17칸, 인원 = 카드 인원
   console.log("▶ 출석부");
   const cardInfo = await page.locator("li.cs-section").evaluateAll((els) => els.map((li) => ({ neis: li.dataset.room, size: Number(li.dataset.size), course: li.dataset.course, room: li.querySelector(".cs-room select")?.selectedOptions[0]?.textContent.replace(/^자동\((.*)\)$/, "$1") })));
-  const att = await save(() => page.getByRole("button", { name: "출석부 엑셀(이 그룹)" }).click(), "attendance-group.xlsx");
+  const att = await save(() => page.getByRole("button", { name: "출석부 이 그룹 파일" }).click(), "attendance-group.xlsx");
   report.checks.attendanceName = att.appName;
   const attSheets = readXlsxAll(att.file);
   check(attSheets.length === cardInfo.length, `출석부 시트 수 = 분반 수(${cardInfo.length})`, { sheets: attSheets.length });
@@ -169,18 +169,18 @@ function attendanceInfo(sheet) {
   report.checks.attendanceSample = attendanceInfo(attSheets[0]);
   // 날짜 칸 수 설정
   await page.getByLabel("출석부 날짜 칸 수").fill("12"); await page.getByLabel("출석부 날짜 칸 수").press("Tab"); await sleep(500);
-  const att12 = readXlsxAll((await save(() => page.getByRole("button", { name: "출석부 엑셀(이 그룹)" }).click(), "attendance-12.xlsx")).file);
+  const att12 = readXlsxAll((await save(() => page.getByRole("button", { name: "출석부 이 그룹 파일" }).click(), "attendance-12.xlsx")).file);
   check(attendanceInfo(att12[0]).dateCols === 12, "날짜 칸 12로 바꾸면 12칸");
   await page.getByLabel("출석부 날짜 칸 수").fill("17"); await page.getByLabel("출석부 날짜 칸 수").press("Tab"); await sleep(400);
   // 교사별 zip·전체 zip
-  const teacherZip = await save(() => page.getByRole("button", { name: "출석부 교사별 zip" }).click(), "attendance-teacher.zip");
+  const teacherZip = await save(() => page.getByRole("button", { name: "출석부 교사별(zip)" }).click(), "attendance-teacher.zip");
   const teacherFiles = unzipNames(teacherZip.file);
   report.checks.teacherZip = { name: teacherZip.appName, files: teacherFiles.length, sample: teacherFiles.slice(0, 5) };
   check(teacherFiles.length > 0 && teacherFiles.every((name) => /^\d{4}_[12]학기_출석부_.+\.xlsx$/.test(name)), "교사별 zip: 교사마다 xlsx", report.checks.teacherZip);
-  const allZip = await save(() => page.getByRole("button", { name: "출석부 전체 zip" }).click(), "attendance-all.zip");
+  const allZip = await save(() => page.getByRole("button", { name: "출석부 학급별 파일(zip)" }).click(), "attendance-all.zip");
   const allFiles = unzipNames(allZip.file);
   report.checks.allZip = { name: allZip.appName, files: allFiles.length, sample: allFiles.slice(0, 5) };
-  check(allFiles.length >= cardInfo.length && allFiles.every((name) => /^\d{4}_[12]학기_.+\(.+\)_.+_.+\.xlsx$/.test(name)), "전체 zip: 분반마다 '2027_1학기_과목(강의실)_교실_교사.xlsx'", report.checks.allZip);
+  check(allFiles.length >= cardInfo.length && allFiles.every((name) => /^\d{4}_[12]학기_.+\(.+\)_.+_.+\.xlsx$/.test(name)), "학급별 파일 zip: 분반마다 '2027_1학기_과목(강의실)_교실_교사.xlsx'", report.checks.allZip);
   // zip 안 파일도 열리는지(첫 파일)
   unzipTo(allZip.file, path.join(OUT, "downloads", "all"));
   const firstInner = readXlsxAll(path.join(OUT, "downloads", "all", allFiles[0]));
@@ -189,6 +189,46 @@ function attendanceInfo(sheet) {
   unzipTo(teacherZip.file, path.join(OUT, "downloads", "teacher"));
   const teacherSheets = teacherFiles.reduce((n, name) => n + readXlsxAll(path.join(OUT, "downloads", "teacher", name)).length, 0);
   check(teacherSheets === allFiles.length, `교사별 시트 합(${teacherSheets}) = 전체 분반 수(${allFiles.length})`);
+  // 전체 파일: 목록 + 분반마다 시트(= 학급별 파일 수)
+  const fullFile = await save(() => page.getByRole("button", { name: "출석부 전체 파일" }).click(), "attendance-full.xlsx");
+  const fullSheets = readXlsxAll(fullFile.file);
+  report.checks.fullFile = { name: fullFile.appName, sheets: fullSheets.length, first: fullSheets.slice(0, 3).map((sheet) => sheet.name) };
+  check(fullSheets[0].name === "목록" && fullSheets.length === allFiles.length + 1 && fullSheets[0].rows.length - 2 === allFiles.length,
+    `전체 파일: '목록' + 분반 ${allFiles.length}개 시트`, report.checks.fullFile);
+  check(/_이동출석부_전체\.xlsx$/.test(fullFile.appName), "전체 파일 이름 '…_이동출석부_전체.xlsx'", fullFile.appName);
+
+  // ⑤-2 출석부 화면 보기: 표 = 엑셀 시트, 앞·뒤 넘기기, 범위(학기 전체), 인쇄 미리보기 쪽 수
+  console.log("▶ 출석부 화면 보기·인쇄");
+  const view = page.locator("#classSectionsAttendanceView");
+  check(await view.count() === 1, "출석부 보기 영역");
+  const readTable = () => page.locator("#classSectionsAttendanceTable").evaluate((table) => ({ sheet: table.dataset.sheet,
+    rows: [...table.querySelectorAll("tr")].map((tr) => [...tr.children].map((cell) => cell.textContent)) }));
+  const first = await readTable();
+  const excelFirst = attSheets.find((sheet) => sheet.name === first.sheet);
+  const headerAt = first.rows.findIndex((row) => row[0] === "순서");
+  const same = excelFirst && first.rows.slice(headerAt).every((row, i) => row.join("|") === excelFirst.rows[headerAt + i].slice(0, row.length).join("|"))
+    && first.rows[0][0] === excelFirst.rows[0][0];
+  check(Boolean(same), `화면 출석부 '${first.sheet}' = 엑셀 시트(제목·머리글·학생 줄)`, { screen: first.rows.slice(headerAt, headerAt + 2), excel: excelFirst?.rows.slice(headerAt, headerAt + 2) });
+  await shot("07-attendance-view.png", view);
+  await page.getByRole("button", { name: "다음 분반 출석부" }).click(); await sleep(500);
+  const second = await readTable();
+  check(second.sheet !== first.sheet, "뒤 ▶ 누르면 다음 분반", { first: first.sheet, second: second.sheet });
+  await page.getByRole("button", { name: "앞 분반 출석부" }).click(); await sleep(500);
+  check((await readTable()).sheet === first.sheet, "◀ 앞 누르면 처음 분반");
+  await page.getByLabel("출석부 보기 범위").selectOption("semester"); await sleep(600);
+  const semesterOptions = await page.getByLabel("출석부 분반 고르기").locator("option").count();
+  check(semesterOptions === fullSheets.length - 1, `학기 전체 범위: 분반 목록 ${semesterOptions} = 전체 분반 수`, { semesterOptions });
+  await page.getByLabel("출석부 보기 범위").selectOption("group"); await sleep(500);
+  // 인쇄: 이 그룹 → 분반마다 A4 한 장(PDF 쪽 수 = 분반 수), 이 분반 → 1쪽
+  await page.getByRole("button", { name: "이 그룹 인쇄" }).click(); await sleep(800);
+  const attPrint = await page.evaluate(() => ({ prints: window.__prints, pages: document.querySelectorAll("#printBatch .cs-att-page").length }));
+  const attPdf = await page.pdf({ path: path.join(OUT, "08-attendance-print.pdf"), format: "A4", preferCSSPageSize: true });
+  const attPdfPages = (attPdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length;
+  report.checks.attendancePrint = { ...attPrint, pdfPages: attPdfPages };
+  check(attPrint.pages === cardInfo.length && attPdfPages === cardInfo.length, `그룹 인쇄: 분반 ${cardInfo.length}개 = ${attPrint.pages}장, PDF ${attPdfPages}쪽(분반마다 한 장)`, report.checks.attendancePrint);
+  await page.getByRole("button", { name: "이 분반 인쇄" }).click(); await sleep(500);
+  const onePdf = await page.pdf({ format: "A4", preferCSSPageSize: true });
+  check((onePdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length === 1, "이 분반 인쇄: PDF 1쪽");
 
   // ⑥ 학생 시간표: 학생 찾기 → 미리 보기, 반별 인쇄, 엑셀
   console.log("▶ 학생 시간표");
@@ -205,11 +245,12 @@ function attendanceInfo(sheet) {
   }
   await page.getByLabel("학생 시간표 인쇄할 반(현 반)").selectOption("1"); await sleep(200);
   await page.getByLabel("한 장에 학생 수").selectOption("2"); await sleep(500);
+  const printsBefore = await page.evaluate(() => window.__prints);
   await page.getByRole("button", { name: "학생 시간표 인쇄" }).click(); await sleep(800);
   const printed = await page.evaluate(() => ({ prints: window.__prints, pages: document.querySelectorAll("#printBatch .cs-tt-page").length, students: document.querySelectorAll("#printBatch .cs-tt").length,
     keys: [...document.querySelectorAll("#printBatch .cs-tt")].map((el) => el.dataset.student) }));
   report.checks.print = printed;
-  check(printed.prints === 1 && printed.students > 0 && printed.pages === Math.ceil(printed.students / 2) && printed.keys.every((key) => key.startsWith(`${grade}-1-`)), "1반 인쇄: 한 장에 2명, 1반 학생만", printed);
+  check(printed.prints === printsBefore + 1 && printed.students > 0 && printed.pages === Math.ceil(printed.students / 2) && printed.keys.every((key) => key.startsWith(`${grade}-1-`)), "1반 인쇄: 한 장에 2명, 1반 학생만", printed);
   // 인쇄 모양: A4 PDF로 만들어 쪽 수 = 장 수(한 장에 2명)인지 본다.
   const pdf = await page.pdf({ path: path.join(OUT, "05-timetable-print.pdf"), format: "A4", preferCSSPageSize: true });
   const pdfPages = (pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length;
