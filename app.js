@@ -8802,7 +8802,7 @@
         if (!requireLocalWorkspaceAccess()) return;
         addApplicationRound();
         status.style.color = "#287956";
-        status.textContent = `${state.currentRound}를 추가했습니다.`;
+        status.textContent = `${state.currentRound}차를 추가했습니다.`;
       } catch (error) {
         status.style.color = "#a44939";
         status.textContent = error instanceof Error ? error.message : "차수를 추가하지 못했습니다.";
