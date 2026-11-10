@@ -67,7 +67,7 @@ function classSectionsAttendanceSheet(info, options = {}) {
   infoRow("교시", `${info.blockLetter ? `${info.blockLetter}블록 · ` : ""}${classSectionsPrintTimesText(info.times) || "시간 미정"}`);
   infoRow("교실", info.roomLabel || "미정");
   infoRow("교사", info.teacherName || "미정");
-  const subtitle = `${info.year}학년도 ${info.semester}학기 · 현 ${info.grade}학년 → ${info.targetGrade}학년 · ${students.length}명`;
+  const subtitle = `${info.year}학년도 ${info.semester}학기 · 현 ${info.grade}학년 → ${info.targetGrade}학년 · ${students.length}명${options.subtitle ? ` · ${options.subtitle}` : ""}`;
   rows.push([{ v: subtitle, s: 8 }]);
   merges.push(`A${rows.length}:${last}${rows.length}`);
   let warning = "";
@@ -210,6 +210,121 @@ function classSectionsSheetHtml(sheet, options = {}) {
   return `<table class="cs-att-table" data-sheet="${esc(sheet.name || "")}"><colgroup>${cols}</colgroup><thead>${rows.slice(0, headerRows).map((row, r) => rowHtml(row, r)).join("")}</thead>
     <tbody>${rows.slice(headerRows).map((row, r) => rowHtml(row, r + headerRows)).join("")}</tbody></table>`;
 }
+
+// ---- 담임학급별 출석부 ----
+// 기준 반: 내년 반(배정표 또는 '그대로 올라감')을 알면 내년 반, 모르면 현재 반(경고). 학년·반마다 한 묶음.
+// roster: [{ key(현학년-반-번호), grade, targetGrade, classroom(내년 반, 모르면 ""), number(내년 번호), name, basis }]
+// extras: { 학생키: { unit: [학급 단위 과목], retake: [{ courseName, reason }] } }
+// 반환: [{ id, grade, targetGrade, room, basis, label, students: [{ key, number, name, cells: {열키: 칸}, unit, retake }],
+//   columns: [{ key, groupKey, groupCategory, blockLetter, times }], sections: [info(그 반 학생만, sectionTotal = 분반 전체 인원)] }]
+function classSectionsHomerooms(infos, roster, extras = {}) {
+  const homerooms = new Map();
+  const homeroomOf = new Map();
+  const year = infos[0]?.year || "";
+  const semester = infos[0]?.semester || "";
+  for (const student of roster || []) {
+    const [, curClass, curNumber] = String(student.key).split("-");
+    const known = student.basis !== "none" && classSectionsPrintText(student.classroom);
+    const room = known ? classSectionsPrintText(student.classroom) : curClass;
+    const id = `${student.grade}|${known ? "next" : "now"}|${room}`;
+    if (!homerooms.has(id)) {
+      homerooms.set(id, { id, year, semester, grade: String(student.grade), targetGrade: String(student.targetGrade), room, basis: known ? student.basis : "none",
+        label: known ? `내년 ${student.targetGrade}학년 ${room}반` : `현 ${student.grade}학년 ${room}반`, students: [], columns: [], sections: [] });
+    }
+    const homeroom = homerooms.get(id);
+    homeroom.students.push({ key: student.key, number: known ? classSectionsPrintText(student.number) : curNumber, name: student.name || "", cells: {},
+      unit: (extras[student.key]?.unit || []).slice(), retake: (extras[student.key]?.retake || []).slice() });
+    homeroomOf.set(student.key, homeroom);
+  }
+  const groupOrder = new Map();
+  for (const info of infos) if (!groupOrder.has(info.groupKey)) groupOrder.set(info.groupKey, groupOrder.size);
+  for (const info of infos) {
+    const colKey = `${info.groupKey}|${info.blockId || info.blockLetter}`;
+    const byRoom = new Map();
+    for (const member of info.students || []) {
+      const homeroom = homeroomOf.get(member.key);
+      if (!homeroom) continue;
+      const student = homeroom.students.find((item) => item.key === member.key);
+      student.cells[colKey] = { courseName: info.courseName, roomName: info.roomName, roomLabel: info.roomLabel || "", teacher: info.teacherName || "" };
+      if (!homeroom.columns.some((col) => col.key === colKey)) {
+        homeroom.columns.push({ key: colKey, groupKey: info.groupKey, groupCategory: info.groupCategory || "", blockLetter: info.blockLetter, times: info.times || [], order: groupOrder.get(info.groupKey) });
+      }
+      if (!byRoom.has(homeroom)) byRoom.set(homeroom, []);
+      byRoom.get(homeroom).push(member);
+    }
+    for (const [homeroom, members] of byRoom) homeroom.sections.push({ ...info, students: members, sectionTotal: (info.students || []).length });
+  }
+  const num = (value) => (/^\d+$/.test(String(value)) ? Number(value) : 999);
+  const list = [...homerooms.values()];
+  for (const homeroom of list) {
+    homeroom.students.sort((a, b) => num(a.number) - num(b.number) || a.key.localeCompare(b.key, "ko", { numeric: true }));
+    homeroom.columns.sort((a, b) => a.order - b.order || String(a.blockLetter).localeCompare(String(b.blockLetter)));
+  }
+  return list.sort((a, b) => a.grade.localeCompare(b.grade) || (a.basis === "none") - (b.basis === "none") || num(a.room) - num(b.room) || a.room.localeCompare(b.room, "ko"));
+}
+
+// ① 그 반 '이동수업 현황' 시트: 행 = 학생, 열 = 블록(그룹·블록·시간), 칸 = 과목 강의실 / 교실 · 교사. A4 가로·한 장.
+function classSectionsHomeroomStatusSheet(homeroom, options = {}) {
+  const cols = 3 + homeroom.columns.length + 2;
+  const last = classSectionsPrintColumn(cols - 1);
+  const rows = [[{ v: `${homeroom.label} 이동수업 현황`, s: 1 }]];
+  const merges = [`A1:${last}1`];
+  const heights = [30];
+  rows.push([{ v: `${homeroom.year}학년도 ${homeroom.semester}학기 · ${homeroom.basis === "none" ? `현 ${homeroom.grade}학년` : `현 ${homeroom.grade}학년 → ${homeroom.targetGrade}학년`} · 학생 ${homeroom.students.length}명`, s: 8 }]);
+  merges.push(`A2:${last}2`);
+  if (homeroom.basis === "none") { rows.push([{ v: "⚠ 내년 반 미정 — 현재 반 기준입니다. 내년 반 배정표를 올리면 내년 반으로 묶습니다.", s: 8 }]); merges.push(`A3:${last}3`); }
+  else if (homeroom.basis === "same") { rows.push([{ v: "진급 때 반이 그대로 올라가 지금 반을 내년 반으로 보았습니다(번호는 진급 뒤 확인).", s: 8 }]); merges.push(`A3:${last}3`); }
+  rows.push([{ v: "번호", s: 2 }, { v: "현 학년-반-번호", s: 2 }, { v: "성명", s: 2 },
+    ...homeroom.columns.map((col) => ({ v: `${col.groupCategory} ${col.blockLetter}블록\n${classSectionsPrintTimesText(col.times) || "시간 미정"}`, s: 2 })),
+    { v: "학급 단위", s: 2 }, { v: "재신청·미배정", s: 2 }]);
+  const headerRow = rows.length;
+  heights[headerRow - 1] = 32;
+  for (const student of homeroom.students) {
+    rows.push([{ v: classSectionsPrintNumber(student.number), s: 4 }, { v: student.key, s: 4 }, { v: student.name, s: 4 },
+      ...homeroom.columns.map((col) => {
+        const cell = student.cells[col.key];
+        return { v: cell ? `${cell.courseName} ${cell.roomName}\n${[cell.roomLabel, cell.teacher].filter(Boolean).join(" · ")}` : "", s: 4 };
+      }),
+      { v: student.unit.join(", "), s: 4 },
+      { v: student.retake.map((item) => `${item.courseName}${item.reason ? `(${item.reason})` : ""}`).join(", "), s: student.retake.length ? 9 : 4 }]);
+    heights[rows.length - 1] = 30;
+  }
+  return { name: options.sheetName || "이동수업 현황", rows, merges, heights, widths: [5, 11, 9, ...homeroom.columns.map(() => 17), 10, 16], orientation: "landscape", fitToHeight: 1,
+    printTitles: `$1:$${headerRow}`, freeze: `D${headerRow + 1}`, headerRow, studentKeys: homeroom.students.map((student) => student.key) };
+}
+
+// ② 그 반 학생만 추린 분반 출석부 시트들(같은 양식, 부제에 '○반 학생만 n/전체 m명').
+function classSectionsHomeroomAttendanceSheets(homeroom, options = {}) {
+  const used = new Set(["이동수업 현황"]);
+  return homeroom.sections.map((info) => {
+    let name = String(info.roomName).slice(0, 31);
+    for (let n = 2; used.has(name); n += 1) name = `${String(info.roomName).slice(0, 27)}(${n})`;
+    used.add(name);
+    return classSectionsAttendanceSheet(info, { ...options, sheetName: name, subtitle: `${homeroom.label} 학생만 ${info.students.length}/${info.sectionTotal}명` });
+  });
+}
+
+function classSectionsHomeroomFileName(homeroom) {
+  return `${homeroom.year}_${homeroom.semester}학기_담임학급_${classSectionsPrintFilePart(homeroom.label)}_출석부.xlsx`;
+}
+
+function classSectionsHomeroomSheetName(homeroom) {
+  return homeroom.basis === "none" ? `현${homeroom.grade}-${homeroom.room}반` : `${homeroom.targetGrade}-${homeroom.room}반`;
+}
+
+// 담임학급별 파일(반마다 파일 하나: ① + ②) / 담임학급 전체 파일(맨 앞 목록 + 반마다 ①). options.homerooms = classSectionsHomerooms(…)
+CLASS_SECTIONS_ATTENDANCE_BUNDLES.homeroom = (infos, options) => (options.homerooms || []).map((homeroom) => ({ name: classSectionsHomeroomFileName(homeroom),
+  sheets: [classSectionsHomeroomStatusSheet(homeroom), ...classSectionsHomeroomAttendanceSheets(homeroom, options)] }));
+CLASS_SECTIONS_ATTENDANCE_BUNDLES.homeroomFile = (infos, options) => {
+  const homerooms = options.homerooms || [];
+  const head = ["번호", "시트", "반", "학생", "이동 분반", "기준"];
+  const list = { name: "목록", orientation: "portrait", merges: ["A1:F1"], widths: [6, 14, 20, 8, 10, 20], freeze: "A3", printTitles: "$1:$2",
+    rows: [[{ v: `${infos[0]?.year || ""}학년도 ${infos[0]?.semester || ""}학기 담임학급별 이동수업 현황 (반 ${homerooms.length}개)`, s: 1 }], head.map((v) => ({ v, s: 2 })),
+      ...homerooms.map((homeroom, i) => [i + 1, classSectionsHomeroomSheetName(homeroom), homeroom.label, homeroom.students.length, homeroom.sections.length,
+        homeroom.basis === "none" ? "현재 반(내년 반 미정)" : homeroom.basis === "same" ? "그대로 올라감" : "내년 반 배정표"].map((v) => ({ v, s: 4 })))] };
+  return [{ name: `${infos[0]?.year || ""}_${infos[0]?.semester || ""}학기_담임학급별_이동수업현황_전체.xlsx`,
+    sheets: [list, ...homerooms.map((homeroom) => classSectionsHomeroomStatusSheet(homeroom, { sheetName: classSectionsHomeroomSheetName(homeroom) }))] }];
+};
 
 // ---- ③ 학생 개인 이동수업 시간표 ----
 // info: { year, semester, grade, targetGrade, key, name, nextClass, nextNumber, days:["월",…], periods, fill(빈칸 글자),
@@ -441,7 +556,9 @@ function classSectionsPrintButtonsHtml(round, group, result) {
     <div class="cs-actions">
       <span class="cs-note">출석부 저장(${esc(group.semester)}학기):</span>
       <button class="button" id="classSectionsAttendanceFile" type="button" title="${esc(group.semester)}학기 모든 그룹·분반을 한 엑셀에(맨 앞 '목록' 시트 + 분반마다 시트)">출석부 전체 파일</button>
-      <button class="button" id="classSectionsAttendanceAll" type="button" title="${esc(group.semester)}학기 분반(이동 학급)마다 파일 하나, zip으로 묶음">출석부 학급별 파일(zip)</button>
+      <button class="button" id="classSectionsAttendanceAll" type="button" title="${esc(group.semester)}학기 분반(이동 학급)마다 파일 하나, zip으로 묶음">출석부 분반별 파일(zip)</button>
+      <button class="button" id="classSectionsAttendanceHomeroom" type="button" title="${esc(group.semester)}학기 · 담임반마다 파일 하나(그 반 이동수업 현황 + 그 반 학생 분반 출석부), zip으로 묶음">담임학급별 파일(zip)</button>
+      <button class="button" id="classSectionsAttendanceHomeroomFile" type="button" title="${esc(group.semester)}학기 · 한 파일에 맨 앞 목록 + 반마다 이동수업 현황 시트">담임학급 전체 파일</button>
       <button class="button" id="classSectionsAttendanceTeacher" type="button" title="${esc(group.semester)}학기 · 교사마다 파일 하나(zip)">출석부 교사별(zip)</button>
       <button class="button" id="classSectionsAttendanceGroup" type="button" title="이 그룹만 · 분반마다 시트 하나">출석부 이 그룹 파일</button>
       <label>날짜 칸 <input class="cs-num" type="number" min="1" max="40" id="classSectionsAttendanceDays" value="${esc(classSectionsPrintOption("attendanceDays"))}" data-focus-key="cs-att-days" aria-label="출석부 날짜 칸 수"></label>
@@ -595,7 +712,7 @@ function classSectionsAttendanceInfos(round, group, scope) {
     const ordered = result.sections.slice().sort((a, b) => String(a.blockLetter).localeCompare(String(b.blockLetter)) || a.courseName.localeCompare(b.courseName, "ko") || (a.roomNo || 0) - (b.roomNo || 0) || a.ord - b.ord);
     for (const section of ordered) {
       const teacherId = String(section.teacherId || "");
-      list.push({ year, semester: item.semester, grade: item.grade, targetGrade: item.targetGrade, groupKey: item.key, groupLabel: item.label, groupCategory: item.category, sectionId: section.id, courseKey: section.courseKey,
+      list.push({ year, semester: item.semester, grade: item.grade, targetGrade: item.targetGrade, groupKey: item.key, groupLabel: item.label, groupCategory: item.category, sectionId: section.id, courseKey: section.courseKey, blockId: section.blockId,
         courseName: section.courseName, roomName: section.roomName, blockLetter: section.blockLetter, times: blockById.get(section.blockId)?.times || [],
         roomLabel: classSectionsRoomLabel(round, item, section.id), teacherId, teacherName: teacherName.get(teacherId) || "", basis: effective.basis,
         students: (members.get(section.id) || []).map((key) => ({ key, classroom: effective.map?.[key]?.classroom || "", number: effective.map?.[key]?.number || "", name: names.get(key) || "" })) });
@@ -610,11 +727,14 @@ async function classSectionsAttendanceExport(kind) {
   const { list, warnings } = classSectionsAttendanceInfos(context.round, context.group, kind === "group" ? "group" : "semester");
   if (!list.length) return void classSectionsSetStatus("출석부를 만들 분반이 없습니다(먼저 편성 계산).", true);
   const days = Number(classSectionsPrintOption("attendanceDays")) || 17;
-  const bundles = classSectionsAttendanceBundles(list, kind, { days });
+  const homeroomKind = kind === "homeroom" || kind === "homeroomFile";
+  const homerooms = homeroomKind ? classSectionsHomeroomData(context.round, context.group).homerooms : null;
+  const bundles = classSectionsAttendanceBundles(list, kind, { days, homerooms });
   const note = warnings.length ? ` ${warnings.join(" ")}` : "";
-  if (kind === "group" || kind === "file") {
+  if (kind === "group" || kind === "file" || kind === "homeroomFile") {
     downloadBlob(createWorkbookBlob(bundles[0].sheets), bundles[0].name);
-    return void classSectionsSetStatus(`출석부 ${kind === "file" ? "전체 파일" : "이 그룹 파일"}: 분반 ${list.length}개 시트${kind === "file" ? " + 목록" : ""}를 내려받았습니다.${note}`, Boolean(warnings.length));
+    return void classSectionsSetStatus(kind === "homeroomFile" ? `담임학급 전체 파일: 반 ${homerooms.length}개 시트 + 목록을 내려받았습니다.${note}`
+      : `출석부 ${kind === "file" ? "전체 파일" : "이 그룹 파일"}: 분반 ${list.length}개 시트${kind === "file" ? " + 목록" : ""}를 내려받았습니다.${note}`, Boolean(warnings.length));
   }
   CLASS_SECTIONS_PRINT_VIEW.busy = true;
   try {
@@ -626,8 +746,9 @@ async function classSectionsAttendanceExport(kind) {
     }
     const zip = new Blob([createXlsxBlob(files)], { type: "application/zip" });
     const year = classSectionsPrintYear();
-    downloadBlob(zip, `${year}_${context.group.semester}학기_출석부_${kind === "teacher" ? "교사별" : "학급별"}.zip`);
-    classSectionsSetStatus(`출석부 ${kind === "teacher" ? "교사별" : "학급별 파일"}(zip): 파일 ${bundles.length}개(${kind === "teacher" ? "교사마다" : "분반마다"}), 분반 ${list.length}개.${note}`, Boolean(warnings.length));
+    const label = kind === "teacher" ? "교사별" : kind === "homeroom" ? "담임학급별" : "분반별";
+    downloadBlob(zip, `${year}_${context.group.semester}학기_출석부_${label}.zip`);
+    classSectionsSetStatus(`출석부 ${label} 파일(zip): 파일 ${bundles.length}개(${kind === "teacher" ? "교사마다" : kind === "homeroom" ? "담임반마다" : "분반마다"}), 분반 ${list.length}개.${note}`, Boolean(warnings.length));
   } catch (error) {
     classSectionsSetStatus(`출석부 zip을 만들지 못했습니다: ${error?.message || error}`, true);
   } finally {
@@ -657,6 +778,7 @@ function classSectionsAttendanceCurrent(round, group, list) {
 }
 
 function classSectionsAttendanceViewHtml(round, group) {
+  if (CLASS_SECTIONS_PRINT_VIEW.attScope === "homeroom") return classSectionsHomeroomViewHtml(round, group);
   const esc = classSectionsPrintEsc;
   const open = CLASS_SECTIONS_PRINT_VIEW.attOpen !== false;
   const { list } = classSectionsAttendanceViewList(round, group);
@@ -669,7 +791,7 @@ function classSectionsAttendanceViewHtml(round, group) {
   const inSections = student ? list.filter((item) => item.students.some((s) => s.key === student)).map((item) => item.roomName) : [];
   return `<details class="cs-att-view" id="classSectionsAttendanceView"${open ? " open" : ""}><summary>이동 출석부 보기 <span class="cs-note">${index + 1}/${list.length} · ${esc(info.roomName)}</span></summary>
     <div class="cs-actions">
-      <label>범위 <select id="classSectionsAttendanceScope" data-focus-key="cs-att-scope" aria-label="출석부 보기 범위"><option value="group">이 그룹</option><option value="semester"${CLASS_SECTIONS_PRINT_VIEW.attScope === "semester" ? " selected" : ""}>${esc(group.semester)}학기 전체</option></select></label>
+      ${classSectionsAttendanceScopeHtml(group)}
       <button class="button" id="classSectionsAttendancePrev" type="button" aria-label="앞 분반 출석부"${index <= 0 ? " disabled" : ""}>◀ 앞</button>
       <label>분반 <select id="classSectionsAttendancePick" data-focus-key="cs-att-pick" aria-label="출석부 분반 고르기">${options}</select></label>
       <button class="button" id="classSectionsAttendanceNext" type="button" aria-label="다음 분반 출석부"${index >= list.length - 1 ? " disabled" : ""}>뒤 ▶</button>
@@ -704,6 +826,15 @@ function classSectionsAttendanceRerender() {
 function classSectionsAttendanceStep(delta) {
   const context = classSectionsCurrent();
   if (!context?.group) return;
+  if (CLASS_SECTIONS_PRINT_VIEW.attScope === "homeroom") {
+    const { homerooms } = classSectionsHomeroomData(context.round, context.group);
+    const { index } = classSectionsHomeroomCurrent(context.round, context.group, homerooms);
+    const next = homerooms[Math.max(0, Math.min(homerooms.length - 1, index + delta))];
+    if (!next) return;
+    CLASS_SECTIONS_PRINT_VIEW.attPick = next.id;
+    if (typeof CLASS_SECTIONS_VIEW !== "undefined") CLASS_SECTIONS_VIEW.search = "";
+    return classSectionsAttendanceRerender();
+  }
   const { list } = classSectionsAttendanceViewList(context.round, context.group);
   const { index, id } = classSectionsAttendanceCurrent(context.round, context.group, list);
   const next = list[Math.max(0, Math.min(list.length - 1, index + delta))];
@@ -728,6 +859,114 @@ function classSectionsAttendancePrint(kind) {
   if (!infos.length) return void classSectionsSetStatus("인쇄할 출석부가 없습니다.", true);
   target.innerHTML = infos.map((info) => `<div class="print-page cs-att-page">${classSectionsSheetHtml(classSectionsAttendanceSheet(info, { days }))}</div>`).join("");
   classSectionsSetStatus(`출석부 ${infos.length}장(분반마다 한 장)을 인쇄합니다.`);
+  if (typeof window !== "undefined" && typeof window.print === "function") window.print();
+}
+
+// ---- 담임학급별 출석부(화면·저장·인쇄) ----
+// 같은 차수·학기 모든 그룹(학년)의 분반 + 그 학년 학생 전체(신청하지 않은 학생 포함) → 반마다 묶음(classSectionsHomerooms).
+function classSectionsHomeroomData(round, group) {
+  const compute = () => {
+    const { list, warnings } = classSectionsAttendanceInfos(round, group, "semester");
+    const source = classSectionsSource(round);
+    const settings = classSectionsPrintSettings();
+    const names = typeof classSectionsStudentNames === "function" ? classSectionsStudentNames(round) : new Map();
+    const reasons = typeof CLASS_SECTIONS_UNASSIGNED_REASONS !== "undefined" ? CLASS_SECTIONS_UNASSIGNED_REASONS : {};
+    const roster = new Map();
+    const extras = {};
+    const extra = (key) => (extras[key] || (extras[key] = { unit: [], retake: [] }));
+    for (const item of source.groups.filter((other) => other.semester === group.semester)) {
+      const entry = classSectionsEntry(round, item.key, false);
+      const result = entry?.sectionResult;
+      if (!result) continue;
+      const effective = typeof classSectionsEffectiveClassMap === "function" ? classSectionsEffectiveClassMap(item) : { map: null, basis: "none" };
+      for (const student of item.gradeStudents || item.students) {
+        if (roster.has(student.key)) continue;
+        const next = effective.map?.[student.key];
+        roster.set(student.key, { key: student.key, grade: item.grade, targetGrade: item.targetGrade, classroom: next?.classroom || "", number: next?.number || "",
+          name: names.get(student.key) || "", basis: next?.classroom ? effective.basis : "none" });
+      }
+      const courseName = new Map(item.courses.map((course) => [course.key, course.name]));
+      for (const miss of [...(result.unassigned || []), ...(result.closedRequests || [])]) {
+        if (miss.reason === "class-unit-other-room") continue;
+        const list = extra(miss.studentKey).retake;
+        const name = courseName.get(miss.courseKey) || miss.courseKey;
+        if (!list.some((x) => x.courseName === name)) list.push({ courseName: name, reason: reasons[miss.reason] || miss.reason });
+      }
+      const unitCourses = item.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", item.grade)[course.key] === "class");
+      if (unitCourses.length && effective.map && typeof classSectionsClassUnitPlan === "function") {
+        const plan = classSectionsClassUnitPlan(item, entry, settings);
+        for (const student of item.gradeStudents || item.students) {
+          const unitKey = plan.assign[String(effective.map[student.key]?.classroom || "")];
+          if (unitKey) extra(student.key).unit.push(courseName.get(unitKey) || unitKey);
+        }
+      }
+    }
+    return { list, warnings, homerooms: classSectionsHomerooms(list, [...roster.values()], extras) };
+  };
+  return typeof cachedByStateRevision === "function" ? cachedByStateRevision("classSectionsHomeroomData", `${round}|${group.semester}|${typeof $ === "function" ? $("#schoolYear")?.value || "" : ""}`, compute) : compute();
+}
+
+function classSectionsAttendanceScopeHtml(group) {
+  const esc = classSectionsPrintEsc;
+  const scope = CLASS_SECTIONS_PRINT_VIEW.attScope || "group";
+  return `<label>범위 <select id="classSectionsAttendanceScope" data-focus-key="cs-att-scope" aria-label="출석부 보기 범위"><option value="group">이 그룹(분반별)</option><option value="semester"${scope === "semester" ? " selected" : ""}>${esc(group.semester)}학기 전체(분반별)</option><option value="homeroom"${scope === "homeroom" ? " selected" : ""}>담임반별</option></select></label>`;
+}
+
+function classSectionsHomeroomCurrent(round, group, homerooms) {
+  const query = (typeof CLASS_SECTIONS_VIEW !== "undefined" ? CLASS_SECTIONS_VIEW.search || "" : "").trim();
+  const student = query ? classSectionsTimetableFindKey(round, group, query) : "";
+  let index = homerooms.findIndex((item) => item.id === CLASS_SECTIONS_PRINT_VIEW.attPick);
+  if (student && !(homerooms[index]?.students || []).some((item) => item.key === student)) {
+    const found = homerooms.findIndex((item) => item.students.some((s) => s.key === student));
+    if (found >= 0) index = found;
+  }
+  if (index < 0) index = Math.max(0, homerooms.findIndex((item) => item.grade === group.grade));
+  return { index, homeroom: homerooms[index] || null, student };
+}
+
+function classSectionsHomeroomViewHtml(round, group) {
+  const esc = classSectionsPrintEsc;
+  const open = CLASS_SECTIONS_PRINT_VIEW.attOpen !== false;
+  const { homerooms } = classSectionsHomeroomData(round, group);
+  if (!homerooms.length) return "";
+  const { index, homeroom, student } = classSectionsHomeroomCurrent(round, group, homerooms);
+  const sheet = classSectionsHomeroomStatusSheet(homeroom);
+  const options = homerooms.map((item, i) => `<option value="${esc(item.id)}"${i === index ? " selected" : ""}>${esc(`${item.label} (${item.students.length}명, 분반 ${item.sections.length})`)}</option>`).join("");
+  const retake = homeroom.students.filter((item) => item.retake.length).length;
+  return `<details class="cs-att-view" id="classSectionsAttendanceView"${open ? " open" : ""}><summary>이동 출석부 보기 <span class="cs-note">담임반 ${index + 1}/${homerooms.length} · ${esc(homeroom.label)}</span></summary>
+    <div class="cs-actions">
+      ${classSectionsAttendanceScopeHtml(group)}
+      <button class="button" id="classSectionsAttendancePrev" type="button" aria-label="앞 담임반"${index <= 0 ? " disabled" : ""}>◀ 앞</button>
+      <label>담임반 <select id="classSectionsHomeroomPick" data-focus-key="cs-hr-pick" aria-label="담임반 고르기">${options}</select></label>
+      <button class="button" id="classSectionsAttendanceNext" type="button" aria-label="다음 담임반"${index >= homerooms.length - 1 ? " disabled" : ""}>뒤 ▶</button>
+      <span class="cs-note">인쇄(반마다 A4 가로 + 그 반 학생 분반 출석부):</span>
+      <button class="button" id="classSectionsHomeroomPrintOne" type="button">이 반 인쇄</button>
+      <button class="button" id="classSectionsHomeroomPrintGrade" type="button">${esc(homeroom.basis === "none" ? `현 ${homeroom.grade}학년` : `${homeroom.targetGrade}학년`)} 전체 인쇄</button>
+    </div>
+    ${homeroom.basis === "none" ? '<p class="cs-note is-warn" id="classSectionsHomeroomBasis">내년 반 미정 — 현재 반 기준입니다(내년 반 배정표를 올리거나 진급 반 편성을 ‘그대로 올라감’으로 하면 내년 반으로 묶음).</p>' : ""}
+    ${retake ? `<p class="cs-note is-warn" id="classSectionsHomeroomRetake" data-count="${retake}">이 반 재신청·미배정 학생 ${retake}명(표 맨 오른쪽 칸)</p>` : ""}
+    <div class="cs-att-scroll" data-scroll-key="cs-hr">${classSectionsSheetHtml(sheet, { keys: sheet.studentKeys, highlight: student ? [student] : [] }).replace("<table ", '<table id="classSectionsHomeroomTable" ')}</div>
+  </details>`;
+}
+
+// 담임반 인쇄: one(이 반) / grade(같은 학년 모든 반). 반마다 ① 현황(A4 가로) + ② 그 반 학생 분반 출석부(A4 세로).
+function classSectionsHomeroomPrint(kind) {
+  const context = classSectionsCurrent();
+  const target = typeof document !== "undefined" ? document.getElementById("printBatch") : null;
+  if (!context?.group || !target) return;
+  const { homerooms } = classSectionsHomeroomData(context.round, context.group);
+  const { homeroom } = classSectionsHomeroomCurrent(context.round, context.group, homerooms);
+  if (!homeroom) return void classSectionsSetStatus("인쇄할 담임반이 없습니다.", true);
+  const chosen = kind === "grade" ? homerooms.filter((item) => item.grade === homeroom.grade && (item.basis === "none") === (homeroom.basis === "none")) : [homeroom];
+  const days = Number(classSectionsPrintOption("attendanceDays")) || 17;
+  let sheets = 0;
+  target.innerHTML = chosen.map((item) => {
+    const attendance = classSectionsHomeroomAttendanceSheets(item, { days });
+    sheets += 1 + attendance.length;
+    return `<div class="print-page cs-hr-page" data-homeroom="${classSectionsPrintEsc(item.id)}">${classSectionsSheetHtml(classSectionsHomeroomStatusSheet(item))}</div>`
+      + attendance.map((sheet) => `<div class="print-page cs-att-page" data-homeroom="${classSectionsPrintEsc(item.id)}">${classSectionsSheetHtml(sheet)}</div>`).join("");
+  }).join("");
+  classSectionsSetStatus(`담임반 ${chosen.length}개(현황 + 분반 출석부 ${sheets}장)를 인쇄합니다.`);
   if (typeof window !== "undefined" && typeof window.print === "function") window.print();
 }
 
@@ -795,8 +1034,9 @@ function classSectionsPrintHandleChange(event) {
       : `${target.value ? `${label(target.value)} 교실로 바꿨습니다.` : "교실을 자동 추천으로 되돌렸습니다."}${moved.length ? ` 함께 옮긴 분반: ${moved.join(", ")}` : ""}`, clash.length > 0);
   } else if (target.id === "classSectionsAttendanceDays") s.print.attendanceDays = Math.max(1, Math.min(40, Number(target.value) || 17));
   else if (target.id === "classSectionsTimetableClass") { CLASS_SECTIONS_PRINT_VIEW.timetableClass = target.value; return; }
+  else if (target.id === "classSectionsHomeroomPick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsAttendancePick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
-  else if (target.id === "classSectionsAttendanceScope") { CLASS_SECTIONS_PRINT_VIEW.attScope = target.value === "semester" ? "semester" : "group"; CLASS_SECTIONS_PRINT_VIEW.attPick = ""; return void classSectionsAttendanceRerender(); }
+  else if (target.id === "classSectionsAttendanceScope") { CLASS_SECTIONS_PRINT_VIEW.attScope = ["semester", "homeroom"].includes(target.value) ? target.value : "group"; CLASS_SECTIONS_PRINT_VIEW.attPick = ""; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsTimetablePerPage") s.print.perPage = [2, 3, 4].includes(Number(target.value)) ? Number(target.value) : 2;
   else if (target.id === "classSectionsTimetableFill") s.print.timetableFill = target.value === "학급 수업" ? "학급 수업" : "";
   else return;
@@ -810,6 +1050,10 @@ function classSectionsPrintHandleClick(event) {
   if (button.id === "classSectionsAttendanceTeacher") return void classSectionsAttendanceExport("teacher");
   if (button.id === "classSectionsAttendanceAll") return void classSectionsAttendanceExport("sections");
   if (button.id === "classSectionsAttendanceFile") return void classSectionsAttendanceExport("file");
+  if (button.id === "classSectionsAttendanceHomeroom") return void classSectionsAttendanceExport("homeroom");
+  if (button.id === "classSectionsAttendanceHomeroomFile") return void classSectionsAttendanceExport("homeroomFile");
+  if (button.id === "classSectionsHomeroomPrintOne") return classSectionsHomeroomPrint("one");
+  if (button.id === "classSectionsHomeroomPrintGrade") return classSectionsHomeroomPrint("grade");
   if (button.id === "classSectionsAttendancePrev" || button.id === "classSectionsAttendanceNext") return classSectionsAttendanceStep(button.id === "classSectionsAttendanceNext" ? 1 : -1);
   if (button.id === "classSectionsAttendancePrintOne") return classSectionsAttendancePrint("one");
   if (button.id === "classSectionsAttendancePrintGroup") return classSectionsAttendancePrint("group");
@@ -841,6 +1085,6 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { classSectionsAttendanceSheet, classSectionsAttendanceFileName, classSectionsAttendanceBundles, classSectionsStudentTimetable, classSectionsSheetHtml, classSectionsAttendanceListSheet, classSectionsAttendanceSheetNames,
+  module.exports = { classSectionsAttendanceSheet, classSectionsAttendanceFileName, classSectionsAttendanceBundles, classSectionsStudentTimetable, classSectionsSheetHtml, classSectionsAttendanceListSheet, classSectionsAttendanceSheetNames, classSectionsHomerooms, classSectionsHomeroomStatusSheet, classSectionsHomeroomAttendanceSheets,
     classSectionsTimetableHtml, classSectionsTimetableSheet, classSectionsRoomSpecFromSettings };
 }
