@@ -571,6 +571,12 @@ test("상단 접기 손잡이: 경계선 가운데 단추(▼ 펼치기/▲ 접�
   assert.match(sync, /"학교·학년도·편제표 카드 펼치기 \(상단 펼치기\)"/);
   assert.match(sync, /"접기 · 학교·학년도·편제표 카드 접기 \(상단 접기\)"/);
   assert.match(sync, /collapsed \? "▼" : "▲"/);
+  // 올린 편제표가 없으면 접힌 설정이어도 펼쳐 업로드 카드를 보여 주고 손잡이는 감춘다.
+  assert.match(sync, /state\.curriculumTopCollapsed\) && curriculumHasAnyUpload\(\)/);
+  assert.match(sync, /if \(!curriculumHasAnyUpload\(\)\) state\.curriculumTopCollapsed = false;/);
+  assert.match(sync, /toggle\("hidden", !curriculumHasAnyUpload\(\)\)/);
+  const has = appFunction("curriculumHasAnyUpload");
+  assert.match(has, /cohort\.fileName \|\| cohort\.importedLayout/);
   assert.match(app, /\$\("#curriculumTopDivider"\)\?\.addEventListener\("click"/);
   const css = read("src/legacy.css");
   assert.match(css, /\.collapse-divider:hover \.collapse-handle/);

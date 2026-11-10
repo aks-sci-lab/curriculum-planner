@@ -197,7 +197,7 @@ function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, co
   }
   const colGroup = Array.from({ length: width }, (_, column) => {
     const excelWidth = Number(layout.columnWidths?.[column]);
-    const pixels = Number.isFinite(excelWidth) && excelWidth > 0 ? `${Math.max(44, Math.min(360, Math.round(excelWidth * 7 + 12)))}px` : "100px";
+    const pixels = Number.isFinite(excelWidth) && excelWidth > 0 ? `${Math.max(44, Math.min(240, Math.round(excelWidth * 7 + 12)))}px` : "100px";
     return `<col style="width:${pixels}">`;
   }).join("");
   const bodyRows = visibleItems.map((item) => {

@@ -2879,7 +2879,7 @@
       const colGroup = Array.from({ length: columnCount }, (_, column) => {
         const excelWidth = Number(layout.columnWidths?.[column]);
         const width = Number.isFinite(excelWidth) && excelWidth > 0
-          ? `${Math.max(44, Math.min(360, Math.round(excelWidth * 7 + 12)))}px`
+          ? `${Math.max(44, Math.min(240, Math.round(excelWidth * 7 + 12)))}px`
           : "100px";
         return `<col style="width:${width}">`;
       }).join("");
@@ -3497,8 +3497,16 @@
 
     // 1단계 위쪽(학교·학년도 설정·편제표 카드·변경 이력)과 편제표 표 사이 경계선 가운데의 접기 손잡이.
     // 접힌 상태 ▼ '학교·학년도·편제표 카드 펼치기', 펼친 상태 ▲ '접기'. 접근성 이름에는 예전 단추 이름(상단 펼치기/접기)도 남긴다.
+    // 올린 편제표가 하나도 없으면 업로드 카드를 접어 둘 이유가 없다(처음 쓰는 사람이 업로드 단추를 못 찾음).
+    function curriculumHasAnyUpload() {
+      if (state.curriculumPlanFileName || state.curriculumImportedLayout) return true;
+      return Object.values(state.curriculumCohorts || {}).some((cohort) => cohort && (cohort.fileName || cohort.importedLayout));
+    }
+
     function syncCurriculumTopToggle() {
-      const collapsed = Boolean(state.curriculumTopCollapsed);
+      // 첫 업로드 직후 카드가 갑자기 접히지 않도록, 빈 동안은 펼친 상태로 기억해 둔다.
+      if (!curriculumHasAnyUpload()) state.curriculumTopCollapsed = false;
+      const collapsed = Boolean(state.curriculumTopCollapsed) && curriculumHasAnyUpload();
       $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", collapsed);
       const toggle = $("#curriculumTopToggle");
       if (!toggle) return;
@@ -3510,6 +3518,8 @@
       if (label) label.textContent = collapsed ? "학교·학년도·편제표 카드 펼치기" : "접기";
       if (!arrow && !label) toggle.textContent = collapsed ? "상단 펼치기" : "상단 접기";
       $("#curriculumTopDivider")?.classList.toggle("is-collapsed", collapsed);
+      // 올린 편제표가 없으면 펼친 채로 두고 손잡이를 감춘다(접어도 아래에 볼 표가 없음).
+      $("#curriculumTopDivider")?.classList.toggle("hidden", !curriculumHasAnyUpload());
     }
 
     function renderCurriculumStep() {

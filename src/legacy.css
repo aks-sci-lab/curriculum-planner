@@ -1764,7 +1764,8 @@
 .workspace-data-menu > summary::after { content: " ▾"; }
 .workspace-data-menu-items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 210px; padding: 8px; border: 1px solid #d7dfed; border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(30, 50, 90, 0.15); }
 .workspace-data-menu-items .button, .workspace-data-menu-items .file-button { width: 100%; justify-content: flex-start; text-align: left; }
-@media screen and (min-width: 1500px) {
+/* 1440 폭에서도 카드 5개를 한 줄에(두 줄이면 업로드 직후 표가 몇 행만 보임). */
+@media screen and (min-width: 1360px) {
   .curriculum-cohort-uploads { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
 .workspace-data-menu-items .file-button { border-color: transparent; background: transparent; box-shadow: none; }
