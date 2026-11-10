@@ -631,4 +631,5 @@ test("test bot: 대상 범위 한 줄(반 번호는 이어지면 1~10으로 줄�
   assert.deepEqual(Core.scopeSummary({ scope: "first", count: 10 }, students), { limited: true, text: "대상: 처음 10명 · 10명(전체 12명 중)" });
   assert.deepEqual(Core.scopeSummary({ scope: "all" }, students), { limited: false, text: "대상: 전체 · 12명" });
   assert.deepEqual(Core.scopeSummary({}), { limited: false, text: "대상: 전체" });
+  assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "" }, students), { limited: true, text: "대상: 반 지정 없음 · 0명(전체 12명 중)" });
 });

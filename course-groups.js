@@ -638,10 +638,12 @@ function validateApplicationGroupData(groups, seeded) {
     const index = ["1", "2"].indexOf(grade);
     if (index < 0 || gradeTabs[index].disabled) return;
     if (gradeTabsBusy()) {
-      pendingMenuGrade = grade === String(state.applicationMenuGrade || "1") ? null : { grade, focus };
-      gradeTabs.forEach((tab, i) => tab.classList.toggle("is-pending", Boolean(pendingMenuGrade) && i === index));
+      // 같은 학년이어도 기억한다: 저장 자료 복원(로그인 직후 토큰 교환 중 등)이 같은 학년으로 다시 그리기를 부를 수 있다.
+      const differs = grade !== String(state.applicationMenuGrade || "1");
+      pendingMenuGrade = { grade, focus };
+      gradeTabs.forEach((tab, i) => tab.classList.toggle("is-pending", differs && i === index));
       const message = document.getElementById("cloudTeacherMessage");
-      if (message && pendingMenuGrade) message.textContent = `처리 중… 끝나면 현 ${grade}학년 탭으로 바꿉니다.`;
+      if (message && differs) message.textContent = `처리 중… 끝나면 현 ${grade}학년 탭으로 바꿉니다.`;
       return;
     }
     pendingMenuGrade = null;

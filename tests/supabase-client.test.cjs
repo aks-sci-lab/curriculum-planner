@@ -1736,3 +1736,20 @@ test("teacher sees per-student lock status and can unlock one student or all stu
   assert.equal(lockRows().length, 0);
   assert.match(card.querySelector(".course-code-locks").children[2].textContent, /실패 기록이 있는 학생이 없습니다/);
 });
+
+test("a grade re-render requested while a teacher action runs (startup restore after login) is applied when the action ends", async () => {
+  let release;
+  const f=fixture({menus:true,respond:(request)=>request.url.includes("/auth/v1/settings")
+    ? new Promise((resolve)=>{ release=()=>resolve({data:{external:{google:true}}}); })
+    : Promise.resolve({data:[]})});
+  assert.equal(f.renderedGrade,"1");
+  await f.fire("cloudTeacherGoogleLogin","click");
+  // 저장 자료 복원이 학년을 2로 되돌리고 같은 학년으로 다시 그리기를 부른다(app.js completeWorkspaceStoreBoot).
+  f.context.state.applicationMenuGrade="2";
+  f.context.switchApplicationMenuGrade("2");
+  assert.equal(f.renderedGrade,"1","not drawn while the action runs");
+  release();
+  for (let i = 0; i < 200 && !f.redirects.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(f.renderedGrade,"2","drawn for the restored grade once the action ends");
+  assert.equal(f.elements.applicationGrade2Tab["aria-selected"],"true");
+});
