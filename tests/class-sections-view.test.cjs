@@ -314,10 +314,11 @@ test("6차 화면: 다른 학년 점유로 '입력 변경됨' 안 됨·다른 �
   // 배정표 합치기: 파일에 있는 학생만 갱신, 나머지 유지, 명단에 없는 키는 따로 셈
   ctx.CLASS_SECTIONS_VIEW.round = "1";
   let merged = ctx.classSectionsMergeClassMap({ "1-1-1": { classroom: "02", number: "03" }, "1-9-9": { classroom: "1" } });
-  assert.equal(merged.updated, 1);
+  assert.equal(merged.updated, 2, "students not in this round's data are kept too");
   assert.equal(merged.unmatched, 1);
+  assert.match(merged.text, /현 1학년 2명 읽음 · 갱신 2명 · 유지 0명 · 이 차수 결과에 없는 학생 1명/);
   merged = ctx.classSectionsMergeClassMap({ "1-2-1": { classroom: "3" } });
-  assert.match(merged.text, /갱신 1명 · 유지 1명/);
+  assert.match(merged.text, /1명 읽음 · 갱신 1명 · 유지 2명/);
   assert.deepEqual(plain(ctx.classSectionsClassMap("1")["1-1-1"]), { classroom: "2", number: "3" });
   // 교사 id 중복은 다시 매김
   const settings = ctx.classSectionsSettings();
@@ -342,4 +343,38 @@ test("6차 화면: 다른 학년 점유로 '입력 변경됨' 안 됨·다른 �
   assert.equal(ctx.classSectionsResultBasis("1", group, entry, entry.sectionResult), "확정 결과 기준(시안 때 계산 · 입력 같음)");
   entry.classCounts["화학"] = 4;
   assert.equal(ctx.classSectionsResultBasis("1", group, entry, entry.sectionResult), "확정 전 시안 · 입력 변경됨");
+});
+
+test("joint solve issues: errors only on the group that owns the sections, others get a note (info)", () => {
+  const ctx = context();
+  const issues = [
+    { type: "teacher-shortage", severity: "error", groups: ["1:2:3-1 택1"], message: "제2외국어: 월요일 1교시 분반 11개 > 가능한 교사 2명" },
+    { type: "teacher-missing", severity: "warn", sectionId: "1:1:2-1 택3::물리학#1", message: "x" },
+    { type: "teacher-missing", severity: "warn", sectionId: "1:2:3-1 택1::일본어#1", message: "y" },
+    { type: "teacher-none", severity: "info", message: "정보: 명단에 없음" }
+  ];
+  const mine = plain(ctx.classSectionsJointIssuesFor(issues, "1:2:3-1 택1"));
+  assert.deepEqual(mine.map((issue) => [issue.type, issue.severity]), [["teacher-shortage", "error"], ["teacher-missing", "warn"], ["teacher-none", "info"]]);
+  const other = plain(ctx.classSectionsJointIssuesFor(issues, "1:1:2-1 택3"));
+  assert.deepEqual(other.map((issue) => [issue.type, issue.severity]), [["teacher-shortage-other", "info"], ["teacher-missing", "warn"], ["teacher-none", "info"]]);
+  assert.match(other[0].message, /^참고: 같은 시간 다른 그룹/);
+  assert.ok(!other.some((issue) => issue.severity === "error"), "a fully assigned group is not marked infeasible by another group's shortage");
+});
+
+test("class-unit-only group: roster export has the '학급 단위 과목' sheet and per-class roster sheets when next-year classes are known", () => {
+  const ctx = context();
+  ctx.state.roundStatuses["1"].snapshot.classBases = { "2": 4 };
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key);
+  const settings = ctx.classSectionsSettings();
+  for (const course of group.courses) ctx.classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] = "class";
+  assert.deepEqual(plain(ctx.classSectionsClassUnitRosterSheets(group, entry, settings, new Map())), [], "no per-class rosters before classes are known");
+  settings.promotion["1"] = "same";
+  const sheets = plain(ctx.classSectionsClassUnitRosterSheets(group, entry, settings, ctx.classSectionsStudentNames("1")));
+  assert.deepEqual(sheets.map((sheet) => sheet.name), ["학급 단위 1반", "학급 단위 2반", "학급 단위 3반", "학급 단위 4반"]);
+  assert.equal(sheets.reduce((sum, sheet) => sum + sheet.rows.length - 2, 0), group.gradeStudents.length);
+  assert.match(sheets[0].rows[0][0], /^내년 2학년 1반 · .+ 10명$/);
+  assert.equal(sheets[0].rows[2][3], "가명11");
+  const unit = plain(ctx.classSectionsClassUnitSheet(group, entry, settings));
+  assert.equal(unit.rows[2][2], 10, "per-class head count");
 });
