@@ -296,3 +296,23 @@ test("전학년 편제표: 다른 입학생 편제표에서만 있는 행이 들
   assert.equal(bottom(korean[1]), "thin");
   assert.equal(bottom(korean[2]), "thin");
 });
+
+test("전학년 편제표: 같은 과목이라도 학년 열마다 편성 영역(학교 지정/학생 선택)이 다르면 행을 나눈다", () => {
+  const ctx = context();
+  // Y(2026)에서는 '프로그래밍★'이 학생 선택(3-1 4학점), 2025 입학생에서는 학교 지정(2-2 4학점)
+  const y2026 = converted(ctx, fixture(2026), 2026);
+  const raw2025 = fixture(2025);
+  raw2025.rows[5][3] = "프로그래밍★"; raw2025.rows[5][9] = "4";
+  const y2025 = converted(ctx, raw2025, 2025);
+  const y2024 = converted(ctx, fixture(2024), 2024);
+  const layout = ctx.buildAnnualCurriculumLayout({ 2026: { plan: [], layout: y2026 }, 2025: { plan: [], layout: y2025 }, 2024: { plan: [], layout: y2024 } }, 2026);
+  const rows = ctx.planDataSubjects(layout.planData).filter((item) => item.name.trim() === "프로그래밍★");
+  assert.equal(rows.length, 2, "학교 지정 행과 학생 선택 행으로 나뉜다");
+  const school = rows.find((item) => ctx.planDataDivision(item.category) === "학교 지정 교육과정");
+  const choice = rows.find((item) => ctx.planDataDivision(item.category) === "학생 선택 교육과정");
+  assert.ok(school && choice, rows.map((item) => item.category).join(" / "));
+  assert.deepEqual(plain(school.credits), { sem22: 4 }, "2학년 열(2025 입학생)은 학교 지정 행");
+  assert.equal(school.credits.sem31, undefined);
+  assert.equal(choice.credits.sem22, undefined, "학생 선택 행에는 2학년 학교 지정 학점이 들어가지 않는다");
+  assert.ok(school.row < choice.row, "학교 지정 영역(위)에 놓인다");
+});
