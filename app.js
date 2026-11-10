@@ -50,6 +50,7 @@
       roundStatuses: {},
       hoursStats: {},
       classSections: {},
+      applicationRosters: {},
       courseChecks: {},
       curriculumCompliance: {},
       curriculumVersions: {},
@@ -451,6 +452,7 @@
           roundStatuses: state.roundStatuses,
           hoursStats: state.hoursStats,
           classSections: state.classSections,
+          applicationRosters: state.applicationRosters,
           courseChecks: state.courseChecks,
           curriculumCompliance: state.curriculumCompliance,
           curriculumVersions: state.curriculumVersions,
@@ -1515,6 +1517,7 @@
       state.roundStatuses = {};
       state.hoursStats = {};
       state.classSections = {};
+      state.applicationRosters = {};
       state.courseChecks = {};
       state.curriculumCompliance = {};
       state.curriculumVersions = {};
@@ -1637,6 +1640,8 @@
         // 6단계 분반 편성(예전 저장분·백업에는 없음 → 빈 객체). 정리는 class-sections-view.js가 한다.
         state.classSections = typeof classSectionsRestore === "function" ? classSectionsRestore(saved.classSections)
           : plainObject(saved.classSections) ? saved.classSections : {};
+        // 웹 신청 명렬(현 학년 전체, 이 PC에만). 예전 저장분·백업에는 없음 → 빈 객체.
+        state.applicationRosters = typeof applicationRostersRestore === "function" ? applicationRostersRestore(saved.applicationRosters) : {};
         // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.
         if (typeof courseCheckMigrateRequired === "function") {
           const migrated = courseCheckMigrateRequired(saved.courseChecks, saved.curriculumCompliance);
@@ -5305,6 +5310,7 @@
 
     function renderApplicationSubjects() {
       if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(2, "renderApplicationSubjects", renderApplicationSubjects)) return;
+      if (typeof renderApplicationRosterLocalSummary === "function") renderApplicationRosterLocalSummary();
       const container = $("#applicationSubjectList");
       if (!container) return;
       const subjects = collectApplicationSubjects();
@@ -5615,6 +5621,72 @@
         throw new Error(`${Number(grade) + 1}학년 수강신청에는 현재 ${grade}학년 명렬만 업로드할 수 있습니다. 현재 ${found}학년 학생 ${mismatched.length}명이 포함되어 있습니다. 다른 학년을 제외한 명렬을 다시 업로드하세요.`);
       }
       return roster;
+    }
+
+    // ---- 웹 신청 명렬 로컬 저장(현 학년 전체 = 미제출 학생 포함, 성명은 이 PC에만, 서버로 보내지 않음) ----
+    // state.applicationRosters[학년도][현학년] = { students:[{ classroom, number, name }], uploadedAt, source }
+    function applicationRostersRestore(saved) {
+      const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+      if (!plain(saved)) return {};
+      const out = {};
+      for (const [year, grades] of Object.entries(saved)) {
+        if (!/^\d{4}$/.test(year) || !plain(grades)) continue;
+        for (const [grade, entry] of Object.entries(grades)) {
+          if (!/^[12]$/.test(grade) || !plain(entry) || !Array.isArray(entry.students)) continue;
+          const students = entry.students.filter(plain).map((student) => ({ classroom: String(student.classroom ?? "").trim(), number: String(student.number ?? "").trim(), name: String(student.name ?? "").trim() }))
+            .filter((student) => student.classroom && student.number);
+          (out[year] ||= {})[grade] = { students, uploadedAt: String(entry.uploadedAt || ""), source: String(entry.source || "") };
+        }
+      }
+      return out;
+    }
+
+    // 명렬(parseApplicationRoster 결과)에서 그 현 학년 학생을 저장한다. 같은 학년도·학년을 다시 올리면 바꾼다.
+    function storeApplicationRoster(roster, { grade, year, source = "" } = {}) {
+      const gradeKey = String(grade || state.applicationMenuGrade || "1");
+      const yearKey = String(year || $("#schoolYear")?.value || "").trim();
+      if (!/^\d{4}$/.test(yearKey)) throw new Error("학년도를 확인하세요(명렬 저장).");
+      const students = (roster || []).filter((student) => String(student.grade) === gradeKey)
+        .map((student) => ({ classroom: String(student.classroom ?? "").trim(), number: String(student.number ?? "").trim(), name: String(student.name ?? "").trim() }));
+      const rosters = { ...(state.applicationRosters || {}) };
+      rosters[yearKey] = { ...(rosters[yearKey] || {}), [gradeKey]: { students, uploadedAt: new Date().toISOString(), source } };
+      state.applicationRosters = rosters;
+      if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
+      if (typeof renderApplicationRosterLocalSummary === "function") renderApplicationRosterLocalSummary();
+      return rosters[yearKey][gradeKey];
+    }
+
+    // 다른 파일(6단계 출력물 등)이 typeof 가드로 부른다: 앱 학년도의 그 현 학년 명렬, 없으면 null.
+    function applicationRosterFor(grade) {
+      const gradeKey = String(grade);
+      const entry = state.applicationRosters?.[String($("#schoolYear")?.value || "").trim()]?.[gradeKey];
+      if (!entry) return null;
+      const keyOf = (student) => (typeof classSectionsStudentKey === "function" ? classSectionsStudentKey(gradeKey, student.classroom, student.number) : `${gradeKey}-${student.classroom}-${student.number}`);
+      return { students: entry.students.map((student) => ({ key: keyOf(student), classroom: student.classroom, number: student.number, name: student.name })), uploadedAt: entry.uploadedAt, source: entry.source };
+    }
+
+    function renderApplicationRosterLocalSummary() {
+      const box = typeof document !== "undefined" ? document.getElementById("cloudRosterLocalSummary") : null;
+      if (!box) return;
+      const grade = String(state.applicationMenuGrade || "1");
+      const entry = applicationRosterFor(grade);
+      box.textContent = entry
+        ? `이 PC에 저장한 현 ${grade}학년 명렬: ${entry.students.length}명 · ${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} (담임반 현황·출석부의 미제출 학생 확인용, 서버로 보내지 않음)`
+        : `이 PC에 저장한 현 ${grade}학년 명렬이 없습니다. 이미 만든 웹 신청이면 '명렬 다시 올리기'로 같은 명렬 파일을 올리세요(서버 변경 없음).`;
+    }
+
+    async function readApplicationRosterLocal(file) {
+      const box = document.getElementById("cloudRosterLocalSummary");
+      if (!file) return;
+      try {
+        if (!file.name.toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
+        const grade = String(state.applicationMenuGrade || "1");
+        const roster = validateApplicationRosterGrade(parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())), grade);
+        const saved = storeApplicationRoster(roster, { grade, source: `${file.name}(다시 올림)` });
+        if (box) box.textContent = `현 ${grade}학년 명렬 ${saved.students.length}명을 이 PC에 저장했습니다(서버 변경 없음). ${box.textContent}`;
+      } catch (error) {
+        if (box) box.textContent = `명렬을 저장하지 못했습니다: ${error?.message || error}`;
+      }
     }
 
     function downloadTextFile(text, filename, type) {
@@ -7580,6 +7652,8 @@
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
+    // 웹 신청 명렬 다시 올리기(이 PC에만 저장, 서버 변경 없음)
+    $("#cloudRosterLocalInput")?.addEventListener("change", (event) => { const file = event.target.files[0]; event.target.value = ""; readApplicationRosterLocal(file); });
     // 파일 고르기 창을 취소하면(크롬 'cancel') 카드도 원래대로.
     curriculumPlanInput.addEventListener("cancel", () => restoreCurriculumUploadCard());
     $("#curriculumCohortUploads").addEventListener("click", (event) => {
