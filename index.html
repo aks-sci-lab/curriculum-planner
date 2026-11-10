@@ -266,6 +266,10 @@
         </div>
         <div id="applicationGradeWorkspace" role="tabpanel" aria-labelledby="applicationGrade1Tab">
         <p class="note" id="applicationGradeDescription">현재 1학년 학생의 2학년 과목·그룹과 신청 결과를 관리합니다.</p>
+        <p class="note application-roster-local">
+          <label class="file-button" for="cloudRosterLocalInput" tabindex="0" role="button">명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)</label>
+          <input class="hidden" id="cloudRosterLocalInput" type="file" accept=".xlsx" aria-label="명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)">
+          <span id="cloudRosterLocalSummary" role="status"></span></p>
         <section class="application-subject-box" id="applicationGroupsPanel" role="tabpanel" aria-labelledby="applicationGroupsTab">
           <details>
           <summary class="application-subject-title">신청 받을 과목 확인 (학생선택교육과정 · 공동교육과정·소인수 제외)</summary>
@@ -325,10 +329,7 @@
               <input class="hidden" id="cloudRosterInput" type="file" accept=".xlsx">
               <p id="cloudRosterSummary" class="cloud-roster-summary" role="status">학생 명렬을 선택하면 업로드한 파일의 학년을 확인합니다.</p>
               <button class="button button-primary" id="cloudCreateEvent" type="button" disabled>수강신청 생성</button>
-              <p class="note cloud-roster-local">명렬은 신청을 만들 때 이 PC에도 저장해 담임반 현황·출석부에서 미제출 학생까지 셉니다(서버로 보내지 않음). 이미 만든 웹 신청이면:
-                <label class="file-button" for="cloudRosterLocalInput" tabindex="0" role="button">명렬 다시 올리기(이 PC에만 저장, 서버 변경 없음)</label>
-                <input class="hidden" id="cloudRosterLocalInput" type="file" accept=".xlsx" aria-label="명렬 다시 올리기(이 PC에만 저장, 서버 변경 없음)"></p>
-              <p id="cloudRosterLocalSummary" class="cloud-roster-summary" role="status"></p>
+              <p class="note cloud-roster-local">명렬은 신청을 만들 때 이 PC에도 저장해 담임반 현황·출석부에서 미제출 학생까지 셉니다(서버로 보내지 않음). 이미 만든 신청이면 학년 탭 아래 '명렬 올리기'를 쓰세요.</p>
               <p class="note">학생 화면에는 위계(선이수)·학기별 이수 학점 점검표가 함께 나옵니다. 위계는 경고만 하며(저장은 막지 않음), 규칙은 <button class="button button-quiet" id="courseCheckOpenOnline" type="button" aria-haspopup="dialog" data-open-dialog="courseCheckDialog">위계·학점 점검</button>에서 정한 뒤 생성하세요.</p>
               <p class="note cloud-auto-test"><button class="button button-quiet" id="cloudAutoTest" type="button">수강신청 자동 테스트</button> 시험 삼아 확인할 때: 가상 학생으로 [테스트] 신청을 만들어 테스트봇이 접속·신청·교사 화면 대조·정리까지 자동으로 확인합니다(집계표에는 연동하지 않음).</p>
               <hr>

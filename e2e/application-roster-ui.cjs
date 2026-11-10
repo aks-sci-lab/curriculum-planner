@@ -46,17 +46,22 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   await page.reload(); await page.waitForLoadState("networkidle"); await sleep(2500);
   const after = await page.evaluate(() => applicationRosterFor("2")?.students.length || 0);
   check(after === counts["2"], "새로 고침 뒤에도 명렬이 남음", after);
-  // 다시 올리기(로그인 없이, 서버 요청 없이): 하네스가 만든 현 1학년 명렬 파일
-  await open2("1");
+  // 명렬 올리기(로그인하지 않은 상태, 서버 요청 없이): 하네스가 만든 현 1학년 명렬 파일
+  await page.getByRole("button", { name: /^2\. 수강신청/ }).first().click(); await sleep(500);
+  await page.locator("#applicationGrade1Tab").click(); await sleep(400);
+  const loggedIn = await page.locator("#cloudTeacherLogout").isVisible().catch(() => false) || await page.locator("#cloudCreateEvent").isVisible().catch(() => false);
+  check(!loggedIn, "교사 로그인하지 않은 상태", loggedIn);
+  const label = page.getByRole("button", { name: "명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)" });
+  check(await label.isVisible(), "로그인 없이 '명렬 올리기' 단추가 보임");
   const before = outside.length;
   const file = path.join(RUN, "roster-grade1.xlsx");
   await page.locator("#cloudRosterLocalInput").setInputFiles(file); await sleep(1200);
   const text1 = await summary();
   console.log("re-upload:", text1);
-  check(/^현 1학년 명렬 \d+명을 이 PC에 저장했습니다\(서버 변경 없음\)/.test(text1), "명렬 다시 올리기 → 저장 안내", text1);
-  check(outside.length === before, "다시 올리기는 서버 요청 없음", outside.slice(before));
+  check(/^현 1학년 명렬 \d+명을 이 PC에 저장했습니다\(서버 변경 없음\)/.test(text1), "명렬 올리기 → 저장 안내", text1);
+  check(outside.length === before, "명렬 올리기는 서버 요청 없음", outside.slice(before));
   const source = await page.evaluate(() => applicationRosterFor("1")?.source || "");
-  check(/다시 올림/.test(source), "다시 올린 명렬로 바뀜", source);
+  check(/명렬 올리기/.test(source), "올린 명렬로 바뀜", source);
   await page.screenshot({ path: path.join(OUT, "02-roster-reuploaded.png"), fullPage: false });
   check(!logs.length, "페이지 오류 없음", logs);
   await browser.close(); server.close();
