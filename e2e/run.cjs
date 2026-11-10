@@ -174,8 +174,18 @@ async function setCriteria(page) {
   await page.locator("#nextYearClasses3").fill(String(NEXT_CLASSES));
   await page.locator("#maxClassSize").fill("34");
   await page.locator("#maxClassSize").press("Tab");
+  // 잘못된 기준(%)은 적용·저장하지 않고 칸 옆에 오류(수정 8차)
+  const invalid = {};
+  for (const [selector, bad] of [["#openingPercent", "0"], ["#openingPercent", "500"], ["#divisionPercent", "0"]]) {
+    const good = await page.locator(selector).inputValue();
+    await page.locator(selector).fill(bad); await page.locator(selector).press("Tab"); await sleep(250);
+    const dialogText = await text(page, "#aggregateSettingsDialog");
+    invalid[`${selector}=${bad}`] = { summary: await text(page, "#aggregateSettingsSummary"), error: (dialogText.match(/[^\n]*1~[23]00[^\n]*/) || [""])[0] };
+    await page.locator(selector).fill(good); await page.locator(selector).press("Tab"); await sleep(200);
+  }
   await page.locator("#closeAggregateSettings").click();
-  return text(page, "#aggregateSettingsSummary");
+  const summary = await text(page, "#aggregateSettingsSummary");
+  return { summary, invalid };
 }
 
 async function decide(page, key, choice) {
@@ -196,7 +206,13 @@ async function stepAggregate({ page, h, report }, round) {
       report.timings[`roundSwitch${round}`] = Date.now() - t0;
     }
     report.timings[`step4Enter${round}`] = await gotoStep(page, 4);
-    if (round === 1) result.criteria = await setCriteria(page);
+    if (round === 1) {
+      result.criteria = await setCriteria(page);
+      for (const [key, v] of Object.entries(result.criteria.invalid)) {
+        h.check(/개설 90% · 분반 110%/.test(v.summary) && v.error, "중요", "4단계", `기준(%) 잘못된 값(${key})이 적용되거나 오류 안내가 없음`, { actual: v });
+      }
+      h.check(/개설 90% · 분반 110% · 최대 34명/.test(result.criteria.summary), "중요", "4단계", "기준 설정 요약이 되돌린 값과 다름", { actual: result.criteria.summary });
+    }
     const events = round === 1 ? report.data.events : report.data.retakeEvents;
     const serverCounts = {};
     const totals = {};
@@ -857,8 +873,11 @@ async function step6Draft(page, h, report) {
   out.expectedUnassigned = expectedUnassigned;
   // 7차 뒤: 폐강 과목 학생을 '재신청 대상 n명'으로 따로 셀 것으로 기대
   out.retakeSeparated = /재신청 대상\s*\d+명/.test(r.summary + " " + (await page.locator('section[aria-label="편성 결과"]').innerText().catch(() => "")));
+  const retakeCount = Number(((r.summary + " " + (await page.locator('section[aria-label="편성 결과"]').innerText().catch(() => ""))).match(/재신청 대상\s*(\d+)명/) || [])[1] || NaN);
+  out.retakeCount = retakeCount;
+  if (expectedUnassigned) h.check(retakeCount === expectedUnassigned && r.feasible === true, "중요", "6단계", `1차 시안: 폐강 과목 학생을 '재신청 대상 n명'으로 따로 세고 편성 가능으로 보지 않음`, { expected: expectedUnassigned, actual: { retakeCount, feasible: r.feasible, summary: r.summary.slice(0, 200) } });
   h.check(r.feasible === true || shown === expectedUnassigned, "중요", "6단계", `확정 전 시안 편성 불가(${out.group}): 미배정 ${shown}명(폐강 과목 신청 ${expectedUnassigned}명)`, { actual: r.summary.slice(0, 300) });
-  if (r.feasible === false && expectedUnassigned && shown === expectedUnassigned) h.issue("경미", "6단계", `1차 시안: 폐강 과목 신청 학생(재신청 대상) ${expectedUnassigned}명 때문에 '모두 배정하는 편성을 찾지 못했습니다'(불가)로 나옴 — 폐강 미배정은 따로 안내하는 편이 맞아 보임 [6단계 7차 대기]`, { actual: r.summary.slice(0, 200) });
+  if (false && r.feasible === false && expectedUnassigned && shown === expectedUnassigned) h.issue("경미", "6단계", `1차 시안: 폐강 과목 신청 학생(재신청 대상) ${expectedUnassigned}명 때문에 '모두 배정하는 편성을 찾지 못했습니다'(불가)로 나옴 — 폐강 미배정은 따로 안내하는 편이 맞아 보임 [6단계 7차 대기]`, { actual: r.summary.slice(0, 200) });
   await h.screenshot(page, "step6-draft");
   return out;
 }
@@ -876,6 +895,7 @@ async function stepClassSections({ page, h, report, roster }) {
     const t0 = Date.now();
     result.teachers = await SC.setupTeachers(page);
     report.timings.step6Teachers = Date.now() - t0;
+    h.check(!result.teachers.rebuild.duplicateNames.length && result.teachers.rebuild.afterRebuild >= result.teachers.rebuild.first - 2, "중요", "6단계", "교사 명단 만들기 → 삭제 → 다시 만들기 뒤 교사 이름·id가 겹침", { actual: result.teachers.rebuild });
     h.check(result.teachers.fromHours >= Object.values(SC.TEACHER_COUNTS).reduce((a, b) => a + b, 0) - 5, "중요", "6단계", "'5단계 교사 수로 명단 만들기' 교사 수가 5단계 입력과 다름", { expected: Object.values(SC.TEACHER_COUNTS).reduce((a, b) => a + b, 0), actual: result.teachers.fromHours });
     const gs = await S6.groups(page);
     const info = [];
@@ -957,6 +977,8 @@ async function stepClassSections({ page, h, report, roster }) {
     for (const g of info) {
       await S6.selectGroup(page, g.key);
       times[g.key] = await page.locator("[data-cs-block-times]").evaluateAll((els) => els.map((e) => e.value));
+      const staleNow = (await S6.readScreen(page)).stale;
+      h.check(!staleNow, "중요", "6단계", `${g.key}: '전 학년 함께 다시 계산' 직후인데 '입력 변경됨, 재계산 필요'가 뜸`, { actual: staleNow });
       let feasible = (await page.locator("#classSectionsSummary").getAttribute("data-feasible").catch(() => null)) === "true";
       let summary = await page.locator("#classSectionsSummary").innerText().catch(() => "");
       const log = { group: g.key, feasible, applied: [], summary: summary.slice(0, 300), times: times[g.key] };
@@ -974,7 +996,12 @@ async function stepClassSections({ page, h, report, roster }) {
       log.teacherNote = await page.locator('section[aria-label="편성 결과"]').innerText().then((t) => (t.match(/교사 부족[^\n]*/) || [""])[0]).catch(() => "");
       result.solves.push(log);
       if (!feasible) h.issue(log.applied.length ? "중요" : "경미", "6단계", `${g.key}: 편성 불가${log.applied.length ? "(제안 적용 뒤에도)" : "(적용할 제안 없음)"}`, { actual: { summary: log.summary, applied: log.applied, teacherNote: log.teacherNote } });
-      if (!feasible && /^모든 학생 배정/.test(summary)) h.issue("경미", "6단계", `${g.key}: 요약은 '모든 학생 배정…'인데 불가로 표시${log.foreign ? `(다른 그룹 오류: ${log.foreign})` : ""}`, { actual: summary });
+      {
+        // 다른 그룹(교사 부족 원인 그룹)의 오류가 이 그룹에 붙었는지: 오류 문장 속 그룹 표시가 이 그룹이 아닌 경우
+        const label = g.key.split(":")[2];
+        const others = [...summary.matchAll(/\((현\d → \d학년 \d학기 · ([^ )]+ ?[^ )]*)[^)]*)\)/g)].map((m) => m[1]).filter((t) => !t.includes(label));
+        if (others.length) h.issue("중요", "6단계", `${g.key}: 다른 그룹(${others[0]})의 오류가 이 그룹 결과에 붙음`, { actual: summary.slice(0, 300) });
+      }
     }
     // 내년 반 배정표(현1 10반 → 새 11반으로 섞음, 고정 양식: 현 학년·현 반·현 번호·새 반·새 번호)
     const classMap = new Map();
@@ -997,7 +1024,9 @@ async function stepClassSections({ page, h, report, roster }) {
         counters[nc] = (counters[nc] || 0) + 1;
         const value = { classroom: nc, number: same ? String(st.number) : String(counters[nc]) };
         classMap.set(`${grade}-${st.classroom}-${st.number}`, value);
-        mine.push([grade, st.classroom, st.number, value.classroom, value.number]);
+        // 일부 학생은 '01'처럼 앞자리 0을 붙여 적는다(실제 엑셀에서 흔함) → 같은 학생으로 읽혀야 함
+        const pad = (v) => (i % 7 === 0 ? String(v).padStart(2, "0") : String(v));
+        mine.push([grade, pad(st.classroom), pad(st.number), pad(value.classroom), pad(value.number)]);
       });
       const rows = [["현 학년", "현 반", "현 번호", "새 반", "새 번호"], ...mine];
       const file = path.join(OUT, `classmap-grade${grade}.xlsx`);
@@ -1009,7 +1038,12 @@ async function stepClassSections({ page, h, report, roster }) {
       const cm = { line: scr.classMapLine, warn: scr.homeroomWarn, status: await page.locator("#classSectionsStatus").innerText().catch(() => "") };
       result.classMap[grade] = cm;
       const m = cm.line.match(/(\d+)\/(\d+)명/);
-      h.check(m && m[1] === m[2] && new RegExp(`${roster[grade].length}명 읽음`).test(cm.status), "중요", "6단계", `현 ${grade}학년 내년 반 배정표를 올렸는데 반영 인원이 맞지 않음`, { expected: `${roster[grade].length}명 읽음, 그룹 학생 전부`, actual: cm });
+      const submittedCount = Number(m?.[2]);
+      h.check(m && m[1] === m[2] && (new RegExp(`${roster[grade].length}명 읽음`).test(cm.status) || new RegExp(`갱신 ${submittedCount}명`).test(cm.status)), "중요", "6단계", `현 ${grade}학년 내년 반 배정표를 올렸는데 반영 인원이 맞지 않음(앞자리 0 '01' 표기 학생 포함)`, { expected: `그룹 학생 ${submittedCount}명 전부`, actual: cm });
+      const missing = Number((cm.status.match(/명단에 없는 학생 (\d+)명/) || [])[1] || 0);
+      const unsubmitted = roster[grade].length - submittedCount;
+      if (missing && missing === unsubmitted) h.issue("경미", "6단계", `현 ${grade}학년 배정표 읽기: 미제출 학생 ${missing}명을 '명단에 없는 학생(반·번호 표기 확인)'으로 안내(표기 오류처럼 보임)`, { actual: cm.status });
+      else h.check(!missing, "중요", "6단계", `현 ${grade}학년 배정표 읽기: 명단에 없는 학생 ${missing}명(미제출 ${unsubmitted}명과 다름)`, { actual: cm.status });
       h.check(!scr.homeroomWarn, "경미", "6단계", "내년 반 배정표를 올린 뒤에도 '담임반 묶기: 지금 반 기준' 경고가 남음", { actual: cm });
       if (grade !== "1") continue;
       await page.locator("#classSectionsCompare").click();
@@ -1031,6 +1065,21 @@ async function stepClassSections({ page, h, report, roster }) {
       const rooms = await page.locator("[data-cs-unit-room]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-cs-unit-room"), e.options[e.selectedIndex]?.textContent]));
       result.classUnit.rooms = rooms;
       h.check(rooms.length === NEXT_CLASSES && rooms.every(([, v]) => v), "중요", "6단계", "학급 단위 과목: 담임반마다 과목이 배분되지 않음", { expected: `내년 ${NEXT_CLASSES}개 반`, actual: rooms });
+      // 내년 반을 모를 때('아직 모름', 배정표 없음): 나이스에는 행 대신 '확인 필요' 안내, 명렬표에는 '학급 단위 과목' 시트
+      const promo = page.locator(`[data-cs-promotion="${unitGroup.key[0]}"]`);
+      const promoValue = await promo.inputValue().catch(() => "");
+      if (await promo.count() && promoValue === "same" && !result.classMap?.[unitGroup.key[0]]) {
+        const before = await promo.inputValue();
+        await promo.selectOption("unknown"); await sleep(400);
+        const files = await S6.exportGroup(page, path.join(OUT, "downloads", "step6"), "unit-unknown");
+        const confirm = files.neis.find((sheet) => sheet.name === "확인 필요")?.rows.map((r) => r.join(" ")).join(" / ") || "";
+        const unitRows = files.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5]))).length;
+        const unitSheet = files.rosters.find((sheet) => sheet.name === "학급 단위 과목");
+        result.classUnit.unknown = { unitRows, confirm: confirm.slice(0, 300), unitSheet: unitSheet ? unitSheet.rows.slice(0, 3) : null };
+        h.check(!unitRows && /학급 단위 과목: .*\d+명분 행은 반 배정표를 올린 뒤 생성/.test(confirm), "중요", "6단계", "내년 반을 모를 때 학급 단위 과목 나이스 '확인 필요' 안내가 없거나 행이 생김", { actual: result.classUnit.unknown });
+        h.check(!!unitSheet, "중요", "6단계", "분반 명렬표에 '학급 단위 과목' 시트가 없음", { actual: files.rosters.map((x) => x.name).slice(-3) });
+        await promo.selectOption(before); await sleep(400);
+      }
       await h.screenshot(page, "step6-class-unit");
     }
     // 그룹별 엑셀 검증 + 그룹 간 시간 검증
@@ -1062,13 +1111,14 @@ async function stepClassSections({ page, h, report, roster }) {
         check.classUnit = screen.classUnit;
         // 나이스: 학급 단위 행 = 그룹 학생 수, 과목 = 그 학생의 내년 반에 배정된 과목
         const unitOf = new Map(screen.classUnit);
-        const unitRows = files.neis[0].rows.slice(2).filter((r) => classUnitCourses.includes(String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "")));
+        const unitRows = files.neis[0].rows.slice(2).filter((r) => S6.CLASS_UNIT_ROOM.test(String(r[5])));
         const wrongUnit = unitRows.filter((r) => unitOf.get(String(r[7]).replace(/반$/, "")) !== String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, ""));
         const groupStudents = [...sel.keys()].length;
         check.classUnitNeis = { rows: unitRows.length, students: groupStudents, wrong: wrongUnit.length, rosterSheets: files.rosters.length };
         h.check(unitRows.length === groupStudents && !wrongUnit.length, "중요", "6단계", `${g.key}: 학급 단위 과목 나이스 행이 담임반(내년 반) 배정과 다름(행 ${unitRows.length}/${groupStudents}명, 반·과목 불일치 ${wrongUnit.length})`, { actual: wrongUnit.slice(0, 5) });
-        const confirmSheet = files.neis.some((sheet) => sheet.name === "확인 필요" && sheet.rows.some((r) => /학급 단위/.test(r.join(" "))));
-        h.check(files.rosters.length > 0 || confirmSheet, "경미", "6단계", `${g.key}: 학급 단위 과목만 있는 그룹은 분반 명렬표·블록표가 비어 있음(나이스 엑셀에는 있음) [6단계 7차 대기]`, { actual: { ...check.classUnitNeis, confirmSheet } });
+        const unitSheet = files.rosters.find((sheet) => sheet.name === "학급 단위 과목");
+        check.classUnitNeis.unitSheet = unitSheet ? unitSheet.rows.length - 2 : 0;
+        h.check(unitSheet && unitSheet.rows.length - 2 === NEXT_CLASSES, "중요", "6단계", `${g.key}: 분반 명렬표 '학급 단위 과목' 시트가 없거나 내년 반 수와 다름`, { actual: unitSheet ? unitSheet.rows.slice(0, 4) : files.rosters.map((x) => x.name) });
       }
       sectionsByGroup[g.key] = sections;
       result.groups[g.key] = check;
@@ -1088,8 +1138,8 @@ async function stepClassSections({ page, h, report, roster }) {
       await SC.setBlockTimes(page, [overlap.join(","), ...times[a.key].slice(1)]);
       const r = await S6.solve(page);
       const body = await text(page, 'section[aria-label="편성 결과"]');
-      result.overlapProbe = { group: a.key, with: b.key, times: overlap.join(","), feasible: r.feasible, warned: /겹|같은 시간|충돌/.test(body + r.summary + r.status), summary: r.summary.slice(0, 200) };
-      h.check(result.overlapProbe.warned, "경미", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 학생 시간 겹침 경고가 없음 [6단계 7차 대기]`, { actual: result.overlapProbe });
+      result.overlapProbe = { group: a.key, with: b.key, times: overlap.join(","), feasible: r.feasible, warned: r.feasible === false && /겹|같은 시간|충돌|같은 학생/.test(body + r.summary + r.status), summary: r.summary.slice(0, 200) };
+      h.check(result.overlapProbe.warned, "중요", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 오류(같은 학생 시간 겹침·불가)로 나오지 않음`, { actual: result.overlapProbe });
       await SC.setBlockTimes(page, times[a.key]);
       if (await page.locator("#classSectionsSolveSemester").count()) await S6.solve(page, "#classSectionsSolveSemester"); else await S6.solve(page);
     }
