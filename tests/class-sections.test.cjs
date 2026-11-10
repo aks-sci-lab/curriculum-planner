@@ -808,3 +808,44 @@ test("[치명 회귀] 택1 한 과목만 학급 단위로: 그 반 학생은 이
   assert.equal(ctx.classSectionsJosa("일본어·중국어", "을/를"), "일본어·중국어를");
   assert.equal(ctx.classSectionsJosa("물리학", "을/를"), "물리학을");
 });
+
+test("학급 단위 제안: 내년 반을 모르면 없는 반을 공짜 '이동' 반으로 잡지 않고 학교 전체 비율로 어림, 이동 반 희망자가 남으면 '이동 반도 학급 단위로' 확인 제안", () => {
+  const ctx = context();
+  // 지금 10반 × 31명(내년 11학급, 배정표 없음). 택1: 지구과학(과학, 교사 2명) 희망이 많아 한 블록 분반 > 교사.
+  const students = [];
+  for (let room = 1; room <= 10; room += 1) for (let n = 1; n <= 31; n += 1) {
+    students.push({ key: `1-${room}-${n}`, homeroom: String(room), courses: [n <= 25 ? "지구과학" : "일본어"] });
+  }
+  const wishers = students.filter((student) => student.courses[0] === "지구과학").length;
+  const input = { blocks: 1, choose: 1, homeroomCount: 11, classUnitRoomsKnown: false, maxSectionsPerBlock: 11, defaultCapacity: 35, seed: 1,
+    departmentTeachers: { 과학: 2, 제2외국어: 6 },
+    courses: [{ key: "지구과학", sections: 8, department: "과학" }, { key: "일본어", sections: 2, department: "제2외국어" }], students };
+  const before = plain(ctx.classSectionsSolve(input));
+  assert.equal(before.explain.feasible, false);
+  const fix = before.explain.suggestions.find((item) => item.type === "class-unit" && item.courseKeys.length === 1 && item.courseKey === "지구과학");
+  assert.ok(fix, JSON.stringify(before.explain.suggestions.map((item) => item.message)));
+  assert.equal(fix.estimated, true);
+  assert.match(fix.message, /어림/);
+  // 8개 반 학급 단위 + 3개 반 이동(11반 중): 이동 반 희망자 ≈ 희망자 × 3/11 (예전에는 없는 11반을 공짜 이동 반으로 잡아 적게 셈)
+  assert.equal(fix.rooms.move, 3);
+  assert.equal(fix.retake, Math.round(wishers * 3 / 11));
+  // 내년 반을 알면(11반, 반마다 희망이 고르게 많음): 반별 희망으로 정해지고 이동 반 희망자는 재신청 → '이동 반도 학급 단위로' 제안이 확인됨
+  const next = [];
+  for (let room = 1; room <= 11; room += 1) for (let n = 1; n <= 30; n += 1) next.push({ key: `1-${room}-${n}`, homeroom: String(room), courses: [n <= 24 ? "지구과학" : "일본어"] });
+  const known = { ...input, classUnitRoomsKnown: true, students: next };
+  const unitKeys = ["지구과학"];
+  const split = plain(ctx.classSectionsClassUnitSplit({ allowMove: true, homerooms: Array.from({ length: 11 }, (_, i) => ({ id: String(i + 1) })),
+    courses: [{ key: "지구과학", sections: 8 }], students: next }));
+  const moved = plain(ctx.classSectionsClassUnitStudents({ students: next, choose: 1, unitKeys, byClass: split.assign }));
+  const after = plain(ctx.classSectionsSolve({ ...known, courses: known.courses.map((course) => (course.key === "지구과학" ? { ...course, mode: "class" } : course)),
+    students: moved.students, classUnit: { choose: 1, unitOf: moved.unitOf } }));
+  const retake = new Set(after.unassigned.filter((item) => item.reason === "class-unit-other-room").map((item) => item.studentKey)).size;
+  assert.equal(retake, 3 * 24);
+  const rooms = after.explain.suggestions.find((item) => item.type === "class-unit-rooms");
+  assert.ok(rooms, JSON.stringify(after.explain.suggestions.map((item) => item.message)));
+  assert.equal(rooms.verified, true);
+  assert.equal(rooms.sections, 11);
+  assert.equal(rooms.retake, retake);
+  assert.equal(rooms.mismatched, 3 * 6, "이동 반에서 지구과학을 고르지 않은 학생");
+  assert.match(rooms.message, /'이동' 반 3개도 지구과학을 학급 단위로 하면\(지구과학 학급 8→11개/);
+});
