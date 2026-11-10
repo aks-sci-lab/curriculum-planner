@@ -837,6 +837,11 @@ function courseCheckNeisFor(student, context = courseCheckContext()) {
 }
 
 // 결과 학생 한 명의 점검. exclude: 빼고 볼 과목명(폐강 과목).
+// 점검에 쓰는 학생 선택: 소인수·공동교육과정(따로 신청) 과목은 뺀다(app.js applicationSelections 한 기준, 예전 결과에 남은 선택 포함).
+function courseCheckSelections(student) {
+  return typeof applicationSelections === "function" ? applicationSelections(student) : (student?.selections || []);
+}
+
 function courseCheckStudentReport(student, context = courseCheckContext(), { exclude = null } = {}) {
   if (!student) return null;
   if (!exclude && context.reports.has(student)) return context.reports.get(student);
@@ -847,7 +852,7 @@ function courseCheckStudentReport(student, context = courseCheckContext(), { exc
   if (model && ["1", "2"].includes(grade)) {
     const targetGrade = String(Number(grade) + 1);
     const removed = exclude ? new Set(exclude.map(courseCheckKey)) : null;
-    const selections = (student.selections || []).filter((item) => !removed || !removed.has(courseCheckKey(item.name)))
+    const selections = courseCheckSelections(student).filter((item) => !removed || !removed.has(courseCheckKey(item.name)))
       .map((item) => ({ name: item.name, semester: courseCheckSelectionSemester(item, grade, model), credit: item.credits, area: item.applicationSubject?.area || "" }));
     // 나이스 수강학생 편성 자료가 있으면 실제 이수 기록을 먼저 쓰고, 없으면 예전 '이전 학년 이수 결과' 엑셀.
     const neis = courseCheckNeisFor(student, context);
@@ -885,7 +890,7 @@ function courseCheckSummary(students, context = courseCheckContext()) {
   const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], kemOver: [], byCourse: new Map(), unknownByCourse: new Map(),
     priorMissing: 0, priorAvailable: false, neis: Boolean(courseCheckNeisStore(context)), neisFound: 0, transfers: 0 };
   for (const student of students) {
-    if (!(student.selections || []).length) continue;
+    if (!courseCheckSelections(student).length) continue;
     const report = courseCheckStudentReport(student, context);
     if (!report) { summary.noPlan++; continue; }
     summary.checked++;
@@ -985,7 +990,7 @@ function courseCheckStudentTableHtml(summary, { grade = "", limit = 400 } = {}) 
 // 3단계 확인서 아래 점검란(두 줄, 인쇄 한 장 유지).
 function courseCheckCertificateHtml(student, context = courseCheckContext()) {
   const report = courseCheckStudentReport(student, context);
-  if (!report || !(student.selections || []).length) return "";
+  if (!report || !courseCheckSelections(student).length) return "";
   const esc = courseCheckEscape;
   const credits = report.credits;
   const semesters = credits.semesters.map((row) => `${row.label} ${row.earned}/${row.target}`).join(" · ");
@@ -1022,7 +1027,7 @@ function courseCheckFlags(students = typeof state !== "undefined" ? state.studen
     return flags.courses.get(key);
   };
   for (const student of list) {
-    if (!(student?.selections || []).length) continue;
+    if (!courseCheckSelections(student).length) continue;
     const report = courseCheckStudentReport(student, context);
     if (!report) continue;
     const grade = String(student.grade);
@@ -1038,7 +1043,7 @@ function courseCheckFlags(students = typeof state !== "undefined" ? state.studen
     if (entry.violations.length) gradeFlags.violators.push(entry);
     if (entry.unknowns.length) gradeFlags.unknowns.push(entry);
     const columns = new Map();
-    for (const selection of student.selections) {
+    for (const selection of courseCheckSelections(student)) {
       if (!columns.has(selection.name)) columns.set(selection.name, []);
       columns.get(selection.name).push(selection.column);
     }
@@ -1159,7 +1164,7 @@ function courseCheckAggregateSheetRows(students, grade = "") {
 function courseCheckPrereqText(student, { exclude = null } = {}) {
   const report = courseCheckStudentReport(student, courseCheckContext(), exclude ? { exclude } : {});
   if (!report) return "";
-  const picked = new Set((student.selections || []).map((item) => courseCheckKey(item.name)));
+  const picked = new Set(courseCheckSelections(student).map((item) => courseCheckKey(item.name)));
   const closed = new Set((exclude || []).map(courseCheckKey).filter((key) => picked.has(key)));
   return report.prerequisites.violations.map((issue) => `${issue.course}: ${closed.has(courseCheckKey(issue.requires))
     ? `선이수 과목(${issue.requires}) 폐강`
@@ -1381,7 +1386,7 @@ function courseCheckKemOverCount(cohortYear) {
   if (typeof state === "undefined") return null;
   const grade = ["1", "2"].find((item) => courseCheckCohortYear(item) === String(cohortYear));
   if (!grade || !courseCheckModel(String(cohortYear))) return null;
-  const students = (state.students || []).filter((student) => String(student.grade) === grade && (student.selections || []).length);
+  const students = (state.students || []).filter((student) => String(student.grade) === grade && courseCheckSelections(student).length);
   if (!students.length) return null;
   const summary = courseCheckSummary(students);
   return { grade, checked: summary.checked, over: summary.kemOver.length };

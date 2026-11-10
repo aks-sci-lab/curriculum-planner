@@ -353,3 +353,17 @@ test("위계 점검 팝업: 결과가 있으면 '현재 차수 결과 점검'이
   assert.ok(emptyRules < emptyRequired && emptyRequired < emptyResult, "결과가 없으면 안내는 맨 아래");
   assert.equal(body.innerHTML.split('id="courseCheckResultTitle"').length, 2, "결과 칸은 한 번만");
 });
+
+test("separate (소인수·공동) selections left in older results are not checked (one filter: applicationSelections)", () => {
+  const ctx = checksContext();
+  // 예전 결과에 미적분Ⅱ가 소인수(따로 신청) 과목으로 남아 있다고 가정: 점검에서 빠져 진가람·허다솜의 미적분Ⅱ 경고가 사라진다.
+  ctx.collectApplicationSubjects = () => ({ "1": [], "2": [{ subject: "미적분Ⅱ", separate: true }], "3": [] });
+  vm.runInContext(functionSource(app, "function applicationSeparateNames(", "function aggregateCourseDisplayName("), ctx);
+  const flags = ctx.courseCheckFlags(ctx.state.students);
+  assert.equal(flags.courses.has("1:c3"), false, "따로 신청 과목에는 위계 배지가 없다");
+  assert.equal(flags.grades.get("1").violators.length, 1, "생물의 유전 경고(허다솜)만 남는다");
+  const jin = ctx.state.students[0];
+  assert.equal(ctx.courseCheckSelections(jin).some((course) => course.name === "미적분Ⅱ"), false);
+  assert.equal(jin.selections.some((course) => course.name === "미적분Ⅱ"), true, "저장 자료는 그대로");
+  assert.doesNotMatch(ctx.courseCheckCertificateHtml(jin), /미적분Ⅱ/);
+});
