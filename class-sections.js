@@ -128,6 +128,13 @@ function classSectionsStudentCourseList(student) {
 }
 
 // 학생 키 조각: 앞뒤 공백·끝의 '학년/반/번'·숫자의 앞 0을 없앤다('01반' → '1'). 그룹 자료·배정표·이름·명렬표·나이스가 모두 이것을 쓴다.
+// 유지할 강의실 이름: input.roomNames { 분반id: 이름 } (부분 재계산·고정이 있는 재계산에서 화면이 넘김).
+function classSectionsKeepMap(src) {
+  const map = new Map();
+  for (const [id, value] of Object.entries(src?.roomNames || {})) if (classSectionsText(value)) map.set(classSectionsText(id), classSectionsText(value));
+  return map;
+}
+
 function classSectionsKeyPart(value) {
   const text = classSectionsText(value).replace(/\s+/g, "").replace(/(학년|반|번)$/, "");
   return /^\d+$/.test(text) ? String(Number(text)) : text;
@@ -338,6 +345,7 @@ function classSectionsNormalize(input) {
     // baseline: 비교용 기존 배정(옮긴 수 지표만, 배정 비용에는 쓰지 않음). previous는 유지 비용·부분 재계산에 쓴다.
     baseline: src.baseline && typeof src.baseline === "object" ? src.baseline : previous,
     teacherPins: pins.teachers || {}, issues, unassignedInput,
+    keepRoomNames: classSectionsKeepMap(src),
     cohortTimes: (src.cohortTimes || []).map((item) => ({ label: classSectionsText(item.label), times: classSectionsSlots(item.times) })).filter((item) => item.times.length), sectionById, courseByKey: byKey,
     options: {
       placementSteps: Number(src.placementSteps) || 0, evalIterations: Number(src.evalIterations) || 0, finalIterations: Number(src.finalIterations) || 0,
@@ -1805,8 +1813,11 @@ function classSectionsSolve(input, presetPlacement) {
   result.seed = model.seed;
   result.signature = classSectionsSignature(input);
   result.metrics = classSectionsMetrics(model, result, model.baseline);
-  classSectionsAssignRoomNames(result, model.blocks.map((block) => block.id));
+  classSectionsAssignRoomNames(result, model.blocks.map((block) => block.id), model.keepRoomNames);
+
   result.issues = [...model.issues, ...placed.issues, ...teacherIssues, ...classSectionsValidate(model, result)];
+  if (result.roomRenames?.length) result.issues.push({ type: "room-renamed", severity: "warn",
+    message: `강의실 이름이 바뀐 분반 ${result.roomRenames.length}개: ${result.roomRenames.slice(0, 6).map((item) => `${item.from} → ${item.to}`).join(", ")}${result.roomRenames.length > 6 ? " …" : ""}` });
   result.explain = classSectionsExplainResult(model, placed.place, result, deadline, input);
   result.placement = Object.fromEntries(model.sections.map((section) => [section.id, placed.place.blockOf[section.index]]));
   result.elapsedMs = Math.round(classSectionsNow() - start);
@@ -1884,7 +1895,7 @@ function classSectionsSectionsSuggestion(model, input, deadline) {
 // 개설강의실 번호(나이스): 어느 블록에서든 그 과목 분반이 2개 이상이면 그 과목의 모든 분반에 번호, 아니면 번호 없음.
 // 번호는 교사가 모두 배정돼 있으면 과목 안 교사 순번(같은 교사 = 같은 번호, 블록 안에서 겹치지 않을 때), 아니면 블록 안 순번.
 // (사용자 나이스 파일: 물리학 a1·a2·b2·c1 — b블록 단독 분반이 2 → 교사 순번으로 해석. 확인 필요)
-function classSectionsAssignRoomNames(result, blockOrder) {
+function classSectionsAssignRoomNames(result, blockOrder, keep) {
   const order = new Map((blockOrder || result.blocks.map((block) => block.id)).map((id, index) => [id, index]));
   const byCourse = new Map();
   for (const section of result.sections) {
@@ -1913,8 +1924,48 @@ function classSectionsAssignRoomNames(result, blockOrder) {
       section.roomNumbering = numbered ? (numbers ? "teacher" : "block") : "none";
       section.roomName = `${section.blockLetter}${classSectionsCompact(section.courseName)}${section.roomNo || ""}`;
     });
+    if (keep && keep.size) classSectionsKeepRoomNames(list, numbered, keep, result);
   }
   return result;
+}
+
+// 부분 재계산·고정이 있는 재계산: 기존 분반은 강의실 이름(번호)을 그대로 두고, 새 분반에만 그 블록에서 비어 있는 다음 번호를 준다
+// (학생 분반은 그대로인데 이름만 바뀌어 나이스·명렬표가 달라지지 않게). 교사 순번 규칙보다 기존 이름이 우선.
+// 번호 없던 과목이 한 블록에 2개가 되면 기존 분반에도 번호가 붙어야 하므로 그때만 이름이 바뀌고 result.roomRenames에 남긴다.
+function classSectionsKeepRoomNames(list, numbered, keep, result) {
+  const name = (section, no) => `${section.blockLetter}${classSectionsCompact(section.courseName)}${no || ""}`;
+  const pattern = (section) => new RegExp(`^${section.blockLetter}${classSectionsCompact(section.courseName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\d*)$`);
+  const used = new Map();
+  const take = (block, no) => { if (!used.has(block)) used.set(block, new Set()); used.get(block).add(no); };
+  const kept = [];
+  const fresh = [];
+  for (const section of list) {
+    const before = keep.get(section.id);
+    const match = before ? before.match(pattern(section)) : null;
+    if (match) { kept.push([section, before, Number(match[1]) || 0]); take(section.blockId, Number(match[1]) || 0); }
+    else fresh.push([section, before]);
+  }
+  const next = (block) => { let no = 1; while (used.get(block)?.has(no)) no += 1; take(block, no); return no; };
+  if (!result.roomRenames) result.roomRenames = [];
+  for (const [section, before, no] of kept) {
+    if (numbered && !no) {
+      const assigned = next(section.blockId);
+      section.roomNo = assigned;
+      section.roomName = name(section, assigned);
+      result.roomRenames.push({ sectionId: section.id, from: before, to: section.roomName, reason: "numbered" });
+    } else {
+      section.roomNo = no;
+      section.roomName = before;
+    }
+    section.roomNumbering = "kept";
+  }
+  for (const [section, before] of fresh) {
+    const no = numbered ? next(section.blockId) : 0;
+    section.roomNo = no;
+    section.roomName = name(section, no);
+    section.roomNumbering = "new";
+    if (before && before !== section.roomName) result.roomRenames.push({ sectionId: section.id, from: before, to: section.roomName, reason: "moved" });
+  }
 }
 
 function classSectionsTeacherSections(model, result) {
@@ -2052,7 +2103,7 @@ function classSectionsSolveAllOnce(spec, list, fixedSlots) {
         if (section.teacherId) result.teacherOf[section.id] = section.teacherId;
       }
       result.issues = result.issues.filter((issue) => !String(issue.type).startsWith("teacher-"));
-      classSectionsAssignRoomNames(result);
+      classSectionsAssignRoomNames(result, undefined, classSectionsKeepMap(input));
     }
   }
   const across = classSectionsValidateAcross(results, spec.teachers);
@@ -2486,7 +2537,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
   return [classSectionsText, classSectionsCompact, classSectionsNow, classSectionsRng, classSectionsSlot, classSectionsSlots, classSectionsOverlap,
     classSectionsStable, classSectionsHash, classSectionsSignature, classSectionsStudentCourseList, classSectionsHomeroomOf, classSectionsChangedStudents,
     classSectionsNormalize, classSectionsSupply, classSectionsPlacementNew, classSectionsCanPlace, classSectionsPut, classSectionsCooccurrence,
-    classSectionsInitialPlacement, classSectionsTeacherSuggestions, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
+    classSectionsInitialPlacement, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
     classSectionsUnitDelta, classSectionsUnitApply, classSectionsUnitPlaceOne, classSectionsRouterRebuild, classSectionsRouterRecount,
     classSectionsRouterCost, classSectionsRouterSnapshot, classSectionsRouterRestore, classSectionsRouterSearch, classSectionsRouterSnapshotY,
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,

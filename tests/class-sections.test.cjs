@@ -713,3 +713,47 @@ test("real-scale teacher shortages are actually solved by a verified suggestion 
   geo.occupied = [{ label: "3학년 a블록", times: ["월1"], departments: { 지리: 1 } }, { label: "3학년 b블록", times: ["화1"], departments: { 지리: 1 } }];
   verifiedFix(geo);
 });
+
+test("partial recompute keeps existing room names; only new sections get the next free number, forced renames are listed", () => {
+  const ctx = context();
+  const input = synthetic({ courses: EIGHT, choose: 3, students: 240, capacity: 30, sizeFor: 27, seed: 21 });
+  const first = plain(ctx.classSectionsSolve(input));
+  assert.equal(first.unassigned.length, 0);
+  const next = plain(input);
+  for (let k = 0; k < 3; k += 1) next.students.push({ key: `1-9-${90 + k}`, homeroom: "9", courses: ["물리학", "화학", "세계사"] });
+  const physics = next.courses.find((course) => course.key === "물리학");
+  physics.sections += 1;
+  const roomNames = Object.fromEntries(first.sections.map((section) => [section.id, section.roomName]));
+  const second = plain(ctx.classSectionsSolve({ ...next, partial: true, roomNames,
+    changedStudents: ctx.classSectionsChangedStudents(input.students, next.students),
+    previous: { sections: first.sections.map((section) => ({ id: section.id, blockId: section.blockId })), assign: first.assign } }));
+  const renamed = new Set((second.roomRenames || []).map((item) => item.sectionId));
+  for (const section of first.sections) {
+    const now = second.sections.find((item) => item.id === section.id);
+    if (!renamed.has(section.id)) assert.equal(now.roomName, section.roomName, `${section.id} keeps ${section.roomName}`);
+  }
+  const added = second.sections.find((section) => section.id === `물리학#${physics.sections}`);
+  assert.ok(added && added.roomName);
+  const names = second.sections.map((section) => section.roomName);
+  assert.equal(new Set(names).size, names.length, "room names stay unique");
+  for (const item of second.roomRenames || []) {
+    assert.equal(item.reason, "numbered");
+    assert.match(item.to, /\d$/);
+    assert.doesNotMatch(item.from, /\d$/);
+  }
+  if ((second.roomRenames || []).length) assert.ok(second.issues.some((issue) => issue.type === "room-renamed"));
+  // 직접: 번호 없던 과목에 같은 블록 분반이 생기면 기존 분반에 1, 새 분반에 2
+  const result = { blocks: [{ id: "a" }], sections: [
+    { id: "s#1", courseKey: "세계사", courseName: "세계사", ord: 1, blockId: "a", blockLetter: "a", noInBlock: 1 },
+    { id: "s#2", courseKey: "세계사", courseName: "세계사", ord: 2, blockId: "a", blockLetter: "a", noInBlock: 2 }] };
+  ctx.classSectionsAssignRoomNames(result, ["a"], new Map([["s#1", "a세계사"]]));
+  assert.deepEqual(result.sections.map((section) => section.roomName), ["a세계사1", "a세계사2"]);
+  assert.deepEqual(plain(result.roomRenames), [{ sectionId: "s#1", from: "a세계사", to: "a세계사1", reason: "numbered" }]);
+  // 교사 순번 규칙과 충돌해도 기존 이름 유지
+  const teacherResult = { blocks: [{ id: "a" }, { id: "b" }], sections: [
+    { id: "p#1", courseKey: "물리학", courseName: "물리학", ord: 1, blockId: "a", blockLetter: "a", noInBlock: 1, teacherId: "T2" },
+    { id: "p#2", courseKey: "물리학", courseName: "물리학", ord: 2, blockId: "a", blockLetter: "a", noInBlock: 2, teacherId: "T1" },
+    { id: "p#3", courseKey: "물리학", courseName: "물리학", ord: 3, blockId: "b", blockLetter: "b", noInBlock: 1, teacherId: "T1" }] };
+  ctx.classSectionsAssignRoomNames(teacherResult, ["a", "b"], new Map([["p#1", "a물리학2"], ["p#2", "a물리학1"], ["p#3", "b물리학1"]]));
+  assert.deepEqual(teacherResult.sections.map((section) => section.roomName), ["a물리학2", "a물리학1", "b물리학1"]);
+});
