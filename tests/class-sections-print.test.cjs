@@ -703,16 +703,80 @@ test("담임용 이동수업 현황: 31명 → 두 장(16 + 15), 쪽마다 제�
   const small = pr.classSectionsHomeroomStatusPages(syntheticHomeroom(14, 4));
   assert.deepEqual(small.map((item) => item.pageLabel), ["1/1"]);
   assert.deepEqual(plain(pr.classSectionsHomeroomStatusSheet(syntheticHomeroom(14, 4)).rowBreaks), []);
-  // 블록 열 6개(택5 등): 칸이 접혀 줄이 늘면 세 장까지, 쪽마다 한 쪽 줄 수 이하, 글자는 그대로 9pt
+  // 블록 열 6개(택5 등): 1단계(9pt 두 줄)는 세 장 → 두 장을 넘으면 overflow, 단계 고르기는 한 줄 칸으로 두 장 안
   const wide = pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(31, 6));
   assert.ok(wide.maxLines > 2, `접힘 ${wide.maxLines}줄`);
   assert.equal(wide.pages, 3);
-  assert.equal(wide.overflow, false);
+  assert.equal(wide.overflow, true, "두 장 넘음");
   assert.ok(wide.parts.every((part) => part.to - part.from <= wide.rowsPerPage));
-  // 블록 열 10개: 세 장으로도 안 되면 글자를 줄이지 않고 더 나눈 뒤 overflow로 알림
-  const huge = pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(31, 10));
-  assert.equal(huge.overflow, true);
-  assert.ok(huge.pages > 3 && huge.parts.every((part) => part.to - part.from <= huge.rowsPerPage));
+  const wideChosen = pr.classSectionsHomeroomStatusChoose(syntheticHomeroom(31, 6));
+  assert.ok(wideChosen.plan.pages <= 2 && wideChosen.mode.level >= 2, `단계 ${wideChosen.mode.level} · ${wideChosen.plan.pages}장`);
+  // 블록 열 10개 31명은 한 줄 칸으로 두 장 안, 90명처럼 8pt 한 줄로도 안 되면 그대로 더 나누고 overflow로 알림(8pt 아래로 안 줄임)
+  assert.ok(pr.classSectionsHomeroomStatusChoose(syntheticHomeroom(31, 10)).plan.pages <= 2);
+  const huge = pr.classSectionsHomeroomStatusChoose(syntheticHomeroom(90, 10));
+  assert.deepEqual([huge.mode.level, huge.mode.fontPt], [3, 8]);
+  assert.ok(huge.plan.pages > 2 && huge.plan.overflow);
+  assert.ok(huge.plan.parts.every((part) => part.to - part.from <= huge.plan.rowsPerPage));
+});
+
+// 3학년 택5 + 택1(블록 열 6개, 긴 과목명·자리 이름 교사): 하네스에서 반당 3~4쪽이던 경우
+function seniorHomeroom(n) {
+  const groups = [...["a", "b", "c", "d", "e"].map((letter) => ({ groupKey: "g5", groupCategory: "3-1 택5", blockLetter: letter })), { groupKey: "g1", groupCategory: "3-1 택1", blockLetter: "a" }];
+  const columns = groups.map((item, i) => ({ key: `${item.groupKey}|${item.blockLetter}`, ...item, times: ["월:1", "화:3", "목:2"], order: item.groupKey === "g5" ? 0 : 1, i }));
+  const names = ["인공지능 기초와 활용", "세계시민과 지리", "동아시아 역사 기행", "물질과 에너지", "기하", "미적분Ⅱ"];
+  const students = Array.from({ length: n }, (_, i) => ({ key: `2-4-${i + 1}`, number: String(i + 1), name: `가명${i + 1}`, unsubmitted: false, unit: [], retake: [],
+    cells: Object.fromEntries(columns.map((col, c) => {
+      const course = names[(c + i) % names.length];
+      return [col.key, { courseName: course, roomName: `${col.blockLetter}${course.replace(/\s/g, "")}${1 + (i % 2)}`, roomLabel: `3학년 ${1 + ((i + c) % 11)}반`, teacher: `과학(물리) ${1 + (i % 3)}` }];
+    })) }));
+  return { id: "2|next|4", year: "2027", semester: "1", grade: "2", targetGrade: "3", room: "4", basis: "map", label: "내년 3학년 4반", students, columns, sections: [], unsubmitted: 0 };
+}
+
+test("담임용 현황 단계: 3학년 택5 + 택1 → 9pt 두 줄은 두 장 넘음 → 한 줄 칸 '과목 · 교실' + 범례로 두 장 안, 엑셀도 같은 단계", () => {
+  const homeroom = seniorHomeroom(30);
+  const one = pr.classSectionsHomeroomStatusPlan(homeroom, pr.classSectionsHomeroomStatusLayout(homeroom, { level: 1, compact: false, fontPt: 9 }));
+  assert.ok(one.pages > 2, `1단계 ${one.pages}장`);
+  const chosen = pr.classSectionsHomeroomStatusChoose(homeroom);
+  assert.ok(chosen.plan.pages <= 2, `${chosen.mode.level}단계 ${chosen.plan.pages}장`);
+  assert.equal(chosen.mode.compact, true);
+  // 한 줄 칸 = '과목 · 교실(3-11)'(9pt 단계는 약칭 없음, 8pt 단계만 칸에 안 들어가면 약칭), 범례 = 분반마다 한 번 '강의실(과목 전체, 교실) → 선생님'
+  const cells = chosen.layout.body.flatMap((row) => row.slice(3, 9));
+  assert.ok(cells.every((text) => !text.includes("\n") && / · \d+-\d+$/.test(text)), cells.slice(0, 3).join(" / "));
+  const nine = pr.classSectionsHomeroomStatusLayout(homeroom, { level: 2, compact: true, fontPt: 9 });
+  assert.ok(nine.body.some((row) => row.includes("인공지능 기초와 활용 · 3-5") || row.some((text) => /^인공지능 기초와 활용 · /.test(text))), "9pt 한 줄 칸은 전체 과목명");
+  const eight = pr.classSectionsHomeroomStatusLayout(homeroom, { level: 3, compact: true, fontPt: 8, short: true });
+  const longCell = eight.body.flatMap((row) => row.slice(3, 9)).find((text) => !/^인공지능 기초와 활용 · /.test(text) && /^인/.test(text));
+  assert.ok(!longCell || longCell.length < "인공지능 기초와 활용 · 3-10".length, `8pt 단계 약칭 ${longCell}`);
+  const legendText = chosen.layout.legend.join(" ");
+  assert.match(legendText, /^범례 — 강의실\(과목, 교실\) → 선생님:/);
+  const sections = new Set(homeroom.students.flatMap((student) => Object.entries(student.cells).map(([key, cell]) => `${key}|${cell.roomName}`)));
+  assert.equal((legendText.match(/ → 과학\(물리\) \d/g) || []).length, sections.size, "분반마다 한 번");
+  assert.match(legendText, /a인공지능기초와활용1\(인공지능 기초와 활용, 3-\d+\) → 과학\(물리\) \d/, "범례에는 전체 이름");
+  // 인쇄 쪽: 범례는 마지막 쪽 표 아래에만, 글자 크기 표시
+  const pages = pr.classSectionsHomeroomStatusPages(homeroom);
+  assert.ok(pages.length <= 2);
+  assert.deepEqual(pages.map((sheet) => sheet.legendRows > 0), pages.map((_, i) => i === pages.length - 1));
+  assert.ok(pages.every((sheet) => sheet.fontPt === chosen.mode.fontPt && sheet.level === chosen.mode.level));
+  assert.deepEqual(plain(pages.flatMap((sheet) => sheet.studentKeys)), homeroom.students.map((student) => student.key));
+  // 엑셀 시트: 같은 단계, 범례 행(표 폭 병합), 배율 = 9pt 단계 90% 이상 / 8pt 단계 80% 이상
+  const sheet = pr.classSectionsHomeroomStatusSheet(homeroom);
+  assert.equal(sheet.level, chosen.mode.level);
+  assert.equal(sheet.legendRows, chosen.layout.legend.length);
+  assert.ok(sheet.scale >= (chosen.mode.fontPt === 8 ? 80 : 90));
+  assert.equal(sheet.rows.length, sheet.headerRow + 30 + sheet.legendRows);
+  assert.ok(sheet.merges.includes(`A${sheet.rows.length}:${String.fromCharCode(64 + sheet.widths.length)}${sheet.rows.length}`), "범례 행 = 표 폭 병합");
+  // 화면 표는 늘 1단계(두 줄 칸, 범례 없음)
+  const screen = pr.classSectionsHomeroomStatusSheet(homeroom, { mode: { level: 1, compact: false, fontPt: 9 } });
+  assert.equal(screen.legendRows, 0);
+  assert.match(screen.rows[screen.headerRow][3].v, /\n/);
+  // 브라우저에서 잰 높이: 1단계가 두 장에 들면 1단계(줄 높이 8mm × 30 = 240 > 187 → 두 장 = 15 + 15)
+  const measured = pr.classSectionsHomeroomStatusChoose(homeroom, { measure: (s) => ({ header: 25, rows: s.studentKeys.map(() => 8), legend: 0, page: 187 }) });
+  assert.deepEqual([measured.mode.level, measured.plan.pages], [1, 2]);
+  // 잰 높이로도 1단계가 넘치면 2단계, 그 범례 높이까지 셈
+  const tall = pr.classSectionsHomeroomStatusChoose(homeroom, { measure: (s, mode) => ({ header: 25, rows: s.studentKeys.map(() => (mode.compact ? 5 : 13)), legend: mode.compact ? 30 : 0, page: 187 }) });
+  assert.deepEqual([tall.mode.level, tall.plan.pages, tall.plan.parts.map((part) => part.to - part.from).join("+")], [2, 2, "15+15"]);
+  const small8 = pr.classSectionsHomeroomStatusChoose(homeroom, { measure: (s, mode) => ({ header: 25, rows: s.studentKeys.map(() => (mode.fontPt === 8 ? 5 : 13)), legend: 20, page: 187 }) });
+  assert.deepEqual([small8.mode.level, small8.mode.fontPt, small8.plan.pages], [3, 8, 2]);
 });
 
 test("담임용 현황: 빈 열(학급 단위·재신청)은 그 반에 값이 없으면 좁게, 있으면 원래 폭 · 인쇄 글자 9pt(12px) 이상", () => {
