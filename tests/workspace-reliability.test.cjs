@@ -65,7 +65,7 @@ function fixture(saved) {
     renderSemesterClassifier() {}, renderAggregate() {}, renderWorkflowLayout() {},
     applyClassFilterOptions() {},
     showAppToast: (message) => notices.push(message),
-    downloadTextFile: (text) => { context.downloaded = JSON.parse(text); },
+    downloadTextFile: (text) => { context.downloadedText = text; context.downloaded = JSON.parse(text); },
   });
   vm.runInContext(app.slice(0, app.indexOf("function escapeHtml(")), context);
   for (const name of [
@@ -178,6 +178,8 @@ test("workspace backups include groups and protected originals but never login t
   assert.equal(f.context.downloaded.protectedStoredState, "{broken");
   assert.equal(f.context.downloaded.groups[groupKey], "[]");
   assert.ok(!JSON.stringify(f.context.downloaded).includes("private-session"));
+  // 크기를 줄이려고 들여쓰기 없이 쓴다(읽기는 JSON.parse라 예전 들여쓴 백업도 그대로 읽힌다).
+  assert.equal(f.context.downloadedText.includes("\n"), false);
 });
 
 test("backup restore validates before writing and rolls back a partially failed import", async () => {

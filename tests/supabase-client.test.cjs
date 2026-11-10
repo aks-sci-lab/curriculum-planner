@@ -16,7 +16,8 @@ class Element {
     this.disabled = false;
     this.textContent = "";
     const classes = new Set();
-    this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) };
+    this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
+      toggle: (c, force = !classes.has(c)) => { if (force) classes.add(c); else classes.delete(c); return force; } };
   }
   addEventListener(type, callback) { this.listeners[type] = callback; }
   appendChild(child) { child.parent = this; this.children.push(child); }
@@ -30,6 +31,7 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   getAttribute(name) { return this[name]; }
+  removeAttribute(name) { delete this[name]; }
   setCustomValidity(message) { this.validationMessage = message; }
   reportValidity() { return !this.validationMessage; }
   showModal() { this.open = true; }
@@ -308,6 +310,31 @@ test("grade menus scope curriculum groups and offer table-based assignment for u
   f.elements.applicationGrade1Tab.listeners.keydown({key:"ArrowRight",preventDefault(){}});
   assert.equal(f.elements.applicationGrade2Tab.focused,true);
   assert.equal(f.elements.applicationGradeWorkspace["aria-labelledby"],"applicationGrade2Tab");
+});
+
+test("grade tab clicks during a teacher action are remembered and applied when it finishes, not silently dropped", async () => {
+  let release;
+  const f=fixture({menus:true,respond:(request)=>request.url.includes("/auth/v1/settings")
+    ? new Promise((resolve)=>{ release=()=>resolve({data:{external:{google:true}}}); })
+    : Promise.resolve({data:[]})});
+  assert.equal(f.renderedGrade,"1");
+  await f.fire("cloudTeacherGoogleLogin","click");
+  // 작업 중에는 학년 탭을 disabled로 막지 않고(클릭이 사라짐) aria-disabled로 표시한다.
+  assert.equal(f.elements.applicationGrade2Tab.disabled,false);
+  assert.equal(f.elements.applicationGrade2Tab["aria-disabled"],"true");
+  await f.fire("applicationGrade2Tab","click");
+  assert.equal(f.context.state.applicationMenuGrade,"1","the grade must not change while the action runs");
+  assert.equal(f.elements.applicationGrade2Tab.classList.contains("is-pending"),true);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/끝나면 현 2학년 탭으로 바꿉니다/);
+  release();
+  await f.settle();
+  for (let i = 0; i < 200 && !f.redirects.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(f.redirects.length,1,f.elements.cloudTeacherMessage.textContent);
+  assert.equal(f.elements.applicationGrade2Tab["aria-disabled"],undefined);
+  assert.equal(f.context.state.applicationMenuGrade,"2");
+  assert.equal(f.renderedGrade,"2");
+  assert.equal(f.elements.applicationGrade2Tab["aria-selected"],"true");
+  assert.equal(f.elements.applicationGrade2Tab.classList.contains("is-pending"),false);
 });
 
 test("cohort group deployment loads versioned application scripts to bypass stale caches", () => {

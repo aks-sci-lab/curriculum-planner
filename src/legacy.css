@@ -85,6 +85,8 @@
     .file-button:focus-within { outline: 3px solid #2852ce; outline-offset: 3px; }
     .curriculum-table-wrap:focus-visible, .preview-area:focus-visible { outline:3px solid #2852ce; outline-offset:2px; }
     .button:disabled { cursor: not-allowed; opacity: .45; }
+    .button[role="tab"][aria-disabled="true"] { cursor: progress; opacity: .6; }
+    .button[role="tab"].is-pending { outline: 2px dashed currentColor; outline-offset: 2px; }
     .app-toast {
       position: fixed; z-index: 1000; right: 22px; top: 18px; max-width: min(440px, calc(100vw - 32px));
       padding: 12px 16px; border: 1px solid #b8c9ef; border-radius: 10px; background: #203d7b;
