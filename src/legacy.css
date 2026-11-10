@@ -393,6 +393,7 @@
     .curriculum-cohort-card h4 { margin: 0; color: #263e68; font-size: 13px; overflow-wrap: anywhere; }
     .curriculum-cohort-card p { margin: 3px 0; color: #596983; font-size: 12px; line-height: 1.4; }
     .curriculum-cohort-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .curriculum-cohort-file.is-warn { color: #8a3b12; white-space: normal; font-size: 12px; }
     .curriculum-cohort-card > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 3px; }
     .curriculum-cohort-card [aria-pressed="true"] { border-color: #9eb4e8; color: #244ba0; background: #eaf0ff; }
     .curriculum-meta-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin: 4px 0 6px; }

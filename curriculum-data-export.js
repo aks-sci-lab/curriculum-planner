@@ -131,9 +131,16 @@ async function buildCurriculumDataWorkbook(sourceLayout) {
   const layout = typeof curriculumExportLayout === "function" ? curriculumExportLayout(sourceLayout) : sourceLayout;
   // 울산 편제 점검 프로그램에서 불러온 편제표는 원본 양식이 없으므로 기본 양식(화면 표 그대로)으로 저장한다.
   if (layout.officeImport && typeof buildCurriculumBasicWorkbook === "function") return buildCurriculumBasicWorkbook(layout);
-  if (!layout.archiveId || !layout.sheetPath) throw new Error("원본 양식을 쓰려면 편제표를 다시 업로드하세요.");
+  // 원본 엑셀이 이 브라우저에 없으면(백업 복원·다른 PC: 원본은 백업에 넣지 않음) 기본 양식으로 저장하고 알린다.
+  const fallback = () => {
+    if (typeof buildCurriculumBasicWorkbook !== "function") throw new Error("저장된 원본 편제표가 없습니다. 다시 업로드하세요.");
+    const blob = buildCurriculumBasicWorkbook(layout);
+    blob.basicFallback = true;
+    return blob;
+  };
+  if (!layout.archiveId || !layout.sheetPath) return fallback();
   const buffer = await curriculumArchiveStore("get", layout.archiveId);
-  if (!buffer) throw new Error("저장된 원본 편제표가 없습니다. 다시 업로드하세요.");
+  if (!buffer) return fallback();
   const directory = readZipDirectory(buffer), files = {};
   for (const name of directory.keys()) files[name] = await readZipEntry(buffer, directory, name);
   const sheet = parseXml(files[layout.sheetPath], "편제표");
