@@ -447,8 +447,9 @@
           curriculumBundleName: state.curriculumBundleName,
           curriculumBundlePick: state.curriculumBundlePick,
           workflowStep: state.workflowStep,
-          openingPercent: $("#openingPercent").value,
-          divisionPercent: $("#divisionPercent").value,
+          // 잘못된 기준 값은 저장하지 않는다(마지막으로 적용된 값, aggregateThresholdStoredValue).
+          openingPercent: typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#openingPercent") : $("#openingPercent").value,
+          divisionPercent: typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#divisionPercent") : $("#divisionPercent").value,
           maxClassSize: $("#maxClassSize").value,
           schoolYear: $("#schoolYear").value,
           round: $("#round").value,
@@ -1683,6 +1684,8 @@
           : state.fileName || "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음";
         $("#openingPercent").value = saved.openingPercent || "90";
         $("#divisionPercent").value = saved.divisionPercent || "110";
+        // 복원한 값이 기준이 된다(예전 자료에 잘못된 값이 있으면 4단계가 경고하고 칸을 강조).
+        if (typeof aggregateThresholds === "function") aggregateThresholds.applied = null;
         // 반별 최대 인원은 나중에 추가된 값이라 이전 저장 자료·백업에는 없다. 없으면 34명.
         $("#maxClassSize").value = saved.maxClassSize || "34";
         $("#schoolYear").value = saved.schoolYear || $("#schoolYear").value;
@@ -3970,14 +3973,49 @@
         </div>`;
     }
 
+    // 개설·분반 기준(%): 칸 값이 범위 안이면 그 값을 '적용된 기준'(aggregateThresholds.applied)으로 쓴다.
+    // 칸에 잘못된 값이 있으면 적용하지 않고 마지막으로 적용된 값으로 계산·저장한다(기준 설정 창이 칸 옆에 오류를 보이고 닫기를 막음).
+    // 적용된 값이 없을 때(예전 자료에 잘못된 값이 저장된 경우)만 예전처럼 오류를 낸다.
     function aggregateThresholds() {
       const openingPercent = Number($("#openingPercent").value);
       const divisionPercent = Number($("#divisionPercent").value);
-      if (!Number.isInteger(openingPercent) || openingPercent < 1 || openingPercent > 200 ||
-          !Number.isInteger(divisionPercent) || divisionPercent < 1 || divisionPercent > 300) {
-        throw new Error("개설 기준은 1~200%, 분반 기준은 1~300%의 정수로 입력하세요.");
+      if (!aggregateThresholdFieldError("#openingPercent") && !aggregateThresholdFieldError("#divisionPercent")) {
+        aggregateThresholds.applied = { openingPercent, divisionPercent };
+        return { openingPercent, divisionPercent };
       }
-      return { openingPercent, divisionPercent };
+      if (aggregateThresholds.applied) return { ...aggregateThresholds.applied };
+      throw new Error("개설 기준은 1~200%, 분반 기준은 1~300%의 정수로 입력하세요.");
+    }
+
+    function aggregateThresholdFieldError(selector) {
+      const [min, max, label] = selector === "#openingPercent" ? [1, 200, "개설 기준"] : [1, 300, "분반 기준"];
+      const raw = String($(selector)?.value ?? "").trim();
+      const value = Number(raw);
+      return raw !== "" && Number.isInteger(value) && value >= min && value <= max ? "" : `${label}은 ${min}~${max} 사이의 정수(%)로 입력하세요.`;
+    }
+
+    // 저장할 값: 칸이 올바르면 칸 값, 아니면 마지막으로 적용된 값(잘못된 값을 저장하지 않음).
+    function aggregateThresholdStoredValue(selector) {
+      const key = selector === "#openingPercent" ? "openingPercent" : "divisionPercent";
+      if (!aggregateThresholdFieldError(selector)) return $(selector).value;
+      return aggregateThresholds.applied ? String(aggregateThresholds.applied[key]) : $(selector).value;
+    }
+
+    // 기준 설정 창의 칸 옆 오류 표시. 잘못된 값이 있으면 true. applied가 있으면 '지금 적용된 값'도 알려 준다.
+    function renderAggregateThresholdErrors() {
+      let invalid = false;
+      for (const [selector, key] of [["#openingPercent", "openingPercent"], ["#divisionPercent", "divisionPercent"]]) {
+        const field = $(selector);
+        const box = document.getElementById(`${selector.slice(1)}Error`);
+        const error = aggregateThresholdFieldError(selector);
+        if (field?.toggleAttribute) field.toggleAttribute("aria-invalid", Boolean(error));
+        if (box) {
+          box.hidden = !error;
+          box.textContent = error ? `${error}${aggregateThresholds.applied ? ` 지금 적용된 값: ${aggregateThresholds.applied[key]}%` : " 저장된 값이 올바르지 않아 집계를 표시하지 못합니다."}` : "";
+        }
+        if (error) invalid = true;
+      }
+      return invalid;
     }
 
     // 반별 최대 인원(학급수 자동 조정 기준). 이전 저장 자료처럼 값이 없거나 잘못되면 34명으로 본다.
@@ -4073,8 +4111,9 @@
     }
 
     function aggregateSettingsSummaryText(aggregate, maxClassSize) {
-      const opening = $("#openingPercent")?.value || "-";
-      const division = $("#divisionPercent")?.value || "-";
+      // 적용된 기준을 보여 준다(칸에 잘못된 값을 넣고 있는 동안에도 계산에 쓰는 값).
+      const opening = (typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#openingPercent") : $("#openingPercent")?.value) || "-";
+      const division = (typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#divisionPercent") : $("#divisionPercent")?.value) || "-";
       const classes = ["1", "2"].map((grade) => {
         const summary = aggregate?.reports.find((report) => String(report.summary.grade) === grade)?.summary;
         const planned = Number((typeof nextYearClassBases === "function" ? nextYearClassBases() : {})[String(Number(grade) + 1)]);
@@ -4211,8 +4250,10 @@
       try {
         thresholds = aggregateThresholds();
       } catch (error) {
-        $("#aggregateDescription").textContent = error.message;
-        $("#aggregateContent").textContent = "유효한 기준 비율을 입력하면 집계를 다시 표시합니다.";
+        // 예전 자료에 잘못된 기준 값이 저장된 경우: 경고와 함께 기준 설정 창을 여는 단추, 창의 칸은 강조한다.
+        $("#aggregateDescription").textContent = `저장된 기준 값이 올바르지 않습니다: ${error.message}`;
+        $("#aggregateContent").innerHTML = '<div class="aggregate-empty">유효한 기준 비율을 입력하면 집계를 다시 표시합니다. <button class="button" type="button" data-open-aggregate-settings>기준 설정 열기</button></div>';
+        if (typeof renderAggregateThresholdErrors === "function") renderAggregateThresholdErrors();
         if (gradeBar) gradeBar.innerHTML = "";
         if (settingsSummary) settingsSummary.textContent = aggregateSettingsSummaryText(null, maxClassSize);
         $("#downloadAggregate").disabled = true;
@@ -7777,13 +7818,35 @@
     for (const selector of ["#openingPercent", "#divisionPercent", "#maxClassSize"]) {
       $(selector).addEventListener("input", () => {
         if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) return;
+        // 기준(%)이 범위 밖이면 칸 옆에 오류를 보이고 적용하지 않는다(집계·저장은 마지막으로 적용된 값).
+        if (selector !== "#maxClassSize" && renderAggregateThresholdErrors() && aggregateThresholds.applied) return;
         // 집계표 안에 개설/폐강 결정 칸이 함께 있으므로 집계표만 다시 그리면 결정 기본값도 함께 갱신된다.
         if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
         renderAggregate();
         persistStateSoon();
       });
     }
+    $("#aggregateSettingsForm").addEventListener("submit", (event) => {
+      // 잘못된 기준 값이 있으면 닫지 않는다(적용 전에 고치게).
+      if (!renderAggregateThresholdErrors()) return;
+      event.preventDefault();
+      document.querySelector('#aggregateSettingsDialog [aria-invalid]')?.focus();
+    });
+    $("#aggregateSettingsDialog").addEventListener("cancel", () => {
+      // Esc로 닫으면 잘못된 칸은 적용된 값으로 되돌린다.
+      const applied = aggregateThresholds.applied;
+      if (applied) {
+        for (const [selector, key] of [["#openingPercent", "openingPercent"], ["#divisionPercent", "divisionPercent"]]) {
+          if (aggregateThresholdFieldError(selector)) $(selector).value = String(applied[key]);
+        }
+        renderAggregateThresholdErrors();
+      }
+    });
+    $("#aggregateContent").addEventListener("click", (event) => {
+      if (event.target.closest("[data-open-aggregate-settings]")) $("#openAggregateSettings").click();
+    });
     $("#openAggregateSettings").addEventListener("click", () => {
+      renderAggregateThresholdErrors();
       const dialog = $("#aggregateSettingsDialog");
       const locked = typeof isRoundLocked === "function" && isRoundLocked(state.currentRound);
       $("#aggregateSettingsLockNote").textContent = locked
