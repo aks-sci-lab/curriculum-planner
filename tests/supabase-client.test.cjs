@@ -398,6 +398,9 @@ test("grade menus reject mixed and wrong-grade rosters and preserve each valid g
   f.roster = [{grade:"1",classroom:"1",number:"1",name:"1학년 학생"}];
   await upload();
   assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명/);
+  // 명렬을 올린 탭에 머문다('수강신청 생성' 단추가 숨지 않게).
+  assert.notEqual(f.elements.applicationGroupsTab.clicked,true);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/아래 '수강신청 생성'을 누르세요/);
   const first=f.elements.cloudRosterSummary.textContent;
   f.setGrade("2");
   assert.equal(f.elements.cloudCreateEvent.disabled,true);

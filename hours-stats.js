@@ -295,12 +295,23 @@ function hoursRecommendTeachers(units, { total, maxHours = HOURS_DEFAULT_MAX_TEA
   const needed = free.reduce((acc, unit) => acc + unit.lo, 0);
   if (remaining < 0 || needed > remaining) {
     const minimum = free.reduce((acc, unit) => acc + (unit.h1 || unit.h2 ? 1 : 0), 0);
-    return {
-      ...result, needed: needed + lockedTeachers,
-      reason: minimum > remaining
-        ? `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, remaining)}명뿐입니다.`
-        : `한 학기 1인당 ${maxHours}시간을 넘지 않으려면 교과 교사가 최소 ${needed + lockedTeachers}명 필요합니다(지금 ${totalTeachers}명).`
-    };
+    if (minimum > remaining || !(cap < Infinity)) {
+      return { ...result, needed: needed + lockedTeachers,
+        reason: `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, remaining)}명뿐입니다.` };
+    }
+    // 정원 안에서는 1인당 최대 시간을 지킬 수 없다: 그래도 정해진 교사 수 안에서 가장 고른 배치를 보여 주고(적용 가능),
+    // 최대 시간을 넘는 교과를 표시한다. 최대 시간을 지키는 교사 수(needed) 안도 함께 계산해 둔다.
+    const relaxed = hoursRecommendTeachers(units, { total: totalTeachers, maxHours: 0 });
+    const required = needed + lockedTeachers;
+    const alternative = hoursRecommendTeachers(units, { total: required, maxHours });
+    if (!relaxed.ok) return { ...result, needed: required, reason: relaxed.reason };
+    for (const row of relaxed.rows) {
+      row.recommendedOverCap = Boolean(row.recommendedPerTeacher) && Math.max(row.recommendedPerTeacher["1"], row.recommendedPerTeacher["2"]) > cap + 1e-9;
+      row.overCap = row.current > 0 && Math.max(row.hours["1"], row.hours["2"]) / row.current > cap;
+    }
+    return { ...relaxed, cap, needed: required, capExceeded: true, alternative: alternative.ok ? alternative : null,
+      reason: `한 학기 1인당 ${maxHours}시간을 넘지 않으려면 교과 교사가 최소 ${required}명 필요합니다(지금 ${totalTeachers}명). ` +
+        `${totalTeachers}명 안에서 가장 고른 배치를 보여 드립니다(${maxHours}시간 넘는 교과 ${relaxed.rows.filter((row) => row.recommendedOverCap).length}개 표시).` };
   }
   // 편차 기준값 후보(교과·교사 수마다 나오는 편차) 중, 모든 교과가 그 안에 들면서 합이 맞는 가장 작은 값을 찾는다.
   const windowOf = (unit, limit) => {
@@ -938,8 +949,12 @@ function hoursRecommendationSection(stats) {
   const range = (value) => value ? `${hoursFormat(value[0], 1)}~${hoursFormat(value[1], 1)}` : "-";
   const pair = (value) => value ? `${hoursFormat(value["1"], 1)} / ${hoursFormat(value["2"], 1)}` : "-";
   const headline = recommendation.ok
-    ? `추천대로 하면 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)}${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}`
+    ? `${recommendation.capExceeded ? `${recommendation.reason} ` : ""}추천대로 하면 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)}${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}`
     : recommendation.reason;
+  // 최대 시간을 지키려면 더 필요한 교사 수 안(예: 61명안): 어느 교과에 몇 명이 더 필요한지 한 줄로.
+  const alternative = recommendation.capExceeded && recommendation.alternative
+    ? recommendation.alternative.rows.filter((row) => row.recommended !== recommendation.rows.find((item) => item.id === row.id)?.recommended)
+      .map((row) => `${hoursDepartmentName(row.id)} ${row.recommended}명`).join(", ") : "";
   const rows = recommendation.rows.map((row) => {
     const diff = row.diff;
     const diffText = !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 충원` : `${hoursFormat(diff, 1)} 감원`;
@@ -949,7 +964,7 @@ function hoursRecommendationSection(stats) {
       <td><input type="checkbox" data-hours-lock="${row.id}" data-focus-key="lock-${row.id}"${row.locked ? " checked" : ""}${row.current === null ? " disabled" : ""} aria-label="${escapeHtml(hoursDepartmentName(row.id))} 교사 수 고정"></td>
       <td>${row.current === null ? "-" : hoursFormat(row.current, 1)}</td>
       <td><b>${row.recommended}</b></td>
-      <td class="${diff > 0 ? "hours-up" : diff < 0 ? "hours-down" : ""}">${diffText}${row.overCap ? `${diffText ? "<br>" : ""}<span class="hours-note">지금 한 학기 ${recommendation.maxHours}시간 초과${row.locked ? "(고정)" : ""}</span>` : ""}</td>
+      <td class="${diff > 0 ? "hours-up" : diff < 0 ? "hours-down" : ""}">${diffText}${row.overCap ? `${diffText ? "<br>" : ""}<span class="hours-note">지금 한 학기 ${recommendation.maxHours}시간 초과${row.locked ? "(고정)" : ""}</span>` : ""}${row.recommendedOverCap ? `${diffText || row.overCap ? "<br>" : ""}<span class="hours-note is-warn">추천해도 ${recommendation.maxHours}시간 초과</span>` : ""}</td>
       <td>${pair(row.currentPerTeacher)}</td>
       <td>${pair(row.recommendedPerTeacher)}</td>
     </tr>`;
@@ -966,6 +981,7 @@ function hoursRecommendationSection(stats) {
     </div>
     <p class="note">교사 수는 정원·표시과목에 따라 학교가 정하므로 <b>추천만</b> 합니다. 1인당 시수가 학교 평균(1학기 ${recommendation.average ? hoursFormat(recommendation.average["1"], 1) : "-"} · 2학기 ${recommendation.average ? hoursFormat(recommendation.average["2"], 1) : "-"}시간)에서 가장 덜 벗어나도록 두 학기를 함께 보고 나누며, 같으면 지금 교사 수와 차이가 적은 쪽을 고릅니다. 시수가 있는 교과는 최소 1명입니다. '고정'한 교과는 바꾸지 않고 나머지 교사로 나눕니다. 진로(합계 제외) 교사는 추천에서 뺍니다.</p>
     ${recommendation.notes.map((note) => `<p class="note">${escapeHtml(note)}</p>`).join("")}
+    ${alternative ? `<p class="note" id="hoursRecommendAlternative">${hoursFormat(recommendation.needed, 1)}명이면 모든 교과가 ${recommendation.maxHours}시간 안: ${escapeHtml(alternative)} (나머지는 위와 같음). 기준 교과 교사 수를 ${hoursFormat(recommendation.needed, 1)}으로 바꾸면 그 안을 적용할 수 있습니다.</p>` : ""}
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-recommend-table">
       <thead><tr><th scope="col">교과</th><th scope="col">1학기 시수</th><th scope="col">2학기 시수</th><th scope="col">고정</th><th scope="col">현재 교사 수</th><th scope="col">추천</th><th scope="col">차이</th><th scope="col">현재 1인당<br>(1학기 / 2학기)</th><th scope="col">추천 시 1인당<br>(1학기 / 2학기)</th></tr></thead>
       <tbody>${rows}</tbody>

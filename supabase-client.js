@@ -1194,8 +1194,8 @@ var updateRetakeReadiness;
       pendingRoster = roster;
       byId("cloudCreateEvent").disabled = false;
       byId("cloudRosterSummary").textContent = `${file.name} · 현재 ${currentGrade}학년 ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만`;
-      byId("applicationGroupsTab").click();
-      byId("cloudTeacherMessage").textContent = "해당 학년의 그룹·선택 수를 설정한 뒤 온라인 신청 관리 탭에서 수강신청 생성을 누르세요.";
+      // 명렬을 올린 탭(온라인 신청 관리)에 그대로 둔다: 다른 탭으로 옮기면 바로 아래 '수강신청 생성' 단추가 숨는다.
+      byId("cloudTeacherMessage").textContent = "명렬을 확인했습니다. ① 과목·그룹 확인 탭에서 그룹·선택 수를 확인한 뒤 아래 '수강신청 생성'을 누르세요.";
       byId("courseGroupMessage").textContent = `명렬 기준 ${grades.map((g) => `${g}학년`).join(", ")} 그룹만 설정하세요. 설정 후 온라인 신청 관리 탭에서 신청을 생성합니다.`;
     });
   });
