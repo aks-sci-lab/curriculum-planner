@@ -1156,6 +1156,9 @@ var TestBotCore = (() => {
           step.actual = `성공 ${summary.ok}명, 실패 ${summary.failed}명${summary.locked ? `, 잠김 확인 ${summary.locked}명` : ""}${summary.skipped ? `, 대상 아님 ${summary.skipped}명` : ""}, 코드 변경 ${summary.codeChanged}명, 평균 응답 ${summary.averageMs}ms` +
             (summary.violationsRefused + summary.violationsAccepted ? `, 위반 거절 ${summary.violationsRefused}/${summary.violationsRefused + summary.violationsAccepted}` : "") +
             (isStopped() ? ` · 중지됨(${round.records.length}/${targets.length}명 처리)` : "");
+          const unprocessed = targets.length - (summary.ok + summary.locked + summary.skipped + summary.failed);
+          if (unprocessed > 0 && !isStopped()) step.actual += ` · 결과가 없는 학생 ${unprocessed}명(응답 없음·건너뜀)`;
+          if (summary.violationsAccepted) step.actual += ` · 서버가 받아들인 규칙 위반 ${summary.violationsAccepted}명`;
           if (isStopped() || summary.ok + summary.locked + summary.skipped !== targets.length || summary.failed || summary.violationsAccepted) step.status = "fail";
         });
         if (isStopped()) throw stopError();
@@ -1236,10 +1239,14 @@ var TestBotCore = (() => {
   function roundRow(round) {
     const summary = summarize(round.records);
     const checks = [round.teacher, round.locks].filter(Boolean);
-    const failedSteps = round.steps.filter((step) => step.status === "fail").length;
+    const failed = round.steps.filter((step) => step.status === "fail");
+    const failedSteps = failed.length;
+    // '실패 단계 n개'만 보이고 사유 칸이 비던 문제: 어느 단계가 왜 실패했는지(실제값)를 함께 적는다.
+    const failures = failed.map((step) => `${step.name}: ${String(step.actual || "").trim() || "실패 사유가 기록되지 않았습니다(체크리스트의 기대값 확인)"}`);
     return {
       round: round.round, eventId: round.eventId, stopped: round.status === "stopped",
-      status: round.status === "stopped" ? `중지됨(끝나지 않음 · 처리 ${summary.ok + summary.locked + summary.skipped + summary.failed}/${round.targets.length}명)` : failedSteps ? `실패 단계 ${failedSteps}개` : round.status === "done" ? "통과" : "진행 중",
+      status: round.status === "stopped" ? `중지됨(끝나지 않음 · 처리 ${summary.ok + summary.locked + summary.skipped + summary.failed}/${round.targets.length}명)` : failedSteps ? `실패 단계 ${failedSteps}개 — ${failures.join(" / ")}` : round.status === "done" ? "통과" : "진행 중",
+      failures,
       targets: round.targets.length, total: summary.total, ok: summary.ok, failed: summary.failed, locked: summary.locked, skipped: summary.skipped,
       violationsRefused: summary.violationsRefused, mismatches: checks.length ? checks.reduce((sum, item) => sum + item.problems, 0) : null,
       requests: summary.requests, averageMs: summary.averageMs, maxMs: summary.maxMs, failedSteps,

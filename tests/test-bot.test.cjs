@@ -633,3 +633,16 @@ test("test bot: 대상 범위 한 줄(반 번호는 이어지면 1~10으로 줄�
   assert.deepEqual(Core.scopeSummary({}), { limited: false, text: "대상: 전체" });
   assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "" }, students), { limited: true, text: "대상: 반 지정 없음 · 0명(전체 12명 중)" });
 });
+
+test("회차별 결과: '실패 단계 n개'에는 실패한 단계 이름과 사유(실제값)를 함께 적고, 사유가 비면 그렇다고 적는다", () => {
+  const step = (key, name, status, actual = "") => ({ key, name, status, expected: "", actual, ms: 0 });
+  const round = (number, steps) => ({ round: number, eventId: "e", status: "failed", steps, records: [], targets: [{}, {}] });
+  const report = { meta: {}, repeat: { count: 2, freshEvent: false }, notes: [], rounds: [
+    round(1, [step("students", "재신청", "pass", "성공 2명"), step("teacher", "교사 화면 대조", "fail", "학생 불일치 1명 (2-1-3)")]),
+    round(2, [step("students", "재신청", "fail", "")])
+  ] };
+  const { rows } = Core.repeatSummary(report);
+  assert.match(rows[0].status, /^실패 단계 1개 — 교사 화면 대조: 학생 불일치 1명 \(2-1-3\)$/);
+  assert.match(rows[1].status, /^실패 단계 1개 — 재신청: 실패 사유가 기록되지 않았습니다/);
+  assert.equal(rows[0].failures.length, 1);
+});
