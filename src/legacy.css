@@ -2327,6 +2327,24 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-proposal { margin-top:10px; padding:10px; border:1px dashed #b9c6dc; border-radius:10px; background:#fbfcff; }
     .cs-proposal h5 { margin:0 0 6px; font-size:12px; }
     .cs-table tr.is-current th { color:#2852ce; }
+    /* 6단계 직접 고치기(class-sections-edit.js) */
+    .cs-table-wrap { overflow-x:auto; }
+    .cs-place .cs-num { width:52px; }
+    .cs-place td.is-empty .cs-num { color:#9aa3b2; }
+    .cs-place td.is-conflict { background:#fff1ee; box-shadow:inset 0 0 0 2px #e3a497; }
+    .cs-place td.is-shared { background:#fff8e6; }
+    .cs-place tr.is-selected th, .cs-place tr.is-selected td { background:#eef4ff; }
+    .cs-place tfoot td.is-over { color:#b4412c; font-weight:700; }
+    .cs-place .cs-co { color:var(--muted); }
+    .cs-link { border:0; background:none; padding:0; color:#2852ce; font:inherit; font-weight:700; cursor:pointer; text-align:left; }
+    .cs-link[aria-pressed="true"] { text-decoration:underline; }
+    .cs-move-dialog { max-width:min(960px, calc(100vw - 32px)); }
+    .cs-move td.is-empty { background:#eef0f4; }
+    .cs-move-cell { display:flex; gap:4px; align-items:center; padding:3px 6px; border:1px solid var(--line); border-radius:6px; margin:2px 0; cursor:pointer; }
+    .cs-move-cell.is-current { border:2px solid #2852ce; }
+    .cs-move-cell.is-recommended { background:#eef8ee; }
+    .cs-move-cell em { font-style:normal; font-size:11px; color:#2852ce; }
+    #classSectionsMoveIssues[data-state="error"] { color:#b4412c; }
 
 /* 떠 있는 묶기 단추: 고른 학기에 학점 없는 과목이 섞였을 때 경고 */
 .curriculum-selection-actions:has(.curriculum-selection-actions-warn) { flex-wrap: wrap; max-width: min(560px, calc(100vw - 16px)); }

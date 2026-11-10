@@ -813,6 +813,7 @@ function renderClassSectionsView() {
     </section>
     ${classSectionsCompareHtml(group, entry)}
     ${result ? classSectionsResultHtml(round, group, entry, result, settings) : '<p class="cs-empty">아직 편성하지 않았습니다. 기준을 확인하고 ‘편성 계산’을 누르세요.</p>'}
+    ${result && typeof classSectionsEditHtml === "function" ? classSectionsEditHtml(round, group, entry, result) : ""}
     ${classSectionsClassUnitHtml(group, entry, settings)}`;
 }
 
@@ -979,7 +980,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   let lookup = "";
   if (query) {
     const keys = Object.keys(result.assign).filter((key) => key === query || key.startsWith(`${query}-`) || key.endsWith(`-${query}`)).slice(0, 12);
-    lookup = keys.length ? `<ul class="cs-lookup">${keys.map((key) => `<li><strong>${esc(key)}</strong> ${result.assign[key].map((id) => esc(result.sections.find((section) => section.id === id)?.roomName || id)).join(", ")}</li>`).join("")}</ul>`
+    lookup = keys.length ? `<ul class="cs-lookup">${keys.map((key) => `<li><strong>${esc(key)}</strong> ${result.assign[key].map((id) => esc(result.sections.find((section) => section.id === id)?.roomName || id)).join(", ")}${entry.pins.students?.[key] ? ' <span class="cs-tag">고정</span>' : ""} <button class="button button-quiet" type="button" data-cs-move-student="${esc(key)}" aria-label="${esc(key)} 옮기기">옮기기</button></li>`).join("")}</ul>`
       : '<p class="cs-note">찾는 학생이 없습니다(현학년-반-번호, 예: 1-3-12).</p>';
   }
   const metrics = result.metrics || {};
@@ -1174,6 +1175,7 @@ async function classSectionsApplySuggestion(index) {
 function classSectionsHandleClick(event) {
   const target = event.target.closest("button, [data-cs-group]");
   if (!target) return;
+  if (typeof classSectionsEditClick === "function" && classSectionsEditClick(target)) return;
   if (target.dataset.csGroup) { CLASS_SECTIONS_VIEW.group = target.dataset.csGroup; CLASS_SECTIONS_VIEW.search = ""; CLASS_SECTIONS_VIEW.status = null; renderClassSections(); return; }
   if (target.id === "classSectionsSolve") return void classSectionsSolveCurrent("solve");
   if (target.id === "classSectionsCompare") return void classSectionsSolveCurrent("compare");
@@ -1219,6 +1221,7 @@ function classSectionsHandleClick(event) {
 
 function classSectionsHandleChange(event) {
   const target = event.target;
+  if (typeof classSectionsEditChange === "function" && classSectionsEditChange(target)) return;
   const context = classSectionsCurrent();
   if (!context?.entry) return;
   const { entry } = context;
