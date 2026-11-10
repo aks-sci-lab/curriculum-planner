@@ -63,7 +63,9 @@ async function readScreen(page) {
       }
     }
     const unassigned = (document.querySelector("#classSectionsUnassigned summary")?.textContent || document.querySelector('section[aria-label="편성 결과"] details summary')?.textContent || "").match(/미배정 (\d+)건/);
-    return { sections, unassignedRows: unassigned ? Number(unassigned[1]) : 0, stale: !!document.querySelector("#classSectionsStale"),
+    const unassignedStudents = [...new Set([...document.querySelectorAll("#classSectionsUnassigned tbody tr")].map((tr) => (tr.cells[0]?.textContent.match(/\d+-\d+-\d+/) || [""])[0]).filter(Boolean))];
+    const metricStudents = Number((document.querySelector("#classSectionsMetrics")?.textContent.match(/미배정 (\d+)명/) || [])[1] || 0);
+    return { sections, unassignedRows: unassigned ? Number(unassigned[1]) : 0, unassignedStudents, metricStudents, stale: !!document.querySelector("#classSectionsStale"),
       header: document.querySelector('section[aria-label="편성 결과"] h4')?.textContent.replace(/\s+/g, " ") || "",
       classUnit: [...document.querySelectorAll("[data-cs-unit-room]")].map((e) => [e.getAttribute("data-cs-unit-room"), e.options[e.selectedIndex]?.textContent || ""]),
       badge: document.querySelector("#classSectionsRoundBadge")?.textContent || "",
@@ -97,7 +99,7 @@ function modelFromExports(files, { semester }) {
   }
   const sections = [];
   for (const sheet of files.rosters) {
-    if (/^학급 단위/.test(sheet.name)) continue; // '학급 단위 과목'·'학급 단위 N반' 시트(이동 분반 아님)
+    if (/^학급 단위/.test(sheet.name) || /^재신청/.test(sheet.name)) continue; // '학급 단위 과목'·'학급 단위 N반' 시트(이동 분반 아님)
     const head = sheet.rows[0]?.[0] || "";
     const room = head.split(" (")[0];
     const students = sheet.rows.slice(2).filter((r) => r[1]).map((r) => r[1]);
@@ -106,6 +108,37 @@ function modelFromExports(files, { semester }) {
       capacity: info.capacity, students, title: head, titleCount: Number((head.match(/(\d+)명$/) || [])[1]) });
   }
   return { sections, byRoom };
+}
+
+// 11차: 명렬표 첫 시트 '재신청·미배정'(1행 안내, 2행 머리글, 3행부터 학생) · 나이스 '확인 필요' 시트(2행 안내, 3행 머리글)
+// 학생 수 = 화면 미배정 학생 수(폐강 재신청만인 학생은 화면 미배정 표에 없으므로 따로 셈), 안내 문장 n명 = 행 수, 두 파일 같은 학생.
+const RETAKE_HEADER = ["현 학년-반-번호", "성명", "빠진 과목", "사유"];
+function retakeFrom(rows, start) {
+  const note = String(rows[start]?.[0] || "");
+  const header = (rows[start + 1] || []).slice(0, 4).map(compact);
+  const list = [];
+  for (const r of rows.slice(start + 2)) { if (!/^\d+-\d+-\d+$/.test(String(r[0] || ""))) break; list.push({ key: String(r[0]), name: r[1] || "", courses: String(r[2] || ""), reasons: String(r[3] || "") }); }
+  return { note, headerOk: RETAKE_HEADER.every((name, i) => header[i] === compact(name)), list, noteCount: Number((note.match(/(\d+)명/) || [])[1]) };
+}
+function checkRetakeSheets({ h, label, files, screen }) {
+  const sheet = files.rosters.find((x) => /^재신청/.test(x.name));
+  const firstOk = !sheet || files.rosters[0] === sheet;
+  const screenSet = new Set(screen.unassignedStudents || []);
+  const roster = sheet ? retakeFrom(sheet.rows, 0) : { list: [], headerOk: true, note: "", noteCount: 0 };
+  const neisSheet = files.neis.find((x) => x.name === "확인 필요");
+  const neisStart = neisSheet ? neisSheet.rows.findIndex((r, i) => i > 0 && /^재신청이 필요한 학생/.test(String(r[0] || ""))) : -1;
+  const neis = neisStart > 0 ? retakeFrom(neisSheet.rows, neisStart) : { list: [], headerOk: true, note: "", noteCount: 0 };
+  const onlyClosed = roster.list.filter((x) => x.reasons && x.reasons.split(", ").every((r) => r === "폐강")).map((x) => x.key);
+  const sheetNonClosed = roster.list.map((x) => x.key).filter((k) => !onlyClosed.includes(k));
+  const missingOnSheet = [...screenSet].filter((k) => !roster.list.some((x) => x.key === k));
+  const extraOnSheet = sheetNonClosed.filter((k) => !screenSet.has(k));
+  const neisDiff = roster.list.length !== neis.list.length || roster.list.some((x, i) => neis.list[i]?.key !== x.key || neis.list[i]?.courses !== x.courses);
+  const result = { sheet: Boolean(sheet), students: roster.list.length, screen: screenSet.size, metric: screen.metricStudents, onlyClosed: onlyClosed.length, neis: neis.list.length };
+  const ok = firstOk && roster.headerOk && neis.headerOk && (!sheet || roster.noteCount === roster.list.length) && !missingOnSheet.length && !extraOnSheet.length
+    && (screen.metricStudents === undefined || sheetNonClosed.length === screen.metricStudents || screenSet.size === screen.metricStudents) && !neisDiff && (Boolean(sheet) === Boolean(roster.list.length));
+  h.check(ok, "중요", "6단계", `${label}: '재신청·미배정' 시트 학생 ${roster.list.length}명(폐강만 ${onlyClosed.length})·화면 미배정 학생 ${screenSet.size}명(요약 ${screen.metricStudents}명)·나이스 확인 필요 ${neis.list.length}명이 맞지 않음`,
+    { actual: { ...result, firstOk, headerOk: [roster.headerOk, neis.headerOk], note: roster.note.slice(0, 120), noteCount: roster.noteCount, missingOnSheet: missingOnSheet.slice(0, 5), extraOnSheet: extraOnSheet.slice(0, 5), neisDiff } });
+  return result;
 }
 
 // 그룹 하나의 결과 검증(엑셀 기준) + 화면 대조
@@ -122,6 +155,7 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   const result = { sections: sections.length, students: sel.size, problems: Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.length])) };
   h.check(!p.unassigned.length || screen.unassignedRows === p.unassigned.length, "중요", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면 미배정 표 ${screen.unassignedRows}건)`, { actual: p.unassigned.slice(0, 8) });
   if (p.unassigned.length && p.unassigned.length !== expectedUnassigned) h.issue("경미", "6단계", `${label}: 미배정 ${p.unassigned.length}건(화면에 사유 표시)`, { actual: p.unassigned.slice(0, 8) });
+  result.retake = checkRetakeSheets({ h, label, files, screen });
   h.check(!p.blockConflict.length, "치명", "6단계", `${label}: 한 학생이 같은 블록에 두 분반 ${p.blockConflict.length}건`, { actual: p.blockConflict.slice(0, 5) });
   h.check(!p.duplicate.length, "중요", "6단계", `${label}: 한 학생이 같은 과목 여러 분반 ${p.duplicate.length}건`, { actual: p.duplicate.slice(0, 5) });
   h.check(!p.overCapacity.length, "중요", "6단계", `${label}: 정원 초과 ${p.overCapacity.length}건`, { actual: p.overCapacity.slice(0, 5) });
