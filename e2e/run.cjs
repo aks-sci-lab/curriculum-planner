@@ -855,8 +855,10 @@ async function step6Draft(page, h, report) {
   const expectedUnassigned = rows.filter((x) => x.submitted_at && x.selections.some((n) => closedHere.includes(n))).length;
   const shown = Number((r.summary.match(/미배정 (\d+)명/) || [])[1] || 0);
   out.expectedUnassigned = expectedUnassigned;
+  // 7차 뒤: 폐강 과목 학생을 '재신청 대상 n명'으로 따로 셀 것으로 기대
+  out.retakeSeparated = /재신청 대상\s*\d+명/.test(r.summary + " " + (await page.locator('section[aria-label="편성 결과"]').innerText().catch(() => "")));
   h.check(r.feasible === true || shown === expectedUnassigned, "중요", "6단계", `확정 전 시안 편성 불가(${out.group}): 미배정 ${shown}명(폐강 과목 신청 ${expectedUnassigned}명)`, { actual: r.summary.slice(0, 300) });
-  if (r.feasible === false && expectedUnassigned && shown === expectedUnassigned) h.issue("경미", "6단계", `1차 시안: 폐강 과목 신청 학생(재신청 대상) ${expectedUnassigned}명 때문에 '모두 배정하는 편성을 찾지 못했습니다'(불가)로 나옴 — 폐강 미배정은 따로 안내하는 편이 맞아 보임`, { actual: r.summary.slice(0, 200) });
+  if (r.feasible === false && expectedUnassigned && shown === expectedUnassigned) h.issue("경미", "6단계", `1차 시안: 폐강 과목 신청 학생(재신청 대상) ${expectedUnassigned}명 때문에 '모두 배정하는 편성을 찾지 못했습니다'(불가)로 나옴 — 폐강 미배정은 따로 안내하는 편이 맞아 보임 [6단계 7차 대기]`, { actual: r.summary.slice(0, 200) });
   await h.screenshot(page, "step6-draft");
   return out;
 }
@@ -906,9 +908,39 @@ async function stepClassSections({ page, h, report, roster }) {
       result.recommendedMode = await page.getByLabel("편성 방식", { exact: true }).inputValue();
       result.solves.push({ group: g.key, ms: r.ms, feasible: r.feasible, applied: [], summary: r.summary.slice(0, 300), via: "비교·추천" });
     }
-    // 진급 때 반 편성 설정(예정 기능): 있으면 현2 = 그대로 올라감
-    const promotion = page.getByLabel(/진급 때 반 편성/);
-    result.promotionSetting = await promotion.count();
+    // 진급 때 반 편성: 현1(10→11) = '새로 편성' 고정(다른 값 선택 불가), 현2(11→11) = '그대로 올라감'으로 고름
+    result.promotion = {};
+    for (const grade of ["1", "2"]) {
+      const g = info.find((x) => x.key.startsWith(`${grade}:`));
+      if (!g) continue;
+      await S6.selectGroup(page, g.key);
+      const select = page.locator(`[data-cs-promotion="${grade}"]`);
+      if (!(await select.count())) { result.promotion[grade] = "대기(설정 없음)"; continue; }
+      const state = await select.evaluate((el) => ({ value: el.value, disabled: [...el.options].filter((o) => o.disabled).map((o) => o.value) }));
+      const reason = await page.locator("#classSectionsPromotionReason").innerText().catch(() => "");
+      if (CLASSES_BY[grade] !== NEXT_CLASSES) {
+        h.check(state.value === "new" && state.disabled.includes("same") && /새로 편성/.test(reason), "중요", "6단계", `현 ${grade}학년(${CLASSES_BY[grade]}→${NEXT_CLASSES}학급) 진급 때 반 편성이 '새로 편성' 고정이 아님`, { actual: { state, reason } });
+      } else {
+        await select.selectOption("same"); await sleep(400);
+        const line = await page.locator("#classSectionsClassMapLine").innerText().catch(() => "");
+        h.check(/그대로 올라감/.test(line), "중요", "6단계", `현 ${grade}학년 '그대로 올라감'을 골랐는데 배정 기준 안내가 바뀌지 않음`, { actual: line });
+        state.after = await select.inputValue(); state.line = line;
+      }
+      result.promotion[grade] = { ...state, reason };
+    }
+    // '그대로 올라감'인 현2는 배정표 없이 담임반 묶기가 추천 대상이어야 함
+    {
+      const g2 = info.find((x) => x.key.startsWith("2:") && /택5/.test(x.key)) || info.find((x) => x.key.startsWith("2:"));
+      if (g2 && CLASSES_BY["2"] === NEXT_CLASSES) {
+        await S6.selectGroup(page, g2.key);
+        await page.locator("#classSectionsCompare").click();
+        await page.locator('section[aria-label="편성 방식 비교"]').waitFor({ timeout: 120000 });
+        await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+        const cmp = (await page.locator('section[aria-label="편성 방식 비교"]').innerText()).replace(/\s+/g, " ");
+        result.compareSame = cmp.slice(0, 400);
+        h.check(!/추천 제외/.test(cmp), "중요", "6단계", "현2 '그대로 올라감'인데 '같은 담임반끼리 묶기'가 추천 제외로 남음", { actual: cmp.slice(0, 300) });
+      }
+    }
     // 학기마다: 블록 시간 추천 → 적용 → 전 학년 함께 다시 계산
     result.semesters = {};
     for (const semester of ["1", "2"]) {
@@ -950,8 +982,12 @@ async function stepClassSections({ page, h, report, roster }) {
     for (const grade of ["1", "2"]) {
       const g1 = info.find((g) => g.key.startsWith(`${grade}:`));
       if (!g1) continue;
-      // 현1: 10반 → 새 11반으로 섞음(새로 편성) / 현2: 11반 → 11반 그대로(그대로 올라감)
+      // 현1: 10반 → 새 11반으로 섞은 배정표를 올림 / 현2: 11 → 11은 배정표 없이 '그대로 올라감'(지금 반 = 내년 반, 번호 빈칸)
       const same = CLASSES_BY[grade] === NEXT_CLASSES;
+      if (same) {
+        for (const st of roster[grade]) classMap.set(`${grade}-${st.classroom}-${st.number}`, { classroom: String(st.classroom), number: "" });
+        continue;
+      }
       const rng = Core.createRng(SEED * 4243);
       const students = same ? roster[grade].slice() : Core.shuffle(roster[grade].slice(), rng);
       const counters = {};
@@ -1031,7 +1067,8 @@ async function stepClassSections({ page, h, report, roster }) {
         const groupStudents = [...sel.keys()].length;
         check.classUnitNeis = { rows: unitRows.length, students: groupStudents, wrong: wrongUnit.length, rosterSheets: files.rosters.length };
         h.check(unitRows.length === groupStudents && !wrongUnit.length, "중요", "6단계", `${g.key}: 학급 단위 과목 나이스 행이 담임반(내년 반) 배정과 다름(행 ${unitRows.length}/${groupStudents}명, 반·과목 불일치 ${wrongUnit.length})`, { actual: wrongUnit.slice(0, 5) });
-        h.check(files.rosters.length > 0, "경미", "6단계", `${g.key}: 학급 단위 과목만 있는 그룹은 분반 명렬표·블록표가 비어 있음(나이스 엑셀에는 있음)`, { actual: check.classUnitNeis });
+        const confirmSheet = files.neis.some((sheet) => sheet.name === "확인 필요" && sheet.rows.some((r) => /학급 단위/.test(r.join(" "))));
+        h.check(files.rosters.length > 0 || confirmSheet, "경미", "6단계", `${g.key}: 학급 단위 과목만 있는 그룹은 분반 명렬표·블록표가 비어 있음(나이스 엑셀에는 있음) [6단계 7차 대기]`, { actual: { ...check.classUnitNeis, confirmSheet } });
       }
       sectionsByGroup[g.key] = sections;
       result.groups[g.key] = check;
@@ -1052,7 +1089,7 @@ async function stepClassSections({ page, h, report, roster }) {
       const r = await S6.solve(page);
       const body = await text(page, 'section[aria-label="편성 결과"]');
       result.overlapProbe = { group: a.key, with: b.key, times: overlap.join(","), feasible: r.feasible, warned: /겹|같은 시간|충돌/.test(body + r.summary + r.status), summary: r.summary.slice(0, 200) };
-      h.check(result.overlapProbe.warned, "경미", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 학생 시간 겹침 경고가 없음`, { actual: result.overlapProbe });
+      h.check(result.overlapProbe.warned, "경미", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 학생 시간 겹침 경고가 없음 [6단계 7차 대기]`, { actual: result.overlapProbe });
       await SC.setBlockTimes(page, times[a.key]);
       if (await page.locator("#classSectionsSolveSemester").count()) await S6.solve(page, "#classSectionsSolveSemester"); else await S6.solve(page);
     }
