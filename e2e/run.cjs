@@ -71,7 +71,8 @@ async function gotoStep(page, n) {
 }
 
 
-const courseName = (label) => String(label || "").replace(/\((일반|진로|융합|공통)\)$/, "").trim();
+// 화면 과목명 → 비교 키: 분류 꼬리 '(일반)' 등을 떼고, 두 학기 꼬리표는 '심화 영어 (1학기)' 모양으로 맞춘다.
+const courseName = (label) => String(label || "").replace(/\s*\((일반|진로|융합|공통)\)/, "").replace(/\s*[(（]\s*([12])\s*학기\s*[)）]\s*$/, " ($1학기)").trim();
 async function serverSelections(h, eventId) {
   return h.mock.adminQuery("select grade, classroom, number, name, selections, submitted_at from public.course_students where event_id=$1 order by grade, classroom::int, number::int", [eventId]);
 }
@@ -107,11 +108,29 @@ async function stepCertificates({ page, h, report, roster }, round) {
         const names = shown.filter((t) => t !== "과목명").map(courseName);
         const preview = await text(page, "#preview");
         const header = `현 ${grade}학년 ${row.classroom}반 ${row.number}번 · ${Number(grade) + 1}학년`;
-        const same = names.length === row.selections.length && row.selections.every((n) => names.includes(n));
+        const same = names.length === row.selections.length && row.selections.every((n) => names.map(Expected.bare).includes(Expected.bare(n)));
+        const tagged = shown.filter((t) => Expected.TERM_TAG.test(t.replace(/\s*\((일반|진로|융합|공통)\)\s*$/, "")) || /\([12]학기\)/.test(t));
+        if (tagged.length && !(report.data.certTagReported ||= new Set()).has(grade) && report.data.certTagReported.add(grade)) h.issue("중요", "3단계", `확인서 과목명에 학기 꼬리표가 보임(현 ${grade}학년 ${row.classroom}-${row.number}): ${tagged.join(", ")} [수정 대기]`, { actual: tagged, pending: true });
         h.check(same, "중요", "3단계", `확인서 과목이 서버 저장값과 다름(현 ${grade}학년 ${row.classroom}-${row.number})`, { expected: row.selections, actual: names });
         h.check(preview.includes(header), "중요", "3단계", `확인서 학년 표기 누락(현 ${grade}학년 → ${Number(grade) + 1}학년)`, { expected: header, actual: preview.slice(0, 200) });
         result.samples.push({ grade, seat: `${row.classroom}-${row.number}`, ok: same });
       }
+    }
+    // 확인서 선택군 순서 = 학기 → 편제표 순서
+    {
+      const orderIssues = [];
+      for (const grade of ["1", "2"]) {
+        const row = rows[grade][0];
+        if (!row) continue;
+        await page.locator(`[data-student-id="app-${grade}-${row.classroom}-${row.number}-${row.name}"]`).click();
+        await page.locator("#preview table.certificate-table").waitFor({ timeout: 10000 });
+        const shownOrder = (await page.locator("#preview .group-cell").allInnerTexts()).filter((t) => t !== "선택군").map((t) => (t.match(/(\d-\d 택\d+)/) || [])[1]);
+        const expectedOrder = groupsForTarget(Number(grade) + 1).map((g) => `${g.field.slice(3, 4)}-${g.field.slice(4)} 택${g.pick}`).sort((a, b) => a.slice(2, 3).localeCompare(b.slice(2, 3)));
+        const stableExpected = groupsForTarget(Number(grade) + 1).map((g, i) => ({ k: `${g.field.slice(3, 4)}-${g.field.slice(4)} 택${g.pick}`, s: g.field.slice(-1), i })).sort((a, b) => a.s.localeCompare(b.s) || a.i - b.i).map((x) => x.k);
+        if (JSON.stringify(shownOrder) !== JSON.stringify(stableExpected)) orderIssues.push({ grade, shown: shownOrder, expected: stableExpected });
+      }
+      result.groupOrder = orderIssues;
+      h.check(!orderIssues.length, "중요", "3단계", `${round}차 확인서 선택군 순서가 학기 → 편제표 순서가 아님 [수정 대기]`, { actual: orderIssues, pending: true });
     }
     result.prereqFilterCount = await text(page, "#prereqFilterCount");
     report.data[`prereq3_${round}`] = Number(result.prereqFilterCount);
@@ -188,6 +207,12 @@ async function setCriteria(page) {
   return { summary, invalid };
 }
 
+async function setOpening(page, value) {
+  await page.locator("#openAggregateSettings").click();
+  await page.locator("#aggregateSettingsDialog[open]").waitFor();
+  await page.locator("#openingPercent").fill(String(value)); await page.locator("#openingPercent").press("Tab"); await sleep(250);
+  await page.locator("#closeAggregateSettings").click(); await sleep(400);
+}
 async function decide(page, key, choice) {
   await page.locator(`#aggregatePanel [data-aggregate-course="${key}"]`).click();
   await page.locator("#aggregateCourseMenu").waitFor({ state: "visible", timeout: 10000 });
@@ -223,6 +248,17 @@ async function stepAggregate({ page, h, report }, round) {
       totals[grade] = rows.filter((row) => row.submitted_at).length;
     }
     let courses = await readAggregate(page);
+    if (round > 1 && report.data.opened1?.length) {
+      await setOpening(page, 130);
+      courses = await readAggregate(page);
+      // 1차에서 '개설'로 정한 미달 과목이 2차 집계에서도 '개설'로 이어지는지
+      const lost = report.data.opened1.filter((o) => { const c = courses.find((x) => x.key.startsWith(`${o.grade}:`) && courseName(x.label) === o.name); return c && c.decision !== "open"; })
+        .map((o) => `${o.grade}:${o.name}=${courses.find((x) => x.key.startsWith(`${o.grade}:`) && courseName(x.label) === o.name)?.decision || "(없음)"}`);
+      result.openedCarry = { opened1: report.data.opened1.length, lost };
+      h.check(!lost.length, "중요", "4단계", `1차에서 '개설'로 정한 미달 과목 ${lost.length}개가 2차 집계에서 개설 결정으로 이어지지 않음 [수정 대기]`, { actual: lost.slice(0, 8), pending: true });
+      await setOpening(page, 90);
+      courses = await readAggregate(page);
+    }
     result.before = courses.map((c) => [c.key, c.label, c.count, c.decision, c.risk]);
     // 신청 인원 = 서버 자료 = 집계표
     for (const grade of Object.keys(serverCounts)) {
@@ -303,7 +339,7 @@ async function stepAggregate({ page, h, report }, round) {
         if (!c.risk && c.decision) continue;
         const close = round === 1 && closable > 0 && c.count < perClass(grade) * 0.9;
         if (close) closable--;
-        decisions.push({ key: c.key, label: c.label, grade, group, count: c.count, choice: close ? "closed" : "open" });
+        decisions.push({ key: c.key, label: c.label, grade, group, count: c.count, risk: c.risk, choice: close ? "closed" : "open" });
       }
     }
     // 학년에 기준 미달 과목이 없으면(재신청 경로를 시험하려고) 가장 큰 택n 그룹의 최소 인원 과목을 협의회 결정으로 폐강한다.
@@ -315,11 +351,25 @@ async function stepAggregate({ page, h, report }, round) {
       const target = groupsOf[0]?.members.slice().sort((a, b) => a.count - b.count)[0];
       if (target) decisions.push({ key: target.key, label: target.label, grade, group: target.group, count: target.count, choice: "closed", reason: "기준 미달 없음 → 협의회 결정(최소 인원 과목)" });
     }
+    // 1차: 미달인데 '개설'로 남기는 과목을 학년마다 하나 둔다(폐강 후보 2개 이상이면 인원이 가장 많은 것) → 2차에 결정이 이어지는지 본다
+    if (round === 1) for (const grade of ["1", "2"]) {
+      const closedG = decisions.filter((d) => d.grade === grade && d.choice === "closed" && !d.reason);
+      if (closedG.length >= 2) { const keep = closedG.sort((a, b) => b.count - a.count)[0]; keep.choice = "open"; keep.reason = "미달이지만 개설(협의회 결정)"; }
+    }
     const t1 = Date.now();
     for (const d of decisions) await decide(page, d.key, d.choice);
     report.timings[`decisions${round}`] = { count: decisions.length, ms: Date.now() - t1 };
     result.decisions = decisions;
     report.data[`closed${round}`] = decisions.filter((d) => d.choice === "closed").map((d) => ({ grade: d.grade, name: courseName(d.label) }));
+    if (round === 1) {
+      // 개설 기준을 잠깐 130%로 올려 '미달'이 된 과목 2개를 '개설'로 정하고 90%로 되돌린다 → 2차에서 같은 결정이 이어지는지 본다
+      await setOpening(page, 130);
+      const risky = (await readAggregate(page)).filter((c) => c.risk && c.decision !== "closed" && !decisions.some((d) => d.key === c.key && d.choice === "closed"));
+      const pickOpen = [...new Map(risky.map((c) => [c.key.split(":")[0], c])).values()].slice(0, 2);
+      for (const c of pickOpen) await decide(page, c.key, "open");
+      report.data.opened1 = pickOpen.map((c) => ({ grade: c.key.split(":")[0], name: courseName(c.label) }));
+      await setOpening(page, 90);
+    }
     // 학급수 자동 조정(학년 전체)
     const t2 = Date.now();
     const adjust = page.getByRole("button", { name: "학급수 자동 조정(학년 전체)" });
@@ -501,6 +551,12 @@ async function stepHours({ page, h, report }) {
     await page.locator("#hoursNonTeaching-상담").fill("1");
     await page.locator("#hoursNonTeaching-상담").press("Tab");
     await sleep(300);
+    // 전년도 교사 수만 넣고(올해 교사 수 입력 전) 증감 메모가 저절로 생기지 않아야 함
+    const prevInputs = page.locator("[data-hours-previous-teachers]");
+    const prevCount = await prevInputs.count();
+    for (let i = 0; i < Math.min(prevCount, 4); i++) { await prevInputs.nth(i).fill(String(3 + i)); await prevInputs.nth(i).press("Tab"); await sleep(80); }
+    result.memoBeforeCounts = prevCount ? ((await text(page, "#workflowStep7Panel")).match(/[^\n]*명 (감|증)[^\n]*/) || [""])[0] : "(전년도 교사 수 칸 없음)";
+    h.check(!/명 (감|증)/.test(result.memoBeforeCounts), "중요", "5단계", "올해 교사 수를 넣기 전에 교사 증감 메모가 저절로 작성됨 [수정 대기]", { actual: result.memoBeforeCounts, pending: true });
     {
       const dialogText = await text(page, "#hoursSettingsDialog");
       if (CLASSES_BY["1"] !== NEXT_CLASSES) {
@@ -513,6 +569,19 @@ async function stepHours({ page, h, report }) {
     await sleep(500);
     result.teacherCounts = await SC.setTeacherCounts(page);
     await sleep(300);
+    // 교사 수 추천: 정원(총 교사 62)보다 추천 합이 적어도 표가 나와야 함
+    {
+      const rec = page.getByRole("button", { name: /교사 수 추천/ }).first();
+      if (await rec.count()) {
+        await rec.click(); await sleep(500);
+        const dialog = page.locator("#hoursRecommendDialog");
+        const rowsShown = await dialog.locator("table tbody tr").count().catch(() => 0);
+        result.recommend = { rows: rowsShown, text: (await dialog.innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300) };
+        h.check(rowsShown > 0, "중요", "5단계", "교사 수 추천 팝업에 표가 나오지 않음(추천 합이 정원보다 적은 경우) [수정 대기]", { actual: result.recommend, pending: true });
+        await dialog.getByRole("button", { name: /닫기/ }).last().click().catch(() => page.keyboard.press("Escape"));
+        await sleep(300);
+      }
+    }
     const panel = await text(page, "#workflowStep7Panel");
     result.title = (panel.match(/\d{4}학년도 교과별 시수 통계 \(총\d+학급\)/) || [""])[0];
     h.check(result.title.includes(`총${NEXT_CLASSES * 3}학급`), "중요", "5단계", "시수 통계 총 학급 수가 설정과 다름", { expected: `총${NEXT_CLASSES * 3}학급`, actual: result.title });
@@ -657,9 +726,18 @@ print(json.dumps([[str(c.value) if c.value is not None else "" for c in r] for r
 }
 
 function groupsForTarget(targetGrade) { return GROUPS.filter((g) => g.field.startsWith(`sem${targetGrade}`)); }
+// 같은 학년 두 학기 그룹에 다 있는 과목은 앱·서버에서 '이름 (n학기)'로 쓴다. 학생은 한 학기만 고른다.
+function termName(targetGrade, name, field) {
+  const fields = groupsForTarget(targetGrade).filter((g) => g.members.some((m) => m[2] === name)).map((g) => g.field);
+  return new Set(fields.map((f) => f.slice(-1))).size > 1 ? `${name} (${field.slice(-1)}학기)` : name;
+}
 function randomValid(targetGrade, rng) {
-  const picks = [];
-  for (const g of groupsForTarget(targetGrade)) picks.push(...Core.shuffle(g.members.map((m) => m[2]), rng).slice(0, g.pick));
+  const picks = []; const used = new Set();
+  for (const g of groupsForTarget(targetGrade)) {
+    const names = Core.shuffle(g.members.map((m) => m[2]).filter((n) => !used.has(n)), rng).slice(0, g.pick);
+    names.forEach((n) => used.add(n));
+    picks.push(...names.map((n) => termName(targetGrade, n, g.field)));
+  }
   return picks;
 }
 // 위반 선택: 현1 → 2-2 '역학과 에너지'를 2-1 '물리학' 없이(+ 다른 2-2 과목), 현2 → 3-1 중국어 + 3-2 일본어 회화(위계), 국·수·영 과목을 최대로(국수영 초과).
@@ -671,8 +749,15 @@ function violatingPicks(targetGrade, rng) {
     return [...s21, Core.shuffle(by("sem22", 1), rng)[0], ...s22];
   }
   const kem = new Set(["미적분Ⅱ", "기하", "실용 통계", "심화 영어", "수학과제 탐구", "인공지능 수학", "영미 문학 읽기", "영어 발표와 토론", "언어생활 탐구"]);
-  const fill = (names, n) => { const a = names.filter((x) => kem.has(x)); for (const x of Core.shuffle(names.filter((y) => !kem.has(y)), rng)) if (a.length < n) a.push(x); return a.slice(0, n); };
-  return [...fill(by("sem31", 5), 5), "중국어", ...fill(by("sem32", 5), 5), "일본어 회화"];
+  const used = new Set();
+  const fill = (field, n) => {
+    const names = by(field, 5).filter((x) => !used.has(x));
+    const a = names.filter((x) => kem.has(x)).slice(0, n);
+    for (const x of Core.shuffle(names.filter((y) => !kem.has(y)), rng)) if (a.length < n) a.push(x);
+    a.forEach((x) => used.add(x));
+    return a.map((x) => termName(3, x, field));
+  };
+  return [...fill("sem31", 5), "중국어", ...fill("sem32", 5), "일본어 회화"];
 }
 
 async function studentApply(studentPage, h, eventId, student, picks) {
@@ -983,8 +1068,13 @@ async function stepClassSections({ page, h, report, roster }) {
       let summary = await page.locator("#classSectionsSummary").innerText().catch(() => "");
       const log = { group: g.key, feasible, applied: [], summary: summary.slice(0, 300), times: times[g.key] };
       for (let tries = 0; !feasible && tries < 3; tries++) {
-        const apply = page.locator("[data-cs-apply]").first();
+        // 시드 짝수: '과목 하나만 학급 단위' 제안을 먼저, 홀수: '모두 학급 단위'(교과 전체) 제안을 먼저(없으면 첫 제안)
+        const options = await page.locator("[data-cs-apply]").evaluateAll((els) => els.map((e, i) => ({ i, text: e.parentElement.innerText.replace(/\s+/g, " ") })));
+        const want = SEED % 2 === 0 ? /을\(를\) 학급 단위로 운영하면\(이동/ : /모두 학급 단위로 운영/;
+        const chosen = options.find((o) => want.test(o.text)) || options[0];
+        const apply = page.locator("[data-cs-apply]").nth(chosen ? chosen.i : 0);
         if (!(await apply.count())) break;
+        if (chosen && /학급 단위/.test(chosen.text)) log.classUnitPath = SEED % 2 === 0 && want.test(chosen.text) ? "단일 과목" : /모두/.test(chosen.text) ? "모두" : "기타";
         log.applied.push((await apply.locator("xpath=..").innerText()).replace(/\s+/g, " ").slice(0, 160));
         await apply.click(); await sleep(300);
         const r = await S6.solve(page);
@@ -1123,6 +1213,30 @@ async function stepClassSections({ page, h, report, roster }) {
         h.check(unitSheet && unitSheet.rows.length - 2 === NEXT_CLASSES, "중요", "6단계", `${g.key}: 분반 명렬표 '학급 단위 과목' 시트가 없거나 내년 반 수와 다름`, { actual: unitSheet ? unitSheet.rows.slice(0, 4) : files.rosters.map((x) => x.name) });
       }
       sectionsByGroup[g.key] = sections;
+      {
+        // 학생별 그룹 과목 수 = 택n(나이스 이동 행 + 학급 단위 행). 한 그룹에서 택n보다 많으면 이중 배정(치명)
+        const pick = Number((g.key.match(/택(\d+)/) || [])[1]);
+        const rows = files.neis[0].rows.slice(2).filter((r) => r.some(Boolean));
+        const bareSubject = (r) => Expected.bare(String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, ""));
+        const per = new Map();
+        for (const r of rows) if (groupCourses.includes(bareSubject(r))) per.set(r[10], (per.get(r[10]) || 0) + 1);
+        const unitWaiting = screen.classUnit.length && !rows.some((r) => S6.CLASS_UNIT_ROOM.test(String(r[5])));
+        const over = [...per].filter(([, n]) => n > pick);
+        const under = unitWaiting ? [] : [...sel.keys()].filter((k) => (per.get(k) || 0) < pick && !screen.unassignedRows);
+        check.perStudent = { pick, students: per.size, over: over.length, under: under.length };
+        h.check(!over.length, "치명", "6단계", `${g.key}: 한 학생이 그룹에서 택${pick}보다 많은 과목에 배정(이중 배정) ${over.length}명 [수정 대기]`, { actual: over.slice(0, 5), path: result.solves.find((v) => v.group === g.key)?.classUnitPath || "", pending: true });
+        h.check(!under.length, "중요", "6단계", `${g.key}: 택${pick}보다 적게 배정된 학생 ${under.length}명(미배정 표 없음)`, { actual: under.slice(0, 5) });
+        // '희망과 다른 학생 n명' = 학급 단위 행 과목이 학생 신청과 다른 학생 수
+        if (screen.classUnit.length && !unitWaiting) {
+          const card = await page.locator('section[aria-label="학급 단위 과목"]').innerText().catch(() => "");
+          const shownMismatch = Number((card.match(/희망과 다른 학생 (\d+)명/) || [])[1] ?? NaN);
+          const mine = new Map([...selections].filter(([k]) => k.startsWith(`${g.key[0]}-`)));
+          const mismatch = new Set();
+          for (const r of rows) if (S6.CLASS_UNIT_ROOM.test(String(r[5]))) { const want = (mine.get(r[10]) || []).map((x) => x.subject); if (!want.includes(bareSubject(r))) mismatch.add(r[10]); }
+          check.classUnitMismatch = { shown: shownMismatch, computed: mismatch.size };
+          h.check(shownMismatch === mismatch.size, "중요", "6단계", `${g.key}: 학급 단위 '희망과 다른 학생 n명'이 나이스 행으로 센 수와 다름`, { expected: mismatch.size, actual: shownMismatch });
+        }
+      }
       result.groups[g.key] = check;
     }
     const unavailable = Object.fromEntries(SC.SPECIAL_TEACHERS.map((t) => [t.name, t.slots]));
@@ -1261,7 +1375,7 @@ async function finalSelections(h, report) {
     if (!id) continue;
     for (const row of await serverSelections(h, id)) {
       if (!row.submitted_at) continue;
-      map.set(`${grade}-${Number(row.classroom)}-${Number(row.number)}`, row.selections.map((subject) => ({ subject, semester: semesterOf.get(subject) || "" })));
+      map.set(`${grade}-${Number(row.classroom)}-${Number(row.number)}`, row.selections.map((raw) => ({ subject: Expected.bare(raw), semester: Expected.tagOf(raw) || semesterOf.get(Expected.bare(raw)) || "" })));
     }
   }
   return map;
@@ -1416,7 +1530,14 @@ async function main() {
         const summary = await waitText(page, "#cloudRosterSummary", /신청 대상/);
         h.check(summary.includes(`현재 ${grade}학년 ${roster[grade].length}명`) && summary.includes(`${Number(grade) + 1}학년`), "중요", "2단계",
           `명렬 요약 표기(현 ${grade}학년 → ${Number(grade) + 1}학년) 이상`, { expected: `현재 ${grade}학년 ${roster[grade].length}명 · 신청 대상: ${Number(grade) + 1}학년만`, actual: summary });
+        // 명렬 업로드 뒤 그룹 탭으로 넘어가므로: 그룹명 칸 폭, 온라인 탭에서 '수강신청 생성' 단추가 보이는지
+        const nameWidths = await page.locator("#courseGroupEditor .course-group-name input").evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().width)));
+        h.check(nameWidths.length && nameWidths.every((w) => w > 40), "중요", "2단계", `그룹명 칸이 너무 좁음(폭 ${Math.min(...nameWidths)}px ≤ 40px)`, { actual: nameWidths });
         await page.locator("#applicationOnlineTab").click();
+        await sleep(300);
+        const createVisible = await page.locator("#cloudCreateEvent").isVisible();
+        const box = await page.locator("#cloudCreateEvent").boundingBox();
+        h.check(createVisible && box && box.width > 0, "중요", "2단계", "명렬 업로드 뒤 '수강신청 생성' 단추가 보이지 않음", { actual: { createVisible, box } });
         const t0 = Date.now();
         await page.locator("#cloudCreateEvent").click();
         const message = await waitText(page, "#cloudTeacherMessage", /신청을 생성했습니다|실패|오류|확인하세요/, 60000);
@@ -1427,7 +1548,7 @@ async function main() {
         report.data.events[grade] = event.id;
         const groups = event.selection_groups.filter((g) => g.grade === String(Number(grade) + 1));
         const expected = choiceGroups(Number(grade) + 1);
-        h.check(groups.length === expected.length && expected.every((e) => groups.some((g) => Number(g.count) === e.pick && g.semester === e.semester && e.courses.every((c) => g.courses.includes(c)))),
+        h.check(groups.length === expected.length && expected.every((e) => groups.some((g) => Number(g.count) === e.pick && g.semester === e.semester && e.courses.every((c) => g.courses.map(Expected.bare).includes(c)))),
           "중요", "2단계·웹", `서버에 저장된 ${Number(grade) + 1}학년 선택 그룹이 편제표와 다름`, { expected, actual: groups.map((g) => ({ name: g.name, count: g.count, semester: g.semester, courses: g.courses })) });
         const students = await h.mock.adminQuery("select count(*)::int as n from public.course_students where event_id=$1", [event.id]);
         h.check(students[0].n === roster[grade].length, "중요", "2단계·웹", "서버 학생 수가 명렬과 다름", { expected: roster[grade].length, actual: students[0].n });
