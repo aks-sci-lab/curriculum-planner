@@ -1517,6 +1517,25 @@ async function main() {
   const page = await h.context.newPage();
   const dialogs = [];
   page.on("dialog", async (dialog) => { dialogs.push({ type: dialog.type(), message: dialog.message() }); await dialog.accept(dialog.type() === "prompt" ? dialog.defaultValue() : undefined); });
+  // 앱 확인 대화상자(#appConfirmDialog, appConfirm): 브라우저 confirm 대신 쓰는 곳 → 열리면 기록하고 확인 단추를 누른다(사용자처럼).
+  await page.exposeFunction("__e2eAppConfirm", (entry) => { dialogs.push({ type: "appConfirm", ...entry }); });
+  await page.addInitScript(() => {
+    const seen = new WeakSet();
+    const watch = () => {
+      const dialog = document.getElementById("appConfirmDialog");
+      if (!dialog || seen.has(dialog)) return;
+      seen.add(dialog);
+      new MutationObserver(() => {
+        if (!dialog.open) return;
+        const entry = { title: dialog.querySelector("#appConfirmTitle")?.textContent || "", message: dialog.querySelector("#appConfirmText")?.textContent || "", ok: dialog.querySelector("#appConfirmOk")?.textContent || "" };
+        try { window.__e2eAppConfirm(entry); } catch { /* 기록 실패는 무시 */ }
+        setTimeout(() => { if (dialog.open) dialog.querySelector("#appConfirmOk")?.click(); }, 150);
+      }).observe(dialog, { attributes: true, attributeFilter: ["open"] });
+    };
+    const finder = new MutationObserver(() => { watch(); if (document.getElementById("appConfirmDialog")) finder.disconnect(); });
+    finder.observe(document, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", () => { watch(); finder.disconnect(); });
+  });
   const downloads = [];
   page.on("download", async (download) => {
     // 이 환경에서는 이름이 'download'로 오기도 한다 → 엑셀(zip)이면 .xlsx를 붙여 저장(openpyxl은 확장자를 본다).
