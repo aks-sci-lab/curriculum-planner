@@ -2435,3 +2435,12 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td small { display:none; }
   .print-page.cs-tt-page[data-per="2"] .cs-tt-year header h4 { font-size:11px; }
 }
+@media print {
+  /* 한 장에 2명: 학생마다 1·2학기를 좌우로(세로 4개 격자는 한 장을 넘음) */
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year { display:grid; grid-template-columns:1fr 1fr; column-gap:3mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year > header, .print-page.cs-tt-page[data-per="2"] .cs-tt-year > .cs-tt-retake { grid-column:1 / -1; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-sem { margin-top:2px; min-width:0; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid { font-size:7.5px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:10mm; line-height:1.1; padding:1px 2px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid tbody th { width:14px; }
+}
