@@ -243,6 +243,8 @@
     .application-semester-empty { margin: 10px 0; color: #78859a; font-size: 12px; }
     .application-semester-unscheduled { margin-top: 8px; }
     .application-subject { display: flex; align-items: center; gap: 8px; min-height:44px; margin:6px 0; padding:9px 11px; border:1px solid #d7dfed; border-radius:10px; background:#fff; font-size: 13px; cursor:pointer; transition:border-color .15s,background .15s,box-shadow .15s; }
+    .application-subject .same-course-note { margin-left: auto; padding: 1px 6px; border-radius: 4px; background: #fdebd0; color: #8a4a00; font-size: 11px; white-space: nowrap; }
+    .application-subject:has(input:disabled) { cursor: not-allowed; }
     .application-subject:has(input:checked) { border:2px solid #3b68e8; padding:8px 10px; background:#eef3ff; box-shadow:0 0 0 2px #3b68e81a; }
     .application-subject:has(input:disabled) { cursor:not-allowed; opacity:.72; }
     .application-subject input { width:20px; height:20px; flex:0 0 20px; accent-color:#3b68e8; }

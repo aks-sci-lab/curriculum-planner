@@ -210,7 +210,8 @@ function stripSeparateResultCourses(data, items) {
 }
 
 function analyzeResultCandidate(candidate, options) {
-  const issues = { blocking: [], warnings: [], info: [], actions: [] };
+  // errors: 빨간 오류지만 반영은 막지 않는다(반영 전에 앱 확인 창으로 한 번 더 묻는다).
+  const issues = { blocking: [], errors: [], warnings: [], info: [], actions: [] };
   const addAction = (target, label) => {
     if (!issues.actions.some((action) => action.target === target)) issues.actions.push({ target, label });
   };
@@ -308,6 +309,16 @@ function analyzeResultCandidate(candidate, options) {
     }
   }
 
+  // 같은 과목 두 학기 신청(편제표 다른 행 · 한 학기만): 판별은 app.js applicationSameCourseTwice 하나.
+  if (typeof applicationSameCourseTwice === "function") {
+    const twice = students.map((student) => ({ student, items: applicationSameCourseTwice(student) })).filter((entry) => entry.items.length);
+    if (twice.length) {
+      issues.errors.push(`같은 과목을 두 학기에 신청한 학생 ${twice.length}명: ${resultExampleList(twice.map(({ student, items }) =>
+        `${student.classroom}-${student.number} ${student.name}(${items.map((item) => item.name).join(", ")})`))}. 같은 과목은 한 학기에만 신청합니다. 반영하면 이 학생들은 재신청 대상(위계·학점 점검·확인서·4단계 재신청 명단)으로 표시됩니다.`);
+      candidate.sameCourseTwice = twice.length;
+    }
+  }
+
   // 위계(선이수)·이수학점 점검(course-checks.js): 편제표 데이터 기준 학생별 경고와 목록.
   let courseChecks = null;
   if (typeof courseCheckResultIssues === "function") {
@@ -402,12 +413,14 @@ function renderResultImportPreview() {
     : "";
   const blocked = candidate.issues.blocking.length > 0;
   const warningCount = candidate.issues.warnings.length;
+  const errorCount = (candidate.issues.errors || []).length;
   container.innerHTML = `<div class="result-import-head">
       <div><strong>결과 파일 검증 · ${esc(preview.round)}차 ${esc(resultCurrentLabel(preview.grade))}</strong><span>${esc(preview.fileName)} · ${formatLabel}</span></div>
       ${sheetPicker}
     </div>
     ${summary}
     ${list(candidate.issues.blocking, "is-blocking", "반영할 수 없는 오류")}
+    ${list(candidate.issues.errors || [], "is-blocking is-error", "오류 · 확인 후 반영할 수 있음")}
     ${list(candidate.issues.warnings, "is-warning", "확인이 필요한 경고")}
     ${list(candidate.issues.info, "is-info", "참고")}
     ${candidate.courseCheckHtml || ""}
@@ -415,16 +428,25 @@ function renderResultImportPreview() {
     ${candidate.issues.actions?.length ? `<div class="result-import-fixes"><span>설정을 고친 뒤 파일을 다시 올리지 않고 아래 버튼으로 다시 검증할 수 있습니다.</span>${candidate.issues.actions.map((action) =>
       `<button class="button" type="button" data-result-import-fix="${esc(action.target)}">${esc(action.label)}</button>`).join("")}<button class="button" id="revalidateResultImport" type="button">다시 검증</button></div>` : ""}
     <div class="result-import-actions">
-      <button class="button button-primary" id="confirmResultImport" type="button"${blocked ? " disabled" : ""}>${warningCount ? `경고 ${warningCount}건 확인 후 결과 반영` : "결과 반영"}</button>
+      <button class="button button-primary" id="confirmResultImport" type="button"${blocked ? " disabled" : ""}>${errorCount ? `오류 ${errorCount}건 확인 후 결과 반영` : warningCount ? `경고 ${warningCount}건 확인 후 결과 반영` : "결과 반영"}</button>
       <button class="button" id="cancelResultImport" type="button">취소</button>
     </div>`;
   container.classList.remove("hidden");
 }
 
-function confirmResultImport() {
+async function confirmResultImport() {
   const preview = resultImportPending;
   if (!preview) return;
   const candidate = preview.candidates[preview.selected];
+  // 빨간 오류(같은 과목 두 학기 신청 등)는 자료를 버리지 않고, 앱 확인 창으로 한 번 더 묻고 반영한다.
+  const errors = candidate?.issues?.errors || [];
+  if (errors.length && !candidate.issues.blocking.length) {
+    const text = `${errors.join("\n\n")}\n\n그대로 반영할까요? (자료는 버리지 않습니다.)`;
+    const ok = typeof appConfirm === "function"
+      ? await appConfirm(text, { title: "오류가 있는 결과 반영", ok: "반영", cancel: "취소" })
+      : window.confirm(text);
+    if (!ok || resultImportPending !== preview) return;
+  }
   try {
     if (!candidate || candidate.issues.blocking.length) throw new Error("오류가 있는 시트는 반영할 수 없습니다.");
     if (state.currentRound !== preview.round) throw new Error("미리보기 이후 차수가 바뀌었습니다. 해당 차수에서 다시 업로드하세요.");

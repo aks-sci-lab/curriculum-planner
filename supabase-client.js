@@ -997,6 +997,7 @@ var updateRetakeReadiness;
       box.disabled = student?.reselectionAllowed === false || !!student?.lockedSelections?.includes(box.value) ||
         (!box.checked && picked.some((name) => baseApplicationSubject(name) === baseApplicationSubject(box.value)));
     }
+    markSameCourseOnce(byId("cloudTeacherEditChoices"));
     const studentLabel = student ? `${student.grade}학년 ${student.classroom}반 ${student.number}번 ${student.name}` : "학생 선택";
     byId("cloudTeacherEditSummary").textContent = `${studentLabel} · 현재 ${selected}과목 선택`;
     // 지금 고른 과목의 위계(선이수) 경고(저장은 막지 않는다).
@@ -1325,6 +1326,25 @@ var updateRetakeReadiness;
   function baseApplicationSubject(name) {
     return String(name).replace(/\s*\([12]학기\)/g, "").replace(/\s+/g, " ").trim();
   }
+  // 같은 과목은 한 학기만: 다른 학기에서 이미 고른 과목 칸은 비활성 + 옆에 '같은 과목은 한 학기만 — n학기에 신청함'.
+  // (학생 화면·학생 화면 미리 보기·교사 신청 수정이 함께 쓴다. 서버도 같은 기준으로 저장을 거절한다.)
+  function markSameCourseOnce(container) {
+    const picked = [...container.querySelectorAll("input:checked")].map((box) => box.value);
+    for (const box of container.querySelectorAll("input[type=checkbox]")) {
+      const label = box.closest("label");
+      if (!label) continue;
+      const other = box.checked ? null : picked.find((name) => name !== box.value && baseApplicationSubject(name) === baseApplicationSubject(box.value));
+      let note = label.querySelector(".same-course-note");
+      if (!other) { note?.remove(); continue; }
+      const semester = String(other).match(/\(([12])학기\)/)?.[1];
+      if (!note) {
+        note = document.createElement("span");
+        note.className = "same-course-note";
+        label.appendChild(note);
+      }
+      note.textContent = `같은 과목은 한 학기만 — ${semester ? `${semester}학기에` : "다른 학기에"} 신청함`;
+    }
+  }
   function validateUniqueApplicationCourses(names) {
     const seen = new Set();
     for (const name of names) {
@@ -1485,6 +1505,7 @@ var updateRetakeReadiness;
     for (const box of byId("cloudStudentChoices").querySelectorAll("input")) {
       if (!box.checked && selected.some((chosen) => baseApplicationSubject(chosen.value) === baseApplicationSubject(box.value))) box.disabled = true;
     }
+    markSameCourseOnce(byId("cloudStudentChoices"));
     if (typeof courseCheckStudentUpdate === "function") courseCheckStudentUpdate();
   }
   byId("cloudStudentChoices").addEventListener("change", (event) => {
