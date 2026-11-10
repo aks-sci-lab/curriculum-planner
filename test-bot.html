@@ -48,6 +48,9 @@
     .bot-rounds { margin:10px 0; overflow:auto; }
     .bot-rounds caption { text-align:left; font-weight:700; padding:4px 0; }
     .bot-round-table td, .bot-round-table th { white-space:nowrap; }
+    /* 결과 칸('실패 단계 n개 — 단계: 사유')은 길어서 한 줄이면 표 밖으로 잘린다 → 줄바꿈 */
+    .bot-round-table td:nth-child(2) { white-space:normal; min-width:14em; max-width:40em; overflow-wrap:anywhere; }
+    #botProgressText { overflow-wrap:anywhere; }
     .bot-round-table tr.bot-total-row td { font-weight:700; background:#f4f6f9; }
     .bot-rounds ul { margin:4px 0 0; padding-left:20px; font-size:14px; }
     .bot-subtitle { font-size:15px; margin:12px 0 0; }
