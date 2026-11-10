@@ -667,6 +667,19 @@ async function snapshot(page) {
   return snap;
 }
 
+// 2단계 '이 PC에 저장한 명렬'(#cloudRosterLocalSummary) 인원
+async function rosterLocalCounts(page) {
+  const out = {};
+  await gotoStep(page, 2);
+  for (const grade of ["1", "2"]) {
+    await selectGradeTab(page, grade);
+    await page.locator("#applicationOnlineTab").click().catch(() => {});
+    await sleep(300);
+    const t = await page.locator("#cloudRosterLocalSummary").textContent().catch(() => "");
+    out[grade] = { text: (t || "").slice(0, 120), count: Number(((t || "").match(/명렬: (\d+)명/) || [])[1] ?? NaN) };
+  }
+  return out;
+}
 async function stepPersistence({ page, h, report, dialogs }) {
   await h.step("저장: 새로고침·백업→초기화→복원 뒤 같음, 저장 용량", async () => {
     const result = {};
@@ -679,6 +692,10 @@ async function stepPersistence({ page, h, report, dialogs }) {
     report.timings.reload = Date.now() - t0;
     result.reloaded = await snapshot(page);
     h.check(JSON.stringify(result.reloaded) === JSON.stringify(result.before), "치명", "저장", "새로고침 뒤 화면 자료가 달라짐", { expected: result.before, actual: result.reloaded });
+    // 웹 신청 명렬 로컬 저장(state.applicationRosters)이 새로 고침 뒤에도 남음
+    result.rosterLocal = await rosterLocalCounts(page);
+    const rosterSizes = report.data.rosterSizes || {};
+    h.check(["1", "2"].every((g) => result.rosterLocal[g].count === rosterSizes[g]), "중요", "저장", "새로 고침 뒤 2단계 '이 PC에 저장한 명렬' 인원이 명렬 파일과 다름(또는 없어짐)", { expected: rosterSizes, actual: result.rosterLocal });
     await page.locator("#workspaceDataMenu summary").click();
     await sleep(800);
     result.usage = await text(page, "#workspaceStorageUsage");
@@ -1376,7 +1393,7 @@ async function stepClassSections({ page, h, report, roster }) {
       result.roomsAfterEdit = await X6.checkRoomsAll({ page, h, info: [editGroup], label: " (직접 고친 뒤)" });
       result.attendance = await X6.attendanceScenario({ page, h, groupKey: editGroup.key, dir, classMap, grade: editGroup.key[0], info });
       const submitted = new Map(); for (const k of after.keys()) submitted.set(k[0], (submitted.get(k[0]) || 0) + 1);
-      result.homeroom = await X6.homeroomScenario({ page, h, info, groupKey: editGroup.key, dir, classMap, nextClasses: NEXT_CLASSES, submitted });
+      result.homeroom = await X6.homeroomScenario({ page, h, info, groupKey: editGroup.key, dir, classMap, nextClasses: NEXT_CLASSES, submitted, mapGrades: ["1", "2"] });
       result.timetable = await X6.timetableScenario({ page, h, info, groupKey: editGroup.key, dir, fixed: SC.FIXED });
       result.roomShort = await X6.roomShortScenario({ page, h, info, groupKey: editGroup.key });
       await h.screenshot(page, "step6-edit-print");
@@ -1747,6 +1764,13 @@ async function main() {
           "중요", "2단계·웹", `서버에 저장된 ${Number(grade) + 1}학년 선택 그룹이 편제표와 다름`, { expected, actual: groups.map((g) => ({ name: g.name, count: g.count, semester: g.semester, courses: g.courses })) });
         const students = await h.mock.adminQuery("select count(*)::int as n from public.course_students where event_id=$1", [event.id]);
         h.check(students[0].n === roster[grade].length, "중요", "2단계·웹", "서버 학생 수가 명렬과 다름", { expected: roster[grade].length, actual: students[0].n });
+        report.data.rosterSizes = { ...(report.data.rosterSizes || {}), [grade]: roster[grade].length };
+        {
+          const t = await page.locator("#cloudRosterLocalSummary").textContent().catch(() => "");
+          const n = Number(((t || "").match(/명렬: (\d+)명/) || [])[1] ?? NaN);
+          report.data.rosterLocal = { ...(report.data.rosterLocal || {}), [grade]: (t || "").slice(0, 120) };
+          h.check(n === roster[grade].length, "중요", "2단계·웹", `웹 신청 생성 뒤 '이 PC에 저장한 현 ${grade}학년 명렬' 인원 ${n}명 ≠ 명렬 파일 ${roster[grade].length}명`, { actual: t });
+        }
         await sleep(800);
         const linked = await text(page, "#cloudEventList");
         h.check(/집계표 연동 해제/.test(linked), "중요", "2단계·웹", "생성한 신청이 집계표에 자동 연동되지 않음", { actual: linked.slice(0, 400) });
