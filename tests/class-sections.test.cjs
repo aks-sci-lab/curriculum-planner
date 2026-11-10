@@ -645,6 +645,12 @@ test("6차·7차 계산: 서명에서 다른 학년 점유 제외, 학생 키 �
   assert.equal(neis.rows.length, 3);
   assert.equal(neis.rows[2][5], "1(3학년 1반)");
   assert.ok(neis.warnings.some((text) => /내년 12반에 정한 과목이 없어 1명분/.test(text)));
+  // '이동'으로 정한 반은 정상: 반 배정표 확인 안내 대신 '이동 반 — 학급 단위 행 없음'
+  const neisMove = plain(ctx.classSectionsNeisExport({ sections: [], assign: {} }, { targetGrade: 3, reference: false,
+    students: [{ key: "2-1-1", classroom: "1", number: "1" }, { key: "2-1-2", classroom: "2", number: "2" }],
+    classUnit: { byClass: { "1": "일본어", "2": "" }, courses: { 일본어: { name: "일본어", credits: 2 } } } }));
+  assert.ok(neisMove.warnings.some((text) => /내년 2반은 이동 반 — 학급 단위 행 없음/.test(text)), JSON.stringify(neisMove.warnings));
+  assert.ok(!neisMove.warnings.some((text) => /반 배정표의 새 반 번호를 확인/.test(text)));
   // 같은 현 학년·학기 그룹끼리 블록 시간 겹침
   const one = { ...input, blocks: [{ id: "a", times: ["월1", "수1"] }, { id: "b", times: ["화1", "목1"] }], cohortTimes: [{ label: "2-2 택1 a블록", times: ["수1"] }] };
   const clash = plain(ctx.classSectionsSolve(one));
@@ -807,4 +813,68 @@ test("[치명 회귀] 택1 한 과목만 학급 단위로: 그 반 학생은 이
   assert.equal(ctx.classSectionsJosa("인공지능 기초", "을/를"), "인공지능 기초를");
   assert.equal(ctx.classSectionsJosa("일본어·중국어", "을/를"), "일본어·중국어를");
   assert.equal(ctx.classSectionsJosa("물리학", "을/를"), "물리학을");
+});
+
+test("학급 단위 제안: 내년 반을 모르면 없는 반을 공짜 '이동' 반으로 잡지 않고 학교 전체 비율로 어림, 이동 반 희망자가 남으면 '이동 반도 학급 단위로' 확인 제안", () => {
+  const ctx = context();
+  // 지금 10반 × 31명(내년 11학급, 배정표 없음). 택1: 지구과학(과학, 교사 2명) 희망이 많아 한 블록 분반 > 교사.
+  const students = [];
+  for (let room = 1; room <= 10; room += 1) for (let n = 1; n <= 31; n += 1) {
+    students.push({ key: `1-${room}-${n}`, homeroom: String(room), courses: [n <= 25 ? "지구과학" : "일본어"] });
+  }
+  const wishers = students.filter((student) => student.courses[0] === "지구과학").length;
+  const input = { blocks: 1, choose: 1, homeroomCount: 11, classUnitRoomsKnown: false, maxSectionsPerBlock: 11, defaultCapacity: 35, seed: 1,
+    departmentTeachers: { 과학: 2, 제2외국어: 6 },
+    courses: [{ key: "지구과학", sections: 8, department: "과학" }, { key: "일본어", sections: 2, department: "제2외국어" }], students };
+  const before = plain(ctx.classSectionsSolve(input));
+  assert.equal(before.explain.feasible, false);
+  const fix = before.explain.suggestions.find((item) => item.type === "class-unit" && item.courseKeys.length === 1 && item.courseKey === "지구과학");
+  assert.ok(fix, JSON.stringify(before.explain.suggestions.map((item) => item.message)));
+  assert.equal(fix.estimated, true);
+  assert.match(fix.message, /어림/);
+  // 8개 반 학급 단위 + 3개 반 이동(11반 중): 이동 반 희망자 ≈ 희망자 × 3/11 (예전에는 없는 11반을 공짜 이동 반으로 잡아 적게 셈)
+  assert.equal(fix.rooms.move, 3);
+  assert.equal(fix.retake, Math.round(wishers * 3 / 11));
+  // 내년 반을 알면(11반, 반마다 희망이 고르게 많음): 반별 희망으로 정해지고 이동 반 희망자는 재신청 → '이동 반도 학급 단위로' 제안이 확인됨
+  const next = [];
+  for (let room = 1; room <= 11; room += 1) for (let n = 1; n <= 30; n += 1) next.push({ key: `1-${room}-${n}`, homeroom: String(room), courses: [n <= 24 ? "지구과학" : "일본어"] });
+  const known = { ...input, classUnitRoomsKnown: true, students: next };
+  const unitKeys = ["지구과학"];
+  const split = plain(ctx.classSectionsClassUnitSplit({ allowMove: true, homerooms: Array.from({ length: 11 }, (_, i) => ({ id: String(i + 1) })),
+    courses: [{ key: "지구과학", sections: 8 }], students: next }));
+  const moved = plain(ctx.classSectionsClassUnitStudents({ students: next, choose: 1, unitKeys, byClass: split.assign }));
+  const after = plain(ctx.classSectionsSolve({ ...known, courses: known.courses.map((course) => (course.key === "지구과학" ? { ...course, mode: "class" } : course)),
+    students: moved.students, classUnit: { choose: 1, unitOf: moved.unitOf } }));
+  const retake = new Set(after.unassigned.filter((item) => item.reason === "class-unit-other-room").map((item) => item.studentKey)).size;
+  assert.equal(retake, 3 * 24);
+  const rooms = after.explain.suggestions.find((item) => item.type === "class-unit-rooms");
+  assert.ok(rooms, JSON.stringify(after.explain.suggestions.map((item) => item.message)));
+  assert.equal(rooms.verified, true);
+  assert.equal(rooms.sections, 11);
+  assert.equal(rooms.retake, retake);
+  assert.equal(rooms.mismatched, 3 * 6, "이동 반에서 지구과학을 고르지 않은 학생");
+  assert.match(rooms.message, /'이동' 반 3개도 지구과학을 학급 단위로 하면\(지구과학 학급 8→11개/);
+  // 요약은 정원 탓이 아니라 재신청 대상으로 말한다
+  assert.match(after.explain.summary, /학급 단위로 바꾼 과목\(지구과학\)을 고른 '이동' 반 학생 72명은 재신청이 필요합니다/);
+  assert.doesNotMatch(after.explain.summary, /정원 \d+명·블록당 최대/);
+  // 모든 과목을 학급 단위로 하는 어림: 다른 과목 반에 가는 학생도 희망과 다름(0명이 아님)
+  const both = plain(ctx.classSectionsClassUnitTrial({ ...input, courses: [{ key: "지구과학", sections: 8 }, { key: "일본어", sections: 3 }] }, ["지구과학", "일본어"]));
+  assert.equal(both.estimated, true);
+  assert.ok(both.mismatched > 0, String(both.mismatched));
+});
+
+test("검증기: 택n보다 적게 배정됐는데 미배정·재신청(폐강) 기록이 없으면 오류, 폐강 과목은 언제나 '재신청 대상'으로 셈", () => {
+  const ctx = context();
+  const students = [];
+  for (let n = 1; n <= 40; n += 1) students.push({ key: `1-${1 + (n % 4)}-${n}`, homeroom: String(1 + (n % 4)), courses: n <= 30 ? ["A", "B"] : ["A", "C"] });
+  const base = { blocks: 2, choose: 2, defaultCapacity: 35, seed: 1, courses: [{ key: "A", sections: 2 }, { key: "B", sections: 1 }, { key: "C", sections: 0 }], students };
+  const closed = plain(ctx.classSectionsSolve(base));
+  assert.ok(!closed.issues.some((issue) => issue.type === "choice-under"), JSON.stringify(closed.issues.map((issue) => issue.message)));
+  assert.match(closed.explain.summary, /재신청 대상 10명\(폐강 과목 10건\)/);
+  // 앞 단계에서 C가 빠져 A만 남은 학생(기록 없음) → 오류
+  const dropped = { ...base, courses: base.courses.filter((course) => course.key !== "C"), students: students.map((student) => ({ ...student, courses: student.courses.filter((key) => key !== "C") })) };
+  const silent = plain(ctx.classSectionsSolve(dropped));
+  const under = silent.issues.find((issue) => issue.type === "choice-under");
+  assert.ok(under && under.severity === "error" && under.count === 10, JSON.stringify(silent.issues.map((issue) => issue.message)));
+  assert.equal(silent.explain.feasible, false);
 });

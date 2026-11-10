@@ -431,3 +431,17 @@ test("[치명 회귀] 화면 입력: 학급 단위 반 학생은 이동 분반�
   assert.ok(exported.rows.slice(2).some((row) => row[4] === "지구과학(3)"), "NEIS subject name without '(1학기)'");
   assert.ok(!exported.rows.slice(2).some((row) => /학기\)/.test(row[4]) || /학기\)/.test(row[5])));
 });
+
+test("공통 교과(과학-공통)에 교사가 없으면 같은 교과군 세부 교과 교사가 자동 배정 후보, 시수표 교사 수는 세부 교과 합", () => {
+  const ctx = context();
+  const teachers = [{ id: "a", departments: ["과학-물리"] }, { id: "b", departments: ["과학-화학"] }, { id: "c", departments: ["사회-일사"] }];
+  ctx.classSectionsCommonDepartmentFallback([{ department: "과학-공통" }, { department: "과학-물리" }], teachers, null);
+  assert.deepEqual(teachers.map((teacher) => teacher.departments.includes("과학-공통")), [true, true, false]);
+  // 공통 교사가 따로 있으면 그대로
+  const own = [{ id: "a", departments: ["과학-물리"] }, { id: "d", departments: ["과학-공통"] }];
+  ctx.classSectionsCommonDepartmentFallback([{ department: "과학-공통" }], own, null);
+  assert.deepEqual(own[0].departments, ["과학-물리"]);
+  const counts = { "과학-물리": 2, "과학-화학": 3, "사회-일사": 4 };
+  ctx.classSectionsCommonDepartmentFallback([{ department: "과학-공통" }], [], counts);
+  assert.equal(counts["과학-공통"], 5);
+});
