@@ -5308,6 +5308,12 @@
           if (!byGrade.has(grade)) byGrade.set(grade, { semesters: [], hours: [] });
           byGrade.get(grade).semesters.push(sem);
           byGrade.get(grade).hours.push(value);
+          // 학기제: 두 학기에 걸친 한 행 과목은 학기마다 따로 한 학기만 들으므로, 학기로 나눈 줄의 학점은 그 학기 칸 값이다.
+          const semesterCredit = Number(value.replace(/[^\d.]/g, "")) || 0;
+          if (semesterCredit > 0) {
+            if (!byGrade.get(grade).credits) byGrade.get(grade).credits = {};
+            byGrade.get(grade).credits[sem] = semesterCredit;
+          }
         });
         if (!byGrade.size && !columns.semesters.some((column) => column >= 0)) {
           const fallback = context.grade.match(/[123]/)?.[0];
@@ -5318,6 +5324,8 @@
           const blockGrade = Number(block.grade);
           if (!byGrade.has(blockGrade)) byGrade.set(blockGrade, { semesters: [], hours: [] });
           const info = byGrade.get(blockGrade);
+          // 택n 묶음 학기는 학기 칸 값이 아니라 지금처럼 그 행의 학점(묶음 학점)을 쓴다.
+          if (info.credits) delete info.credits[block.semester];
           if (info.semesters.includes(block.semester)) continue;
           info.semesters.push(block.semester);
           info.semesters.sort();
@@ -5340,6 +5348,10 @@
               existing.semester = [...new Set([...existing.semester.split("·"), ...info.semesters])]
                 .filter(Boolean).sort().join("·");
               Object.assign(existing.semesterGroups, semesterGroupAssignments);
+              for (const [sem, value] of Object.entries(info.credits || {})) {
+                if (!existing.semesterCredits) existing.semesterCredits = {};
+                if (!existing.semesterCredits[sem]) existing.semesterCredits[sem] = value;
+              }
               for (const sem of info.semesters) existing.semesterColors[sem] =
                 curriculumCellFill(layout, context.rowIndex, columns.semesters[(grade-1)*2+Number(sem)-1]);
               continue;
@@ -5354,6 +5366,7 @@
               semesterGroups: semesterGroupAssignments,
               hours: info.hours.join("+"),
               credit,
+              ...(info.credits && Object.keys(info.credits).length ? { semesterCredits: { ...info.credits } } : {}),
               ...(separate ? { separate: true } : {})
             };
             seen.set(key, item);
@@ -5362,7 +5375,13 @@
         }
       }
       for (const [key, item] of seen) {
-        if (String(item.semester).split("·").filter(Boolean).length > 1) item.sameCourseOnce = true;
+        const semesters = String(item.semester).split("·").filter(Boolean);
+        if (semesters.length > 1) {
+          item.sameCourseOnce = true;
+          // 학기 없이 고르는 곳(오프라인 신청 파일·학기 없이 고른 결과)의 학점: 학기 칸 값이 모두 같으면 그 값.
+          const values = semesters.map((semester) => item.semesterCredits?.[semester]);
+          if (values.every((value) => value > 0 && value === values[0])) item.onceCredit = values[0];
+        }
       }
       return result;
     }
@@ -5372,6 +5391,7 @@
       return Object.fromEntries(Object.entries(result).map(([grade, items]) => [grade, items.map((item) => ({
         ...item,
         semesterColors: { ...item.semesterColors },
+        ...(item.semesterCredits ? { semesterCredits: { ...item.semesterCredits } } : {}),
         semesterGroups: Object.fromEntries(Object.entries(item.semesterGroups || {}).map(([semester, group]) => [semester, { ...group }]))
       }))]));
     }
@@ -5406,7 +5426,9 @@
           const semesters = String(item.semester || "").split("·").filter(Boolean);
           for (const key of semesters.length ? semesters : ["0"]) {
             if (!bySemester.has(key)) bySemester.set(key, []);
-            bySemester.get(key).push(semesters.length > 1 ? { ...item, subject: `${item.subject} (${key}학기)` } : item);
+            bySemester.get(key).push(semesters.length > 1
+              ? { ...item, subject: `${item.subject} (${key}학기)`, credit: item.semesterCredits?.[key] || item.credit }
+              : item);
           }
         }
         const semesterHtml = ["1", "2"].map((semester) => {
@@ -5494,7 +5516,7 @@
         "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
         "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
         "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
-        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.sameCourseOnce?'1·2학기 중 한 학기만 · ':'')+(c.credit?c.credit+'학점':'')+'</span></label>';});",
+        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+(c.onceCredit||c.credit)+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.sameCourseOnce?'1·2학기 중 한 학기만 · ':'')+((c.onceCredit||c.credit)?(c.onceCredit||c.credit)+'학점':'')+'</span></label>';});",
         "});});",
         "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
         "updateSummary();",
@@ -5556,7 +5578,7 @@
             column: `app${nextCourseColumn++}`,
             applicationCurrentGrade: String(Number(grade) - 1),
             name: displayName,
-            credits: item.credit || 0,
+            credits: item.onceCredit || item.credit || 0,
             // 1·2학기에 모두 편성된 과목을 학기 없이 고른 경우는 학기를 비워 두고, 학생들의 그룹 선택 수로 학기를 정한다.
             semesterKey: String(item.semester || "").includes("·") ? "" : String(item.semester || "").match(/[12]/)?.[0] || "",
             applicationSubject: { ...item },
@@ -5569,9 +5591,12 @@
           if (semesters.length > 1) for (const semester of semesters) {
             const subject = `${item.subject} (${semester}학기)`;
             if (!entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(subject))) continue;
+            // 학기제: 학기로 나눈 줄의 학점은 그 학기 칸 값(묶음 과목·학기 칸을 못 읽은 과목은 행 학점 그대로).
+            const semesterCredit = item.semesterCredits?.[semester] || item.credit || 0;
             const semesterCourse = { ...course, column:`app${nextCourseColumn++}`,
               name: nameCount.get(item.subject)>1 ? `${subject}(${grade}학년)` : subject, semesterKey:semester,
-              applicationSubject: { ...item, subject, semester } };
+              credits: semesterCredit,
+              applicationSubject: { ...item, subject, semester, credit: semesterCredit } };
             courses.push(semesterCourse);
             courseByGradeName.set(`${grade}:${subject}`,semesterCourse);
             semesterVariants++;
