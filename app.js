@@ -1183,7 +1183,7 @@
           : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
         7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts >= 3 ? ["todo", "편제표 필요"]
           : missingCohorts ? ["todo", "일부 편제표 없음"] : ["done", "가능"],
-        8: !hasResult ? ["wait", "대기"] : roundState === "confirmed" ? ["todo", "편성 가능"] : ["todo", "시안 가능"]
+        8: !hasResult ? ["wait", "대기"] : roundState === "confirmed" ? ["done", "편성 가능"] : ["wait", "시안 가능"]
       };
     }
 

@@ -86,7 +86,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.locator("#classSectionsTeacherDialog").screenshot({ path: path.join(OUT, "04-teachers.png") });
   await page.getByRole("button", { name: "닫기" }).first().click();
   // 블록 시간 추천 → 추천안 표 → 한 칸 고치기 → 추천 적용
-  await page.getByText("블록별로 다르게 · 블록 시간(요일·교시)").click();
+  // 이미 열려 있으면(블록 시간이 있는 자료) 닫지 않는다.
+  await page.locator("details.cs-advanced").first().evaluate((el) => { el.open = true; });
   let t0 = Date.now();
   await page.getByRole("button", { name: "블록 시간 추천" }).click();
   await page.locator("#classSectionsTimesProposal").waitFor({ timeout: 60000 });

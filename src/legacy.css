@@ -2306,7 +2306,7 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-section .cs-neis { color:var(--muted); font-size:10px; }
     .cs-section .cs-size { justify-self:end; color:var(--ink); font-weight:700; white-space:nowrap; }
     .cs-section .cs-controls { display:inline-flex; align-items:center; justify-self:end; gap:6px; white-space:nowrap; }
-    .cs-section .cs-controls select { max-width:120px; }
+    .cs-section .cs-controls select { max-width:170px; min-width:96px; }
     .cs-section.is-over { border-color:#e3a497; background:#fff6f4; }
     .cs-pin { display:inline-flex; align-items:center; gap:3px; color:var(--muted); font-size:11px; }
     .cs-lookup { margin:4px 0; padding-left:18px; font-size:12px; }
