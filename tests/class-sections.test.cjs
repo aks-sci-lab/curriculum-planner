@@ -645,6 +645,12 @@ test("6차·7차 계산: 서명에서 다른 학년 점유 제외, 학생 키 �
   assert.equal(neis.rows.length, 3);
   assert.equal(neis.rows[2][5], "1(3학년 1반)");
   assert.ok(neis.warnings.some((text) => /내년 12반에 정한 과목이 없어 1명분/.test(text)));
+  // '이동'으로 정한 반은 정상: 반 배정표 확인 안내 대신 '이동 반 — 학급 단위 행 없음'
+  const neisMove = plain(ctx.classSectionsNeisExport({ sections: [], assign: {} }, { targetGrade: 3, reference: false,
+    students: [{ key: "2-1-1", classroom: "1", number: "1" }, { key: "2-1-2", classroom: "2", number: "2" }],
+    classUnit: { byClass: { "1": "일본어", "2": "" }, courses: { 일본어: { name: "일본어", credits: 2 } } } }));
+  assert.ok(neisMove.warnings.some((text) => /내년 2반은 이동 반 — 학급 단위 행 없음/.test(text)), JSON.stringify(neisMove.warnings));
+  assert.ok(!neisMove.warnings.some((text) => /반 배정표의 새 반 번호를 확인/.test(text)));
   // 같은 현 학년·학기 그룹끼리 블록 시간 겹침
   const one = { ...input, blocks: [{ id: "a", times: ["월1", "수1"] }, { id: "b", times: ["화1", "목1"] }], cohortTimes: [{ label: "2-2 택1 a블록", times: ["수1"] }] };
   const clash = plain(ctx.classSectionsSolve(one));
@@ -848,4 +854,27 @@ test("학급 단위 제안: 내년 반을 모르면 없는 반을 공짜 '이동
   assert.equal(rooms.retake, retake);
   assert.equal(rooms.mismatched, 3 * 6, "이동 반에서 지구과학을 고르지 않은 학생");
   assert.match(rooms.message, /'이동' 반 3개도 지구과학을 학급 단위로 하면\(지구과학 학급 8→11개/);
+  // 요약은 정원 탓이 아니라 재신청 대상으로 말한다
+  assert.match(after.explain.summary, /학급 단위로 바꾼 과목\(지구과학\)을 고른 '이동' 반 학생 72명은 재신청이 필요합니다/);
+  assert.doesNotMatch(after.explain.summary, /정원 \d+명·블록당 최대/);
+  // 모든 과목을 학급 단위로 하는 어림: 다른 과목 반에 가는 학생도 희망과 다름(0명이 아님)
+  const both = plain(ctx.classSectionsClassUnitTrial({ ...input, courses: [{ key: "지구과학", sections: 8 }, { key: "일본어", sections: 3 }] }, ["지구과학", "일본어"]));
+  assert.equal(both.estimated, true);
+  assert.ok(both.mismatched > 0, String(both.mismatched));
+});
+
+test("검증기: 택n보다 적게 배정됐는데 미배정·재신청(폐강) 기록이 없으면 오류, 폐강 과목은 언제나 '재신청 대상'으로 셈", () => {
+  const ctx = context();
+  const students = [];
+  for (let n = 1; n <= 40; n += 1) students.push({ key: `1-${1 + (n % 4)}-${n}`, homeroom: String(1 + (n % 4)), courses: n <= 30 ? ["A", "B"] : ["A", "C"] });
+  const base = { blocks: 2, choose: 2, defaultCapacity: 35, seed: 1, courses: [{ key: "A", sections: 2 }, { key: "B", sections: 1 }, { key: "C", sections: 0 }], students };
+  const closed = plain(ctx.classSectionsSolve(base));
+  assert.ok(!closed.issues.some((issue) => issue.type === "choice-under"), JSON.stringify(closed.issues.map((issue) => issue.message)));
+  assert.match(closed.explain.summary, /재신청 대상 10명\(폐강 과목 10건\)/);
+  // 앞 단계에서 C가 빠져 A만 남은 학생(기록 없음) → 오류
+  const dropped = { ...base, courses: base.courses.filter((course) => course.key !== "C"), students: students.map((student) => ({ ...student, courses: student.courses.filter((key) => key !== "C") })) };
+  const silent = plain(ctx.classSectionsSolve(dropped));
+  const under = silent.issues.find((issue) => issue.type === "choice-under");
+  assert.ok(under && under.severity === "error" && under.count === 10, JSON.stringify(silent.issues.map((issue) => issue.message)));
+  assert.equal(silent.explain.feasible, false);
 });

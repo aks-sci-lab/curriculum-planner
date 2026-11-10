@@ -306,6 +306,22 @@ function classSectionsTeacherList(settings) {
   }));
 }
 
+// 공통 교과(예: 과학-공통 = 통합과학·두 학기 과목)에 따로 정한 교사가 없으면 같은 교과군 세부 교과(과학-물리·화학·생명·지구) 교사를
+// 그 공통 과목의 자동 배정 후보로 넣는다(교사 명단은 담당 교과에 공통을 더하고, 시수표 교사 수는 세부 교과 합).
+function classSectionsCommonDepartmentFallback(courses, teachers, departmentTeachers) {
+  const commons = [...new Set(courses.map((course) => course.department).filter((dept) => /-공통$/.test(dept || "")))];
+  for (const dept of commons) {
+    const family = dept.replace(/공통$/, "");
+    if (teachers.length) {
+      if (teachers.some((teacher) => teacher.departments.includes(dept))) continue;
+      for (const teacher of teachers) if (teacher.departments.some((item) => item.startsWith(family))) teacher.departments.push(dept);
+    } else if (departmentTeachers && !(Number(departmentTeachers[dept]) > 0)) {
+      const sum = Object.entries(departmentTeachers).filter(([key]) => key !== dept && key.startsWith(family)).reduce((total, [, value]) => total + (Number(value) || 0), 0);
+      if (sum > 0) departmentTeachers[dept] = sum;
+    }
+  }
+}
+
 function classSectionsBuildInput(round, group, entry, extra = {}) {
   const settings = classSectionsSettings();
   const source = classSectionsSource(round);
@@ -328,6 +344,7 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
     const used = Object.entries(counts).filter(([, value]) => Number(value) > 0);
     if (used.length) departmentTeachers = Object.fromEntries(used.map(([key, value]) => [key, Number(value)]));
   }
+  classSectionsCommonDepartmentFallback(courses, teachers, departmentTeachers);
   // 같은 차수·학기의 다른 그룹(다른 학년) 결과가 차지한 교사·교과·특별실(블록 시간이 있을 때만).
   const occupied = [];
   const store = classSectionsStore()[round] || {};
@@ -583,6 +600,7 @@ async function classSectionsRecommendTimesCurrent() {
   const groups = source.groups.filter((item) => item.semester === group.semester);
   const teachers = classSectionsTeacherList(settings);
   const sample = classSectionsBuildInput(round, group, context.entry, { noOccupied: true });
+  classSectionsCommonDepartmentFallback(groups.flatMap((item) => item.courses.map((course) => ({ department: classSectionsCourseConf(settings, "courseDepartments", item.grade)[course.key] || course.department }))), teachers, null);
   const spec = {
     days: settings.gridDays.split(","), periods: settings.gridPeriods, seed: Number(context.entry.seed) || 1, reserve: { ...settings.reserve },
     teachers, departmentTeachers: sample.departmentTeachers, fixedSlots: sample.fixedSlots,
@@ -648,9 +666,17 @@ function classSectionsPreviousRoomNames(previous) {
   return Object.fromEntries((previous?.sections || []).filter((section) => section.roomName).map((section) => [section.id, section.roomName]));
 }
 
+// 결과를 만들 때의 내년 반 기준(배정표·'그대로 올라감' → 학생별 반). 바뀌면 '재계산 필요'의 이유로 알린다.
+function classSectionsHomeroomBasisKey(group) {
+  const { map, basis } = classSectionsEffectiveClassMap(group);
+  const rooms = map ? group.students.map((student) => [student.key, String(map[student.key]?.classroom || "")]) : [];
+  return typeof classSectionsHash === "function" ? classSectionsHash(classSectionsStable({ basis, rooms })) : basis;
+}
+
 function classSectionsSaveResult(entry, result, input, group, source, batch = "") {
   entry.sectionResult = classSectionsCompactResult(result, input, !source.locked);
   entry.sectionResult.batch = batch || entry.sectionResult.createdAt;
+  entry.sectionResult.homeroomRoomsKey = classSectionsHomeroomBasisKey(group);
   entry.inputStudents = Object.fromEntries(group.students.map((student) => [student.key, student.courses.slice()]));
 }
 
@@ -752,6 +778,7 @@ function renderClassSectionsView() {
     <div class="cs-badges">
       ${source.locked ? "" : '<span class="cs-badge" data-state="draft">확정 전 시안</span>'}
       ${stale ? '<span class="cs-badge" data-state="stale" id="classSectionsStale">입력 변경됨, 재계산 필요</span>' : ""}
+      ${stale && entry.sectionResult?.homeroomRoomsKey && entry.sectionResult.homeroomRoomsKey !== classSectionsHomeroomBasisKey(group) ? '<span class="cs-note is-warn" id="classSectionsStaleReason">내년 반 배정표(진급 반 편성)가 바뀌어 담임반·학급 단위 배정을 다시 계산해야 합니다.</span>' : ""}
       <span class="cs-note">${esc(teacherNote)}</span>
     </div>
     <section class="cs-card" aria-label="편성 기준">
@@ -894,6 +921,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   const esc = classSectionsEsc;
   const explain = result.explain || {};
   const teachers = classSectionsTeacherList(settings);
+  classSectionsCommonDepartmentFallback(group.courses.map((course) => ({ department: classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] || course.department })), teachers, null);
   const issues = (result.issues || []).filter((issue) => issue.type !== "unassigned");
   // 같은 문장이 여러 번 나오지 않게(블록마다 같은 억지 배치 안내 등) 문장으로 묶는다.
   const uniq = (list) => { const seen = new Set(); return list.filter((issue) => !seen.has(issue.message) && seen.add(issue.message)); };
@@ -1096,14 +1124,14 @@ function classSectionsApplySuggestion(index) {
   } else if (item.type === "class-unit") {
     // 희망과 다른 학생이 생기면 미리 묻는다(제안 문구에도 n명(%)을 보임).
     if (item.mismatched > 0 && typeof window !== "undefined" && typeof window.confirm === "function"
-      && !window.confirm(`${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 바꾸면 희망과 다른 학생이 ${item.mismatched}명(${item.total ? Math.round(item.mismatched / item.total * 100) : 0}%) 생깁니다. 적용할까요?`)) return;
+      && !window.confirm(`${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 바꾸면 희망과 다른 학생이 ${item.estimated ? "약 " : ""}${item.mismatched}명(${item.total ? Math.round(item.mismatched / item.total * 100) : 0}%) 생깁니다${item.retake ? `(그중 이동 반이라 그 과목을 못 들어 재신청이 필요한 학생 ${item.estimated ? "약 " : ""}${item.retake}명)` : ""}. 적용할까요?`)) return;
     // 블록 수는 제안을 확인할 때와 같은 규칙(모든 반이 학급 단위면 택n−1, 이동 반이 남으면 택n)을 따른다.
     const modes = classSectionsCourseConf(classSectionsSettings(), "courseModes", context.group.grade);
     for (const key of item.courseKeys || [item.courseKey]) modes[key] = "class";
   } else if (item.type === "class-unit-rooms") {
     // 이동 반까지 그 과목 학급 단위로: 학급 수 = 내년 학급 수, 손으로 '이동'으로 둔 반 지정은 지운다.
     if (item.mismatched > 0 && typeof window !== "undefined" && typeof window.confirm === "function"
-      && !window.confirm(`이동 반까지 ${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 하면 그 반에서 이 과목을 고르지 않은 학생 ${item.mismatched}명이 희망과 다르게 됩니다. 적용할까요?`)) return;
+      && !window.confirm(`이동 반까지 ${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 하면 그 반에서 이 과목을 고르지 않은 학생 ${item.mismatched}명이 희망과 다르게 됩니다(재신청이 필요한 학생 ${item.retake || 0}명은 없어짐). 적용할까요?`)) return;
     entry.classCounts[item.courseKey] = item.sections;
     if (classSectionsPlain(entry.classUnit.assign)) for (const [room, key] of Object.entries(entry.classUnit.assign)) if (!key) delete entry.classUnit.assign[room];
   } else if (item.type === "recommend-times") {
