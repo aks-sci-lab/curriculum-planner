@@ -25,6 +25,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.locator("#workspaceDataMenu summary").click();
   const nav = page.waitForEvent("load", { timeout: 30000 }).catch(() => null);
   await page.locator("#restoreWorkspaceBackup").setInputFiles(BACKUP);
+  await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 10000 }).catch(() => {}); // 백업 복원은 앱 확인 창으로 묻는다
   await nav; await sleep(2500);
   // 6단계
   await page.getByRole("button", { name: /6\. 분반 편성/ }).click();
