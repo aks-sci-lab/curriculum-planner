@@ -862,11 +862,19 @@ function courseCheckStudentReport(student, context = courseCheckContext(), { exc
       prerequisites: courseCheckPrerequisites(model, context.active, { targetGrade, selections, prior,
         ...(neis ? { priorMissing: neis.missing, priorSource: "neis", priorFields: neis.fields || null } : {}) }),
       credits: courseCheckCredits(model, { targetGrade, selections, prior, priorRecords: neis ? neis.records : null,
-        required: context.limits.required, limits: context.limits })
+        required: context.limits.required, limits: context.limits }),
+      // 같은 과목 두 학기 신청(편제표 다른 행 · 한 학기만 신청해야 함) → 재신청 필요. 판별은 app.js applicationSameCourseTwice 하나.
+      twice: !exclude && typeof applicationSameCourseTwice === "function" ? applicationSameCourseTwice(student) : []
     };
   }
   if (!exclude) context.reports.set(student, report);
   return report;
+}
+
+// 같은 과목 두 학기 신청 한 건의 글자(검증 팝업·확인서 점검란·재신청 명단이 같이 쓴다).
+function courseCheckTwiceText(item) {
+  const semesters = (item?.semesters || []).length > 1 ? `${item.semesters.join("·")}학기` : "두 학기";
+  return `같은 과목 두 학기 신청(${item?.name || ""} ${semesters}) → 재신청 필요`;
 }
 
 function courseCheckSeat(student) {
@@ -887,7 +895,7 @@ function courseCheckList(items, limit = 5) {
 
 // 학생 묶음 요약(2단계 결과 검증·대화상자·4단계 요약이 함께 쓴다).
 function courseCheckSummary(students, context = courseCheckContext()) {
-  const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], kemOver: [], byCourse: new Map(), unknownByCourse: new Map(),
+  const summary = { checked: 0, noPlan: 0, violators: [], unknowns: [], short: [], over: [], familyShort: [], kemOver: [], twice: [], byCourse: new Map(), unknownByCourse: new Map(),
     priorMissing: 0, priorAvailable: false, neis: Boolean(courseCheckNeisStore(context)), neisFound: 0, transfers: 0 };
   for (const student of students) {
     if (!courseCheckSelections(student).length) continue;
@@ -915,6 +923,7 @@ function courseCheckSummary(students, context = courseCheckContext()) {
     if (report.credits.over.length) summary.over.push({ student, report });
     if (report.credits.families.some((family) => !family.ok)) summary.familyShort.push({ student, report });
     if (report.credits.kem?.status === "over") summary.kemOver.push({ student, report });
+    if (report.twice?.length) summary.twice.push({ student, report });
   }
   return summary;
 }
@@ -960,7 +969,7 @@ function courseCheckResultIssues(students, { grade } = {}) {
       : `위계 확인 불가 학생 ${summary.unknowns.length}명(이전 학년 이수 결과가 없어 판단하지 않음 · 과목별 ${courseCheckCountText(summary.unknownByCourse)}). '위계·학점 점검'에서 이전 학년 이수 결과(나이스 수강학생 편성 엑셀 그대로)를 올리면 판단합니다.`);
   }
   if (summary.priorAvailable && summary.priorMissing) result.info.push(`${summary.neis ? "나이스 수강학생 편성 자료" : "이전 학년 이수 결과"}에서 찾지 못한 학생 ${summary.priorMissing}명은 확인 불가로 둡니다.`);
-  if (!summary.violators.length && !credit.length && !summary.familyShort.length && !summary.kemOver.length) {
+  if (!summary.violators.length && !credit.length && !summary.familyShort.length && !summary.kemOver.length && !summary.twice.length) {
     result.info.push(`위계·이수학점 점검: ${summary.checked}명 모두 이상 없음${summary.unknowns.length ? "(확인 불가 제외)" : ""}.`);
   }
   result.html = courseCheckStudentTableHtml(summary, { grade });
@@ -970,7 +979,7 @@ function courseCheckResultIssues(students, { grade } = {}) {
 function courseCheckStudentTableHtml(summary, { grade = "", limit = 400 } = {}) {
   const rows = new Map();
   const add = (item) => { if (!rows.has(item.student)) rows.set(item.student, item); };
-  [summary.violators, summary.short, summary.over, summary.familyShort, summary.kemOver, summary.unknowns].forEach((list) => list.forEach(add));
+  [summary.twice || [], summary.violators, summary.short, summary.over, summary.familyShort, summary.kemOver, summary.unknowns].forEach((list) => list.forEach(add));
   if (!rows.size) return "";
   const list = [...rows.values()].sort((a, b) => Number(a.student.classroom) - Number(b.student.classroom) || Number(a.student.number) - Number(b.student.number));
   const esc = courseCheckEscape;
@@ -980,9 +989,10 @@ function courseCheckStudentTableHtml(summary, { grade = "", limit = 400 } = {}) 
     const credits = [...report.credits.short, ...report.credits.over].map((row) => `<li class="is-credit">${esc(courseCheckSemesterText(row))}</li>`);
     const families = report.credits.families.filter((family) => !family.ok).map((family) => `<li class="is-credit">${esc(`${family.family} 필수 이수 ${family.earned}/${family.required}학점`)}</li>`);
     const kem = report.credits.kem?.status === "over" ? [`<li class="is-credit is-kem">${esc(courseCheckKemText(report.credits.kem))}</li>`] : [];
-    return `<tr><th scope="row">${esc(`현 ${student.grade}학년 ${courseCheckSeat(student)}`)}</th><td><ul>${[...issues, ...credits, ...families, ...kem].join("")}</ul></td></tr>`;
+    const twice = (report.twice || []).map((item) => `<li class="is-violation is-twice">${esc(courseCheckTwiceText(item))}</li>`);
+    return `<tr><th scope="row">${esc(`현 ${student.grade}학년 ${courseCheckSeat(student)}`)}</th><td><ul>${[...twice, ...issues, ...credits, ...families, ...kem].join("")}</ul></td></tr>`;
   }).join("");
-  return `<details class="course-check-details"${summary.violators.length ? " open" : ""}><summary>위계·이수학점 점검 학생 ${rows.size}명${grade ? ` (현 ${esc(grade)}학년 → ${Number(grade) + 1}학년 과목)` : ""} · 위계 미충족 ${summary.violators.length} · 학점 부족 ${summary.short.length} · 초과 ${summary.over.length}${summary.kemOver.length ? ` · 국수영 기준 초과 ${summary.kemOver.length}` : ""} · 확인 불가 ${summary.unknowns.length}</summary>
+  return `<details class="course-check-details"${summary.violators.length || summary.twice?.length ? " open" : ""}><summary>위계·이수학점 점검 학생 ${rows.size}명${grade ? ` (현 ${esc(grade)}학년 → ${Number(grade) + 1}학년 과목)` : ""}${summary.twice?.length ? ` · 같은 과목 두 학기 ${summary.twice.length}` : ""} · 위계 미충족 ${summary.violators.length} · 학점 부족 ${summary.short.length} · 초과 ${summary.over.length}${summary.kemOver.length ? ` · 국수영 기준 초과 ${summary.kemOver.length}` : ""} · 확인 불가 ${summary.unknowns.length}</summary>
     <div class="aggregate-sheet-wrap"><table class="course-check-table"><thead><tr><th scope="col">학생</th><th scope="col">점검 내용</th></tr></thead><tbody>${body}</tbody></table></div>
     ${list.length > limit ? `<p class="note">앞 ${limit}명만 표시했습니다.</p>` : ""}</details>`;
 }
@@ -1000,10 +1010,13 @@ function courseCheckCertificateHtml(student, context = courseCheckContext()) {
   if (credits.kem?.status === "over") notes.push(`국수영 ${credits.kem.earned}/${Math.round(credits.kem.limit * 100) / 100}학점 기준 초과`);
   const creditNote = notes.length ? ` — ${notes.join(", ")}` : "";
   const { violations, unknowns } = report.prerequisites;
-  const prereq = violations.length
+  // 같은 과목 두 학기 신청은 위계 점검 줄 앞에 붙인다(줄 수가 늘지 않게 · 인쇄 1장 유지).
+  const twice = (report.twice || []).map(courseCheckTwiceText).join(", ");
+  const prereqText = violations.length
     ? `확인 필요 — ${violations.map((issue) => `${issue.course}: ${issue.requires} ${issue.reason === "same" ? "같은 학기 선택" : issue.reason === "missing" ? "미이수" : "뒤 학기"}`).join(", ")}`
     : unknowns.length ? `이상 없음(이전 학년 이수 확인 필요: ${[...new Set(unknowns.map((issue) => issue.course))].join(", ")})` : "이상 없음";
-  return `<div class="paper-checks${violations.length || creditNote ? " has-issue" : ""}"><p><b>이수 학점</b> ${esc(`학기별 ${semesters} · ${cumulative}${creditNote}`)}</p><p><b>위계 점검</b> ${esc(prereq)}</p></div>`;
+  const prereq = twice ? `${twice} · ${prereqText}` : prereqText;
+  return `<div class="paper-checks${violations.length || creditNote || twice ? " has-issue" : ""}"><p><b>이수 학점</b> ${esc(`학기별 ${semesters} · ${cumulative}${creditNote}`)}</p><p><b>위계 점검</b> ${esc(prereq)}</p></div>`;
 }
 
 // 4단계 재신청 대상자 엑셀의 '폐강 후 부족 학점'.

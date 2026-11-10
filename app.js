@@ -3876,6 +3876,42 @@
       return selections.some(separate) ? selections.filter((course) => !separate(course)) : selections;
     }
 
+    // 같은 과목 한 학기만(sameCourseOnce): 편제표의 서로 다른 행(예: 3-1 택5·3-2 택5)에 같은 과목이 있으면 한 학기에만 신청한다.
+    // 한 행이 1·2학기에 걸친 과목은 대상이 아니다(collectApplicationSubjects가 표시). 웹 화면·서버는 이미 두 학기 중복을 막으므로
+    // 이 검사는 외부 결과(엑셀·구글폼·오프라인 파일)에 남은 경우를 찾는다. 웹 결과(online)는 서버 과목 목록의 표시만 본다.
+    function applicationOnceNames(currentGrade) {
+      const grade = String(currentGrade ?? "");
+      if (!["1", "2"].includes(grade) || typeof collectApplicationSubjects !== "function") return null;
+      const schoolYear = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+      const compute = () => {
+        let subjects = null;
+        try { subjects = collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }); } catch { subjects = null; }
+        const names = new Set((subjects?.[String(Number(grade) + 1)] || []).filter((item) => item.sameCourseOnce)
+          .map((item) => applicationSeparateKey(item.subject)));
+        return names.size ? names : null;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("applicationOnceNames", `${grade}|${schoolYear}`, compute) : compute();
+    }
+
+    // 학생이 같은 과목을 두 학기에 신청했으면 [{ name, semesters }]를, 아니면 빈 배열을 돌려준다.
+    function applicationSameCourseTwice(student, names) {
+      const list = names === undefined ? applicationOnceNames(student?.grade) : names;
+      const picked = new Map();
+      for (const course of applicationSelections(student)) {
+        const once = Boolean(course?.applicationSubject?.sameCourseOnce) ||
+          (course?.applicationGroupSource !== "online" && Boolean(list?.has(applicationSeparateKey(course?.name))));
+        if (!once) continue;
+        const key = applicationSeparateKey(course.name);
+        if (!picked.has(key)) picked.set(key, { name: String(course.applicationSubject?.subject || course.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, "").trim(), semesters: [], count: 0 });
+        const entry = picked.get(key);
+        entry.count++;
+        const semester = String(course.semesterKey || String(course.name).match(/([12])\s*학기/)?.[1] || "");
+        if (semester && !entry.semesters.includes(semester)) entry.semesters.push(semester);
+      }
+      return [...picked.values()].filter((entry) => entry.count > 1)
+        .map(({ name, semesters }) => ({ name, semesters: semesters.sort() }));
+    }
+
     // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
     // 두 학기에 나눠 신청받은 과목은 학기를 구분해야 하므로(같은 이름 두 행) '(1학기)' 하나만 남기고 과목 구분(융합 등)은 뺀다.
     function aggregateCourseDisplayName(subject, semesterKey) {
@@ -4805,8 +4841,10 @@
           if (grade && String(student.grade) !== String(grade)) continue;
           const closedCourses = student.selections.filter((selection) =>
             closedKeys.has(`${student.grade}:${selection.name}`));
-          if (closedCourses.length) {
-            rows.push({ student, courses: closedCourses.map((selection) => selection.name) });
+          // 같은 과목을 두 학기에 신청한 학생(외부 결과)도 재신청 대상이다.
+          const twice = typeof applicationSameCourseTwice === "function" ? applicationSameCourseTwice(student) : [];
+          if (closedCourses.length || twice.length) {
+            rows.push({ student, courses: closedCourses.map((selection) => selection.name), twice });
           }
         }
       }
@@ -4837,7 +4875,7 @@
       $("#retakePanel h2").textContent = `${nextRound}차 수강신청 대상자${grade ? `(현 ${grade}학년)` : ""}`;
       const summaryCount = $("#retakeSummaryCount");
       if (summaryCount) {
-        summaryCount.textContent = !data ? "결과 없음" : closedCount ? `대상 ${rows.length}명 · 폐강 ${closedCount}과목` : "폐강 과목 없음";
+        summaryCount.textContent = !data ? "결과 없음" : closedCount ? `대상 ${rows.length}명 · 폐강 ${closedCount}과목` : rows.length ? `대상 ${rows.length}명 · 같은 과목 두 학기 신청` : "폐강 과목 없음";
         summaryCount.dataset.state = rows.length ? "alert" : "";
       }
       $("#retakeNextRoundNote").textContent = `${nextRound}차 결과는 2단계에서 차수를 추가한 뒤 불러오세요.`;
@@ -4848,18 +4886,22 @@
         content.innerHTML = "";
         return;
       }
-      if (!closedCount) {
+      if (!closedCount && !rows.length) {
         description.textContent = `${scopeLabel}폐강으로 정한 과목이 없습니다. 위 집계표의 과목명을 눌러 개설/폐강을 정하세요.`;
         content.innerHTML = "";
         return;
       }
-      description.textContent = `${scopeLabel}${sourceRound}차 결과 기준 · 폐강 확정 과목을 신청한 학생 ${rows.length}명`;
+      const twiceCount = rows.filter((row) => row.twice?.length).length;
+      description.textContent = `${scopeLabel}${sourceRound}차 결과 기준 · ${closedCount ? "폐강 확정 과목을 신청한 학생" : "재신청 대상 학생"} ${rows.length}명${twiceCount ? ` (같은 과목 두 학기 신청 ${twiceCount}명 포함)` : ""}`;
+      const twiceText = (row) => (row.twice || []).map((item) => typeof courseCheckTwiceText === "function" ? courseCheckTwiceText(item) : `같은 과목 두 학기 신청(${item.name})`).join(", ");
       // 위계 경고(폐강 후): 폐강 과목을 뺀 나머지 신청으로 다시 점검한다(폐강된 선이수 과목 때문에 새로 생긴 경고도 보인다).
       const prereqText = (student, courses) => typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : "";
-      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th><th>위계 경고(폐강 후)</th></tr></thead><tbody>${
-        rows.map(({ student, courses }) => {
+      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th><th>위계 경고(폐강 후)</th>${twiceCount ? "<th>같은 과목 두 학기 신청</th>" : ""}</tr></thead><tbody>${
+        rows.map((row) => {
+          const { student, courses } = row;
           const warning = prereqText(student, courses);
-          return `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td><td class="retake-prereq${warning ? " has-issue" : ""}">${warning ? `⚠ ${escapeHtml(warning)}` : ""}</td></tr>`;
+          const twiceCell = twiceCount ? `<td class="retake-prereq${row.twice?.length ? " has-issue" : ""}">${row.twice?.length ? `⚠ ${escapeHtml(twiceText(row))}` : ""}</td>` : "";
+          return `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td><td class="retake-prereq${warning ? " has-issue" : ""}">${warning ? `⚠ ${escapeHtml(warning)}` : ""}</td>${twiceCell}</tr>`;
         }).join("")
       }</tbody></table>`;
     }
@@ -4872,15 +4914,16 @@
       const nextRound = String(Number(sourceRound) + 1);
       const gradeSuffix = grade ? `현${grade}학년` : "";
       const sheetRows = [
-        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점", "위계 경고(폐강 후)"],
-        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", "),
+        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점", "위계 경고(폐강 후)", ...(rows.some((row) => row.twice?.length) ? ["같은 과목 두 학기 신청"] : [])],
+        ...rows.map(({ student, courses, twice = [] }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", "),
           typeof courseCheckRetakeShortfall === "function" ? courseCheckRetakeShortfall(student, courses) : "",
-          typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : ""])
+          typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : "",
+          ...(rows.some((row) => row.twice?.length) ? [twice.map((item) => typeof courseCheckTwiceText === "function" ? courseCheckTwiceText(item) : item.name).join(", ")] : [])])
       ];
       const rowsXml = sheetRows.map((cells, rowIndex) =>
         `<row r="${rowIndex + 1}">${cells.map((value, column) =>
           `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`).join("")}</row>`).join("");
-      const columns = [8, 8, 8, 12, 10, 40, 28, 44].map((width, index) =>
+      const columns = [8, 8, 8, 12, 10, 40, 28, 44, 44].slice(0, sheetRows[0].length).map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
       const workbook = createXlsxBlob({
@@ -5214,6 +5257,9 @@
       }
       // 교차집중 과목은 학생이 고르는 과목이 아니라 학급마다 학기를 엇갈려 이수하므로 선택 그룹·신청 과목에서 뺀다.
       const crossRows = new Set((layout.planData?.subjects || []).filter((item) => !item.fixed && item.cross?.length).map((item) => item.row));
+      // 같은 과목이 편제표의 서로 다른 행(예: 3-1 택5 행과 3-2 택5 행)에 있으면 학생은 한 학기에만 신청한다(sameCourseOnce).
+      // 한 행이 1·2학기에 걸친 과목(한 과목을 두 학기에 듣는 것)은 대상이 아니다.
+      const planRowsByKey = new Map();
       // 소인수·공동교육과정은 따로 신청한다(이 앱의 신청 과목이 아님). 판별 기준은 curriculumSeparateApplicationRows 하나,
       // 편제표 데이터가 없는 예전 표만 행 글자로 판별한다. includeExcluded면 결과 취합에서 알아보고 빼도록 separate 표시를 붙여 넣는다.
       const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
@@ -5292,6 +5338,8 @@
               return assignment ? [[semester, assignment]] : [];
             }));
             const existing = seen.get(key);
+            if (!planRowsByKey.has(key)) planRowsByKey.set(key, new Set());
+            planRowsByKey.get(key).add(context.rowIndex);
             if (existing) {
               existing.semester = [...new Set([...existing.semester.split("·"), ...info.semesters])]
                 .filter(Boolean).sort().join("·");
@@ -5316,6 +5364,9 @@
             result[String(grade)].push(item);
           }
         }
+      }
+      for (const [key, item] of seen) {
+        if ((planRowsByKey.get(key)?.size || 0) > 1 && String(item.semester).split("·").filter(Boolean).length > 1) item.sameCourseOnce = true;
       }
       return result;
     }
@@ -5447,7 +5498,7 @@
         "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
         "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
         "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
-        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
+        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.sameCourseOnce?'1·2학기 중 한 학기만 · ':'')+(c.credit?c.credit+'학점':'')+'</span></label>';});",
         "});});",
         "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
         "updateSummary();",
@@ -5983,7 +6034,7 @@
       persistState();
     }
 
-    function applyMergedApplications(entries, sourceLabel) {
+    function applyMergedApplications(entries, sourceLabel, { confirmedTwice = false } = {}) {
       if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
         status.style.color = "#a44939";
         status.textContent = `${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 불러오세요.`;
@@ -5993,6 +6044,20 @@
       if (!merged.students.length) {
         status.style.color = "#a44939";
         status.textContent = `명단을 만들지 못했습니다. ${merged.errors[0] || ""}`;
+        return;
+      }
+      // 같은 과목 두 학기 신청(편제표 다른 행): 자료는 버리지 않고 앱 확인 창으로 한 번 더 묻는다.
+      const twice = typeof applicationSameCourseTwice !== "function" ? [] : merged.students.map((student) => ({ student, items: applicationSameCourseTwice(student) })).filter((entry) => entry.items.length);
+      if (twice.length && !confirmedTwice) {
+        const list = twice.slice(0, 8).map(({ student, items }) => `${student.grade}-${student.classroom}-${student.number} ${student.name}(${items.map((item) => item.name).join(", ")})`).join(", ");
+        const text = `같은 과목을 두 학기에 신청한 학생 ${twice.length}명: ${list}${twice.length > 8 ? " 등" : ""}.\n같은 과목은 한 학기에만 신청합니다. 반영하면 이 학생들은 재신청 대상으로 표시됩니다.\n\n그대로 반영할까요? (자료는 버리지 않습니다.)`;
+        // 앱 확인 창은 비동기라, 반영하기로 하면 확인을 건너뛰고 다시 부른다(함수는 동기로 둔다 · 테스트가 함수 이름으로 자름).
+        const ask = typeof appConfirm === "function" ? appConfirm(text, { title: "오류가 있는 결과 반영", ok: "반영", cancel: "취소" }) : Promise.resolve(window.confirm(text));
+        ask.then((ok) => {
+          if (ok) { applyMergedApplications(entries, sourceLabel, { confirmedTwice: true }); return; }
+          status.style.color = "#a44939";
+          status.textContent = `같은 과목을 두 학기에 신청한 학생 ${twice.length}명이 있어 반영하지 않았습니다.`;
+        });
         return;
       }
       const unclassified = classifyApplicationRecords(merged);
@@ -6022,6 +6087,7 @@
       status.style.color = merged.errors.length ? "#a44939" : "#287956";
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
         (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
+        (twice.length ? ` 같은 과목 두 학기 신청 ${twice.length}명(재신청 필요).` : "") +
         (merged.separated?.length ? ` 소인수·공동교육과정 ${merged.separated.length}과목(${merged.separated.join(", ")})은 따로 신청하므로 뺐습니다.` : "") +
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${typeof describeUnclassifiedCourses === "function" ? describeUnclassifiedCourses(unclassified) : unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }

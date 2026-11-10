@@ -367,3 +367,20 @@ test("separate (소인수·공동) selections left in older results are not chec
   assert.equal(jin.selections.some((course) => course.name === "미적분Ⅱ"), true, "저장 자료는 그대로");
   assert.doesNotMatch(ctx.courseCheckCertificateHtml(jin), /미적분Ⅱ/);
 });
+
+test("same course in two semesters shows in the check table and the certificate check line as '재신청 필요'", () => {
+  const ctx = checksContext();
+  ctx.applicationSameCourseTwice = (student) => student.name === "가나다" ? [{ name: "물리학", semesters: ["1", "2"] }] : [];
+  const student = ctx.state.students[1];
+  const report = ctx.courseCheckStudentReport(student);
+  assert.deepEqual(plain(report.twice), [{ name: "물리학", semesters: ["1", "2"] }]);
+  const summary = ctx.courseCheckSummary(ctx.state.students);
+  assert.equal(summary.twice.length, 1);
+  const table = ctx.courseCheckStudentTableHtml(summary, { grade: "1" });
+  assert.match(table, /같은 과목 두 학기 1/);
+  assert.match(table, /<li class="is-violation is-twice">같은 과목 두 학기 신청\(물리학 1·2학기\) → 재신청 필요<\/li>/);
+  const paper = ctx.courseCheckCertificateHtml(student);
+  assert.match(paper, /paper-checks has-issue/);
+  assert.match(paper, /<b>위계 점검<\/b> 같은 과목 두 학기 신청\(물리학 1·2학기\) → 재신청 필요 · /);
+  assert.equal((paper.match(/<p>/g) || []).length, 2, "점검란은 두 줄 그대로(인쇄 1장)");
+});
