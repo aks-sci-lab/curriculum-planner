@@ -642,3 +642,205 @@ test("담임반 현황 명단: 명렬만 / 배정표만 / 둘 다 / 둘 다 없�
   ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
   ctx.CLASS_SECTIONS_PRINT_VIEW.attPick = "";
 });
+
+// ---- 담임용 두 장 인쇄 · 학생 배부용 쪽지 ----
+// 합성 담임반: 학생 n명, 블록 열 k개(칸 = '과목 강의실\n교실 · 교사'), 재신청 학생 retake명.
+function syntheticHomeroom(n, k, { retake = 0, unit = false, basis = "map" } = {}) {
+  const columns = Array.from({ length: k }, (_, i) => ({ key: `g|${i}`, groupKey: "g", groupCategory: "2-1 택3", blockLetter: String.fromCharCode(65 + i), times: ["월:1", "수:3"], order: 0 }));
+  const students = Array.from({ length: n }, (_, i) => ({ key: `1-3-${i + 1}`, number: String(i + 1), name: `가명${i + 1}`, unsubmitted: false,
+    unit: unit && i === 0 ? ["정보"] : [], retake: i < retake ? [{ courseName: "화학", reason: "정원 부족" }] : [],
+    cells: Object.fromEntries(columns.map((col, c) => [col.key, { courseName: `과목${c}물리`, roomName: `${col.blockLetter}과목${c}물리1`, roomLabel: "2학년 3반", teacher: "김교사" }])) }));
+  return { id: `1|next|3`, year: "2027", semester: "1", grade: "1", targetGrade: "2", room: "3", basis, label: "내년 2학년 3반", students, columns, sections: [], unsubmitted: 0, rosterBasis: "명렬 기준" };
+}
+
+test("담임용 이동수업 현황: 31명 → 두 장(16 + 15), 쪽마다 제목·부제·머리글 반복 + 1/2·2/2, 적으면 한 장, 블록 열이 많으면 최대 세 장", () => {
+  const homeroom = syntheticHomeroom(31, 4);
+  const plan = pr.classSectionsHomeroomStatusPlan(homeroom);
+  assert.equal(plan.pages, 2);
+  assert.deepEqual(plan.parts.map((part) => part.to - part.from), [16, 15]);
+  assert.equal(plan.fontPt, 9);
+  const pages = pr.classSectionsHomeroomStatusPages(homeroom);
+  assert.deepEqual(pages.map((sheet) => sheet.pageLabel), ["1/2", "2/2"]);
+  for (const sheet of pages) {
+    assert.equal(sheet.rows[0][0].v, "내년 2학년 3반 이동수업 현황", "제목 반복");
+    assert.match(sheet.rows[1][0].v, /학생 31명/, "부제 반복(반 전체 인원)");
+    assert.equal(sheet.rows[sheet.headerRow - 1][0].v, "번호", "머리글 반복");
+    assert.equal(sheet.orientation, "landscape");
+  }
+  assert.deepEqual(pages.map((sheet) => sheet.rows.length - sheet.headerRow), [16, 15]);
+  assert.deepEqual(plain(pages.flatMap((sheet) => sheet.studentKeys)), homeroom.students.map((student) => student.key), "번호순으로 빠짐없이");
+  assert.equal(pages[1].rows[pages[1].headerRow][0].v, 17, "둘째 쪽은 17번부터");
+  // 엑셀: 나누지 않은 시트 하나 + 같은 자리 수동 쪽 나눔 + 배율 90% 이상(10pt 글자 → 9pt 이상) + 머리글 반복 + 쪽 번호
+  const sheet = pr.classSectionsHomeroomStatusSheet(homeroom);
+  assert.equal(sheet.rows.length - sheet.headerRow, 31);
+  assert.deepEqual(plain(sheet.rowBreaks), [sheet.headerRow + 16]);
+  assert.ok(sheet.scale >= 90 && sheet.scale <= 100, `scale ${sheet.scale}`);
+  assert.equal(sheet.printTitles, `$1:$${sheet.headerRow}`);
+  assert.equal(sheet.headerText, "&R&P/&N");
+  assert.equal(sheet.printPlan.overflow, false);
+  // 한 쪽에 들어가는 높이(어림, pt): 제목·부제·머리글 + 학생 줄
+  const C = pr.CLASS_SECTIONS_HR_PRINT || vm.runInNewContext(`${printSource}; CLASS_SECTIONS_HR_PRINT`, { console });
+  const used = plan.headerPt + homeroom.students.slice(0, 16).length * (plan.maxLines * C.linePt + C.padPt);
+  assert.ok(used <= C.pagePt, `첫 쪽 높이 ${used}pt ≤ ${C.pagePt}`);
+  // 적으면 한 장
+  const small = pr.classSectionsHomeroomStatusPages(syntheticHomeroom(14, 4));
+  assert.deepEqual(small.map((item) => item.pageLabel), ["1/1"]);
+  assert.deepEqual(plain(pr.classSectionsHomeroomStatusSheet(syntheticHomeroom(14, 4)).rowBreaks), []);
+  // 블록 열 6개(택5 등): 칸이 접혀 줄이 늘면 세 장까지, 쪽마다 한 쪽 줄 수 이하, 글자는 그대로 9pt
+  const wide = pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(31, 6));
+  assert.ok(wide.maxLines > 2, `접힘 ${wide.maxLines}줄`);
+  assert.equal(wide.pages, 3);
+  assert.equal(wide.overflow, false);
+  assert.ok(wide.parts.every((part) => part.to - part.from <= wide.rowsPerPage));
+  // 블록 열 10개: 세 장으로도 안 되면 글자를 줄이지 않고 더 나눈 뒤 overflow로 알림
+  const huge = pr.classSectionsHomeroomStatusPlan(syntheticHomeroom(31, 10));
+  assert.equal(huge.overflow, true);
+  assert.ok(huge.pages > 3 && huge.parts.every((part) => part.to - part.from <= huge.rowsPerPage));
+});
+
+test("담임용 현황: 빈 열(학급 단위·재신청)은 그 반에 값이 없으면 좁게, 있으면 원래 폭 · 인쇄 글자 9pt(12px) 이상", () => {
+  const empty = pr.classSectionsHomeroomStatusLayout(syntheticHomeroom(10, 3));
+  assert.deepEqual(plain(empty.widths.slice(-2)), [6.5, 6.5]);
+  assert.deepEqual(plain(empty.head.slice(-2)), ["학급\n단위", "재신청\n미배정"]);
+  const full = pr.classSectionsHomeroomStatusLayout(syntheticHomeroom(10, 3, { retake: 1, unit: true }));
+  assert.deepEqual(plain(full.widths.slice(-2)), [10, 16]);
+  assert.deepEqual(plain(full.head.slice(-2)), ["학급 단위", "재신청·미배정"]);
+  // 인쇄 CSS: 현황 칸 12px(=9pt), 부제 12px
+  const css = fs.readFileSync(path.join(root, "src", "legacy.css"), "utf8");
+  const rule = css.match(/\.print-page\.cs-hr-page \.cs-att-table \{[^}]*\}/)?.[0] || "";
+  const px = Number(rule.match(/font-size:\s*([\d.]+)px/)?.[1]);
+  assert.ok(px >= 12, `현황 인쇄 글자 ${px}px`);
+  assert.doesNotMatch(css.match(/@media print \{[^@]*cs-hr-page[^@]*\}/)?.[0] || "", /font-size:\s*(7|8|9|10|11)(\.\d+)?px/);
+});
+
+test("createWorkbookBlob: scale이 있으면 쪽 맞춤 대신 배율 + 수동 쪽 나눔(rowBreaks) + 머리글(쪽 번호), 없으면 예전과 같음", () => {
+  const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const start = app.indexOf("    function createWorkbookBlob(");
+  const source = app.slice(start, app.indexOf("    function downloadBlob(", start));
+  const ctx = vm.createContext({ createXlsxBlob: (files) => files, createReportStylesXml: () => "REPORT",
+    xmlEscape: (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+    columnName: (index) => String.fromCharCode(65 + index) });
+  vm.runInContext(`${source}; this.createWorkbookBlob = createWorkbookBlob;`, ctx);
+  const files = ctx.createWorkbookBlob([{ name: "2-3반", rows: [["x"]], scale: 92, rowBreaks: [20], headerText: "&R&P/&N", orientation: "landscape" }, { name: "plain", rows: [["y"]], fitToHeight: 1 }]);
+  const xml = files["xl/worksheets/sheet1.xml"];
+  assert.match(xml, /<pageSetup paperSize="9" orientation="landscape" scale="92"\/><headerFooter><oddHeader>&amp;R&amp;P\/&amp;N<\/oddHeader><\/headerFooter><rowBreaks count="1" manualBreakCount="1"><brk id="20" max="16383" man="1"\/><\/rowBreaks><\/worksheet>$/);
+  assert.doesNotMatch(xml, /fitToPage/);
+  assert.match(files["xl/worksheets/sheet2.xml"], /<sheetPr><pageSetUpPr fitToPage="1"\/><\/sheetPr>.*fitToWidth="1" fitToHeight="1"\/><\/worksheet>$/);
+});
+
+// 두 학기 담임반(같은 반 id): 1학기 블록 2개 + 학급 단위, 2학기 블록 1개 + 재신청, 미제출 학생, 내년 반 미정 반.
+function handoutSemesters() {
+  const columns1 = [{ key: "g1|a", groupKey: "g1", groupCategory: "2-1 택2", blockLetter: "A", times: ["월:3", "수:5"], order: 0 }, { key: "g1|b", groupKey: "g1", groupCategory: "2-1 택2", blockLetter: "B", times: ["화:1"], order: 0 }];
+  const columns2 = [{ key: "g2|a", groupKey: "g2", groupCategory: "2-2 택1", blockLetter: "A", times: [], order: 0 }];
+  const cell = (courseName, roomName) => ({ courseName, roomName, roomLabel: "2학년 1반", teacher: "김교사" });
+  const base = { id: "1|next|1", year: "2027", grade: "1", targetGrade: "2", room: "1", basis: "map", label: "내년 2학년 1반", sections: [] };
+  const s1 = { ...base, semester: "1", columns: columns1, students: [
+    { key: "1-1-11", number: "3", name: "가명가", unsubmitted: false, unit: ["정보"], retake: [], cells: { "g1|a": cell("물리학", "A물리학1"), "g1|b": cell("화학", "B화학") } },
+    { key: "1-2-4", number: "1", name: "가명나", unsubmitted: true, unit: [], retake: [], cells: {} }] };
+  const s2 = { ...base, semester: "2", columns: columns2, students: [
+    { key: "1-1-11", number: "3", name: "가명가", unsubmitted: false, unit: [], retake: [{ courseName: "지구과학", reason: "정원 부족" }], cells: { "g2|a": cell("생명과학", "A생명과학") } },
+    { key: "1-2-4", number: "1", name: "가명나", unsubmitted: true, unit: [], retake: [], cells: {} }] };
+  return [{ semester: "1", homeroom: s1 }, { semester: "2", homeroom: s2 }];
+}
+
+test("학생 배부용 쪽지: 1·2학기 한 쪽지, 표(학기·블록·과목·강의실·교실·선생님), 학급 단위 한 줄, 재신청 굵게, 미제출 안내, 내년 반 미정", () => {
+  const slips = pr.classSectionsHandoutSlips(handoutSemesters());
+  assert.deepEqual(slips.map((slip) => slip.key), ["1-1-11", "1-2-4"], "현 반·번호순");
+  const [a, b] = slips;
+  assert.equal(a.who, "현 1학년 1반 11번 가명가");
+  assert.equal(a.next, "내년 2학년 1반 3번");
+  assert.deepEqual(plain(a.semesters), ["1", "2"]);
+  assert.deepEqual(a.rows.map((row) => [row.semester, row.kind, row.courseName]), [["1", "section", "물리학"], ["1", "section", "화학"], ["1", "unit", "정보"], ["2", "section", "생명과학"], ["2", "retake", "지구과학"]]);
+  assert.equal(a.rows[0].block, "A블록 · 월3, 수5");
+  assert.equal(a.rows[3].block, "A블록 · 시간 미정");
+  const html = pr.classSectionsHandoutHtml(a);
+  assert.match(html, /<h4>2027학년도 이동수업 안내<\/h4>/);
+  assert.match(html, /현 1학년 1반 11번 가명가 → 내년 2학년 1반 3번/);
+  assert.match(html, /<th>학기<\/th><th>블록\(요일·교시\)<\/th><th>과목<\/th><th>강의실<\/th><th>교실<\/th><th>선생님<\/th>/);
+  assert.match(html, /rowspan="3">1학기<\/th><td>A블록 · 월3, 수5<\/td><td>물리학<\/td><td>A물리학1<\/td><td>2학년 1반<\/td><td>김교사<\/td>/);
+  assert.match(html, /<td>정보<\/td><td colspan="3">학급 단위\(우리 반 교실\)<\/td>/);
+  assert.match(html, /<td>지구과학<\/td><td colspan="3"><strong>재신청 필요\(정원 부족\)<\/strong><\/td>/);
+  assert.match(html, /교실·시간은 바뀔 수 있습니다\. 바뀌면 다시 안내합니다\./);
+  assert.equal(b.unsubmitted, true);
+  assert.match(pr.classSectionsHandoutHtml(b), /수강신청 미제출 — 담임 선생님께 확인하세요/);
+  assert.doesNotMatch(pr.classSectionsHandoutHtml(b), /<table/);
+  // 내년 반 미정(현재 반 기준) · 그대로 올라감(번호 모름)
+  const none = handoutSemesters().map((item) => ({ ...item, homeroom: { ...item.homeroom, basis: "none", label: "현 1학년 1반" } }));
+  assert.equal(pr.classSectionsHandoutSlips(none)[0].next, "내년 반 미정");
+  const same = handoutSemesters().map((item) => ({ ...item, homeroom: { ...item.homeroom, basis: "same", students: item.homeroom.students.map((s) => ({ ...s, number: "" })) } }));
+  assert.equal(pr.classSectionsHandoutSlips(same)[0].next, "내년 2학년 1반");
+  // 한 학기만 있으면 그 학기만
+  assert.deepEqual(plain(pr.classSectionsHandoutSlips([handoutSemesters()[0]])[0].semesters), ["1"]);
+});
+
+test("학생 배부용 쪽지 배치: 한 장에 2·4·6장(기본 4), 장 수 = ceil(학생/장당), 글자 8pt 이상, 6장에 너무 길면 막고 안내", () => {
+  const [slip] = pr.classSectionsHandoutSlips(handoutSemesters());
+  const many = Array.from({ length: 31 }, (_, i) => ({ ...slip, key: `1-1-${i + 1}` }));
+  for (const per of [2, 4, 6]) {
+    const layout = pr.classSectionsHandoutLayout(many, per);
+    assert.equal(layout.per, per);
+    assert.equal(layout.ok, true, `${per}장`);
+    assert.ok(layout.fontPt >= 8, `${per}장 글자 ${layout.fontPt}pt`);
+    assert.ok(pr.classSectionsHandoutHeight(slip, layout.fontPt, layout.slipW) <= layout.slipH);
+    const pages = pr.classSectionsHandoutPagesHtml(many, layout);
+    assert.equal(pages.length, Math.ceil(31 / per));
+    assert.equal((pages[0].match(/<article class="cs-ho/g) || []).length, per);
+    assert.match(pages[0], new RegExp(`data-per="${per}"`));
+  }
+  assert.equal(pr.classSectionsHandoutLayout(many, 3).per, 4, "기본 4장");
+  assert.ok(pr.classSectionsHandoutLayout(many, 2).fontPt > pr.classSectionsHandoutLayout(many, 6).fontPt, "장 수가 적을수록 글자가 큼");
+  // 긴 쪽지(10줄): 6장이면 8pt 아래 → 막음 + 안내, 2장은 됨
+  const long = { ...slip, rows: Array.from({ length: 10 }, (_, i) => ({ ...slip.rows[0], semester: i < 5 ? "1" : "2", courseName: `인공지능 기초와 활용 심화${i}`, roomName: `A인공지능기초와활용심화${i}` })) };
+  const blocked = pr.classSectionsHandoutLayout([long], 6);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.message, /한 장에 6장이면 가장 긴 쪽지\(10줄\)의 글자가 8pt보다 작아집니다\. 4장이나 2장을 고르세요\./);
+  assert.equal(pr.classSectionsHandoutLayout([long], 2).ok, true);
+  // 브라우저에서 잰 높이(measure)가 있으면 어림 대신 그 값: 1열(182mm 폭) pt×7mm, 2열(91mm 폭) pt×12mm → 1열 9pt(9×7+1 ≤ 67) vs 2열 10.5pt(≤ 134) → 2열
+  const measured = pr.classSectionsHandoutLayout(many, 4, { measure: (item, pt, width) => (width > 100 ? pt * 7 : pt * 12) });
+  assert.deepEqual([measured.cols, measured.fontPt, measured.ok], [2, 10.5, true]);
+  const tight = pr.classSectionsHandoutLayout(many, 6, { measure: (item, pt) => pt * 12 });
+  assert.equal(tight.ok, false, "6장: 잰 높이로도 8pt 아래면 막음");
+});
+
+test("화면 연결: 담임반 보기에 학생 배부용 단추·미리 보기(첫 학생 / 학생 찾기) · 인쇄 = 학생 수/4장, 두 학기 함께, 6장 막힘", () => {
+  const ctx = context({ twoSemesters: true });
+  const source = ctx.classSectionsSource("1");
+  assert.equal(source.groups.length, 2);
+  let first = null;
+  for (const group of source.groups) {
+    const entry = ctx.classSectionsEntry("1", group.key);
+    entry.blockTimes.a = "월1,수2"; entry.blockTimes.b = "화1,목2";
+    ctx.classSectionsSettings().promotion["1"] = "same";
+    const input = ctx.classSectionsBuildInput("1", group, entry);
+    ctx.classSectionsSaveResult(entry, ctx.classSectionsSolve({ ...input, maxSectionsPerBlock: 4 }), input, group, { locked: true });
+    first = first || { group, entry };
+  }
+  ctx.CLASS_SECTIONS_VIEW.round = "1";
+  ctx.CLASS_SECTIONS_VIEW.group = first.group.key;
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "homeroom";
+  const html = ctx.classSectionsPrintButtonsHtml("1", first.group, first.entry.sectionResult);
+  for (const id of ["classSectionsHandout", "classSectionsHandoutPer", "classSectionsHandoutPrintOne", "classSectionsHandoutPrintGrade", "classSectionsHandoutPreview"]) assert.match(html, new RegExp(`id="${id}"`), id);
+  const preview = html.match(/<div class="cs-ho-preview" id="classSectionsHandoutPreview" data-student="([^"]+)">/);
+  assert.equal(preview[1], "1-1-1", "이 반 첫 학생");
+  assert.match(html, /1학기<\/th>/);
+  assert.match(html, /2학기<\/th>/);
+  ctx.CLASS_SECTIONS_VIEW.search = "1-1-7";
+  assert.match(ctx.classSectionsPrintButtonsHtml("1", first.group, first.entry.sectionResult), /id="classSectionsHandoutPreview" data-student="1-1-7"/);
+  ctx.CLASS_SECTIONS_VIEW.search = "";
+  const printBatch = { innerHTML: "" };
+  ctx.document = { getElementById: (id) => (id === "printBatch" ? printBatch : null) };
+  const statuses = [];
+  ctx.classSectionsSetStatus = (text, error) => statuses.push({ text, error });
+  ctx.classSectionsHandoutPrint("one");
+  assert.equal((printBatch.innerHTML.match(/class="print-page cs-ho-page"/g) || []).length, Math.ceil(10 / 4));
+  assert.equal((printBatch.innerHTML.match(/<article class="cs-ho/g) || []).length, 10, "반 학생 10명");
+  ctx.classSectionsHandoutPrint("grade");
+  assert.equal((printBatch.innerHTML.match(/<article class="cs-ho/g) || []).length, 40, "학년 4개 반");
+  assert.match(statuses.at(-1).text, /반 4개 · 40명\(10장, 한 장에 4장/);
+  // 성명은 저장하지 않음(쪽지는 인쇄에만)
+  assert.doesNotMatch(JSON.stringify(ctx.state.classSections || {}), /가명/);
+  // 담임용 이 반 인쇄: 쪽 번호 표시
+  ctx.classSectionsHomeroomPrint("one");
+  assert.match(printBatch.innerHTML, /<div class="cs-hr-pageno">1\/1<\/div>/);
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
+});

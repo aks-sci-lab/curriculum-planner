@@ -837,7 +837,7 @@ function courseCheckNeisFor(student, context = courseCheckContext()) {
 }
 
 // 결과 학생 한 명의 점검. exclude: 빼고 볼 과목명(폐강 과목).
-// 점검에 쓰는 학생 선택: 소인수·공동교육과정(따로 신청) 과목은 뺀다(app.js applicationSelections 한 기준, 예전 결과에 남은 선택 포함).
+// 점검에 쓰는 학생 선택: 소인수·공동교육과정 과목은 조용히 뺀다(app.js applicationSelections 한 기준, 예전 결과에 남은 선택 포함).
 function courseCheckSelections(student) {
   return typeof applicationSelections === "function" ? applicationSelections(student) : (student?.selections || []);
 }
@@ -1541,7 +1541,7 @@ function courseCheckApplyNeis(items) {
   if (counts.ambiguous) notes.push(`동명이인 ${counts.ambiguous}명은 아래에서 직접 고르세요.`);
   const other = items.reduce((sum, { parsed }) => sum + (parsed.skipped?.other || 0), 0);
   const garbled = items.reduce((sum, { parsed }) => sum + (parsed.garbled || 0), 0);
-  if (other) notes.push(`반이 숫자가 아닌 ${other}행(예: 공동교육과정반 — 다른 학교 학생)은 뺐습니다.`);
+  if (other) notes.push(`반이 숫자가 아닌 ${other}행(다른 학교 학생 등)은 뺐습니다.`);
   if (garbled) notes.push(`성명 칸이 '('로 시작하는 ${garbled}행은 성명을 가리며 '(미재학)' 표시가 깨진 것으로 보고 미재학으로 셌습니다.`);
   return `나이스 수강학생 편성 ${items.length}개 파일(${rows}행, ${store.terms.join("·")})을 반영했습니다. 현 1·2학년 연결 ${counts.linked}명 · 미재학 ${counts.withdrawn}명 · 전입 ${counts.transfers}명.${notes.length ? ` ${notes.join(" ")}` : ""}`;
 }
