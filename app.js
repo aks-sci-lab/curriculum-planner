@@ -3678,7 +3678,7 @@
       }
       // 과목 행 정보는 묶음마다 다시 만들지 않고 한 번만 만든다.
       const contexts = groups.size ? importedPlanCourseContexts(layout, columns) : [];
-      // 소인수·공동교육과정은 따로 신청: 편제표 데이터가 있으면 curriculumSeparateApplicationRows 한 기준, 없으면 행 글자로 판별.
+      // 소인수·공동교육과정은 신청 과목이 아님(편제표 작업에서만 다룸): 편제표 데이터가 있으면 curriculumSeparateApplicationRows 한 기준, 없으면 행 글자로 판별.
       const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
         ? curriculumSeparateApplicationRows(layout.planData) : null;
       for (const group of groups.values()) {
@@ -3736,7 +3736,7 @@
         const semesters = [];
         for (const course of gradeCourses) {
           const applicationSubject = course.applicationSubject || aggregateApplicationSubject(course, grade, applicationSubjects);
-          // 소인수·공동교육과정은 따로 신청하므로(예전에 취합한 결과에 남아 있어도) 집계·개설·6단계 입력에서 뺀다.
+          // 소인수·공동교육과정은 신청 과목이 아니므로(예전에 취합한 결과에 남아 있어도) 집계·개설·6단계 입력에서 조용히 뺀다.
           if (applicationSubject?.separate || (typeof isApplicationSeparateCourse === "function" && isApplicationSeparateCourse(course, grade))) continue;
           const applicationSemester = applicationSubject?.semester || "";
           const applicationGroup = applicationGroupForCourse(course, grade, groupSettings, applicationSemester);
@@ -3835,7 +3835,7 @@
       return semesterMatches.length === 1 ? semesterMatches[0] : matches.length === 1 ? matches[0] : null;
     }
 
-    // 소인수·공동교육과정(따로 신청) 과목: 학생이 고른 과목에서 빼는 곳은 이 두 함수 하나로 모은다.
+    // 소인수·공동교육과정 과목(편제표 작업에서만 다룸): 학생이 고른 과목에서 조용히 빼는 곳은 이 두 함수 하나로 모은다.
     // 새로 취합한 결과에서는 이미 빠지지만, 예전에 취합해 저장한 결과에 남은 선택도 확인서·학생 목록·위계/이수학점 점검·4단계에서 숨긴다.
     // 판별 기준은 1단계 편제표(curriculumSeparateApplicationRows → collectApplicationSubjects의 separate 표시).
     function applicationSeparateNames(currentGrade) {
@@ -3858,8 +3858,8 @@
         .replace(/\s*\((?:공통|일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
     }
 
-    // 과목(결과의 과목 열 또는 학생 선택 하나)이 따로 신청 과목인가. 4단계 집계와 applicationSelections가 함께 쓴다.
-    // 웹 신청 결과(online)는 서버에 올린 과목 목록 기준이라 지금 편제표를 다시 읽지 않는다(따로 신청 과목은 처음부터 없음).
+    // 과목(결과의 과목 열 또는 학생 선택 하나)이 소인수·공동 과목인가. 4단계 집계와 applicationSelections가 함께 쓴다.
+    // 웹 신청 결과(online)는 서버에 올린 과목 목록 기준이라 지금 편제표를 다시 읽지 않는다(소인수·공동 과목은 처음부터 없음).
     function isApplicationSeparateCourse(course, currentGrade, names) {
       if (course?.applicationSubject?.separate) return true;
       if (!course || course.applicationGroupSource === "online") return false;
@@ -3867,7 +3867,7 @@
       return Boolean(list?.has(applicationSeparateKey(course.name)));
     }
 
-    // 학생이 고른 과목 중 따로 신청 과목을 뺀 목록(뺄 것이 없으면 원래 배열 그대로).
+    // 학생이 고른 과목 중 소인수·공동 과목을 뺀 목록(뺄 것이 없으면 원래 배열 그대로).
     function applicationSelections(student) {
       const selections = Array.isArray(student?.selections) ? student.selections : [];
       if (!selections.length) return selections;
@@ -4045,7 +4045,7 @@
 
     function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
       const groups = certificateGroupedSelections(student, groupSettings);
-      // 따로 신청(소인수·공동) 과목은 확인서에 싣지 않고 아래에 작은 글씨로 한 줄만 알린다(점검란은 원래 학생 객체로 계산).
+      // 편제표 밖 과목(소인수·공동)은 확인서에 싣지 않는다(안내 없이 조용히 · 점검란은 원래 학생 객체로 계산).
       const selections = typeof applicationSelections === "function" ? applicationSelections(student) : student.selections;
       const hiddenSeparate = (student.selections || []).length - selections.length;
       const totalCredits = hiddenSeparate ? selections.reduce((sum, course) => sum + (Number(course.credits) || 0), 0) : student.totalCredits;
@@ -4076,7 +4076,6 @@
           ${gauge}
           <div class="paper-closing">
           <p class="paper-total">총 ${selections.length}과목(${totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
-          ${hiddenSeparate ? '<p class="paper-separate-note">소인수·공동교육과정은 따로 신청합니다.</p>' : ""}
           <div class="paper-signature">
             <div>${escapeHtml(String($("#confirmDate").value || "").trim() || "　　　년　　월　　일")}</div>
             <div>학생: ${escapeHtml(student.name)}&nbsp;&nbsp;&nbsp; (인)</div>
@@ -5259,7 +5258,7 @@
       const crossRows = new Set((layout.planData?.subjects || []).filter((item) => !item.fixed && item.cross?.length).map((item) => item.row));
       // 학기제: 한 과목은 한 학기로 운영된다. 같은 과목이 1·2학기에 모두 나오면(편제표 다른 행이든, 한 행이 두 학기에 걸치든)
       // 학생은 한 학기에만 신청한다(sameCourseOnce).
-      // 소인수·공동교육과정은 따로 신청한다(이 앱의 신청 과목이 아님). 판별 기준은 curriculumSeparateApplicationRows 하나,
+      // 소인수·공동교육과정은 신청 과목이 아니다(편제표 작업에서만 다룸). 판별 기준은 curriculumSeparateApplicationRows 하나,
       // 편제표 데이터가 없는 예전 표만 행 글자로 판별한다. includeExcluded면 결과 취합에서 알아보고 빼도록 separate 표시를 붙여 넣는다.
       const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
         ? curriculumSeparateApplicationRows(layout.planData) : null;
@@ -5540,7 +5539,7 @@
       }
       const courses = [];
       const courseByGradeName = new Map();
-      // 소인수·공동교육과정(따로 신청) 과목은 이름만 알아보고 결과에서 뺀다(편제표에 없는 과목 오류로 보지 않음).
+      // 소인수·공동교육과정 과목은 이름만 알아보고 결과에서 조용히 뺀다(안내 없음 · 편제표에 없는 과목 오류로 보지 않음).
       const separateNames = new Set();
       const separated = new Set();
       let nextCourseColumn = 0;
@@ -5612,7 +5611,7 @@
         }
         if (unknown.length) errors.push(`${label}: 편제표에 없는 과목 - ${unknown.join(", ")}`);
         if (!picked.length && !unknown.length && skippedSeparate) {
-          // 따로 신청 과목만 고른 학생: 명단에는 남기고 과목은 비운다.
+          // 소인수·공동 과목만 고른 학생: 명단에는 남기고 과목은 비운다.
           students.push({ id: `app-${grade}-${classroom}-${number}-${name}`, grade, classroom, number, name, selections: [], totalCredits: 0 });
           return;
         }
@@ -6085,7 +6084,6 @@
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
         (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
         (twice.length ? ` 같은 과목 두 학기 신청 ${twice.length}명(재신청 필요).` : "") +
-        (merged.separated?.length ? ` 소인수·공동교육과정 ${merged.separated.length}과목(${merged.separated.join(", ")})은 따로 신청하므로 뺐습니다.` : "") +
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${typeof describeUnclassifiedCourses === "function" ? describeUnclassifiedCourses(unclassified) : unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 

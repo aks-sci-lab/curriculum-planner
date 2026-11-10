@@ -303,18 +303,21 @@ test("hours statistics use planned classes and confirmed selections without doub
 });
 
 
-test("hours statistics: 소인수·공동 courses are applied for separately — 1 class until entered, then the entered count (0 = not opened)", () => {
+test("hours statistics leave 소인수·공동 courses out silently (net increase or not), ignoring old class overrides", () => {
   const entries = [
+    { grade: "2", semester: "1", subject: "물리학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
     { grade: "2", semester: "1", subject: "경제", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점(순증)" },
     { grade: "2", semester: "2", subject: "고급 물리학", area: "과학", credit: 3, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/3학점(순증)" },
     { grade: "2", semester: "2", subject: "공동 과목", area: "과학", credit: 2, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/2학점" },
     { grade: "2", semester: "1", subject: "윤리와 사상", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점" }
   ];
-  const snapshot = { rows: [] };
+  const snapshot = { rows: [{ grade: "1", name: "물리학", semester: "1", classCount: 4, enrollment: 120, decision: "open" }] };
   const layout = { rows: [] };
   const ctx = vm.createContext({
     document: { getElementById: () => null },
-    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 11, "3": 11 } } }, roundStatuses: { "1": { status: "confirmed", snapshot } } },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 11, "3": 11 },
+      // 예전 저장 자료에 남은 개설반 직접 입력값은 무시한다(지우지는 않음).
+      classOverrides: { "2|1|경제": 2 } } }, roundStatuses: { "1": { status: "confirmed", snapshot } } },
     $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
     curriculumCohortLayout: (year) => year === "2026" ? layout : null,
     curriculumPlanEntries: (value) => ({ entries: value === layout ? entries : [], issues: [] }),
@@ -324,46 +327,18 @@ test("hours statistics: 소인수·공동 courses are applied for separately —
     columnName: (index) => String.fromCharCode(65 + index), escapeHtml: String
   });
   vm.runInContext(hoursStats, ctx);
-  let stats = ctx.computeHoursStats("2027");
-  let item = (name) => stats.items.find((entry) => entry.subject === name);
-  assert.equal(item("경제").classes, 1, "소인수 순증");
-  assert.match(item("경제").basis, /소인수 순증 · 따로 신청 · 확인 필요/);
-  assert.equal(item("경제").separate, true);
-  assert.equal(item("고급 물리학").classes, 1, "공동교육과정 순증은 우리 학교 시수");
-  assert.equal(item("공동 과목"), undefined, "순증이 아닌 공동교육과정은 다른 학교 운영이라 뺀다");
-  assert.equal(item("윤리와 사상").classes, 1, "순증이 아닌 소인수도 따로 신청(신청 결과에 없음) · 입력 전 1반");
-  assert.equal(item("윤리와 사상").sourceRound, "", "따로 신청 과목은 수강신청 차수를 근거로 쓰지 않는다");
-  let pending = stats.issues.filter((issue) => issue.separate);
-  assert.equal(pending.length, 1);
-  assert.match(pending[0].text, /^소인수·공동 3과목: 따로 받은 신청 결과로 개설반을 넣으세요/);
-  assert.match(pending[0].text, /경제\(2-1\).*고급 물리학\(2-2\).*윤리와 사상\(2-1\)/);
-  // 시수표에 따로 신청 표시(칸 구조는 그대로): 입력 전에는 '확인 필요'.
-  let model = ctx.hoursFormModel(stats);
-  const tagged = () => [...model.cells.values()].filter((cell) => cell.tag).map((cell) => `${cell.v}:${cell.tag}`);
-  assert.deepEqual(tagged().sort(), ["경제:따로 신청 · 확인 필요", "고급 물리학:따로 신청 · 확인 필요", "윤리와 사상:따로 신청 · 확인 필요"]);
-  assert.match(ctx.hoursFormHtml(model), /hf-separate-tag is-pending">따로 신청 · 확인 필요/);
-  // 직접 입력: 0 = 미개설, 2반, 자동 값과 같은 1반도 입력으로 남는다 → 그 과목은 경고에서 빠진다.
-  const key = (name) => item(name).key;
-  ctx.state.hoursStats["2027"].classOverrides = { [key("경제")]: 0, [key("고급 물리학")]: 2 };
-  stats = ctx.computeHoursStats("2027");
-  assert.equal(item("경제").classes, 0);
-  assert.equal(item("경제").hours, 0);
-  assert.match(item("경제").basis, /미개설/);
-  assert.equal(item("고급 물리학").classes, 2);
-  assert.equal(item("고급 물리학").hours, 6);
-  pending = stats.issues.filter((issue) => issue.separate);
-  assert.equal(pending.length, 1);
-  assert.match(pending[0].text, /^소인수·공동 1과목: .*윤리와 사상\(2-1\)$/);
-  model = ctx.hoursFormModel(stats);
-  assert.ok(tagged().includes("고급 물리학:따로 신청"));
-  ctx.state.hoursStats["2027"].classOverrides[key("윤리와 사상")] = 1;
-  stats = ctx.computeHoursStats("2027");
-  assert.equal(stats.issues.filter((issue) => issue.separate).length, 0, "모두 입력하면 경고 없음");
-  // 엑셀 '확인 필요' 시트에도 같은 문구.
-  ctx.state.hoursStats["2027"].classOverrides = {};
-  stats = ctx.computeHoursStats("2027");
+  const stats = ctx.computeHoursStats("2027");
+  assert.deepEqual(plain(stats.items.map((item) => item.subject)), ["물리학"], "소인수·공동은 시수 항목에 없다");
+  assert.equal(stats.items[0].classes, 4);
+  assert.deepEqual(plain(ctx.state.hoursStats["2027"].classOverrides), { "2|1|경제": 2 }, "예전 직접 입력값은 지우지 않는다");
+  const words = /소인수|공동|따로 신청/;
+  assert.ok(!stats.issues.some((issue) => words.test(issue.text)), stats.issues.map((issue) => issue.text).join("\n"));
+  const model = ctx.hoursFormModel(stats);
+  assert.ok(![...model.cells.values()].some((cell) => cell.tag || words.test(String(cell.v ?? ""))), "시수표에 표시 없음");
+  const html = ctx.hoursFormHtml(model);
+  assert.doesNotMatch(html, /소인수|공동|따로 신청|data-hours-separate|hf-separate-tag/);
   const sheets = ctx.buildHoursWorkbookSheets(stats, { schoolName: "가상고" });
-  assert.ok(sheets.find((sheet) => sheet.name === "확인 필요").rows.some((row) => /소인수·공동 3과목/.test(row[1]?.v || "")));
+  assert.ok(!JSON.stringify(sheets.filter((sheet) => sheet.rows).map((sheet) => sheet.rows)).match(words), "엑셀(확인 필요 시트 포함)에도 없음");
 });
 test("hours stats treat a course closed in an earlier round as closed, not as a missing result", () => {
   const entries = [
