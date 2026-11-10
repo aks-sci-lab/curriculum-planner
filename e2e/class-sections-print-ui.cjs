@@ -298,12 +298,12 @@ function attendanceInfo(sheet) {
     perGrade[g] = (perGrade[g] || 0) + Number(text.match(/\((\d+)명/)?.[1] || 0);
   }
   report.checks.homeroomTotals = perGrade;
-  // 현1은 내년 반 배정표(340명)가 있어 미제출까지 = 명단. 현2는 '그대로 올라감'·배정표 없음 → 웹 결과(제출 학생)만 알 수 있어 '알 수 없음' 안내.
+  // 현1·현2 모두 웹 신청 만들 때 올린 명렬이 이 PC에 저장돼 있어(applicationRosterFor) 미제출까지 = 명단. 현2는 배정표 없이 '그대로 올라감'.
   check(perGrade["1"] === 340, `현1 담임반 학생 합 ${perGrade["1"]} = 명단 340(배정표 기준, 미제출 포함)`, perGrade);
   await page.getByLabel("담임반 고르기").selectOption({ index: hrOptions.findIndex((text) => /내년 3학년|현 2학년/.test(text)) }); await sleep(600);
   const grade2Note = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
   report.checks.grade2Unsubmitted = { total: perGrade["2"], note: grade2Note };
-  check(perGrade["2"] === 308 || /배정표가 없어 미제출 학생은 알 수 없습니다/.test(grade2Note), `현2 담임반 학생 합 ${perGrade["2"]}: 308이거나 '배정표가 없어 미제출은 알 수 없음' 안내`, grade2Note.slice(0, 120));
+  check(perGrade["2"] === 308 && /명렬 .*기준/.test(grade2Note), `현2 담임반 학생 합 ${perGrade["2"]} = 명단 308(명렬 기준, 미제출 포함)`, grade2Note.slice(0, 160));
   await page.getByLabel("담임반 고르기").selectOption({ index: 0 }); await sleep(600);
   const unsubNote = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
   check(/미제출 \d+명/.test(unsubNote), "담임반 화면 위 '미제출 n명'", unsubNote);
