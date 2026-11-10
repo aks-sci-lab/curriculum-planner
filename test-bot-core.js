@@ -510,6 +510,25 @@ var TestBotCore = (() => {
     return sorted;
   }
 
+  // 대상 학생 범위 한 줄: '대상: 1~10반 · 240명'. 반 번호는 이어진 것을 '1~10'으로 줄인다. all이면 limited=false.
+  function scopeSummary(opts = {}, students = null) {
+    const scope = opts.scope === "first" || opts.scope === "class" ? opts.scope : "all";
+    const picked = Array.isArray(students) ? selectStudents(students, opts) : null;
+    const count = picked ? ` · ${picked.length}명${scope === "all" ? "" : `(전체 ${students.length}명 중)`}` : "";
+    if (scope === "first") return { limited: true, text: `대상: 처음 ${Math.max(0, Math.floor(Number(opts.count) || 0))}명${count}` };
+    if (scope === "class") {
+      const numbers = [...new Set(String(opts.classes || "").split(/[,\s·]+/).filter(Boolean).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+      const ranges = [];
+      for (const value of numbers) {
+        const last = ranges.at(-1);
+        if (last && value === last[1] + 1) last[1] = value; else ranges.push([value, value]);
+      }
+      const label = ranges.map(([a, b]) => (a === b ? `${a}` : `${a}~${b}`)).join(", ");
+      return { limited: true, text: `대상: ${label || "반 없음"}반${count}` };
+    }
+    return { limited: false, text: `대상: 전체${count}` };
+  }
+
   const WEAK_CODES = new Set(["012345", "123456", "234567", "345678", "456789", "567890", "987654", "876543", "765432",
     "654321", "543210", "098765", "121212", "123123", "112233", "000123"]);
   function isWeakCode(code) {
@@ -1302,7 +1321,7 @@ var TestBotCore = (() => {
     prerequisiteViolations, choosePrerequisiteSafe, choosePrerequisiteViolation,
     generateRoster, parseRosterSheets, readWorkspaceSettings, buildResultEntries, buildWideRows, buildFormRows,
     resultFileName, courseCounts, createXlsxBytes, UNKNOWN_COURSE,
-    parseEventInput, parseCodeSheets, selectStudents, isWeakCode, makeNewCode, createRpcClient, detectServerMode,
+    parseEventInput, parseCodeSheets, selectStudents, scopeSummary, isWeakCode, makeNewCode, createRpcClient, detectServerMode,
     runVirtualStudent, planStudents, runPool, summarize, resultSheets,
     REPEAT_MAX, normalizeRepeat, repeatPlan, carryCodes, roundTargets, updateExpected, compareTeacherApplications, compareLocks,
     runRepeatedTest, roundRow, compareRounds, repeatSummary, repeatReportSheets,
