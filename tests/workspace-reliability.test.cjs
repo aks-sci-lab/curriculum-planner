@@ -72,7 +72,7 @@ function fixture(saved) {
     "syncActiveRound", "syncActiveCurriculumCohort", "applicationRoundNumbers",
     "updateWorkspaceSaveStatus", "isWorkspaceStorageProtected", "workspacePayload", "persistState", "validateWorkspaceData",
     "loadCurriculumPlanData", "restorePersistedState", "workspaceBackupCompact", "workspaceBackupExpand", "readWorkspaceBackupText", "workspaceBackupGzip",
-    "buildWorkspaceBackup", "downloadWorkspaceBackup", "restoreWorkspaceBackup",
+    "buildWorkspaceBackup", "workspaceBackupFileName", "downloadWorkspaceBackup", "restoreWorkspaceBackup",
   ]) vm.runInContext(source(name), context);
   vm.runInContext("var WORKSPACE_BACKUP_VERSION = 2, APP_VERSION = 'test'; function markWorkspaceBackup() {}", context);
   const groups = fs.readFileSync(path.join(root, "course-groups.js"), "utf8");
@@ -305,7 +305,7 @@ test("backup format 2 leaves out the duplicate current-round students, is gzippe
   let packed = null;
   saved.context.downloadTextFile = (data, name) => { packed = { data, name }; };
   await saved.context.downloadWorkspaceBackup();
-  assert.equal(packed.name, "교육과정_작업자료_백업.json.gz");
+  assert.match(packed.name, /^교육과정_작업자료_백업_\d{8}-\d{4}\.json\.gz$/, "백업 파일 이름에 날짜·시각");
   const bytes = new Uint8Array(await packed.data.arrayBuffer());
   assert.deepEqual([bytes[0], bytes[1]], [0x1f, 0x8b], "gzip magic bytes");
   const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
@@ -317,7 +317,8 @@ test("backup format 2 leaves out the duplicate current-round students, is gzippe
   // CompressionStream이 없는 브라우저는 예전처럼 .json으로 내려받는다.
   delete saved.context.CompressionStream;
   await saved.context.downloadWorkspaceBackup();
-  assert.equal(packed.name, "교육과정_작업자료_백업.json");
+  assert.match(packed.name, /^교육과정_작업자료_백업_\d{8}-\d{4}\.json$/);
+  assert.equal(saved.context.workspaceBackupFileName(".json.gz", new Date(2026, 10, 10, 9, 5)), "교육과정_작업자료_백업_20261110-0905.json.gz");
   assert.deepEqual(JSON.parse(packed.data).omitted, ["students"]);
 
   const restored = async (file) => {

@@ -919,6 +919,11 @@ var PLAN_COMPLIANCE_ITEM_KINDS = { a3: ["range"], a8: ["unlisted"], a9: ["spelli
 function planComplianceItemTargets(report, item) {
   const kinds = PLAN_COMPLIANCE_ITEM_KINDS[item?.id];
   const rows = [];
+  // 7번(국어·수학·영어 비율)은 소계 행이 아니라 국어·수학·영어 과목 행을 보여 준다.
+  if (item?.id === "a7") {
+    const kem = (report.model?.rows || []).filter((row) => ["국어", "수학", "영어"].includes(row.family)).map((row) => row.id);
+    if (kem.length) return { rows: kem, footer: false, label: `국어·수학·영어 과목 ${kem.length}행` };
+  }
   if (kinds) {
     for (const [id, issues] of report.subjectIssues || []) if (issues.some((issue) => kinds.includes(issue.kind))) rows.push(id);
   }
@@ -930,6 +935,14 @@ function planComplianceItemTargets(report, item) {
   if (rows.length) return { rows, footer: false, label: rows.length === 1 ? "해당 과목 행" : `해당 과목 ${rows.length}행` };
   if (["a1", "a2", "a6", "a7"].includes(item?.id)) return { rows: [], footer: true, label: "소계 행" };
   return null;
+}
+
+// 목적격 조사: 받침이 있으면 '을', 없으면 '를'('행을(를)' 대신 '행을').
+function planComplianceObjectParticle(text) {
+  const last = String(text ?? "").trim().slice(-1);
+  const code = last.charCodeAt(0) - 0xac00;
+  if (!(code >= 0 && code <= 11171)) return "을(를)";
+  return code % 28 ? "을" : "를";
 }
 
 // ---- 앱 연결 (아래는 1단계 화면·저장에 연결한다)
@@ -1213,7 +1226,7 @@ function renderPlanComplianceDialog({ fresh = false, compare = false } = {}) {
     const canAck = item.status !== "해당 없음";
     const flash = planComplianceHighlight.key === plan.key && planComplianceHighlight.until > Date.now() && planComplianceHighlight.ids.has(item.id) ? " is-recheck-changed" : "";
     const targets = display.status === "확인필요" ? planComplianceItemTargets(report, item) : null;
-    const goto = targets ? `<button class="button button-quiet plan-compliance-goto" type="button" data-pc-goto="${item.id}" title="팝업을 닫고 편제표에서 ${planComplianceEscape(targets.label)}을(를) 보여 줍니다">해당 위치로</button>` : "";
+    const goto = targets ? `<button class="button button-quiet plan-compliance-goto" type="button" data-pc-goto="${item.id}" title="팝업을 닫고 편제표에서 ${planComplianceEscape(targets.label)}${planComplianceObjectParticle(targets.label)} 보여 줍니다">해당 위치로</button>` : "";
     return `<tr class="${planComplianceStatusClass(display.status)}${flash}" data-pc-item="${item.id}">
       <td class="plan-compliance-no">${item.no}</td><td class="plan-compliance-area">${planComplianceEscape(item.area)}</td>
       <td>${planComplianceEscape(item.text)}${item.hint ? `<small>※ ${planComplianceEscape(item.hint)}</small>` : ""}</td>
@@ -1435,7 +1448,7 @@ function planComplianceShowReturn(key, label) {
     });
   }
   bar.dataset.key = key;
-  document.getElementById("planComplianceReturnText").textContent = `편제 점검 ${label}을(를) 보는 중 · 고친 뒤`;
+  document.getElementById("planComplianceReturnText").textContent = `편제 점검 ${label}${planComplianceObjectParticle(label)} 보는 중 · 고친 뒤`;
   bar.classList.remove("hidden");
   if (planComplianceReturnTimer) window.clearTimeout(planComplianceReturnTimer);
   planComplianceReturnTimer = window.setTimeout(() => bar.classList.add("hidden"), 120000);

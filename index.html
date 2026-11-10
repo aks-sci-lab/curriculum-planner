@@ -227,7 +227,7 @@
       <section class="workflow-step-panel hidden" id="workflowStep2Panel">
         <div class="application-heading">
         <h3>2단계 · 수강신청 준비·결과</h3>
-        <details class="application-mode-settings">
+        <details class="application-mode-settings" id="applicationModeSettings">
           <summary><span>수강신청 방식·업무 안내</span><strong id="applicationModeSummary">외부 프로그램 결과 취합</strong></summary>
           <p class="note">사용할 방식을 선택하세요. 언제든 바꿀 수 있으며 기존 결과는 자동 삭제되지 않습니다.</p>
           <section class="application-mode-picker" id="applicationModePicker" aria-label="수강신청 방식 선택">
@@ -818,6 +818,16 @@ function courseClient_() {
       <div class="curriculum-version-dialog-actions">
         <button class="button" type="button" data-open-dialog="courseCheckDialog">위계·학점 점검 설정</button>
         <button class="button button-primary" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog round-confirm-dialog" id="roundConfirmDialog" aria-labelledby="roundConfirmTitle" aria-describedby="roundConfirmText">
+    <form method="dialog">
+      <h2 id="roundConfirmTitle">차수 확정</h2>
+      <div class="note" id="roundConfirmText" style="white-space:pre-line"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" type="submit" value="cancel">취소</button>
+        <button class="button button-primary" type="submit" value="ok" id="roundConfirmOk">확정</button>
       </div>
     </form>
   </dialog>

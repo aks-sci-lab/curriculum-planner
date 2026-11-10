@@ -331,3 +331,25 @@ test("Korean·math·English limit: one shared setting drives step 2 warning, pop
   assert.match(compliance, /data-pc-suggest="\$\{item\.id\}"[^`]*>제안 문구 넣기</);
   assert.match(app, /courseCheckMigrateRequired\(saved\.courseChecks, saved\.curriculumCompliance\)/);
 });
+
+test("위계 점검 팝업: 결과가 있으면 '현재 차수 결과 점검'이 맨 위, 없으면 안내만 맨 아래", () => {
+  const body = { innerHTML: "" };
+  const ctx = vm.createContext({ document: { getElementById: (id) => id === "courseCheckDialogBody" ? body : null }, console });
+  vm.runInContext(source, ctx);
+  Object.assign(ctx, {
+    state: { applicationMenuGrade: "1", students: [{ grade: "1", classroom: "1", number: "1" }] },
+    courseCheckContext: () => ({ rules: [], settings: { prior: {}, neis: null }, limits: { required: {}, subjects: 174, creative: 18, kemLimit: 81, kemExtraRatio: 50 } }),
+    courseCheckSubjectOptions: () => [], courseCheckModel: () => ({ required: {} }), courseCheckNeisSectionHtml: () => "",
+    courseCheckSummary: () => ({ checked: 1, violators: [], short: [], over: [], familyShort: [], kemOver: [], unknowns: [] }),
+    courseCheckStudentTableHtml: () => "<table data-test-students></table>"
+  });
+  ctx.courseCheckRenderDialog();
+  const order = (html) => ["courseCheckResultTitle", "courseCheckRulesTitle", "courseCheckRequiredTitle"].map((id) => html.indexOf(`id="${id}"`));
+  const [result, rules, required] = order(body.innerHTML);
+  assert.ok(result >= 0 && result < rules && rules < required, "결과가 규칙보다 앞");
+  ctx.state.students = [];
+  ctx.courseCheckRenderDialog();
+  const [emptyResult, emptyRules, emptyRequired] = order(body.innerHTML);
+  assert.ok(emptyRules < emptyRequired && emptyRequired < emptyResult, "결과가 없으면 안내는 맨 아래");
+  assert.equal(body.innerHTML.split('id="courseCheckResultTitle"').length, 2, "결과 칸은 한 번만");
+});

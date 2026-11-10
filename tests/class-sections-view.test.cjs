@@ -193,7 +193,7 @@ test("promotion re-forms classes (now 4 → next year 5): next-year counts, home
   assert.deepEqual(plan.homerooms, ["1", "2", "3", "4", "5"]);
   assert.equal(plan.mapped, false);
   assert.equal(plan.ratio, "3:2");
-  assert.match(ctx.classSectionsClassUnitHtml(group, entry, settings), /학생 배정은 내년 반 배정표를 올린 뒤/);
+  assert.match(ctx.classSectionsClassUnitHtml(group, entry, settings), /학생 배정과 희망 비교는 내년 반 배정표를 올린 뒤/);
   // 내년 반 배정표를 올리면 새 반 기준
   ctx.classSectionsStore().classMaps = { "1": Object.fromEntries(group.students.map((student, index) => [student.key, { classroom: String(1 + (index % 5)), number: String(1 + Math.floor(index / 5)) }])) };
   input = plain(ctx.classSectionsBuildInput("1", group, entry));
@@ -395,4 +395,39 @@ test("class-unit-only group: roster export has the '학급 단위 과목' sheet 
   assert.equal(sheets[0].rows[2][3], "가명11");
   const unit = plain(ctx.classSectionsClassUnitSheet(group, entry, settings));
   assert.equal(unit.rows[2][2], 10, "per-class head count");
+});
+
+test("[치명 회귀] 화면 입력: 학급 단위 반 학생은 이동 분반에서 빠지고 나이스 행도 학생마다 택n개 이하, '(1학기)' 꼬리표는 표시·나이스에서 뗌", () => {
+  const ctx = context();
+  ctx.state.roundStatuses["1"].snapshot.classBases = { "2": 4 };
+  ctx.state.rounds["1"].courses[2].name = "지구과학 (1학기)";
+  const group = ctx.classSectionsSource("1").groups[0];
+  const earth = group.courses.find((course) => course.key === "지구과학 (1학기)");
+  assert.equal(earth.name, "지구과학", "display name without the semester tail");
+  assert.equal(earth.department, "과학-지구");
+  const entry = ctx.classSectionsEntry("1", group.key);
+  const settings = ctx.classSectionsSettings();
+  settings.promotion["1"] = "same";
+  ctx.classSectionsCourseConf(settings, "courseModes", "1")[earth.key] = "class";
+  entry.classCounts[earth.key] = 2;
+  const plan = plain(ctx.classSectionsClassUnitPlan(group, entry, settings));
+  assert.equal(Object.values(plan.assign).filter(Boolean).length, 2, "2 class-unit rooms");
+  assert.equal(Object.values(plan.assign).filter((value) => value === "").length, 2, "the other rooms stay moving");
+  assert.equal(ctx.classSectionsGroupSettings({ maxClassSize: 30 }, group, entry).blocks, 2, "moving rooms remain → 택n blocks");
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  assert.ok(input.classUnit && input.classUnit.choose === 2);
+  for (const student of input.students) {
+    const unit = input.classUnit.unitOf[student.key];
+    assert.ok(student.courses.length + (unit ? 1 : 0) <= 2, `${student.key} total ≤ 택2`);
+    assert.ok(!student.courses.includes(earth.key), "class-unit course is never a moving course");
+  }
+  const result = ctx.classSectionsSolve({ ...plain(input), maxSectionsPerBlock: 5 });
+  assert.ok(!result.issues.some((issue) => issue.type === "choice-over"));
+  const exported = plain(ctx.classSectionsNeisExport(result, { targetGrade: 2, students: group.gradeStudents.map((student) => ({ key: student.key, classroom: student.homeroom, number: "" })),
+    courses: { [earth.key]: { credits: 3 } }, classUnit: { byClass: plan.assign, courses: { [earth.key]: { name: earth.name, credits: 3 } } } }));
+  const perStudent = new Map();
+  for (const row of exported.rows.slice(2)) perStudent.set(row[10], (perStudent.get(row[10]) || 0) + 1);
+  assert.ok([...perStudent.values()].every((count) => count <= 2), "no student has more than 택2 rows");
+  assert.ok(exported.rows.slice(2).some((row) => row[4] === "지구과학(3)"), "NEIS subject name without '(1학기)'");
+  assert.ok(!exported.rows.slice(2).some((row) => /학기\)/.test(row[4]) || /학기\)/.test(row[5])));
 });

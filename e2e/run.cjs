@@ -1318,6 +1318,9 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   await page.locator("#workspaceRound").selectOption("2");
   await sleep(300);
   await page.locator("#roundUnlock").click();
+  await sleep(300);
+  // 확정·해제는 앱 대화상자(#roundConfirmDialog)로 묻는다.
+  if (await page.locator("#roundConfirmDialog[open]").count()) await page.locator("#roundConfirmOk").click();
   await sleep(800);
   out.unlocked = await text(page, "#roundConfirmState");
   // 교사 화면: 학생 선택 과목 변경(2차 신청)
@@ -1366,7 +1369,9 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   await sleep(1500);
   // 재확정
   await gotoStep(page, 4);
-  await page.locator("#roundConfirm").click(); await sleep(800);
+  await page.locator("#roundConfirm").click(); await sleep(300);
+  if (await page.locator("#roundConfirmDialog[open]").count()) await page.locator("#roundConfirmOk").click();
+  await sleep(800);
   out.reconfirmed = await text(page, "#roundConfirmState");
   h.check(/2차 · 확정/.test(out.reconfirmed), "중요", "4단계", "확정 해제 → 재확정이 되지 않음", { actual: out.reconfirmed });
   // 6단계: 재계산 필요 → 바뀐 학생만 다시 계산
@@ -1533,7 +1538,8 @@ async function main() {
 
     await h.step("2-1. 웹 수강신청 방식·그룹 확인", async () => {
       await gotoStep(page, 2);
-      await page.locator("#workflowStep2Panel summary").first().click();
+      // 결과가 없을 때는 방식·안내 상자가 이미 펼쳐져 있다(펼쳐져 있으면 누르지 않음).
+      if (!(await page.locator("#applicationModeWeb").isVisible())) await page.locator("#workflowStep2Panel summary").first().click();
       await page.locator("#applicationModeWeb").click();
       const result = {};
       for (const grade of ["1", "2"]) {
