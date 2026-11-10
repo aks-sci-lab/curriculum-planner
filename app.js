@@ -3876,8 +3876,8 @@
       return selections.some(separate) ? selections.filter((course) => !separate(course)) : selections;
     }
 
-    // 같은 과목 한 학기만(sameCourseOnce): 편제표의 서로 다른 행(예: 3-1 택5·3-2 택5)에 같은 과목이 있으면 한 학기에만 신청한다.
-    // 한 행이 1·2학기에 걸친 과목은 대상이 아니다(collectApplicationSubjects가 표시). 웹 화면·서버는 이미 두 학기 중복을 막으므로
+    // 같은 과목 한 학기만(sameCourseOnce): 학기제라 같은 과목이 1·2학기에 모두 나오면 한 학기에만 신청한다
+    // (편제표 다른 행이든 한 행이 두 학기에 걸치든, collectApplicationSubjects가 표시). 웹 화면·서버는 이미 두 학기 중복을 막으므로
     // 이 검사는 외부 결과(엑셀·구글폼·오프라인 파일)에 남은 경우를 찾는다. 웹 결과(online)는 서버 과목 목록의 표시만 본다.
     function applicationOnceNames(currentGrade) {
       const grade = String(currentGrade ?? "");
@@ -5257,9 +5257,8 @@
       }
       // 교차집중 과목은 학생이 고르는 과목이 아니라 학급마다 학기를 엇갈려 이수하므로 선택 그룹·신청 과목에서 뺀다.
       const crossRows = new Set((layout.planData?.subjects || []).filter((item) => !item.fixed && item.cross?.length).map((item) => item.row));
-      // 같은 과목이 편제표의 서로 다른 행(예: 3-1 택5 행과 3-2 택5 행)에 있으면 학생은 한 학기에만 신청한다(sameCourseOnce).
-      // 한 행이 1·2학기에 걸친 과목(한 과목을 두 학기에 듣는 것)은 대상이 아니다.
-      const planRowsByKey = new Map();
+      // 학기제: 한 과목은 한 학기로 운영된다. 같은 과목이 1·2학기에 모두 나오면(편제표 다른 행이든, 한 행이 두 학기에 걸치든)
+      // 학생은 한 학기에만 신청한다(sameCourseOnce).
       // 소인수·공동교육과정은 따로 신청한다(이 앱의 신청 과목이 아님). 판별 기준은 curriculumSeparateApplicationRows 하나,
       // 편제표 데이터가 없는 예전 표만 행 글자로 판별한다. includeExcluded면 결과 취합에서 알아보고 빼도록 separate 표시를 붙여 넣는다.
       const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
@@ -5338,8 +5337,6 @@
               return assignment ? [[semester, assignment]] : [];
             }));
             const existing = seen.get(key);
-            if (!planRowsByKey.has(key)) planRowsByKey.set(key, new Set());
-            planRowsByKey.get(key).add(context.rowIndex);
             if (existing) {
               existing.semester = [...new Set([...existing.semester.split("·"), ...info.semesters])]
                 .filter(Boolean).sort().join("·");
@@ -5366,7 +5363,7 @@
         }
       }
       for (const [key, item] of seen) {
-        if ((planRowsByKey.get(key)?.size || 0) > 1 && String(item.semester).split("·").filter(Boolean).length > 1) item.sameCourseOnce = true;
+        if (String(item.semester).split("·").filter(Boolean).length > 1) item.sameCourseOnce = true;
       }
       return result;
     }
