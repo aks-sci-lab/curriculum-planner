@@ -4,7 +4,7 @@
 // 저장: state.classSections = { settings: {교사·고정 시간·특별실·기준}, "<차수>": { "<현학년>:<학기>:<그룹>": 그룹 설정 + sectionResult } }
 // 개인정보: 저장하는 학생 키는 '현학년-반-번호'뿐이다. 성명은 명렬표·나이스 내보내기 때 차수 자료에서 읽어 파일에만 쓴다.
 
-var CLASS_SECTIONS_VIEW = { round: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1, classMap: null };
+var CLASS_SECTIONS_VIEW = { round: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1 };
 var CLASS_SECTIONS_DAY_NAMES = ["월", "화", "수", "목", "금"];
 var CLASS_SECTIONS_PERIODS = 7;
 var CLASS_SECTIONS_MODE_OPTIONS = [["move", "완전 이동"], ["homeroom", "같은 담임반끼리 묶기 우선"], ["balance", "분반 인원 균형"]];
@@ -52,12 +52,21 @@ function classSectionsEntry(round, groupKey, create = true) {
   return entry;
 }
 
+// 내년 반 배정표(현 학년마다): { '현학년-반-번호': { classroom, number } }. 진급 때 반이 새로 편성되므로(예 현1 10학급 → 내년 11학급)
+// '같은 담임반끼리 묶기'·학급 단위 과목 학생 배정·나이스 반·번호는 이 표가 있을 때만 새 반 기준으로 한다. 학생 키·반·번호만 저장(성명 없음).
+function classSectionsClassMap(grade) {
+  const maps = classSectionsStore().classMaps;
+  const map = classSectionsPlain(maps) ? maps[String(grade)] : null;
+  return classSectionsPlain(map) && Object.keys(map).length ? map : null;
+}
+
 // 복원: 예전 저장분·백업에 없으면 빈 객체. 모양이 틀린 값은 버린다(app.js restorePersistedState가 부름).
 function classSectionsRestore(saved) {
   if (!classSectionsPlain(saved)) return {};
   const result = {};
   for (const [key, value] of Object.entries(saved)) {
     if (key === "settings" && classSectionsPlain(value)) result.settings = value;
+    else if (key === "classMaps" && classSectionsPlain(value)) result.classMaps = value;
     else if (/^\d+$/.test(key) && classSectionsPlain(value)) {
       result[key] = Object.fromEntries(Object.entries(value).filter(([, entry]) => classSectionsPlain(entry)));
     }
@@ -161,9 +170,12 @@ function classSectionsSourceCompute(round, thresholds) {
           if (picked.length) students.push({ key: `${grade}-${student.classroom}-${student.number}`, homeroom: String(student.classroom), number: String(student.number), courses: picked });
         }
         for (const course of courses) course.credits = credits.get(course.key) || course.planCredits || 0;
-        const classes = Number(classBases?.[targetGrade]) || Number(summary.classes) || 0;
+        // 학급 수 기준은 내년 학급 수(4단계 기준 설정·확정 스냅샷). 없을 때만 지금 명단의 반 수.
+        const rosterClasses = new Set(gradeStudents.map((student) => String(student.classroom))).size;
+        const nextClasses = Number(classBases?.[targetGrade]) || 0;
+        const classes = nextClasses || rosterClasses || Number(summary.classes) || 0;
         groups.push({ key: `${grade}:${semesterKey}:${group.category}`, grade, targetGrade, semester: semesterKey, category: group.category,
-          choice: Number(group.choiceCount), classes, courses, students,
+          choice: Number(group.choiceCount), classes, rosterClasses, nextClasses, courses, students,
           label: `현${grade} → ${targetGrade}학년 ${semesterKey}학기 · ${group.category}` });
       }
     }
@@ -196,6 +208,13 @@ function classSectionsGroupSettings(source, group, entry) {
     blocks: Number(entry.blocks) || classSectionsSuggestedBlocks(group).blocks,
     maxSectionsPerBlock: Number(entry.maxSectionsPerBlock) || group.classes || 0
   };
+}
+
+// 담임반 묶기 기준 반: 내년 반 배정표가 있으면 새 반(없는 학생은 '미정'), 없으면 지금 반.
+function classSectionsHomeroomStudents(group) {
+  const map = classSectionsClassMap(group.grade);
+  if (!map) return group.students;
+  return group.students.map((student) => ({ ...student, homeroom: String(map[student.key]?.classroom || "미정") }));
 }
 
 function classSectionsTeacherList(settings) {
@@ -258,7 +277,8 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
   return {
     groupId: `${round}:${group.key}`, label: group.label, grade: group.grade, targetGrade: group.targetGrade, semester: group.semester,
     blocks, maxSectionsPerBlock: base.maxSectionsPerBlock || undefined, defaultCapacity: base.capacity,
-    courses, students: group.students, teachers, departmentTeachers, rooms, occupied, fixedSlots, spreadWarn: settings.spreadWarn,
+    courses, students: classSectionsHomeroomStudents(group), teachers, departmentTeachers, rooms, occupied, fixedSlots, spreadWarn: settings.spreadWarn,
+    homeroomBasis: classSectionsClassMap(group.grade) ? "next" : "current", recommendExclude: classSectionsClassMap(group.grade) ? [] : ["homeroom"],
     mode: entry.mode || "move", seed: Number(entry.seed) || 1,
     pins: { sections: { ...entry.pins.sections }, students: { ...entry.pins.students }, teachers: { ...entry.pins.teachers } },
     ...rest
@@ -610,6 +630,7 @@ function renderClassSectionsView() {
         <label>편성 방식 <select data-cs-field="mode" data-focus-key="cs-mode" aria-label="편성 방식">${modeOptions}</select></label>
         <span class="cs-note${limit && sum > limit ? " is-warn" : ""}">분반 합 ${sum}개${limit ? ` / 블록 ${base.blocks}개 × ${base.maxSectionsPerBlock}개 = ${limit}개` : ""}</span>
       </div>
+      ${classSectionsClassesHtml(group, entry)}
       <details class="cs-advanced"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length || CLASS_SECTIONS_VIEW.timesProposal ? " open" : ""}>
         <summary>블록별로 다르게 · 블록 시간(요일·교시)</summary>
         <p class="cs-note">블록 시간을 넣으면 교사 불가 시간·다른 학년 블록과의 겹침을 점검합니다. 블록 시수 = 과목 학점.</p>
@@ -634,12 +655,27 @@ function renderClassSectionsView() {
     ${classSectionsClassUnitHtml(group, entry, settings)}`;
 }
 
+function classSectionsClassesHtml(group, entry) {
+  const esc = classSectionsEsc;
+  const map = classSectionsClassMap(group.grade);
+  const mapped = map ? group.students.filter((student) => map[student.key]?.classroom).length : 0;
+  const classLine = group.nextClasses
+    ? `현 ${group.grade}학년 ${group.rosterClasses}학급 → 내년 ${group.targetGrade}학년 ${group.nextClasses}학급 (블록당 최대 분반·학급 단위 반 수 기본값 = 내년 학급 수)`
+    : `내년 ${group.targetGrade}학년 학급 수가 없어 지금 반 수 ${group.rosterClasses}학급으로 잡았습니다. 4단계 기준 설정에서 내년 학급 수를 넣으세요.`;
+  const mapLine = map ? `내년 반 배정표: ${mapped}/${group.students.length}명 · 담임반 묶기·학급 단위 학생 배정·나이스 반·번호를 새 반 기준으로 합니다.`
+    : "내년 반 배정표 없음 · 진급 때 반이 새로 편성될 수 있어 ‘같은 담임반끼리 묶기’는 지금 반 기준이며 추천에서 뺍니다.";
+  const warn = (entry.mode || "move") === "homeroom" && !map
+    ? '<p class="cs-note is-warn" id="classSectionsHomeroomWarn">같은 담임반끼리 묶기: 지금 반 기준 — 진급 때 반이 바뀌면 효과 없음. 내년 반 배정표를 올리면 새 반 기준으로 묶습니다.</p>' : "";
+  return `<p class="cs-note${group.nextClasses ? "" : " is-warn"}" id="classSectionsClassesLine">${esc(classLine)}</p>
+    <p class="cs-note" id="classSectionsClassMapLine">${esc(mapLine)}</p>${warn}`;
+}
+
 function classSectionsCompareHtml(group, entry) {
   const compare = CLASS_SECTIONS_VIEW.compare;
   if (!compare || compare.groupKey !== group.key || compare.round !== CLASS_SECTIONS_VIEW.round) return "";
   const esc = classSectionsEsc;
   const rows = compare.rows.map((row) => `<tr${row.mode === compare.recommended ? ' class="is-recommended"' : ""}>
-    <th scope="row">${esc(row.label)}${row.mode === compare.recommended ? ' <span class="cs-tag">추천</span>' : ""}</th>
+    <th scope="row">${esc(row.label)}${row.mode === compare.recommended ? ' <span class="cs-tag">추천</span>' : ""}${row.excluded ? ' <span class="cs-tag" title="내년 반 배정표가 없어 지금 반 기준입니다. 진급 때 반이 바뀌면 효과가 없어 추천에서 뺐습니다.">추천 제외 · 지금 반 기준</span>' : ""}</th>
     <td>${row.unassigned}</td><td>${row.maxSpread}명 (평균 ${row.avgSpread})</td><td>${Math.round(row.sameHomeroomRatio * 100)}%</td><td>${row.moved === null || row.moved === undefined ? '<span title="앞 편성 결과가 없어 비교하지 않았습니다">–</span>' : row.moved}</td>
     <td><button class="button" type="button" data-cs-use-mode="${esc(row.mode)}"${(entry.mode || "move") === row.mode ? ' aria-pressed="true"' : ""}>이 방식으로 편성</button></td></tr>`).join("");
   return `<section class="cs-card" aria-label="편성 방식 비교"><h4>편성 방식 비교</h4>
@@ -706,7 +742,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
       <button class="button" id="classSectionsExportNeis" type="button">나이스 편성 엑셀</button>
       <button class="button" id="classSectionsClassMapTemplate" type="button">내년 반 배정표 양식</button>
       <label class="button">내년 반 배정표 올리기<input id="classSectionsClassMap" type="file" accept=".xlsx" hidden></label>
-      <span class="cs-note">${CLASS_SECTIONS_VIEW.classMap ? `내년 반 배정표 ${Object.keys(CLASS_SECTIONS_VIEW.classMap).length}명 반영` : "내년 반이 없으면 나이스 파일의 반·번호는 비우고 참고 열(현 학년-반-번호)을 붙입니다."}</span>
+      <span class="cs-note">${classSectionsClassMap(group.grade) ? `내년 반 배정표 ${Object.keys(classSectionsClassMap(group.grade)).length}명 반영` : "내년 반이 없으면 나이스 파일의 반·번호는 비우고 참고 열(현 학년-반-번호)을 붙입니다."}</span>
     </div>
   </section>`;
 }
@@ -715,23 +751,31 @@ function classSectionsClassUnitHtml(group, entry, settings) {
   const courses = group.courses.filter((course) => settings.courseModes[course.key] === "class");
   if (!courses.length) return "";
   const esc = classSectionsEsc;
-  const homerooms = [...new Set(group.students.map((student) => student.homeroom))].sort((a, b) => Number(a) - Number(b));
   const split = classSectionsClassUnitPlan(group, entry, settings);
-  const rows = homerooms.map((room) => `<tr><th scope="row">${esc(room)}반</th><td><select data-cs-unit-room="${esc(room)}" data-focus-key="cs-unit-${esc(room)}" aria-label="${esc(room)}반 학급 단위 과목">
+  const rows = split.homerooms.map((room) => `<tr><th scope="row">내년 ${esc(room)}반</th><td><select data-cs-unit-room="${esc(room)}" data-focus-key="cs-unit-${esc(room)}" aria-label="내년 ${esc(room)}반 학급 단위 과목">
     ${courses.map((course) => `<option value="${esc(course.key)}"${split.assign[room] === course.key ? " selected" : ""}>${esc(course.name)}</option>`).join("")}</select></td></tr>`).join("");
-  return `<section class="cs-card" aria-label="학급 단위 과목"><h4>학급 단위 과목 · 담임반 배정 <span class="cs-note">추천 비율 ${esc(split.ratio)} · 희망과 다른 학생 ${split.mismatched}명</span></h4>
-    <p class="cs-note">학급 단위 과목은 이동 블록에서 빠집니다. 담임반마다 과목을 정하세요(추천은 분반 수 비율과 학생 희망을 따름).</p>
+  const status = split.mapped
+    ? `희망과 다른 학생 ${split.mismatched}명(내년 반 배정표 기준)`
+    : "과목별 반 수만 확정 · 학생 배정은 내년 반 배정표를 올린 뒤";
+  return `<section class="cs-card" aria-label="학급 단위 과목"><h4>학급 단위 과목 · 내년 반 배정 <span class="cs-note">추천 비율 ${esc(split.ratio)} · 내년 ${split.homerooms.length}학급 · ${esc(status)}</span></h4>
+    <p class="cs-note" id="classSectionsClassUnitNote">학급 단위 과목은 이동 블록에서 빠집니다. 반 배분은 내년 ${group.targetGrade}학년 ${split.homerooms.length}학급 기준입니다${split.mapped ? "(학생 희망을 새 반 기준으로 반영)" : ". 내년 반이 정해지지 않아 학생별 과목은 아직 정하지 않습니다(오류 아님)"}.</p>
     <button class="button" type="button" id="classSectionsClassUnitReset">추천으로 되돌리기</button>
-    <table class="cs-table"><thead><tr><th>담임반</th><th>과목</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    <table class="cs-table"><thead><tr><th>내년 반</th><th>과목</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
 function classSectionsClassUnitPlan(group, entry, settings) {
   const courses = group.courses.filter((course) => settings.courseModes[course.key] === "class").map((course) => ({ key: course.key, name: course.name,
     sections: entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount }));
-  const homerooms = [...new Set(group.students.map((student) => student.homeroom))].map((id) => ({ id }));
-  const split = typeof classSectionsClassUnitSplit === "function" ? classSectionsClassUnitSplit({ courses, homerooms, students: group.students }) : { assign: {}, ratio: "", mismatched: 0 };
+  const count = group.nextClasses || group.rosterClasses || group.classes || 0;
+  const homerooms = Array.from({ length: count }, (_, index) => String(index + 1));
+  const map = classSectionsClassMap(group.grade);
+  // 학생 희망은 새 반을 알 때만 반영한다(지금 반으로는 내년 반을 알 수 없음).
+  const students = map ? classSectionsHomeroomStudents(group).filter((student) => student.homeroom !== "미정") : [];
+  const split = typeof classSectionsClassUnitSplit === "function" ? classSectionsClassUnitSplit({ courses, homerooms: homerooms.map((id) => ({ id })), students }) : { assign: {}, ratio: "", mismatched: 0 };
   const manual = classSectionsPlain(entry.classUnit.assign) ? entry.classUnit.assign : {};
-  return { ...split, assign: { ...split.assign, ...manual } };
+  const assign = { ...split.assign };
+  for (const [room, key] of Object.entries(manual)) if (homerooms.includes(room)) assign[room] = key;
+  return { ...split, assign, homerooms, mapped: Boolean(map) };
 }
 
 // ---- 교사·시간 설정 창 ----
@@ -956,8 +1000,17 @@ async function classSectionsReadClassMap(file) {
   try {
     const sheets = await parseWorkbook(await file.arrayBuffer());
     const { map, errors } = classSectionsClassMapFromRows(sheets[0]?.rows || []);
-    CLASS_SECTIONS_VIEW.classMap = map;
-    classSectionsSetStatus(`내년 반 배정표: ${Object.keys(map).length}명 읽음${errors.length ? ` · 확인 ${errors.length}건(${errors.slice(0, 2).join(" ")})` : ""}`, errors.length > 0);
+    const store = classSectionsStore();
+    if (!classSectionsPlain(store.classMaps)) store.classMaps = {};
+    const counts = {};
+    for (const [key, value] of Object.entries(map)) {
+      const grade = key.split("-")[0];
+      if (!classSectionsPlain(store.classMaps[grade]) || !counts[grade]) store.classMaps[grade] = {};
+      store.classMaps[grade][key] = { classroom: String(value.classroom), number: String(value.number || "") };
+      counts[grade] = (counts[grade] || 0) + 1;
+    }
+    if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
+    classSectionsSetStatus(`내년 반 배정표: ${Object.entries(counts).map(([grade, count]) => `현 ${grade}학년 ${count}명`).join(", ") || "0명"} 읽음${errors.length ? ` · 확인 ${errors.length}건(${errors.slice(0, 2).join(" ")})` : ""}`, errors.length > 0 || !Object.keys(counts).length);
   } catch (error) {
     classSectionsSetStatus(`내년 반 배정표를 읽지 못했습니다: ${error?.message || error}`, true);
   }
@@ -1008,9 +1061,12 @@ function classSectionsExport(kind) {
       const department = settings.courseDepartments[course.key] || course.department;
       return [course.key, { family: classSectionsNeisFamily(course.area, department), credits: course.credits }];
     }));
-    const map = CLASS_SECTIONS_VIEW.classMap || {};
+    const map = classSectionsClassMap(group.grade) || {};
     const students = group.students.map((student) => ({ key: student.key, classroom: map[student.key]?.classroom || "", number: map[student.key]?.number || "", name: names.get(student.key) || "" }));
-    const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students });
+    const unitCourses = group.courses.filter((course) => settings.courseModes[course.key] === "class");
+    const classUnit = unitCourses.length ? { byClass: classSectionsClassUnitPlan(group, entry, settings).assign,
+      courses: Object.fromEntries(unitCourses.map((course) => [course.key, { name: course.name, ...courses[course.key] }])) } : null;
+    const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students, classUnit });
     const sheets = [{ name: "수강학생 편성", rows, widths: [8, 6, 6, 18, 22, 18, 12, 6, 6, 10, 16], merges: ["A1:F1", "G1:J1"], freeze: "A3" },
       { name: "확인 필요", orientation: "portrait", widths: [100], rows: [["확인 필요"], ...warnings.map((text) => [text]),
         ["개설강의실 번호: 어느 블록에서든 그 과목 분반이 2개 이상이면 모든 분반에 번호, 교사가 배정돼 있으면 같은 교사는 같은 번호(사용자 나이스 파일에서 추정)."]] }];
