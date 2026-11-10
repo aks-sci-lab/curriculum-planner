@@ -513,13 +513,19 @@ function computeHoursStats(year = hoursTargetYear()) {
     }
     const parsed = curriculumPlanEntries(layout);
     for (const text of parsed.issues) issues.push({ level: "warning", text: `${cohortYear}학년도 입학생 편제표: ${text}` });
-    const entries = parsed.entries.filter((entry) => entry.grade === grade);
-    if (!entries.length) {
+    const gradeEntries = parsed.entries.filter((entry) => entry.grade === grade);
+    if (!gradeEntries.length) {
       issues.push({ level: "error", text: `${cohortYear}학년도 입학생 편제표에서 ${grade}학년 과목을 찾지 못했습니다.` });
       continue;
     }
     const currentGrade = String(Number(grade) - 1);
-    const needsResults = entries.some((entry) => entry.kind === "선택" || entry.kind === "소인수");
+    // 소인수·공동교육과정은 편제표 작업에서만 다룬다: 시수 통계에서는 없는 것처럼 조용히 뺀다(순증이든 아니든, 안내 없음).
+    // 판별은 학기 칸 메모 또는 편성 영역 '소인수·공동'(curriculumSeparateApplicationRows = curriculumSeparateApplication 기준).
+    const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
+      ? curriculumSeparateApplicationRows(layout.planData) : null;
+    const isSeparate = (entry) => entry.kind === "공동" || entry.kind === "소인수" || Boolean(separateRows?.has(entry.rowIndex));
+    const entries = gradeEntries.filter((entry) => !isSeparate(entry));
+    const needsResults = entries.some((entry) => entry.kind === "선택");
     if (needsResults && grade !== "1") {
       const failed = { source: new Set(), closed: new Set() };
       info.source = hoursSourceResult(currentGrade, settings, failed);
@@ -548,14 +554,7 @@ function computeHoursStats(year = hoursTargetYear()) {
       resultIndex.get(key).push(row);
     }
     const usedResults = new Set();
-    const shared = [];
     for (const entry of entries) {
-      // 순증(우리 학교가 따로 1반을 더 여는) 소인수·공동교육과정은 시수에 넣는다. 그 외 공동교육과정은 다른 학교 운영이라 뺀다.
-      const netIncrease = (entry.kind === "공동" || entry.kind === "소인수") && /순증/.test(String(entry.note || ""));
-      if (entry.kind === "공동" && !netIncrease) {
-        shared.push(`${entry.subject}(${entry.grade}-${entry.semester})`);
-        continue;
-      }
       const item = {
         grade, semester: entry.semester, subject: entry.subject, area: entry.area, credit: entry.credit,
         kind: entry.kind, creditSource: entry.creditSource, cohortYear, enrollment: null, basis: "",
@@ -577,11 +576,6 @@ function computeHoursStats(year = hoursTargetYear()) {
             ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`
             : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
           : "학교 지정 · 전체 학급";
-      } else if (netIncrease && (entry.kind === "공동" || grade === "1" || !(resultIndex.get(normalizeResultCourseName(entry.subject)) || [])
-        .some((row) => !row.semester || row.semester === entry.semester))) {
-        // 신청 결과에 없는 순증 과목은 1반으로 본다(0반이면 시수가 빠짐). 반 수가 다르면 상세 표에서 직접 입력.
-        item.autoClasses = 1;
-        item.basis = `${entry.kind === "공동" ? "공동교육과정" : "소인수"} 순증 · 1반으로 계산(다르면 직접 입력)`;
       } else if (grade === "1") {
         item.autoClasses = 0;
         item.basis = "1학년 선택과목 · 개설반 직접 입력";
@@ -612,7 +606,7 @@ function computeHoursStats(year = hoursTargetYear()) {
           if (closedBefore) {
             issues.push({ level: "info", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 현 ${currentGrade}학년 ${earlier.round}차에서 폐강해 개설반 0으로 계산했습니다.` });
           } else if (info.source) {
-            issues.push({ level: entry.kind === "소인수" ? "info" : "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}${entry.kind === "소인수" ? "(소인수)" : ""}: 현 ${currentGrade}학년 ${info.source.round}차 결과에 없어 개설반 0으로 계산했습니다. 과목명이 다르면 상세 표에서 개설반을 입력하세요.` });
+            issues.push({ level: "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 현 ${currentGrade}학년 ${info.source.round}차 결과에 없어 개설반 0으로 계산했습니다. 과목명이 다르면 상세 표에서 개설반을 입력하세요.` });
           }
         }
       }
@@ -630,7 +624,6 @@ function computeHoursStats(year = hoursTargetYear()) {
       item.hours = item.credit * item.classes;
       items.push(item);
     }
-    if (shared.length) issues.push({ level: "info", text: `${grade}학년 공동교육과정 ${shared.length}과목은 다른 학교에서 운영해 시수에서 뺐습니다: ${resultExampleList(shared)}` });
     const unused = (info.source?.rows || []).filter((row) => !usedResults.has(row) && row.classCount > 0);
     if (unused.length) {
       issues.push({ level: "warning", text: `현 ${currentGrade}학년 ${info.source.round}차 결과 중 ${cohortYear}학년도 입학생 편제표의 ${grade}학년 과목과 맞지 않는 과목이 있습니다(시수 미반영): ${resultExampleList(unused.map((row) => `${row.displayName || row.name}${row.semester ? `(${row.semester}학기)` : ""}`))}` });

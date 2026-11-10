@@ -243,6 +243,8 @@
     .application-semester-empty { margin: 10px 0; color: #78859a; font-size: 12px; }
     .application-semester-unscheduled { margin-top: 8px; }
     .application-subject { display: flex; align-items: center; gap: 8px; min-height:44px; margin:6px 0; padding:9px 11px; border:1px solid #d7dfed; border-radius:10px; background:#fff; font-size: 13px; cursor:pointer; transition:border-color .15s,background .15s,box-shadow .15s; }
+    .application-subject .same-course-note { margin-left: auto; padding: 1px 6px; border-radius: 4px; background: #fdebd0; color: #8a4a00; font-size: 11px; white-space: nowrap; }
+    .application-subject:has(input:disabled) { cursor: not-allowed; }
     .application-subject:has(input:checked) { border:2px solid #3b68e8; padding:8px 10px; background:#eef3ff; box-shadow:0 0 0 2px #3b68e81a; }
     .application-subject:has(input:disabled) { cursor:not-allowed; opacity:.72; }
     .application-subject input { width:20px; height:20px; flex:0 0 20px; accent-color:#3b68e8; }
@@ -2327,6 +2329,24 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-proposal { margin-top:10px; padding:10px; border:1px dashed #b9c6dc; border-radius:10px; background:#fbfcff; }
     .cs-proposal h5 { margin:0 0 6px; font-size:12px; }
     .cs-table tr.is-current th { color:#2852ce; }
+    /* 6단계 직접 고치기(class-sections-edit.js) */
+    .cs-table-wrap { overflow-x:auto; }
+    .cs-place .cs-num { width:52px; }
+    .cs-place td.is-empty .cs-num { color:#9aa3b2; }
+    .cs-place td.is-conflict { background:#fff1ee; box-shadow:inset 0 0 0 2px #e3a497; }
+    .cs-place td.is-shared { background:#fff8e6; }
+    .cs-place tr.is-selected th, .cs-place tr.is-selected td { background:#eef4ff; }
+    .cs-place tfoot td.is-over { color:#b4412c; font-weight:700; }
+    .cs-place .cs-co { color:var(--muted); }
+    .cs-link { border:0; background:none; padding:0; color:#2852ce; font:inherit; font-weight:700; cursor:pointer; text-align:left; }
+    .cs-link[aria-pressed="true"] { text-decoration:underline; }
+    .cs-move-dialog { max-width:min(960px, calc(100vw - 32px)); }
+    .cs-move td.is-empty { background:#eef0f4; }
+    .cs-move-cell { display:flex; gap:4px; align-items:center; padding:3px 6px; border:1px solid var(--line); border-radius:6px; margin:2px 0; cursor:pointer; }
+    .cs-move-cell.is-current { border:2px solid #2852ce; }
+    .cs-move-cell.is-recommended { background:#eef8ee; }
+    .cs-move-cell em { font-style:normal; font-size:11px; color:#2852ce; }
+    #classSectionsMoveIssues[data-state="error"] { color:#b4412c; }
 
 /* 떠 있는 묶기 단추: 고른 학기에 학점 없는 과목이 섞였을 때 경고 */
 .curriculum-selection-actions:has(.curriculum-selection-actions-warn) { flex-wrap: wrap; max-width: min(560px, calc(100vw - 16px)); }
@@ -2334,3 +2354,130 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 
 .hours-status { margin: 4px 0 6px; font-size: 13px; }
 .hours-status:empty { display: none; }
+
+/* 6단계 출력물: 교실 배정 칸·출력물 단추 줄·학생 이동수업 시간표(class-sections-print.js) */
+.cs-section .cs-room { display:inline-flex; align-items:center; gap:4px; grid-column:1 / -1; color:var(--muted); font-size:11px; }
+.cs-section .cs-room select { max-width:150px; min-width:90px; }
+.cs-section .cs-room.is-clash select { border-color:#c5533f; background:#fff1ee; color:#a44939; }
+.cs-room-summary { margin:6px 0 10px; }
+.cs-print { margin-top:12px; padding:10px; border:1px solid var(--line); border-radius:10px; background:#fbfcff; }
+.cs-print h5 { margin:0 0 6px; font-size:13px; }
+.cs-print label { display:inline-flex; align-items:center; gap:4px; font-size:12px; }
+.cs-tt-preview { margin-top:10px; max-width:760px; }
+.cs-tt { padding:8px 10px; border:1px solid #9aa6ba; border-radius:6px; background:#fff; color:#111; break-inside:avoid; page-break-inside:avoid; }
+.cs-tt header h4 { margin:0; font-size:13px; }
+.cs-tt header p { margin:2px 0 6px; font-size:12px; font-weight:700; }
+.cs-tt-retake { margin:0 0 6px; padding:3px 6px; border:1px solid #e3a497; border-radius:4px; background:#fff6f4; color:#a44939; font-size:12px; font-weight:700; }
+.cs-tt-grid { width:100%; border-collapse:collapse; table-layout:fixed; font-size:11px; }
+.cs-tt-grid th, .cs-tt-grid td { padding:2px 3px; border:1px solid #777; text-align:center; vertical-align:middle; line-height:1.25; }
+.cs-tt-grid thead th, .cs-tt-grid tbody th { background:#eef1f6; }
+.cs-tt-grid tbody th { width:26px; }
+.cs-tt-grid td { height:40px; }
+.cs-tt-grid td span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-tt-grid td span:first-of-type { font-weight:700; }
+.cs-tt-grid td small { display:block; color:#5d6a82; font-size:9px; }
+.cs-tt-grid td[data-kind="fixed"] { background:#f3f3f3; color:#444; }
+.cs-tt-grid td[data-kind="empty"] { color:#888; }
+.cs-tt-grid td[data-kind="empty"] span { font-weight:400; }
+.cs-tt-grid td[data-kind="clash"] { background:#fff1ee; color:#a44939; }
+.cs-tt-list, .cs-tt-unit { margin:6px 0 0; padding-left:16px; font-size:11px; }
+.cs-tt-unit { padding-left:0; }
+@media print {
+  .print-page.cs-tt-page { display:flex; flex-direction:column; gap:5mm; padding:0; }
+  .print-page.cs-tt-page[data-per="3"] .cs-tt-grid td { height:9mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-grid td { height:14mm; }
+  .print-page.cs-tt-page[data-per="4"] { display:grid; grid-template-columns:1fr 1fr; gap:4mm; }
+  .print-page.cs-tt-page[data-per="4"] .cs-tt-grid { font-size:8px; }
+  .print-page.cs-tt-page[data-per="4"] .cs-tt-grid td { height:13mm; }
+  .print-page.cs-tt-page .cs-tt { border-color:#555; }
+}
+/* 6단계 이동 출석부 보기·인쇄(class-sections-print.js classSectionsSheetHtml: 엑셀 출석부와 같은 칸) */
+.cs-att-view { margin-top:10px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+.cs-att-view > summary { cursor:pointer; font-size:13px; font-weight:700; }
+.cs-att-scroll { margin-top:8px; overflow:auto; max-height:640px; }
+.cs-att-table { border-collapse:collapse; table-layout:fixed; font-size:11px; color:#111; background:#fff; }
+.cs-att-table th, .cs-att-table td { height:20px; padding:1px 3px; border:1px solid #777; text-align:center; white-space:nowrap; overflow:hidden; }
+.cs-att-table th { background:#e9eef6; font-weight:700; }
+.cs-att-table td[data-kind="title"] { border:0; height:30px; font-size:16px; font-weight:700; }
+.cs-att-table td[data-kind="note"] { border:0; text-align:left; color:#8a3b12; font-size:10px; }
+.cs-att-table td[data-kind="left"] { text-align:left; }
+.cs-att-table tr.is-found td { background:#fff3b0; font-weight:700; }
+@media print {
+  .print-page.cs-att-page { padding:0; }
+  .print-page.cs-att-page .cs-att-table { width:100%; font-size:9.5px; }
+  .print-page.cs-att-page .cs-att-table th, .print-page.cs-att-page .cs-att-table td { height:5.8mm; border-color:#444; }
+  .print-page.cs-att-page .cs-att-table td[data-kind="title"] { height:10mm; font-size:15px; }
+  .print-page.cs-att-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
+}
+/* 담임학급별 '이동수업 현황'(class-sections-print.js classSectionsHomeroomStatusSheet): 칸 안 줄바꿈, 인쇄는 A4 가로 */
+.cs-att-table td, .cs-att-table th { white-space:pre-line; }
+#classSectionsHomeroomTable td, #classSectionsHomeroomTable th { height:auto; min-height:28px; line-height:1.25; padding:2px 4px; }
+@page cs-landscape { size: A4 landscape; margin: 10mm 12mm; }
+@media print {
+  /* 칸 글자 12px = 9pt. 쪽 나눔은 class-sections-print.js classSectionsHomeroomStatusPages(쪽마다 .print-page 한 장, 오른쪽 위 1/2) */
+  .print-page.cs-hr-page { page: cs-landscape; width:auto; padding:0; position:relative; }
+  .print-page.cs-hr-page .cs-att-table { width:100%; font-size:12px; table-layout:fixed; }
+  .print-page.cs-hr-page .cs-att-table td, .print-page.cs-hr-page .cs-att-table th { height:auto; padding:.2mm .8mm; line-height:1.2; border-color:#444; overflow-wrap:anywhere; }
+  .print-page.cs-hr-page .cs-att-table td[data-kind="title"] { height:7mm; font-size:16px; }
+  .print-page.cs-hr-page .cs-att-table td[data-kind="note"] { font-size:12px; }
+  .print-page.cs-hr-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
+  .print-page.cs-hr-page .cs-hr-pageno { position:absolute; top:1mm; right:1mm; font-size:12px; font-weight:700; }
+}
+/* 담임 현황 쪽 나눔 재기(classSectionsHomeroomStatusMeasurer, 화면 밖): 위 인쇄 규칙과 같은 글자·여백 — 하나를 바꾸면 둘 다 */
+.print-page.cs-hr-page.cs-hr-measure { padding:0; color:#111; }
+.cs-hr-measure .cs-att-table { width:100%; font-size:12px; table-layout:fixed; }
+.cs-hr-measure .cs-att-table td, .cs-hr-measure .cs-att-table th { height:auto; padding:.2mm .8mm; line-height:1.2; border-color:#444; overflow-wrap:anywhere; }
+.cs-hr-measure .cs-att-table td[data-kind="title"] { height:7mm; font-size:16px; }
+.cs-hr-measure .cs-att-table td[data-kind="note"] { font-size:12px; }
+/* 담임 현황 단계(classSectionsHomeroomStatusChoose): 8pt 단계 = 10.67px, 범례 줄은 왼쪽 정렬 — 인쇄·재기 모두 */
+@media print {
+  .print-page.cs-hr-page[data-font="8"] .cs-att-table, .print-page.cs-hr-page[data-font="8"] .cs-att-table td[data-kind="note"] { font-size:10.67px; }
+  .print-page.cs-hr-page .cs-att-table td[data-kind="left"] { text-align:left; white-space:pre-line; line-height:1.3; }
+}
+.cs-hr-measure[data-font="8"] .cs-att-table, .cs-hr-measure[data-font="8"] .cs-att-table td[data-kind="note"] { font-size:10.67px; }
+.cs-hr-measure .cs-att-table td[data-kind="left"] { text-align:left; white-space:pre-line; line-height:1.3; }
+/* 학생 배부용 '이동수업 안내' 쪽지(classSectionsHandoutHtml): 글자 크기는 --ho-font(인쇄 장마다 classSectionsHandoutLayout이 정함) */
+.cs-ho-box { margin-top:8px; padding-top:6px; border-top:1px solid #d7deed; }
+.cs-ho { box-sizing:border-box; padding:3mm 4mm; border:1px dashed #777; font-size:var(--ho-font, 12px); color:#111; background:#fff; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+.cs-ho header h4 { margin:0; font-size:1.3em; letter-spacing:.5px; }
+.cs-ho .cs-ho-who { margin:.4em 0 .5em; font-weight:700; }
+.cs-ho-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.cs-ho-table th, .cs-ho-table td { border:1px solid #555; padding:.15em .35em; line-height:1.3; text-align:center; overflow-wrap:anywhere; }
+.cs-ho-table thead th { background:#eef1f6; font-weight:700; }
+.cs-ho-table tbody th { font-weight:700; white-space:nowrap; padding:.15em .1em; }
+.cs-ho-retake td strong { color:#a42b1c; }
+.cs-ho-table .cs-ho-room { display:block; font-size:.8em; color:#666; line-height:1.25; }
+.cs-ho-unsub { margin:.6em 0; padding:.8em; border:2px solid #a42b1c; text-align:center; font-size:1.25em; }
+.cs-ho-foot { margin:auto 0 0; padding-top:.4em; font-size:.85em; color:#444; }
+.cs-ho-preview { max-width:720px; margin-top:6px; }
+.cs-ho-preview .cs-ho { border-style:solid; border-color:#c9d2e3; }
+@media print {
+  .print-page.cs-ho-page { width:182mm; height:268mm; padding:0; display:grid; grid-template-columns:repeat(var(--ho-cols, 1), minmax(0, 1fr)); grid-template-rows:repeat(var(--ho-rows, 4), minmax(0, 1fr)); overflow:hidden; }
+  .print-page.cs-ho-page .cs-ho { height:100%; }
+}
+/* 교실 선택 필요(학년 교실 부족 → 교사가 고름) */
+.cs-section .cs-room.is-choose { color:#a44939; font-weight:700; flex-wrap:wrap; }
+.cs-section .cs-room.is-choose select { border-color:#e3a497; background:#fff6f4; }
+.cs-section .cs-room.is-choose input { width:110px; }
+#classSectionsOutputWarnings { margin:4px 0 8px; }
+/* 학생 시간표 1·2학기 한 장(cs-tt-year): 학기마다 격자, 한 장에 1명(기본) 또는 2명 */
+.cs-tt-sem { margin-top:6px; }
+.cs-tt-sem h5 { margin:0 0 3px; font-size:12px; }
+@media print {
+  .print-page.cs-tt-page[data-per="1"] .cs-tt-year .cs-tt-grid td { height:12.5mm; }
+  .print-page.cs-tt-page[data-per="2"] { gap:3mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year { padding:4px 6px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid { font-size:8px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:5.6mm; line-height:1.05; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td small { display:none; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year header h4 { font-size:11px; }
+}
+@media print {
+  /* 한 장에 2명: 학생마다 1·2학기를 좌우로(세로 4개 격자는 한 장을 넘음) */
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year { display:grid; grid-template-columns:1fr 1fr; column-gap:3mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year > header, .print-page.cs-tt-page[data-per="2"] .cs-tt-year > .cs-tt-retake { grid-column:1 / -1; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-sem { margin-top:2px; min-width:0; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid { font-size:7.5px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:10mm; line-height:1.1; padding:1px 2px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid tbody th { width:14px; }
+}

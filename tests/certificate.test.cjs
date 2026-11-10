@@ -241,3 +241,18 @@ test("certificate course names drop the two-semester tag because the group colum
   assert.equal(ctx.certificateCourseName({ applicationSubject: { subject: "과학의 역사와 문화 (2학기)", kind: "융합" } }), "과학의 역사와 문화(융합)");
   assert.equal(ctx.certificateCourseName({ name: "물리학" }), "물리학");
 });
+
+test("소인수·공동 selections left in older imported results are hidden on the certificate silently (no note)", () => {
+  const ctx = markupContext({ "#schoolYear": "2026", "#round": "1차", "#confirmDate": "", "#schoolName": "학교" });
+  ctx.collectApplicationSubjects = () => ({ "1": [], "2": [], "3": [{ subject: "물리학" }, { subject: "고급 물리학", separate: true }] });
+  vm.runInContext(functionSource(app, "function applicationSeparateNames(", "function aggregateCourseDisplayName("), ctx);
+  const older = { grade: "2", classroom: "1", number: "1", name: "가상", totalCredits: 6,
+    selections: [{ name: "물리학", credits: 3, column: 1 }, { name: "고급 물리학 (1학기)", credits: 3, column: 2 }] };
+  assert.deepEqual(ctx.applicationSelections(older).map((course) => course.name), ["물리학"]);
+  const markup = ctx.certificateMarkup(older, true, []);
+  assert.doesNotMatch(markup, /고급 물리학/);
+  assert.match(markup, /총 1과목\(3학점\)/);
+  assert.doesNotMatch(markup, /소인수|공동|따로 신청|paper-separate-note/, "안내 없음");
+  assert.doesNotMatch(css, /paper-separate-note/);
+  assert.equal(ctx.applicationSelections(student(3)).length, 3);
+});

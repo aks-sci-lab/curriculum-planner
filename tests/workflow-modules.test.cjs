@@ -303,18 +303,21 @@ test("hours statistics use planned classes and confirmed selections without doub
 });
 
 
-test("hours statistics count net-increase (순증) small-class and joint courses as one class instead of 0", () => {
+test("hours statistics leave 소인수·공동 courses out silently (net increase or not), ignoring old class overrides", () => {
   const entries = [
+    { grade: "2", semester: "1", subject: "물리학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
     { grade: "2", semester: "1", subject: "경제", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점(순증)" },
     { grade: "2", semester: "2", subject: "고급 물리학", area: "과학", credit: 3, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/3학점(순증)" },
     { grade: "2", semester: "2", subject: "공동 과목", area: "과학", credit: 2, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/2학점" },
     { grade: "2", semester: "1", subject: "윤리와 사상", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점" }
   ];
-  const snapshot = { rows: [] };
+  const snapshot = { rows: [{ grade: "1", name: "물리학", semester: "1", classCount: 4, enrollment: 120, decision: "open" }] };
   const layout = { rows: [] };
   const ctx = vm.createContext({
     document: { getElementById: () => null },
-    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 11, "3": 11 } } }, roundStatuses: { "1": { status: "confirmed", snapshot } } },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 11, "3": 11 },
+      // 예전 저장 자료에 남은 개설반 직접 입력값은 무시한다(지우지는 않음).
+      classOverrides: { "2|1|경제": 2 } } }, roundStatuses: { "1": { status: "confirmed", snapshot } } },
     $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
     curriculumCohortLayout: (year) => year === "2026" ? layout : null,
     curriculumPlanEntries: (value) => ({ entries: value === layout ? entries : [], issues: [] }),
@@ -325,12 +328,17 @@ test("hours statistics count net-increase (순증) small-class and joint courses
   });
   vm.runInContext(hoursStats, ctx);
   const stats = ctx.computeHoursStats("2027");
-  const item = (name) => stats.items.find((entry) => entry.subject === name);
-  assert.equal(item("경제").classes, 1, "소인수 순증");
-  assert.match(item("경제").basis, /소인수 순증/);
-  assert.equal(item("고급 물리학").classes, 1, "공동교육과정 순증은 우리 학교 시수");
-  assert.equal(item("공동 과목"), undefined, "순증이 아닌 공동교육과정은 다른 학교 운영이라 뺀다");
-  assert.equal(item("윤리와 사상").classes, 0, "순증이 아닌 소인수는 결과대로");
+  assert.deepEqual(plain(stats.items.map((item) => item.subject)), ["물리학"], "소인수·공동은 시수 항목에 없다");
+  assert.equal(stats.items[0].classes, 4);
+  assert.deepEqual(plain(ctx.state.hoursStats["2027"].classOverrides), { "2|1|경제": 2 }, "예전 직접 입력값은 지우지 않는다");
+  const words = /소인수|공동|따로 신청/;
+  assert.ok(!stats.issues.some((issue) => words.test(issue.text)), stats.issues.map((issue) => issue.text).join("\n"));
+  const model = ctx.hoursFormModel(stats);
+  assert.ok(![...model.cells.values()].some((cell) => cell.tag || words.test(String(cell.v ?? ""))), "시수표에 표시 없음");
+  const html = ctx.hoursFormHtml(model);
+  assert.doesNotMatch(html, /소인수|공동|따로 신청|data-hours-separate|hf-separate-tag/);
+  const sheets = ctx.buildHoursWorkbookSheets(stats, { schoolName: "가상고" });
+  assert.ok(!JSON.stringify(sheets.filter((sheet) => sheet.rows).map((sheet) => sheet.rows)).match(words), "엑셀(확인 필요 시트 포함)에도 없음");
 });
 test("hours stats treat a course closed in an earlier round as closed, not as a missing result", () => {
   const entries = [

@@ -139,6 +139,8 @@ function validateApplicationGroupData(groups, seeded) {
         const selectionGroup = course.semesterGroups?.[semester];
         result[grade].push({ ...course, semester,
           subject: semesters.length > 1 ? `${course.subject} (${semester}학기)` : course.subject,
+          // 학기제: 두 학기에 걸친 과목을 학기로 나눈 줄의 학점은 그 학기 칸 값(묶음 과목은 행 학점 그대로).
+          credit: semesters.length > 1 ? (course.semesterCredits?.[semester] || course.credit) : course.credit,
           groupSubject: course.subject,
           fill: course.semesterColors?.[semester] || "",
           groupName: selectionGroup?.groupName || "",

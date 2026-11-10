@@ -50,6 +50,7 @@
       roundStatuses: {},
       hoursStats: {},
       classSections: {},
+      applicationRosters: {},
       courseChecks: {},
       curriculumCompliance: {},
       curriculumVersions: {},
@@ -451,6 +452,7 @@
           roundStatuses: state.roundStatuses,
           hoursStats: state.hoursStats,
           classSections: state.classSections,
+          applicationRosters: state.applicationRosters,
           courseChecks: state.courseChecks,
           curriculumCompliance: state.curriculumCompliance,
           curriculumVersions: state.curriculumVersions,
@@ -1049,6 +1051,29 @@
     // afterWrite: 자료를 실제로 교체한 직후(새로고침 직전)에 한 번 부른다. 파일 연결처럼 교체가 끝난 뒤에만 해야 하는 일에 쓴다.
     // confirmed: 호출한 쪽에서 이미 교체 확인을 받았을 때(PC 파일이 바뀌어 불러올 때) 확인 창을 다시 띄우지 않는다.
     async function restoreWorkspaceBackup(file, afterWrite = null, { confirmed = false } = {}) {
+      // 확인 창 문구(학생 수는 현재 차수 명단 기준, 성명은 싣지 않는다).
+      function restoreBackupConfirmText(backup, fileName) {
+        const created = new Date(backup.createdAt);
+        const pad = (value) => String(value).padStart(2, "0");
+        const when = Number.isFinite(created.getTime())
+          ? `${created.getFullYear()}. ${created.getMonth() + 1}. ${created.getDate()}. ${pad(created.getHours())}:${pad(created.getMinutes())}`
+          : "알 수 없음";
+        const students = Array.isArray(backup.workspace?.students) ? backup.workspace.students : [];
+        const byGrade = new Map();
+        for (const student of students) byGrade.set(String(student.grade), (byGrade.get(String(student.grade)) || 0) + 1);
+        const round = backup.workspace?.currentRound ? `${backup.workspace.currentRound}차 ` : "";
+        const counts = students.length
+          ? `${round}${[...byGrade].sort().map(([grade, count]) => `현 ${grade}학년 ${count}명`).join(" · ")}`
+          : "학생 결과 없음";
+        return [
+          `백업 파일${fileName ? ` '${fileName}'` : ""}의 편제표·차수·선택 그룹으로 이 브라우저의 자료를 바꿉니다.`,
+          "",
+          `· 저장 시각: ${when}`,
+          `· 학생: ${counts}`,
+          "",
+          "현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다."
+        ].join("\n");
+      }
       if (!file) return false;
       const previous = new Map();
       const written = [];
@@ -1087,7 +1112,14 @@
           );
           entries.push([key, value]);
         }
-        if (!confirmed && !window.confirm("백업에 포함된 편제표·차수·선택 그룹으로 이 브라우저의 자료를 교체합니다. 현재 자료를 먼저 백업했나요? 온라인 서버 자료는 변경하지 않습니다. 원본 엑셀은 별도로 보관해야 합니다.")) return false;
+        if (!confirmed) {
+          // 복원 확인은 앱 확인 창(appConfirm): 파일 이름·저장 시각·학생 수를 보여 준다(앱 확인 창이 없으면 브라우저 confirm).
+          const text = restoreBackupConfirmText(backup, file?.name);
+          const ok = typeof appConfirm === "function"
+            ? await appConfirm(text, { title: "백업 복원", ok: "복원", cancel: "취소" })
+            : window.confirm(text);
+          if (!ok) return false;
+        }
         entries.push([WORKSPACE_SAVED_AT_KEY, String(Date.now())]);
         // 새 저장소를 쓰면 작업 자료는 IndexedDB에 통째로 바꿔 쓰고(한 번에), localStorage에는 그룹 설정과 작은 기록만 쓴다.
         const useStore = typeof workspaceStoreState !== "undefined" && workspaceStoreState.active;
@@ -1515,6 +1547,7 @@
       state.roundStatuses = {};
       state.hoursStats = {};
       state.classSections = {};
+      state.applicationRosters = {};
       state.courseChecks = {};
       state.curriculumCompliance = {};
       state.curriculumVersions = {};
@@ -1637,6 +1670,8 @@
         // 6단계 분반 편성(예전 저장분·백업에는 없음 → 빈 객체). 정리는 class-sections-view.js가 한다.
         state.classSections = typeof classSectionsRestore === "function" ? classSectionsRestore(saved.classSections)
           : plainObject(saved.classSections) ? saved.classSections : {};
+        // 웹 신청 명렬(현 학년 전체, 이 PC에만). 예전 저장분·백업에는 없음 → 빈 객체.
+        state.applicationRosters = typeof applicationRostersRestore === "function" ? applicationRostersRestore(saved.applicationRosters) : {};
         // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.
         if (typeof courseCheckMigrateRequired === "function") {
           const migrated = courseCheckMigrateRequired(saved.courseChecks, saved.curriculumCompliance);
@@ -3643,13 +3678,16 @@
       }
       // 과목 행 정보는 묶음마다 다시 만들지 않고 한 번만 만든다.
       const contexts = groups.size ? importedPlanCourseContexts(layout, columns) : [];
+      // 소인수·공동교육과정은 신청 과목이 아님(편제표 작업에서만 다룸): 편제표 데이터가 있으면 curriculumSeparateApplicationRows 한 기준, 없으면 행 글자로 판별.
+      const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
+        ? curriculumSeparateApplicationRows(layout.planData) : null;
       for (const group of groups.values()) {
         for (const context of contexts) {
           if (normalizeCurriculumDivision(context.division) !== "학생 선택 교육과정" ||
               !isSelectableDetail(context.selectionType || context.detail) ||
               curriculumCellFill(layout, context.rowIndex, semesterColumn).toUpperCase() !== group.fill.toUpperCase()) continue;
           const rowText = [context.subject, ...context.row].join(" ").replace(/\s+/g, "");
-          if (/공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
+          if (separateRows ? separateRows.has(context.rowIndex) : /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
           for (const subject of String(context.subject).split(/[,，]/)
             .map((name) => name.replace(/↔/g, " ").replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim())
             .filter(Boolean)) group.courses.add(subject);
@@ -3698,6 +3736,8 @@
         const semesters = [];
         for (const course of gradeCourses) {
           const applicationSubject = course.applicationSubject || aggregateApplicationSubject(course, grade, applicationSubjects);
+          // 소인수·공동교육과정은 신청 과목이 아니므로(예전에 취합한 결과에 남아 있어도) 집계·개설·6단계 입력에서 조용히 뺀다.
+          if (applicationSubject?.separate || (typeof isApplicationSeparateCourse === "function" && isApplicationSeparateCourse(course, grade))) continue;
           const applicationSemester = applicationSubject?.semester || "";
           const applicationGroup = applicationGroupForCourse(course, grade, groupSettings, applicationSemester);
           const forcedSemester = semesterAssignments[String(course.column)];
@@ -3795,6 +3835,83 @@
       return semesterMatches.length === 1 ? semesterMatches[0] : matches.length === 1 ? matches[0] : null;
     }
 
+    // 소인수·공동교육과정 과목(편제표 작업에서만 다룸): 학생이 고른 과목에서 조용히 빼는 곳은 이 두 함수 하나로 모은다.
+    // 새로 취합한 결과에서는 이미 빠지지만, 예전에 취합해 저장한 결과에 남은 선택도 확인서·학생 목록·위계/이수학점 점검·4단계에서 숨긴다.
+    // 판별 기준은 1단계 편제표(curriculumSeparateApplicationRows → collectApplicationSubjects의 separate 표시).
+    function applicationSeparateNames(currentGrade) {
+      const grade = String(currentGrade ?? "");
+      if (!["1", "2"].includes(grade) || typeof collectApplicationSubjects !== "function") return null;
+      const schoolYear = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+      const compute = () => {
+        let subjects = null;
+        try { subjects = collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }); } catch { subjects = null; }
+        const names = new Set((subjects?.[String(Number(grade) + 1)] || []).filter((item) => item.separate)
+          .map((item) => applicationSeparateKey(item.subject)));
+        return names.size ? names : null;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("applicationSeparateNames", `${grade}|${schoolYear}`, compute) : compute();
+    }
+
+    function applicationSeparateKey(name) {
+      if (typeof normalizeResultCourseName === "function") return normalizeResultCourseName(name);
+      return String(name ?? "").replace(/\s*\([123]학년\)/g, "").replace(/\s*\([12]학기\)/g, "")
+        .replace(/\s*\((?:공통|일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
+    }
+
+    // 과목(결과의 과목 열 또는 학생 선택 하나)이 소인수·공동 과목인가. 4단계 집계와 applicationSelections가 함께 쓴다.
+    // 웹 신청 결과(online)는 서버에 올린 과목 목록 기준이라 지금 편제표를 다시 읽지 않는다(소인수·공동 과목은 처음부터 없음).
+    function isApplicationSeparateCourse(course, currentGrade, names) {
+      if (course?.applicationSubject?.separate) return true;
+      if (!course || course.applicationGroupSource === "online") return false;
+      const list = names === undefined ? applicationSeparateNames(currentGrade) : names;
+      return Boolean(list?.has(applicationSeparateKey(course.name)));
+    }
+
+    // 학생이 고른 과목 중 소인수·공동 과목을 뺀 목록(뺄 것이 없으면 원래 배열 그대로).
+    function applicationSelections(student) {
+      const selections = Array.isArray(student?.selections) ? student.selections : [];
+      if (!selections.length) return selections;
+      const names = applicationSeparateNames(student.grade);
+      const separate = (course) => isApplicationSeparateCourse(course, student.grade, names);
+      return selections.some(separate) ? selections.filter((course) => !separate(course)) : selections;
+    }
+
+    // 같은 과목 한 학기만(sameCourseOnce): 학기제라 같은 과목이 1·2학기에 모두 나오면 한 학기에만 신청한다
+    // (편제표 다른 행이든 한 행이 두 학기에 걸치든, collectApplicationSubjects가 표시). 웹 화면·서버는 이미 두 학기 중복을 막으므로
+    // 이 검사는 외부 결과(엑셀·구글폼·오프라인 파일)에 남은 경우를 찾는다. 웹 결과(online)는 서버 과목 목록의 표시만 본다.
+    function applicationOnceNames(currentGrade) {
+      const grade = String(currentGrade ?? "");
+      if (!["1", "2"].includes(grade) || typeof collectApplicationSubjects !== "function") return null;
+      const schoolYear = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+      const compute = () => {
+        let subjects = null;
+        try { subjects = collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }); } catch { subjects = null; }
+        const names = new Set((subjects?.[String(Number(grade) + 1)] || []).filter((item) => item.sameCourseOnce)
+          .map((item) => applicationSeparateKey(item.subject)));
+        return names.size ? names : null;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("applicationOnceNames", `${grade}|${schoolYear}`, compute) : compute();
+    }
+
+    // 학생이 같은 과목을 두 학기에 신청했으면 [{ name, semesters }]를, 아니면 빈 배열을 돌려준다.
+    function applicationSameCourseTwice(student, names) {
+      const list = names === undefined ? applicationOnceNames(student?.grade) : names;
+      const picked = new Map();
+      for (const course of applicationSelections(student)) {
+        const once = Boolean(course?.applicationSubject?.sameCourseOnce) ||
+          (course?.applicationGroupSource !== "online" && Boolean(list?.has(applicationSeparateKey(course?.name))));
+        if (!once) continue;
+        const key = applicationSeparateKey(course.name);
+        if (!picked.has(key)) picked.set(key, { name: String(course.applicationSubject?.subject || course.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, "").trim(), semesters: [], count: 0 });
+        const entry = picked.get(key);
+        entry.count++;
+        const semester = String(course.semesterKey || String(course.name).match(/([12])\s*학기/)?.[1] || "");
+        if (semester && !entry.semesters.includes(semester)) entry.semesters.push(semester);
+      }
+      return [...picked.values()].filter((entry) => entry.count > 1)
+        .map(({ name, semesters }) => ({ name, semesters: semesters.sort() }));
+    }
+
     // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
     // 두 학기에 나눠 신청받은 과목은 학기를 구분해야 하므로(같은 이름 두 행) '(1학기)' 하나만 남기고 과목 구분(융합 등)은 뺀다.
     function aggregateCourseDisplayName(subject, semesterKey) {
@@ -3873,7 +3990,7 @@
           item.querySelector(".student-name").append(" ", flag);
         }
         item.querySelector(".student-meta").textContent = studentGradeLabel(student);
-        item.querySelector(".student-courses").textContent = `${student.selections.length}과목`;
+        item.querySelector(".student-courses").textContent = `${(typeof applicationSelections === "function" ? applicationSelections(student) : student.selections).length}과목`;
         fragment.appendChild(item);
       }
       list.replaceChildren(fragment);
@@ -3897,7 +4014,7 @@
       const compact = (name) => (typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(String(name ?? "")) : String(name ?? ""))
         .replace(/\s*\([12]학기\)/g, "").replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
       const groups = [];
-      (student.selections || []).forEach((course, order) => {
+      (typeof applicationSelections === "function" ? applicationSelections(student) : student.selections || []).forEach((course, order) => {
         const groupName = courseGroupLabel(course, student.grade, groupSettings);
         const info = typeof applicationGroupForCourse === "function" ? applicationGroupForCourse(course, student.grade, groupSettings) : null;
         const semester = String(info?.semester || (typeof resolveSemesterKey === "function" ? resolveSemesterKey(course) : "") || "");
@@ -3928,20 +4045,24 @@
 
     function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
       const groups = certificateGroupedSelections(student, groupSettings);
+      // 편제표 밖 과목(소인수·공동)은 확인서에 싣지 않는다(안내 없이 조용히 · 점검란은 원래 학생 객체로 계산).
+      const selections = typeof applicationSelections === "function" ? applicationSelections(student) : student.selections;
+      const hiddenSeparate = (student.selections || []).length - selections.length;
+      const totalCredits = hiddenSeparate ? selections.reduce((sum, course) => sum + (Number(course.credits) || 0), 0) : student.totalCredits;
       const body = groups.length
         ? groups.map((group) => group.courses.map((course, index) => `
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
               <td class="course-cell">${escapeHtml(certificateCourseName(course))}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
-      const coreCredits = student.selections.reduce((sum, course) =>
+      const coreCredits = selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
-      const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
-      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span title="이번에 신청한 ${student.totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+      const corePercent = totalCredits ? Math.round(coreCredits / totalCredits * 100) : 0;
+      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${totalCredits}학점</strong><span title="이번에 신청한 ${totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
       </div>` : "";
       // 과목이 많은 학생은 인쇄용 행 높이를 더 줄여 한 장에 담는다(학교명·서명 줄이 다음 장으로 넘어가지 않게).
-      const density = student.selections.length >= 22 ? " paper-dense" : student.selections.length >= 15 ? " paper-compact" : "";
+      const density = selections.length >= 22 ? " paper-dense" : selections.length >= 15 ? " paper-compact" : "";
       return `<article class="${printMode ? "print-page" : "preview-paper"}${density}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
@@ -3954,11 +4075,11 @@
           ${typeof courseCheckCertificateHtml === "function" ? courseCheckCertificateHtml(student) : ""}
           ${gauge}
           <div class="paper-closing">
-          <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
+          <p class="paper-total">총 ${selections.length}과목(${totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
           <div class="paper-signature">
             <div>${escapeHtml(String($("#confirmDate").value || "").trim() || "　　　년　　월　　일")}</div>
             <div>학생: ${escapeHtml(student.name)}&nbsp;&nbsp;&nbsp; (인)</div>
-            <div>학부형:　　　　　　　　　(인)</div>
+            <div>학부모:　　　　　　　　　(인)</div>
           </div>
           <p class="paper-school">${escapeHtml(String($("#schoolName").value || "").trim() || "　　　　　　　　　　")}&nbsp; 귀하</p>
           </div>
@@ -3981,7 +4102,9 @@
       }
       preview.className = "preview-paper";
       preview.innerHTML = certificateMarkup(student);
-      $("#previewSubheading").textContent = `${studentGradeLabel(student)} · ${Number(student.grade) + 1}학년 과목 ${student.selections.length}개 · ${student.totalCredits}학점`;
+      const shown = typeof applicationSelections === "function" ? applicationSelections(student) : student.selections;
+      const shownCredits = shown === student.selections ? student.totalCredits : shown.reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
+      $("#previewSubheading").textContent = `${studentGradeLabel(student)} · ${Number(student.grade) + 1}학년 과목 ${shown.length}개 · ${shownCredits}학점`;
       $("#printSelected").disabled = false;
       syncPrintAllButton();
     }
@@ -4717,8 +4840,10 @@
           if (grade && String(student.grade) !== String(grade)) continue;
           const closedCourses = student.selections.filter((selection) =>
             closedKeys.has(`${student.grade}:${selection.name}`));
-          if (closedCourses.length) {
-            rows.push({ student, courses: closedCourses.map((selection) => selection.name) });
+          // 같은 과목을 두 학기에 신청한 학생(외부 결과)도 재신청 대상이다.
+          const twice = typeof applicationSameCourseTwice === "function" ? applicationSameCourseTwice(student) : [];
+          if (closedCourses.length || twice.length) {
+            rows.push({ student, courses: closedCourses.map((selection) => selection.name), twice });
           }
         }
       }
@@ -4749,7 +4874,7 @@
       $("#retakePanel h2").textContent = `${nextRound}차 수강신청 대상자${grade ? `(현 ${grade}학년)` : ""}`;
       const summaryCount = $("#retakeSummaryCount");
       if (summaryCount) {
-        summaryCount.textContent = !data ? "결과 없음" : closedCount ? `대상 ${rows.length}명 · 폐강 ${closedCount}과목` : "폐강 과목 없음";
+        summaryCount.textContent = !data ? "결과 없음" : closedCount ? `대상 ${rows.length}명 · 폐강 ${closedCount}과목` : rows.length ? `대상 ${rows.length}명 · 같은 과목 두 학기 신청` : "폐강 과목 없음";
         summaryCount.dataset.state = rows.length ? "alert" : "";
       }
       $("#retakeNextRoundNote").textContent = `${nextRound}차 결과는 2단계에서 차수를 추가한 뒤 불러오세요.`;
@@ -4760,18 +4885,22 @@
         content.innerHTML = "";
         return;
       }
-      if (!closedCount) {
+      if (!closedCount && !rows.length) {
         description.textContent = `${scopeLabel}폐강으로 정한 과목이 없습니다. 위 집계표의 과목명을 눌러 개설/폐강을 정하세요.`;
         content.innerHTML = "";
         return;
       }
-      description.textContent = `${scopeLabel}${sourceRound}차 결과 기준 · 폐강 확정 과목을 신청한 학생 ${rows.length}명`;
+      const twiceCount = rows.filter((row) => row.twice?.length).length;
+      description.textContent = `${scopeLabel}${sourceRound}차 결과 기준 · ${closedCount ? "폐강 확정 과목을 신청한 학생" : "재신청 대상 학생"} ${rows.length}명${twiceCount ? ` (같은 과목 두 학기 신청 ${twiceCount}명 포함)` : ""}`;
+      const twiceText = (row) => (row.twice || []).map((item) => typeof courseCheckTwiceText === "function" ? courseCheckTwiceText(item) : `같은 과목 두 학기 신청(${item.name})`).join(", ");
       // 위계 경고(폐강 후): 폐강 과목을 뺀 나머지 신청으로 다시 점검한다(폐강된 선이수 과목 때문에 새로 생긴 경고도 보인다).
       const prereqText = (student, courses) => typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : "";
-      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th><th>위계 경고(폐강 후)</th></tr></thead><tbody>${
-        rows.map(({ student, courses }) => {
+      content.innerHTML = `<table class="closure-table"><thead><tr><th>현 학년</th><th>반</th><th>번호</th><th>이름</th><th>신청 학년</th><th>폐강 과목</th><th>위계 경고(폐강 후)</th>${twiceCount ? "<th>같은 과목 두 학기 신청</th>" : ""}</tr></thead><tbody>${
+        rows.map((row) => {
+          const { student, courses } = row;
           const warning = prereqText(student, courses);
-          return `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td><td class="retake-prereq${warning ? " has-issue" : ""}">${warning ? `⚠ ${escapeHtml(warning)}` : ""}</td></tr>`;
+          const twiceCell = twiceCount ? `<td class="retake-prereq${row.twice?.length ? " has-issue" : ""}">${row.twice?.length ? `⚠ ${escapeHtml(twiceText(row))}` : ""}</td>` : "";
+          return `<tr><td>${escapeHtml(student.grade)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.number)}</td><td>${escapeHtml(student.name)}</td><td>${Number(student.grade) + 1}학년</td><td class="closure-subject">${escapeHtml(courses.join(", "))}</td><td class="retake-prereq${warning ? " has-issue" : ""}">${warning ? `⚠ ${escapeHtml(warning)}` : ""}</td>${twiceCell}</tr>`;
         }).join("")
       }</tbody></table>`;
     }
@@ -4784,15 +4913,16 @@
       const nextRound = String(Number(sourceRound) + 1);
       const gradeSuffix = grade ? `현${grade}학년` : "";
       const sheetRows = [
-        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점", "위계 경고(폐강 후)"],
-        ...rows.map(({ student, courses }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", "),
+        ["현 학년", "반", "번호", "이름", "신청 학년", "폐강 과목", "폐강 후 부족 학점", "위계 경고(폐강 후)", ...(rows.some((row) => row.twice?.length) ? ["같은 과목 두 학기 신청"] : [])],
+        ...rows.map(({ student, courses, twice = [] }) => [student.grade, student.classroom, student.number, student.name, `${Number(student.grade) + 1}학년`, courses.join(", "),
           typeof courseCheckRetakeShortfall === "function" ? courseCheckRetakeShortfall(student, courses) : "",
-          typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : ""])
+          typeof courseCheckPrereqText === "function" ? courseCheckPrereqText(student, { exclude: courses }) : "",
+          ...(rows.some((row) => row.twice?.length) ? [twice.map((item) => typeof courseCheckTwiceText === "function" ? courseCheckTwiceText(item) : item.name).join(", ")] : [])])
       ];
       const rowsXml = sheetRows.map((cells, rowIndex) =>
         `<row r="${rowIndex + 1}">${cells.map((value, column) =>
           `<c r="${columnName(column)}${rowIndex + 1}" s="${rowIndex === 0 ? 2 : 7}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`).join("")}</row>`).join("");
-      const columns = [8, 8, 8, 12, 10, 40, 28, 44].map((width, index) =>
+      const columns = [8, 8, 8, 12, 10, 40, 28, 44, 44].slice(0, sheetRows[0].length).map((width, index) =>
         `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join("");
       const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><cols>${columns}</cols><sheetData>${rowsXml}</sheetData></worksheet>`;
       const workbook = createXlsxBlob({
@@ -5126,12 +5256,19 @@
       }
       // 교차집중 과목은 학생이 고르는 과목이 아니라 학급마다 학기를 엇갈려 이수하므로 선택 그룹·신청 과목에서 뺀다.
       const crossRows = new Set((layout.planData?.subjects || []).filter((item) => !item.fixed && item.cross?.length).map((item) => item.row));
+      // 학기제: 한 과목은 한 학기로 운영된다. 같은 과목이 1·2학기에 모두 나오면(편제표 다른 행이든, 한 행이 두 학기에 걸치든)
+      // 학생은 한 학기에만 신청한다(sameCourseOnce).
+      // 소인수·공동교육과정은 신청 과목이 아니다(편제표 작업에서만 다룸). 판별 기준은 curriculumSeparateApplicationRows 하나,
+      // 편제표 데이터가 없는 예전 표만 행 글자로 판별한다. includeExcluded면 결과 취합에서 알아보고 빼도록 separate 표시를 붙여 넣는다.
+      const separateRows = layout.planData && typeof curriculumSeparateApplicationRows === "function"
+        ? curriculumSeparateApplicationRows(layout.planData) : null;
       for (const context of contexts) {
         if (!String(context.division || "").replace(/\s+/g, "").includes("학생선택교육과정")) continue;
         if (crossRows.has(context.rowIndex)) continue;
         const rowText = [context.division, context.detail, context.subject, ...context.row]
           .map((value) => String(value ?? "").replace(/\s+/g, "")).join(" ");
-        if (!includeExcluded && /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText)) continue;
+        const separate = separateRows ? separateRows.has(context.rowIndex) : /공동교육과정|공동(?=[,，、/·;:()（）\s]|$)|소인수/.test(rowText);
+        if (!includeExcluded && separate) continue;
         // 과목명 앞뒤의 표기 기호(*★☆■)와 교차집중 표시는 신청 양식에서 제외한다.
         const subject = context.subject.replace(/↔/g, " ").replace(/^[*＊★☆■\s]+|[*＊★☆■\s]+$/g, "").trim();
         if (!subject || subject.includes("과목명") || subject.includes("세부과목")) continue;
@@ -5171,6 +5308,12 @@
           if (!byGrade.has(grade)) byGrade.set(grade, { semesters: [], hours: [] });
           byGrade.get(grade).semesters.push(sem);
           byGrade.get(grade).hours.push(value);
+          // 학기제: 두 학기에 걸친 한 행 과목은 학기마다 따로 한 학기만 들으므로, 학기로 나눈 줄의 학점은 그 학기 칸 값이다.
+          const semesterCredit = Number(value.replace(/[^\d.]/g, "")) || 0;
+          if (semesterCredit > 0) {
+            if (!byGrade.get(grade).credits) byGrade.get(grade).credits = {};
+            byGrade.get(grade).credits[sem] = semesterCredit;
+          }
         });
         if (!byGrade.size && !columns.semesters.some((column) => column >= 0)) {
           const fallback = context.grade.match(/[123]/)?.[0];
@@ -5181,6 +5324,8 @@
           const blockGrade = Number(block.grade);
           if (!byGrade.has(blockGrade)) byGrade.set(blockGrade, { semesters: [], hours: [] });
           const info = byGrade.get(blockGrade);
+          // 택n 묶음 학기는 학기 칸 값이 아니라 지금처럼 그 행의 학점(묶음 학점)을 쓴다.
+          if (info.credits) delete info.credits[block.semester];
           if (info.semesters.includes(block.semester)) continue;
           info.semesters.push(block.semester);
           info.semesters.sort();
@@ -5203,6 +5348,10 @@
               existing.semester = [...new Set([...existing.semester.split("·"), ...info.semesters])]
                 .filter(Boolean).sort().join("·");
               Object.assign(existing.semesterGroups, semesterGroupAssignments);
+              for (const [sem, value] of Object.entries(info.credits || {})) {
+                if (!existing.semesterCredits) existing.semesterCredits = {};
+                if (!existing.semesterCredits[sem]) existing.semesterCredits[sem] = value;
+              }
               for (const sem of info.semesters) existing.semesterColors[sem] =
                 curriculumCellFill(layout, context.rowIndex, columns.semesters[(grade-1)*2+Number(sem)-1]);
               continue;
@@ -5216,11 +5365,22 @@
                 [sem, curriculumCellFill(layout, context.rowIndex, columns.semesters[(grade-1)*2+Number(sem)-1])])),
               semesterGroups: semesterGroupAssignments,
               hours: info.hours.join("+"),
-              credit
+              credit,
+              ...(info.credits && Object.keys(info.credits).length ? { semesterCredits: { ...info.credits } } : {}),
+              ...(separate ? { separate: true } : {})
             };
             seen.set(key, item);
             result[String(grade)].push(item);
           }
+        }
+      }
+      for (const [key, item] of seen) {
+        const semesters = String(item.semester).split("·").filter(Boolean);
+        if (semesters.length > 1) {
+          item.sameCourseOnce = true;
+          // 학기 없이 고르는 곳(오프라인 신청 파일·학기 없이 고른 결과)의 학점: 학기 칸 값이 모두 같으면 그 값.
+          const values = semesters.map((semester) => item.semesterCredits?.[semester]);
+          if (values.every((value) => value > 0 && value === values[0])) item.onceCredit = values[0];
         }
       }
       return result;
@@ -5231,6 +5391,7 @@
       return Object.fromEntries(Object.entries(result).map(([grade, items]) => [grade, items.map((item) => ({
         ...item,
         semesterColors: { ...item.semesterColors },
+        ...(item.semesterCredits ? { semesterCredits: { ...item.semesterCredits } } : {}),
         semesterGroups: Object.fromEntries(Object.entries(item.semesterGroups || {}).map(([semester, group]) => [semester, { ...group }]))
       }))]));
     }
@@ -5246,6 +5407,7 @@
 
     function renderApplicationSubjects() {
       if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(2, "renderApplicationSubjects", renderApplicationSubjects)) return;
+      if (typeof renderApplicationRosterLocalSummary === "function") renderApplicationRosterLocalSummary();
       const container = $("#applicationSubjectList");
       if (!container) return;
       const subjects = collectApplicationSubjects();
@@ -5259,9 +5421,15 @@
       container.innerHTML = [String(Number(state.applicationMenuGrade || "1") + 1)].filter((grade) => subjects[grade].length).map((grade) => {
         const bySemester = new Map();
         for (const item of subjects[grade]) {
-          const key = item.semester || "0";
-          if (!bySemester.has(key)) bySemester.set(key, []);
-          bySemester.get(key).push(item);
+          // 두 학기에 모두 편성된 과목('1·2')은 선택 그룹(getGroupedApplicationSubjects)과 같은 규칙으로
+          // 학기마다 '과목 (1학기)'·'과목 (2학기)' 한 줄씩 넣는다(예전에는 '1·2' 열이 없어 목록에서 빠졌다).
+          const semesters = String(item.semester || "").split("·").filter(Boolean);
+          for (const key of semesters.length ? semesters : ["0"]) {
+            if (!bySemester.has(key)) bySemester.set(key, []);
+            bySemester.get(key).push(semesters.length > 1
+              ? { ...item, subject: `${item.subject} (${key}학기)`, credit: item.semesterCredits?.[key] || item.credit }
+              : item);
+          }
         }
         const semesterHtml = ["1", "2"].map((semester) => {
           const semesterCourses = bySemester.get(semester) || [];
@@ -5348,7 +5516,7 @@
         "html+='<div class=\"semester\">'+(s==='0'?'학기 미정':s+'학기')+'</div>';",
         "var areas={};semesters[s].forEach(function(c){var a=c.area||'선택과목';if(!areas[a])areas[a]=[];areas[a].push(c);});",
         "Object.keys(areas).forEach(function(a){html+='<div class=\"area\">'+esc(a)+'</div>';",
-        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+c.credit+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.credit?c.credit+'학점':'')+'</span></label>';});",
+        "areas[a].forEach(function(c){var classification=String(c.type||'').replace(/선택$/,'');html+='<label class=\"course\"><input type=\"checkbox\" value=\"'+esc(c.subject)+'\" data-credit=\"'+(c.onceCredit||c.credit)+'\" data-core=\"'+(isCore(c)?'1':'0')+'\"><span>'+esc(c.subject+(classification?'('+classification+')':''))+'</span><span class=\"meta\">'+(c.sameCourseOnce?'1·2학기 중 한 학기만 · ':'')+((c.onceCredit||c.credit)?(c.onceCredit||c.credit)+'학점':'')+'</span></label>';});",
         "});});",
         "document.getElementById('courseList').innerHTML=html||'<p class=\"note\">신청할 수 있는 과목이 없습니다.</p>';",
         "updateSummary();",
@@ -5393,16 +5561,24 @@
       }
       const courses = [];
       const courseByGradeName = new Map();
+      // 소인수·공동교육과정 과목은 이름만 알아보고 결과에서 조용히 뺀다(안내 없음 · 편제표에 없는 과목 오류로 보지 않음).
+      const separateNames = new Set();
+      const separated = new Set();
       let nextCourseColumn = 0;
       for (const grade of ["1", "2", "3"]) {
         for (const item of subjects[grade] || []) {
+          if (item.separate) {
+            separateNames.add(`${grade}:${item.subject}`);
+            for (const semester of String(item.semester || "").split("·").filter(Boolean)) separateNames.add(`${grade}:${item.subject} (${semester}학기)`);
+            continue;
+          }
           // 학년이 다른 동일 이름 과목은 표기에 학년을 붙여 구분한다.
           const displayName = nameCount.get(item.subject) > 1 ? `${item.subject}(${grade}학년)` : item.subject;
           const course = {
             column: `app${nextCourseColumn++}`,
             applicationCurrentGrade: String(Number(grade) - 1),
             name: displayName,
-            credits: item.credit || 0,
+            credits: item.onceCredit || item.credit || 0,
             // 1·2학기에 모두 편성된 과목을 학기 없이 고른 경우는 학기를 비워 두고, 학생들의 그룹 선택 수로 학기를 정한다.
             semesterKey: String(item.semester || "").includes("·") ? "" : String(item.semester || "").match(/[12]/)?.[0] || "",
             applicationSubject: { ...item },
@@ -5415,9 +5591,12 @@
           if (semesters.length > 1) for (const semester of semesters) {
             const subject = `${item.subject} (${semester}학기)`;
             if (!entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(subject))) continue;
+            // 학기제: 학기로 나눈 줄의 학점은 그 학기 칸 값(묶음 과목·학기 칸을 못 읽은 과목은 행 학점 그대로).
+            const semesterCredit = item.semesterCredits?.[semester] || item.credit || 0;
             const semesterCourse = { ...course, column:`app${nextCourseColumn++}`,
               name: nameCount.get(item.subject)>1 ? `${subject}(${grade}학년)` : subject, semesterKey:semester,
-              applicationSubject: { ...item, subject, semester } };
+              credits: semesterCredit,
+              applicationSubject: { ...item, subject, semester, credit: semesterCredit } };
             courses.push(semesterCourse);
             courseByGradeName.set(`${grade}:${subject}`,semesterCourse);
             semesterVariants++;
@@ -5445,12 +5624,22 @@
         const targetGrade = String(Number(grade) + 1);
         const picked = [];
         const unknown = [];
+        let skippedSeparate = 0;
         for (const subjectName of selections) {
           const course = courseByGradeName.get(`${targetGrade}:${String(subjectName).trim()}`);
           if (course) picked.push(course);
+          else if (separateNames.has(`${targetGrade}:${String(subjectName).trim()}`)) {
+            separated.add(String(subjectName).trim());
+            skippedSeparate++;
+          }
           else unknown.push(subjectName);
         }
         if (unknown.length) errors.push(`${label}: 편제표에 없는 과목 - ${unknown.join(", ")}`);
+        if (!picked.length && !unknown.length && skippedSeparate) {
+          // 소인수·공동 과목만 고른 학생: 명단에는 남기고 과목은 비운다.
+          students.push({ id: `app-${grade}-${classroom}-${number}-${name}`, grade, classroom, number, name, selections: [], totalCredits: 0 });
+          return;
+        }
         if (!picked.length) {
           errors.push(`${label}: 반영된 과목이 없습니다.`);
           return;
@@ -5465,7 +5654,7 @@
       students.sort((a, b) =>
         Number(a.grade) - Number(b.grade) || Number(a.classroom) - Number(b.classroom) ||
         Number(a.number) - Number(b.number) || a.name.localeCompare(b.name, "ko"));
-      return { students, courses, errors };
+      return { students, courses, errors, separated: [...separated] };
     }
 
     function downloadApplicationForm() {
@@ -5534,6 +5723,80 @@
         throw new Error(`${Number(grade) + 1}학년 수강신청에는 현재 ${grade}학년 명렬만 업로드할 수 있습니다. 현재 ${found}학년 학생 ${mismatched.length}명이 포함되어 있습니다. 다른 학년을 제외한 명렬을 다시 업로드하세요.`);
       }
       return roster;
+    }
+
+    // ---- 웹 신청 명렬 로컬 저장(현 학년 전체 = 미제출 학생 포함, 성명은 이 PC에만, 서버로 보내지 않음) ----
+    // state.applicationRosters[학년도][현학년] = { students:[{ classroom, number, name }], uploadedAt, source }
+    function applicationRostersRestore(saved) {
+      const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+      if (!plain(saved)) return {};
+      const out = {};
+      for (const [year, grades] of Object.entries(saved)) {
+        if (!/^\d{4}$/.test(year) || !plain(grades)) continue;
+        for (const [grade, entry] of Object.entries(grades)) {
+          if (!/^[12]$/.test(grade) || !plain(entry) || !Array.isArray(entry.students)) continue;
+          const students = entry.students.filter(plain).map((student) => ({ classroom: String(student.classroom ?? "").trim(), number: String(student.number ?? "").trim(), name: String(student.name ?? "").trim() }))
+            .filter((student) => student.classroom && student.number);
+          (out[year] ||= {})[grade] = { students, uploadedAt: String(entry.uploadedAt || ""), source: String(entry.source || "") };
+        }
+      }
+      return out;
+    }
+
+    // 명렬(parseApplicationRoster 결과)에서 그 현 학년 학생을 저장한다. 같은 학년도·학년을 다시 올리면 바꾼다.
+    function storeApplicationRoster(roster, { grade, year, source = "" } = {}) {
+      const gradeKey = String(grade || state.applicationMenuGrade || "1");
+      const yearKey = String(year || $("#schoolYear")?.value || "").trim();
+      if (!/^\d{4}$/.test(yearKey)) throw new Error("학년도를 확인하세요(명렬 저장).");
+      const students = (roster || []).filter((student) => String(student.grade) === gradeKey)
+        .map((student) => ({ classroom: String(student.classroom ?? "").trim(), number: String(student.number ?? "").trim(), name: String(student.name ?? "").trim() }));
+      const rosters = { ...(state.applicationRosters || {}) };
+      rosters[yearKey] = { ...(rosters[yearKey] || {}), [gradeKey]: { students, uploadedAt: new Date().toISOString(), source } };
+      state.applicationRosters = rosters;
+      if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
+      if (typeof renderApplicationRosterLocalSummary === "function") renderApplicationRosterLocalSummary();
+      return rosters[yearKey][gradeKey];
+    }
+
+    // 다른 파일(6단계 출력물 등)이 typeof 가드로 부른다: 앱 학년도의 그 현 학년 명렬, 없으면 null.
+    function applicationRosterFor(grade) {
+      const gradeKey = String(grade);
+      const entry = state.applicationRosters?.[String($("#schoolYear")?.value || "").trim()]?.[gradeKey];
+      if (!entry) return null;
+      const keyOf = (student) => (typeof classSectionsStudentKey === "function" ? classSectionsStudentKey(gradeKey, student.classroom, student.number) : `${gradeKey}-${student.classroom}-${student.number}`);
+      return { students: entry.students.map((student) => ({ key: keyOf(student), classroom: student.classroom, number: student.number, name: student.name })), uploadedAt: entry.uploadedAt, source: entry.source };
+    }
+
+    function renderApplicationRosterLocalSummary() {
+      const box = typeof document !== "undefined" ? document.getElementById("cloudRosterLocalSummary") : null;
+      if (!box) return;
+      const grade = String(state.applicationMenuGrade || "1");
+      const entry = applicationRosterFor(grade);
+      box.textContent = entry
+        ? `이 PC에 저장한 현 ${grade}학년 명렬: ${entry.students.length}명 · ${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} (담임반 현황·출석부의 미제출 학생 확인용, 서버로 보내지 않음)`
+        : `이 PC에 저장한 현 ${grade}학년 명렬이 없습니다. 웹 신청을 쓰지 않았거나 이미 만든 신청이면 '명렬 올리기'로 같은 명렬 파일을 올리세요(서버 변경 없음).`;
+    }
+
+    // 명렬 파일(웹 신청과 같은 양식)을 받아 그 현 학년 명렬로 이 PC에만 저장한다. 서버 요청 없음, 로그인 필요 없음.
+    // 다른 파일(6단계 담임반 안내 등)이 typeof 가드로 부른다. 반환 { count, message }(실패하면 count 0, message에 이유).
+    async function importApplicationRosterFile(file, grade) {
+      const gradeKey = String(grade || state.applicationMenuGrade || "1");
+      try {
+        if (!file) throw new Error("명렬 파일을 고르세요.");
+        if (!String(file.name || "").toLowerCase().endsWith(".xlsx")) throw new Error("학생 명렬은 .xlsx 형식이어야 합니다.");
+        const roster = validateApplicationRosterGrade(parseApplicationRoster(await parseWorkbook(await file.arrayBuffer())), gradeKey);
+        const saved = storeApplicationRoster(roster, { grade: gradeKey, source: `${file.name}(명렬 올리기)` });
+        return { count: saved.students.length, message: `현 ${gradeKey}학년 명렬 ${saved.students.length}명을 이 PC에 저장했습니다(서버 변경 없음).` };
+      } catch (error) {
+        return { count: 0, message: `명렬을 저장하지 못했습니다: ${error?.message || error}` };
+      }
+    }
+
+    async function readApplicationRosterLocal(file) {
+      if (!file) return;
+      const result = await importApplicationRosterFile(file, state.applicationMenuGrade || "1");
+      const box = document.getElementById("cloudRosterLocalSummary");
+      if (box) box.textContent = result.count ? `${result.message} ${box.textContent}` : result.message;
     }
 
     function downloadTextFile(text, filename, type) {
@@ -5612,10 +5875,14 @@
         return `<c r="${reference}"${style} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(spec.v)}</t></is></c>`;
       };
       const names = sheets.map((sheet, index) => safeSheetName(sheet.name, index));
+      // 인쇄 제목 줄 반복: sheet.printTitles = "$1:$6"(6단계 출석부).
+      const printTitles = sheets.map((sheet, index) => (/^\$\d+:\$\d+$/.test(sheet.printTitles || "")
+        ? `<definedName name="_xlnm.Print_Titles" localSheetId="${index}">'${xmlEscape(names[index].replace(/'/g, "''"))}'!${sheet.printTitles}</definedName>` : "")).join("");
+      const printTitlesXml = printTitles ? `<definedNames>${printTitles}</definedNames>` : "";
       const files = {
         "[Content_Types].xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
         "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-        "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((name, index) => `<sheet name="${xmlEscape(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
+        "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((name, index) => `<sheet name="${xmlEscape(name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("")}</sheets>${printTitlesXml}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
         "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
         "xl/styles.xml": options.stylesXml || createReportStylesXml()
       };
@@ -5638,7 +5905,17 @@
         const merges = (sheet.merges || []).length
           ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((reference) => `<mergeCell ref="${reference}"/>`).join("")}</mergeCells>`
           : "";
-        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="${Number(sheet.fitToHeight) || 0}"/></worksheet>`;
+        // sheet.scale(10~400)이 있으면 쪽 맞춤 대신 배율: 엑셀은 쪽 맞춤일 때 수동 쪽 나눔(sheet.rowBreaks = 그 행 뒤에서 나눔)을 무시한다.
+        // sheet.headerText: 머리글(예: "&R&P/&N" = 오른쪽 위 '쪽/전체'). 6단계 담임반 이동수업 현황.
+        const scale = Number(sheet.scale) >= 10 && Number(sheet.scale) <= 400 ? Math.round(Number(sheet.scale)) : 0;
+        const sheetPr = scale ? "" : `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>`;
+        const pageSetup = scale
+          ? `<pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" scale="${scale}"/>`
+          : `<pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="${Number(sheet.fitToHeight) || 0}"/>`;
+        const headerFooter = sheet.headerText ? `<headerFooter><oddHeader>${xmlEscape(sheet.headerText)}</oddHeader></headerFooter>` : "";
+        const breaks = (sheet.rowBreaks || []).map(Number).filter((row) => Number.isInteger(row) && row > 0);
+        const breakXml = breaks.length ? `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">${breaks.map((row) => `<brk id="${row}" max="16383" man="1"/>`).join("")}</rowBreaks>` : "";
+        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${sheetPr}${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>${pageSetup}${headerFooter}${breakXml}</worksheet>`;
       });
       return createXlsxBlob(files);
     }
@@ -5788,7 +6065,7 @@
       persistState();
     }
 
-    function applyMergedApplications(entries, sourceLabel) {
+    function applyMergedApplications(entries, sourceLabel, { confirmedTwice = false } = {}) {
       if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
         status.style.color = "#a44939";
         status.textContent = `${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 불러오세요.`;
@@ -5798,6 +6075,20 @@
       if (!merged.students.length) {
         status.style.color = "#a44939";
         status.textContent = `명단을 만들지 못했습니다. ${merged.errors[0] || ""}`;
+        return;
+      }
+      // 같은 과목 두 학기 신청(편제표 다른 행): 자료는 버리지 않고 앱 확인 창으로 한 번 더 묻는다.
+      const twice = typeof applicationSameCourseTwice !== "function" ? [] : merged.students.map((student) => ({ student, items: applicationSameCourseTwice(student) })).filter((entry) => entry.items.length);
+      if (twice.length && !confirmedTwice) {
+        const list = twice.slice(0, 8).map(({ student, items }) => `${student.grade}-${student.classroom}-${student.number} ${student.name}(${items.map((item) => item.name).join(", ")})`).join(", ");
+        const text = `같은 과목을 두 학기에 신청한 학생 ${twice.length}명: ${list}${twice.length > 8 ? " 등" : ""}.\n같은 과목은 한 학기에만 신청합니다. 반영하면 이 학생들은 재신청 대상으로 표시됩니다.\n\n그대로 반영할까요? (자료는 버리지 않습니다.)`;
+        // 앱 확인 창은 비동기라, 반영하기로 하면 확인을 건너뛰고 다시 부른다(함수는 동기로 둔다 · 테스트가 함수 이름으로 자름).
+        const ask = typeof appConfirm === "function" ? appConfirm(text, { title: "오류가 있는 결과 반영", ok: "반영", cancel: "취소" }) : Promise.resolve(window.confirm(text));
+        ask.then((ok) => {
+          if (ok) { applyMergedApplications(entries, sourceLabel, { confirmedTwice: true }); return; }
+          status.style.color = "#a44939";
+          status.textContent = `같은 과목을 두 학기에 신청한 학생 ${twice.length}명이 있어 반영하지 않았습니다.`;
+        });
         return;
       }
       const unclassified = classifyApplicationRecords(merged);
@@ -5827,6 +6118,7 @@
       status.style.color = merged.errors.length ? "#a44939" : "#287956";
       status.textContent = `${state.currentRound}차: ${sourceLabel} ${entries.length}건을 취합해 ${merged.students.length}명 명단을 만들었습니다.` +
         (merged.errors.length ? ` 제외 ${merged.errors.length}건(예: ${merged.errors[0]})` : "") +
+        (twice.length ? ` 같은 과목 두 학기 신청 ${twice.length}명(재신청 필요).` : "") +
         (unclassified.length ? ` 그룹 미확인 ${unclassified.length}개: ${typeof describeUnclassifiedCourses === "function" ? describeUnclassifiedCourses(unclassified) : unclassified.join(", ")}. 선택 그룹 또는 파일의 학기 표기를 확인하세요.` : "");
     }
 
@@ -7494,6 +7786,8 @@
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
+    // 명렬 올리기(이 PC에만 저장, 로그인·서버 없이)
+    $("#cloudRosterLocalInput")?.addEventListener("change", (event) => { const file = event.target.files[0]; event.target.value = ""; readApplicationRosterLocal(file); });
     // 파일 고르기 창을 취소하면(크롬 'cancel') 카드도 원래대로.
     curriculumPlanInput.addEventListener("cancel", () => restoreCurriculumUploadCard());
     $("#curriculumCohortUploads").addEventListener("click", (event) => {
@@ -8508,7 +8802,7 @@
         if (!requireLocalWorkspaceAccess()) return;
         addApplicationRound();
         status.style.color = "#287956";
-        status.textContent = `${state.currentRound}를 추가했습니다.`;
+        status.textContent = `${state.currentRound}차를 추가했습니다.`;
       } catch (error) {
         status.style.color = "#a44939";
         status.textContent = error instanceof Error ? error.message : "차수를 추가하지 못했습니다.";

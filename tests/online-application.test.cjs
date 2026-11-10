@@ -576,7 +576,7 @@ test("merged subject header uses actual course names and splits course lists by 
   assert.deepEqual(plain(ctx.curriculumColorGroupOptions(layout,"2","2")),[]);
 });
 
-test("joint and small-enrollment courses are excluded from new applications, not historical imports", () => {
+test("joint and small-enrollment courses are applied for separately: excluded from applications and dropped from imported results", () => {
   const contexts = [
     {subject:"일반 과목",division:"학생선택교육과정",detail:"융합",selectionType:"융합선택",
       row:[3,3,""],grade:"2",area:"과학"},
@@ -596,11 +596,50 @@ test("joint and small-enrollment courses are excluded from new applications, not
   });
   vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("),ctx);
   assert.deepEqual(plain(ctx.selectedApplicationSubjects()["2"].map((c)=>c.subject)),["일반 과목","공동체와 인간"]);
-  assert.equal(ctx.collectApplicationSubjects({includeExcluded:true})["2"].length,5);
+  const all=ctx.collectApplicationSubjects({includeExcluded:true})["2"];
+  assert.equal(all.length,5);
+  // 결과 취합은 이름을 알아보되 따로 신청 표시(separate)로 빼낸다.
+  assert.deepEqual(plain(all.filter((c)=>c.separate).map((c)=>c.subject)),["공동 과목","소인수 과목","공동 과목 2"]);
   vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("),ctx);
-  const historical=ctx.mergeApplications([{grade:"1",classroom:"1",number:"1",name:"가상",selections:["소인수 과목"]}]);
+  const historical=ctx.mergeApplications([
+    {grade:"1",classroom:"1",number:"1",name:"가상",selections:["소인수 과목"]},
+    {grade:"1",classroom:"1",number:"2",name:"가상2",selections:["일반 과목","공동 과목 2"]}
+  ]);
   assert.deepEqual(plain(historical.errors),[]);
-  assert.equal(historical.students[0].selections[0].name,"소인수 과목");
+  assert.deepEqual(plain(historical.separated),["소인수 과목","공동 과목 2"]);
+  assert.ok(!historical.courses.some((course)=>/소인수|공동 과목/.test(course.name)),"따로 신청 과목은 집계 과목에 없다");
+  assert.equal(historical.students[0].selections.length,0,"따로 신청 과목만 고른 학생은 명단에 남고 과목은 비움");
+  assert.deepEqual(plain(historical.students[1].selections.map((course)=>course.name)),["일반 과목"]);
+});
+
+test("separate (소인수·공동) courses use one rule from plan data: note or plan section 'extra'", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "curriculum-compliance.js"), "utf8"), ctx);
+  const plan = { subjects: [
+    { id: "a", row: 3, name: "물리학", category: "학생 선택 교육과정" },
+    { id: "b", row: 4, name: "경제", category: "학생 선택 교육과정", note: "소인수/2학년/1학기/3학점(순증)" },
+    { id: "c", row: 5, name: "고급 화학", category: "학생 선택 교육과정", planSection: "extra", planSectionManual: true },
+    { id: "d", row: 6, name: "공동 운영", category: "공동·소인수 교육과정" },
+    { id: "e", row: 7, name: "헤더", fixed: true, note: "소인수" }
+  ], groups: [] };
+  assert.deepEqual([...ctx.curriculumSeparateApplicationRows(plan)], [4, 5, 6]);
+});
+
+test("result import drops separate (소인수·공동) course columns and tells the teacher", () => {
+  const ctx = vm.createContext({});
+  const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
+  const slice = (start, end) => importer.slice(importer.indexOf(start), importer.indexOf(end));
+  vm.runInContext(slice("function normalizeResultCourseName(", "function resultCourseSemester("), ctx);
+  vm.runInContext(slice("function stripSeparateResultCourses(", "function analyzeResultCandidate("), ctx);
+  const data = {
+    courses: [{ column: 1, name: "물리학", credits: 3 }, { column: 2, name: "경제 (1학기)", credits: 3 }],
+    students: [{ selections: [{ column: 1, name: "물리학", credits: 3 }, { column: 2, name: "경제 (1학기)", credits: 3 }], totalCredits: 6 }]
+  };
+  const removed = ctx.stripSeparateResultCourses(data, [{ subject: "물리학" }, { subject: "경제", separate: true }]);
+  assert.deepEqual(plain(removed), ["경제 (1학기)"]);
+  assert.deepEqual(plain(data.courses.map((course) => course.name)), ["물리학"]);
+  assert.equal(data.students[0].totalCredits, 3);
+  assert.equal(data.students[0].selections.length, 1);
 });
 
 test("student course classification labels leave selection identities unchanged", () => {
@@ -1535,4 +1574,204 @@ test("4단계 집계표 과목명은 괄호를 한 번만: 두 학기 과목은 
   assert.equal(ctx.aggregateCourseDisplayName({ subject: "법과 사회", type: "진로선택" }, "2"), "법과 사회(진로)", "꼬리표 없는 과목은 그대로");
   assert.match(functionSource("function aggregateRecords(", "function currentStudent("), /aggregateCourseDisplayName\(applicationSubject, semesterKey\)/,
     "화면·엑셀 집계표(aggregateSheetModel)가 함께 쓰는 displayName");
+});
+
+test("aggregate skips separate (소인수·공동) course columns left in older results, by name too", () => {
+  const ctx=vm.createContext({
+    collectApplicationSubjects:()=>({"1":[],"2":[{subject:"물리학",semester:"1"},{subject:"고급 물리학",semester:"1",separate:true}],"3":[]}),
+    getApplicationGroupSettings:()=>[], UNASSIGNED_GROUP:"미분류"
+  });
+  vm.runInContext(functionSource("function applicationSeparateNames(", "function aggregateCourseDisplayName("),ctx);
+  // 예전 결과: 과목 열에 applicationSubject가 없고 이름만 있다.
+  assert.equal(ctx.isApplicationSeparateCourse({name:"고급 물리학(진로)"},"1"),true);
+  assert.equal(ctx.isApplicationSeparateCourse({name:"물리학"},"1"),false);
+  assert.equal(ctx.isApplicationSeparateCourse({name:"고급 물리학"},"2"),false,"현 2학년(3학년 과목)에는 없는 과목");
+  assert.equal(ctx.isApplicationSeparateCourse({name:"고급 물리학",applicationGroupSource:"online"},"1"),false,"웹 결과는 편제표를 다시 읽지 않음");
+  vm.runInContext(functionSource("function parseCourseGroup(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
+  ctx.curriculumSelectionType=(value)=>String(value||"");
+  const courses=[{column:1,name:"물리학",credits:3,semesterKey:"1"},{column:2,name:"고급 물리학",credits:3,semesterKey:"1"}];
+  const students=[1,2,3].map((number)=>({grade:"1",classroom:"1",number:String(number),name:`가상${number}`,selections:courses.slice(),totalCredits:6}));
+  const aggregate=ctx.aggregateRecords(students,courses,90,110);
+  const names=aggregate.reports.flatMap((report)=>report.semesters.flatMap((semester)=>semester.groups.flatMap((group)=>group.courses.map((course)=>course.name))));
+  assert.deepEqual(plain(names),["물리학"]);
+});
+
+test("step 2 subject list shows a two-semester course once per semester, like the selection groups", () => {
+  const container = { innerHTML: "" };
+  const ctx = vm.createContext({
+    state: { applicationMenuGrade: "2" },
+    $: (selector) => selector === "#applicationSubjectList" ? container : { value: "2026" },
+    escapeHtml: (value) => String(value), applicationCohortYear: () => "2025",
+    collectApplicationSubjects: () => ({ "1": [], "2": [], "3": [
+      { subject: "기하", semester: "1", type: "진로선택", area: "수학", credit: 3 },
+      { subject: "융합과학 탐구", semester: "1·2", type: "융합선택", area: "과학", credit: 3 },
+      { subject: "여행지리", semester: "2", type: "융합선택", area: "사회", credit: 3 }
+    ] })
+  });
+  vm.runInContext(functionSource("function renderApplicationSubjects(", "function buildApplicationPageHtml("), ctx);
+  ctx.renderApplicationSubjects();
+  const columns = container.innerHTML.split('<section class="application-semester-column">').slice(1);
+  assert.match(columns[0], /1학기 <span>2과목<\/span>/);
+  assert.match(columns[0], /융합과학 탐구 \(1학기\)/);
+  assert.match(columns[1], /2학기 <span>2과목<\/span>/);
+  assert.match(columns[1], /융합과학 탐구 \(2학기\)/);
+  assert.doesNotMatch(container.innerHTML, /1·2/);
+});
+
+test("result validation drops 소인수·공동 courses silently: no notice, not 'missing', not 'unclassified'", () => {
+  const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
+  const ctx = vm.createContext({ classifyApplicationRecords: () => [], getApplicationGroupSettings: () => [] });
+  vm.runInContext(importer.slice(importer.indexOf("function normalizeResultCourseName("), importer.indexOf("function buildResultImportPreview(")), ctx);
+  ctx.resultExampleList = (items) => items.join(", ");
+  const course = (column, name) => ({ column, name, credits: 3 });
+  const candidate = { skippedRows: [], data: {
+    courses: [course(1, "물리학"), course(2, "경제")],
+    students: [{ grade: "1", classroom: "1", number: "1", name: "가상", selections: [course(1, "물리학"), course(2, "경제")], totalCredits: 6 }]
+  } };
+  const subjects = { "2": [{ subject: "물리학" }, { subject: "경제", separate: true }, { subject: "보건", separate: true }] };
+  const result = ctx.analyzeResultCandidate(candidate, { grade: "1", subjects, cohortYear: "2026" });
+  const text = [...result.issues.warnings, ...result.issues.info].join("\n");
+  assert.doesNotMatch(text, /소인수|공동|따로 신청|경제|보건/, "소인수·공동은 안내 없이 조용히 뺀다");
+  assert.doesNotMatch(text, /결과 파일에 없는 과목/, "소인수·공동 과목만 없으면 '없는 과목' 줄은 없다");
+  assert.deepEqual(plain(result.data.courses.map((course) => course.name)), ["물리학"]);
+});
+
+// 같은 과목 한 학기만(학기제): 같은 과목이 1·2학기에 모두 나오면 편제표 다른 행이든 한 행이 두 학기에 걸치든 sameCourseOnce.
+function sameCourseContext() {
+  const contexts = [
+    { subject: "융합과학 탐구", division: "학생선택교육과정", detail: "융합", selectionType: "융합선택", row: [3, 3, ""], grade: "3", area: "과학", rowIndex: 5 },
+    { subject: "기하", division: "학생선택교육과정", detail: "진로", selectionType: "진로선택", row: [3, 3, ""], grade: "3", area: "수학", rowIndex: 6 },
+    { subject: "융합과학 탐구", division: "학생선택교육과정", detail: "융합", selectionType: "융합선택", row: [3, "", 3], grade: "3", area: "과학", rowIndex: 9 },
+    { subject: "한 행 두 학기", division: "학생선택교육과정", detail: "일반", selectionType: "일반선택", row: [6, 3, 3], grade: "3", area: "과학", rowIndex: 12 }
+  ];
+  const ctx = vm.createContext({
+    state: { curriculumCohortYear: "2025", curriculumImportedLayout: {}, applicationMenuGrade: "2" },
+    importedPlanColumnMap: () => ({ subject: 0, opCredit: 0, semesters: [-1, -1, -1, -1, 1, 2] }),
+    importedPlanCourseContexts: () => contexts, curriculumCellFill: () => ""
+  });
+  vm.runInContext(functionSource("function collectApplicationSubjects(", "function renderApplicationSubjects("), ctx);
+  return ctx;
+}
+
+test("a course offered in both semesters is once-only, whether from two plan rows or one row spanning both semesters", () => {
+  const ctx = sameCourseContext();
+  const items = ctx.collectApplicationSubjects({ currentGrade: "2" })["3"];
+  const byName = Object.fromEntries(items.map((item) => [item.subject, item]));
+  assert.equal(byName["융합과학 탐구"].semester, "1·2");
+  assert.equal(byName["융합과학 탐구"].sameCourseOnce, true);
+  assert.equal(byName["한 행 두 학기"].semester, "1·2");
+  assert.equal(byName["한 행 두 학기"].sameCourseOnce, true, "한 행이 두 학기로 나뉘어도 한 학기만(학기제)");
+  assert.equal(byName["기하"].sameCourseOnce, undefined);
+});
+
+test("results: a student who picked a once-only course in both semesters is found (wide results by name, merged results by flag)", () => {
+  const ctx = sameCourseContext();
+  vm.runInContext(functionSource("function applicationSeparateNames(", "function aggregateCourseDisplayName("), ctx);
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("), ctx);
+  const course = (column, name, semesterKey = "") => ({ column, name, semesterKey, credits: 3 });
+  const twice = { grade: "2", classroom: "1", number: "1", name: "가상", selections: [course(1, "융합과학 탐구 (1학기)", "1"), course(2, "융합과학 탐구(2학기)"), course(3, "기하")] };
+  assert.deepEqual(plain(ctx.applicationSameCourseTwice(twice)), [{ name: "융합과학 탐구", semesters: ["1", "2"] }]);
+  const once = { grade: "2", classroom: "1", number: "2", name: "가상", selections: [course(1, "융합과학 탐구 (1학기)", "1"), course(3, "기하")] };
+  assert.deepEqual(plain(ctx.applicationSameCourseTwice(once)), []);
+  const single = { grade: "2", classroom: "1", number: "3", name: "가상", selections: [course(4, "한 행 두 학기 (1학기)", "1"), course(5, "한 행 두 학기 (2학기)", "2")] };
+  assert.deepEqual(plain(ctx.applicationSameCourseTwice(single)), [{ name: "한 행 두 학기", semesters: ["1", "2"] }], "한 행이 두 학기로 나뉜 과목도 두 학기 신청이면 찾는다");
+  // 웹 결과(online)는 지금 편제표를 다시 읽지 않고 서버 과목 목록의 표시만 본다.
+  const online = { grade: "2", selections: [{ ...course(1, "융합과학 탐구 (1학기)", "1"), applicationGroupSource: "online" }, { ...course(2, "융합과학 탐구 (2학기)", "2"), applicationGroupSource: "online" }] };
+  assert.deepEqual(plain(ctx.applicationSameCourseTwice(online)), []);
+  online.selections[0].applicationSubject = { subject: "융합과학 탐구 (1학기)", sameCourseOnce: true };
+  online.selections[1].applicationSubject = { subject: "융합과학 탐구 (2학기)", sameCourseOnce: true };
+  assert.equal(ctx.applicationSameCourseTwice(online).length, 1);
+  // 오프라인·구글폼 취합(mergeApplications): 과목 객체에 sameCourseOnce가 실린다.
+  const merged = ctx.mergeApplications([{ grade: "2", classroom: "1", number: "1", name: "가상", selections: ["융합과학 탐구 (1학기)", "융합과학 탐구 (2학기)", "기하"] }],
+    ctx.collectApplicationSubjects({ includeExcluded: true, currentGrade: "2" }));
+  assert.deepEqual(plain(merged.errors), []);
+  assert.equal(ctx.applicationSameCourseTwice(merged.students[0]).length, 1);
+});
+
+// 학기제: 편제표 한 행에 학기 칸 3·3(운영학점 6)으로 적힌 묶음 밖 과목을 학기로 나눠 신청하면 그 줄의 학점은 학기 칸 값(3).
+test("a one-row two-semester course carries per-semester credits; split lines and merged results use the semester cell value", () => {
+  const ctx = sameCourseContext();
+  vm.runInContext(functionSource("function applicationSeparateNames(", "function aggregateCourseDisplayName("), ctx);
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("), ctx);
+  const subjects = ctx.collectApplicationSubjects({ includeExcluded: true, currentGrade: "2" });
+  const byName = Object.fromEntries(subjects["3"].map((item) => [item.subject, item]));
+  assert.equal(byName["한 행 두 학기"].credit, 6, "행 학점(운영학점)은 그대로 둔다");
+  assert.deepEqual(plain(byName["한 행 두 학기"].semesterCredits), { "1": 3, "2": 3 });
+  assert.equal(byName["한 행 두 학기"].onceCredit, 3);
+  assert.equal(byName["기하"].credit, 3, "학기 하나인 과목은 그대로");
+  assert.equal(byName["기하"].onceCredit, undefined);
+  const merged = ctx.mergeApplications([
+    { grade: "2", classroom: "1", number: "1", name: "가상", selections: ["한 행 두 학기 (1학기)", "기하"] },
+    { grade: "2", classroom: "1", number: "2", name: "가상둘", selections: ["한 행 두 학기"] }
+  ], subjects);
+  assert.deepEqual(plain(merged.errors), []);
+  const first = merged.students.find((student) => student.number === "1");
+  const picked = Object.fromEntries(first.selections.map((course) => [course.name, course]));
+  assert.equal(picked["한 행 두 학기 (1학기)"].credits, 3, "학기로 나눈 줄 = 학기 칸 학점");
+  assert.equal(picked["한 행 두 학기 (1학기)"].applicationSubject.credit, 3);
+  assert.equal(picked["기하"].credits, 3);
+  assert.equal(first.totalCredits, 6);
+  const second = merged.students.find((student) => student.number === "2");
+  assert.equal(second.selections[0].credits, 3, "학기 없이 고른 경우도 학기 칸 값이 같으면 그 값(한 학기만 듣는다)");
+});
+
+test("choice-block (택n) semesters keep the row credit; only free semesters take the semester cell value", () => {
+  const ctx = sameCourseContext();
+  ctx.curriculumChoiceBlocks = () => [{ startRow: 12, endRow: 12, grade: "3", semester: "1", credit: 4 }];
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("), ctx);
+  const subjects = ctx.collectApplicationSubjects({ includeExcluded: true, currentGrade: "2" });
+  const item = subjects["3"].find((entry) => entry.subject === "한 행 두 학기");
+  assert.deepEqual(plain(item.semesterCredits), { "2": 3 }, "묶음 학기는 학기 칸 학점을 쓰지 않는다");
+  assert.equal(item.onceCredit, undefined);
+  const merged = ctx.mergeApplications([{ grade: "2", classroom: "1", number: "1", name: "가상", selections: ["한 행 두 학기 (1학기)", "한 행 두 학기 (2학기)"] }], subjects);
+  const picked = Object.fromEntries(merged.students[0].selections.map((course) => [course.name, course.credits]));
+  assert.deepEqual(plain(picked), { "한 행 두 학기 (1학기)": 6, "한 행 두 학기 (2학기)": 3 });
+});
+
+test("selection groups and the step-2 list split two-semester courses with the semester credit", () => {
+  const groups = fs.readFileSync(path.join(__dirname, "..", "course-groups.js"), "utf8");
+  assert.match(groups, /credit: semesters\.length > 1 \? \(course\.semesterCredits\?\.\[semester\] \|\| course\.credit\) : course\.credit/);
+  assert.match(frontend, /subject: `\$\{item\.subject\} \(\$\{key\}학기\)`, credit: item\.semesterCredits\?\.\[key\] \|\| item\.credit/);
+});
+
+test("result validation shows a red (non-blocking) error for same course in two semesters and asks with the app dialog before importing", async () => {
+  const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
+  const ctx = vm.createContext({ classifyApplicationRecords: () => [], getApplicationGroupSettings: () => [],
+    applicationSameCourseTwice: (student) => student.name === "가상둘" ? [{ name: "융합과학 탐구", semesters: ["1", "2"] }] : [] });
+  vm.runInContext(importer.slice(importer.indexOf("function normalizeResultCourseName("), importer.indexOf("function buildResultImportPreview(")), ctx);
+  ctx.resultExampleList = (items) => items.join(", ");
+  const course = (column, name) => ({ column, name, credits: 3 });
+  const candidate = { skippedRows: [], data: { courses: [course(1, "융합과학 탐구 (1학기)"), course(2, "융합과학 탐구 (2학기)")], students: [
+    { grade: "2", classroom: "1", number: "1", name: "가상하나", selections: [course(1, "융합과학 탐구 (1학기)")], totalCredits: 3 },
+    { grade: "2", classroom: "1", number: "2", name: "가상둘", selections: [course(1, "융합과학 탐구 (1학기)"), course(2, "융합과학 탐구 (2학기)")], totalCredits: 6 }] } };
+  const result = ctx.analyzeResultCandidate(candidate, { grade: "2", subjects: { "3": [] }, cohortYear: "2025" });
+  assert.equal(result.issues.blocking.length, 0, "반영은 막지 않는다");
+  assert.equal(result.issues.errors.length, 1);
+  assert.match(result.issues.errors[0], /^같은 과목을 두 학기에 신청한 학생 1명: 1-2 가상둘\(융합과학 탐구\)/);
+  // 반영 단추: 앱 확인 창으로 한 번 더 묻는다(취소하면 반영하지 않음).
+  const source = importer.slice(importer.indexOf("async function confirmResultImport("), importer.indexOf("function revalidateResultImport("));
+  assert.match(source, /appConfirm\(text, \{ title: "오류가 있는 결과 반영", ok: "반영", cancel: "취소" \}\)/);
+  const asked = [];
+  const run = vm.createContext({ resultImportPending: { candidates: [result], selected: 0 },
+    appConfirm: async (text, options) => { asked.push({ text, options }); return false; }, window: {} });
+  vm.runInContext(source.replace("async function confirmResultImport(", "var confirmResultImport = async function("), run);
+  await run.confirmResultImport();
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].text, /같은 과목을 두 학기에 신청한 학생 1명[\s\S]*그대로 반영할까요\?/);
+});
+
+test("offline application page notes once-only courses", () => {
+  const ctx = vm.createContext({ $: () => ({ value: "" }) });
+  vm.runInContext(functionSource("function xmlEscape(", "function createStylesXml("), ctx);
+  vm.runInContext(functionSource("function buildApplicationPageHtml(", "function downloadApplicationForm("), ctx);
+  const html = ctx.buildApplicationPageHtml({ "1": [], "2": [], "3": [{ subject: "융합과학 탐구", semester: "1·2", credit: 3, sameCourseOnce: true }] });
+  assert.match(html, /c\.sameCourseOnce\?'1·2학기 중 한 학기만 · ':''/);
+  assert.match(html, /"sameCourseOnce":true/);
+});
+
+test("adding a round says 'n차를 추가했습니다.' (차 is not dropped)", () => {
+  assert.match(frontend, /status\.textContent = `\$\{state\.currentRound\}차를 추가했습니다\.`/);
+  assert.doesNotMatch(frontend, /\$\{[^}]*[Rr]ound[^}]*\}(를|을) /, "차수 숫자 뒤에 '차' 없이 조사가 붙은 문구 없음");
 });

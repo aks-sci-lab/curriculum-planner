@@ -192,8 +192,26 @@ function countResultSelections(students, courses) {
   return counts;
 }
 
+// 소인수·공동교육과정(1단계 편제표 학기 칸 메모·편성 영역 '소인수·공동')은 신청 과목이 아니므로 결과 파일에 있어도 조용히 뺀다.
+// items = 그 학년 신청 과목 목록(collectApplicationSubjects includeExcluded, 해당 과목은 separate: true). 뺀 과목 이름을 돌려준다.
+function stripSeparateResultCourses(data, items) {
+  const separate = new Set((items || []).filter((item) => item.separate).map((item) => normalizeResultCourseName(item.subject)));
+  if (!separate.size || !data?.courses?.length) return [];
+  const removed = data.courses.filter((course) => separate.has(normalizeResultCourseName(course.name)));
+  if (!removed.length) return [];
+  const columns = new Set(removed.map((course) => String(course.column)));
+  data.courses = data.courses.filter((course) => !columns.has(String(course.column)));
+  for (const student of data.students || []) {
+    if (!(student.selections || []).some((selection) => columns.has(String(selection.column)))) continue;
+    student.selections = student.selections.filter((selection) => !columns.has(String(selection.column)));
+    student.totalCredits = student.selections.reduce((total, selection) => total + (Number(selection.credits) || 0), 0);
+  }
+  return removed.map((course) => course.name);
+}
+
 function analyzeResultCandidate(candidate, options) {
-  const issues = { blocking: [], warnings: [], info: [], actions: [] };
+  // errors: 빨간 오류지만 반영은 막지 않는다(반영 전에 앱 확인 창으로 한 번 더 묻는다).
+  const issues = { blocking: [], errors: [], warnings: [], info: [], actions: [] };
   const addAction = (target, label) => {
     if (!issues.actions.some((action) => action.target === target)) issues.actions.push({ target, label });
   };
@@ -204,6 +222,8 @@ function analyzeResultCandidate(candidate, options) {
   const grade = String(options.grade);
   const targetGrade = String(Number(grade) + 1);
   const target = resultTargetLabel(grade);
+  // 소인수·공동교육과정 과목은 신청 과목이 아니므로 결과에 있어도 안내 없이 뺀다(편제표 작업에서만 다룸).
+  stripSeparateResultCourses(candidate.data, options.subjects?.[targetGrade]);
   const plan = options.cohortYear ? `${options.cohortYear}학년도 입학생 편제표(${targetGrade}학년 열)` : `${targetGrade}학년 편제표`;
   const students = candidate.data.students;
   const courses = candidate.data.courses.filter((course) =>
@@ -239,7 +259,8 @@ function analyzeResultCandidate(candidate, options) {
       issues.warnings.push(`${target} 중 ${plan}에 없는 과목 ${unknown.length}개: ${resultExampleList(unknown.map((course) => course.name))}. 과목명이 편제표와 다르면 그룹 분류와 시수 통계 연결이 끊어지니 편제표 또는 파일의 과목명을 맞추세요.`);
       addAction("curriculum", "1단계 편제표 확인");
     }
-    const missing = curriculum.filter((item) => !fileNames.has(normalizeResultCourseName(item.subject)));
+    // 소인수·공동 과목은 신청 과목이 아니므로 '결과 파일에 없는 과목'으로 세지 않는다.
+    const missing = curriculum.filter((item) => !item.separate && !fileNames.has(normalizeResultCourseName(item.subject)));
     if (missing.length) issues.info.push(`${plan}의 ${target} 중 결과 파일에 없는 과목 ${missing.length}개: ${resultExampleList(missing.map((item) => item.subject))}.`);
   } else {
     issues.info.push(`${plan}에서 ${target}을 찾지 못해 과목명 대조를 건너뛰었습니다. 1단계에서 해당 입학연도 편제표를 확인하세요.`);
@@ -282,6 +303,16 @@ function analyzeResultCandidate(candidate, options) {
       const label = `${["1", "2"].includes(group.semester) ? `${group.semester}학기 ` : ""}${group.name}`;
       issues.warnings.push(`${target} ${label}: ${group.count}과목 선택 기준과 다른 학생 ${mismatched.length}명 (${resultExampleList(mismatched.map(({ student, picked }) => `${student.classroom}-${student.number} ${student.name} ${picked}과목`), 3)}).`);
       addAction("groups", "과목·그룹 설정으로");
+    }
+  }
+
+  // 같은 과목 두 학기 신청(편제표 다른 행 · 한 학기만): 판별은 app.js applicationSameCourseTwice 하나.
+  if (typeof applicationSameCourseTwice === "function") {
+    const twice = students.map((student) => ({ student, items: applicationSameCourseTwice(student) })).filter((entry) => entry.items.length);
+    if (twice.length) {
+      issues.errors.push(`같은 과목을 두 학기에 신청한 학생 ${twice.length}명: ${resultExampleList(twice.map(({ student, items }) =>
+        `${student.classroom}-${student.number} ${student.name}(${items.map((item) => item.name).join(", ")})`))}. 같은 과목은 한 학기에만 신청합니다. 반영하면 이 학생들은 재신청 대상(위계·학점 점검·확인서·4단계 재신청 명단)으로 표시됩니다.`);
+      candidate.sameCourseTwice = twice.length;
     }
   }
 
@@ -379,12 +410,14 @@ function renderResultImportPreview() {
     : "";
   const blocked = candidate.issues.blocking.length > 0;
   const warningCount = candidate.issues.warnings.length;
+  const errorCount = (candidate.issues.errors || []).length;
   container.innerHTML = `<div class="result-import-head">
       <div><strong>결과 파일 검증 · ${esc(preview.round)}차 ${esc(resultCurrentLabel(preview.grade))}</strong><span>${esc(preview.fileName)} · ${formatLabel}</span></div>
       ${sheetPicker}
     </div>
     ${summary}
     ${list(candidate.issues.blocking, "is-blocking", "반영할 수 없는 오류")}
+    ${list(candidate.issues.errors || [], "is-blocking is-error", "오류 · 확인 후 반영할 수 있음")}
     ${list(candidate.issues.warnings, "is-warning", "확인이 필요한 경고")}
     ${list(candidate.issues.info, "is-info", "참고")}
     ${candidate.courseCheckHtml || ""}
@@ -392,16 +425,25 @@ function renderResultImportPreview() {
     ${candidate.issues.actions?.length ? `<div class="result-import-fixes"><span>설정을 고친 뒤 파일을 다시 올리지 않고 아래 버튼으로 다시 검증할 수 있습니다.</span>${candidate.issues.actions.map((action) =>
       `<button class="button" type="button" data-result-import-fix="${esc(action.target)}">${esc(action.label)}</button>`).join("")}<button class="button" id="revalidateResultImport" type="button">다시 검증</button></div>` : ""}
     <div class="result-import-actions">
-      <button class="button button-primary" id="confirmResultImport" type="button"${blocked ? " disabled" : ""}>${warningCount ? `경고 ${warningCount}건 확인 후 결과 반영` : "결과 반영"}</button>
+      <button class="button button-primary" id="confirmResultImport" type="button"${blocked ? " disabled" : ""}>${errorCount ? `오류 ${errorCount}건 확인 후 결과 반영` : warningCount ? `경고 ${warningCount}건 확인 후 결과 반영` : "결과 반영"}</button>
       <button class="button" id="cancelResultImport" type="button">취소</button>
     </div>`;
   container.classList.remove("hidden");
 }
 
-function confirmResultImport() {
+async function confirmResultImport() {
   const preview = resultImportPending;
   if (!preview) return;
   const candidate = preview.candidates[preview.selected];
+  // 빨간 오류(같은 과목 두 학기 신청 등)는 자료를 버리지 않고, 앱 확인 창으로 한 번 더 묻고 반영한다.
+  const errors = candidate?.issues?.errors || [];
+  if (errors.length && !candidate.issues.blocking.length) {
+    const text = `${errors.join("\n\n")}\n\n그대로 반영할까요? (자료는 버리지 않습니다.)`;
+    const ok = typeof appConfirm === "function"
+      ? await appConfirm(text, { title: "오류가 있는 결과 반영", ok: "반영", cancel: "취소" })
+      : window.confirm(text);
+    if (!ok || resultImportPending !== preview) return;
+  }
   try {
     if (!candidate || candidate.issues.blocking.length) throw new Error("오류가 있는 시트는 반영할 수 없습니다.");
     if (state.currentRound !== preview.round) throw new Error("미리보기 이후 차수가 바뀌었습니다. 해당 차수에서 다시 업로드하세요.");
