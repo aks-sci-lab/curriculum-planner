@@ -1,5 +1,5 @@
 // 6단계 출력물 화면 확인(사용자처럼 클릭): 하네스 전체 실행이 남긴 백업(가상 학생)을 복원 → 6단계 교실 배정·직접 바꾸기·겹침 경고 →
-// 교사·시간 설정의 교실 칸(특별실 이름) → 출석부(그룹·교사별 zip·전체 zip)·학생 시간표(미리 보기·인쇄·엑셀)·블록표 교실 열.
+// 교사·시간 설정의 교실 칸(특별실 이름) → 출석부(그룹·교사별 zip·전체 zip)·담임반(현황 쪽 나눔·9pt·학생 배부용 쪽지)·학생 시간표(미리 보기·인쇄·엑셀)·블록표 교실 열.
 // 사용: node e2e/run.cjs --seed 10 --out /tmp/e2e  →  node e2e/class-sections-print-ui.cjs /tmp/cs-print /tmp/e2e/downloads/workspace-backup.json.gz
 // 내려받은 파일은 openpyxl로 직접 읽어 확인한다(앱 함수 미사용). 결과는 OUT/report.json, 문제는 problems 목록.
 const path = require("path"), fs = require("fs");
@@ -348,19 +348,121 @@ function attendanceInfo(sheet) {
   const hrAll = await save(() => page.getByRole("button", { name: "담임학급 전체 파일" }).click(), "attendance-homeroom-all.xlsx");
   const hrAllSheets = readXlsxAll(hrAll.file);
   check(hrAllSheets[0].name === "목록" && hrAllSheets.length === hrOptions.length + 1, `담임학급 전체 파일: 목록 + 반 ${hrOptions.length}개 시트`, { sheets: hrAllSheets.length, name: hrAll.appName });
-  // 인쇄: 이 반 → 현황 1장(A4 가로) + 그 반 분반 출석부, 학년 전체 → 반마다
+  // 반 파일 현황 시트 인쇄 설정(엑셀 XML 직접): 가로, 배율 90% 이상(10pt → 9pt 이상), 수동 쪽 나눔, 머리글 행 반복, 쪽 번호 머리글
+  const hrXml = (file, sheetIndex) => JSON.parse(execFileSync("python3", ["-I", "-c", [
+    "import zipfile,sys,json", "z=zipfile.ZipFile(sys.argv[1])", "i=sys.argv[2]",
+    "print(json.dumps({'sheet': z.read('xl/worksheets/sheet'+i+'.xml').decode('utf8'), 'book': z.read('xl/workbook.xml').decode('utf8')}))"].join("\n"), file, String(sheetIndex)], { encoding: "utf8" }));
+  const hrSetup = (xml) => ({ landscape: /orientation="landscape"/.test(xml.sheet), scale: Number(xml.sheet.match(/scale="(\d+)"/)?.[1] || 0), breaks: [...xml.sheet.matchAll(/<brk id="(\d+)"/g)].map((m) => Number(m[1])),
+    header: /<oddHeader>&amp;R&amp;P\/&amp;N<\/oddHeader>/.test(xml.sheet), fitToPage: /fitToPage/.test(xml.sheet), titles: /_xlnm.Print_Titles" localSheetId="0">[^<]*!\$1:\$\d+</.test(xml.book) });
+  const firstSetup = hrSetup(hrXml(path.join(OUT, "downloads", "homeroom", hrFiles[0]), 1));
+  report.checks.homeroomExcelSetup = firstSetup;
+  const expectBreaks = statusRows.length > 0 ? Math.ceil(statusRows.length / Math.ceil(statusRows.length / (firstSetup.breaks.length + 1))) : 0;
+  check(firstSetup.landscape && firstSetup.scale >= 90 && firstSetup.header && firstSetup.titles && !firstSetup.fitToPage && expectBreaks > 0,
+    `반 파일 현황 시트 인쇄: 가로 · 배율 ${firstSetup.scale}%(9pt 이상) · 쪽 나눔 ${firstSetup.breaks.length}곳 · 머리글 행 반복 · 쪽 번호`, firstSetup);
+  // 인쇄: 이 반 → 현황(A4 가로, 학생을 번호순으로 나눠 1/2·2/2) + 그 반 분반 출석부(A4 세로), 학년 전체 → 반마다
   await page.getByRole("button", { name: "이 반 인쇄" }).click(); await sleep(800);
-  const hrPrint = await page.evaluate(() => ({ hr: document.querySelectorAll("#printBatch .cs-hr-page").length, att: document.querySelectorAll("#printBatch .cs-att-page").length }));
-  const hrPdf = await page.pdf({ path: path.join(OUT, "10-homeroom-print.pdf"), format: "A4", preferCSSPageSize: true });
+  const hrPrint = await page.evaluate(() => {
+    const pages = [...document.querySelectorAll("#printBatch .cs-hr-page")];
+    return { hr: pages.length, att: document.querySelectorAll("#printBatch .cs-att-page").length, labels: pages.map((el) => el.dataset.page),
+      rows: pages.map((el) => el.querySelectorAll("tbody tr").length), titles: pages.map((el) => el.querySelector("td[data-kind=title]")?.textContent || ""),
+      heads: pages.map((el) => el.querySelector("thead tr:last-child th")?.textContent || ""), pageNo: pages.map((el) => el.querySelector(".cs-hr-pageno")?.textContent || "") };
+  });
+  await page.emulateMedia({ media: "print" });
+  const hrFont = await page.evaluate(() => {
+    const td = document.querySelector("#printBatch .cs-hr-page tbody td");
+    return td ? parseFloat(getComputedStyle(td).fontSize) : 0;
+  });
+  await page.emulateMedia({ media: null }); // "screen"으로 두면 뒤의 page.pdf()도 화면 CSS로 그린다
+  const hrPdfPath = path.join(OUT, "10-homeroom-print.pdf");
+  const hrPdf = await page.pdf({ path: hrPdfPath, format: "A4", preferCSSPageSize: true });
   const hrPdfText = hrPdf.toString("latin1");
   const hrPages = (hrPdfText.match(/\/Type\s*\/Page[^s]/g) || []).length;
   const boxes = [...hrPdfText.matchAll(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/g)].map((m) => Number(m[1]) > Number(m[2]) ? "가로" : "세로");
-  report.checks.homeroomPrint = { ...hrPrint, pdfPages: hrPages, boxes: boxes.slice(0, 4) };
-  check(hrPrint.hr === 1 && hrPages === 1 + hrPrint.att && boxes.includes("가로") && boxes.includes("세로"), `이 반 인쇄: 현황 1장(가로) + 분반 출석부 ${hrPrint.att}장(세로) = PDF ${hrPages}쪽`, report.checks.homeroomPrint);
-  await page.getByRole("button", { name: /학년 전체 인쇄$/ }).click(); await sleep(1200);
-  const gradePrint = await page.evaluate(() => document.querySelectorAll("#printBatch .cs-hr-page").length);
+  report.checks.homeroomPrint = { ...hrPrint, font: hrFont, pdfPages: hrPages, boxes: boxes.slice(0, 6) };
+  const n = hrPrint.hr;
+  check(n >= 1 && n <= 3 && hrPrint.labels.every((label, i) => label === `${i + 1}/${n}`) && hrPrint.pageNo.every((label, i) => label === `${i + 1}/${n}`),
+    `이 반 현황 ${n}쪽, 오른쪽 위 ${hrPrint.labels.join(", ")}`, hrPrint);
+  check(hrPrint.rows.reduce((a, b) => a + b, 0) === firstOptionCount && Math.max(...hrPrint.rows) - Math.min(...hrPrint.rows) <= 1,
+    `현황 학생 ${hrPrint.rows.join(" + ")} = ${firstOptionCount}명(고르게 나눔)`);
+  check(hrPrint.titles.every((title) => /이동수업 현황$/.test(title)) && hrPrint.heads.every((head) => head === "번호"), "쪽마다 제목·머리글 반복");
+  check(hrFont >= 12, `현황 인쇄 칸 글자 ${hrFont}px(9pt = 12px 이상)`);
+  check(hrPages === n + hrPrint.att && boxes.slice(0, n).every((box) => box === "가로") && boxes.slice(n).every((box) => box === "세로"),
+    `이 반 인쇄 PDF ${hrPages}쪽 = 현황 ${n}쪽(가로) + 분반 출석부 ${hrPrint.att}장(세로)`, report.checks.homeroomPrint);
+  check(n === firstSetup.breaks.length + 1, `인쇄 쪽 수 ${n} = 엑셀 쪽 나눔 ${firstSetup.breaks.length} + 1`);
+  execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "192", "-png", "-singlefile", hrPdfPath, path.join(OUT, "11-homeroom-status-page1")]);
+  await page.getByRole("button", { name: /^.+학년 전체 인쇄$/ }).click(); await sleep(1200);
+  const gradePrint = await page.evaluate(() => new Set([...document.querySelectorAll("#printBatch .cs-hr-page")].map((el) => el.dataset.homeroom)).size);
   const sameGrade = hrOptions.filter((text) => text.split(" ").slice(0, 2).join(" ") === hrOptions[0].split(" ").slice(0, 2).join(" ")).length;
-  check(gradePrint === sameGrade, `학년 전체 인쇄: 반 ${sameGrade}개 = 현황 ${gradePrint}장`);
+  check(gradePrint === sameGrade, `학년 전체 인쇄: 반 ${sameGrade}개 = 현황 반 ${gradePrint}개`);
+
+  // ⑤ 학생 배부용 '이동수업 안내' 쪽지: 미리 보기(첫 학생) · 한 장에 4장 · 이 반 인쇄 PDF 쪽 수 = ceil(학생/4) · 6장 확인 · 학년 전체
+  console.log("▶ 학생 배부용 쪽지");
+  const handout = page.locator("#classSectionsHandoutPreview");
+  check(await handout.count() === 1, "담임반 보기 아래 학생 배부용 미리 보기");
+  const firstSlip = await handout.evaluate((el) => ({ key: el.dataset.student, text: el.innerText, whole: el.textContent, firstRowKey: "" }));
+  firstSlip.firstRowKey = hr1.rows[0]?.key || "";
+  report.checks.handoutPreview = { key: firstSlip.key, text: firstSlip.text.slice(0, 300) };
+  check(firstSlip.key === firstSlip.firstRowKey || /^\d-\d+-\d+$/.test(firstSlip.key), `미리 보기 학생 ${firstSlip.key}`, report.checks.handoutPreview);
+  check(/\d{4}학년도 이동수업 안내/.test(firstSlip.text) && / → (내년 \d학년 \d+반|내년 반 미정)/.test(firstSlip.text) && /교실·시간은 바뀔 수 있습니다/.test(firstSlip.text)
+    && (/수강신청 미제출/.test(firstSlip.text) || (/1학기/.test(firstSlip.text) && /2학기/.test(firstSlip.text) && /블록\(요일·교시\)/.test(firstSlip.text))),
+  "첫 쪽지: 제목·현 반 → 내년 반·1·2학기 표(또는 미제출 안내)·아래 안내", firstSlip.text.slice(0, 200));
+  await page.getByLabel("한 장에 쪽지 수").selectOption("4"); await sleep(600);
+  await page.getByRole("button", { name: "학생 배부용 인쇄(이 반)" }).click(); await sleep(900);
+  const hoPrint = await page.evaluate(() => ({ pages: document.querySelectorAll("#printBatch .cs-ho-page").length, slips: document.querySelectorAll("#printBatch .cs-ho").length,
+    per: document.querySelector("#printBatch .cs-ho-page")?.dataset.per, first: document.querySelector("#printBatch .cs-ho")?.textContent || "",
+    unsub: document.querySelectorAll("#printBatch .cs-ho.is-unsubmitted").length, retake: document.querySelectorAll("#printBatch .cs-ho-retake").length,
+    font: document.querySelector("#printBatch .cs-ho-page")?.style.getPropertyValue("--ho-font") || "" }));
+  // 잘림 없음: 인쇄 모양에서 쪽지마다 내용 높이 ≤ 칸 높이(넘치면 overflow:hidden으로 잘려 안 보임)
+  const clipped = async () => {
+    await page.emulateMedia({ media: "print" });
+    const list = await page.evaluate(() => [...document.querySelectorAll("#printBatch .cs-ho")].filter((el) => el.scrollHeight > el.clientHeight + 1).map((el) => ({ key: el.dataset.student, over: el.scrollHeight - el.clientHeight })));
+    await page.emulateMedia({ media: null });
+    return list;
+  };
+  const clip4 = await clipped();
+  check(!clip4.length, `한 장에 4장: 잘린 쪽지 없음(${hoPrint.slips}명)`, clip4.slice(0, 5));
+  const hoPdfPath = path.join(OUT, "12-handout-print.pdf");
+  const hoPdf = await page.pdf({ path: hoPdfPath, format: "A4", preferCSSPageSize: true });
+  const hoPdfText = hoPdf.toString("latin1");
+  const hoPages = (hoPdfText.match(/\/Type\s*\/Page[^s]/g) || []).length;
+  const hoBoxes = [...hoPdfText.matchAll(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/g)].map((m) => Number(m[1]) > Number(m[2]) ? "가로" : "세로");
+  report.checks.handoutPrint = { ...hoPrint, first: hoPrint.first.slice(0, 200), pdfPages: hoPages };
+  check(hoPrint.slips === firstOptionCount && hoPrint.per === "4" && hoPrint.pages === Math.ceil(firstOptionCount / 4), `쪽지 ${hoPrint.slips}명 = 반 ${firstOptionCount}명, 한 장에 4장 → ${hoPrint.pages}장`, report.checks.handoutPrint);
+  check(hoPages === Math.ceil(firstOptionCount / 4) && hoBoxes.every((box) => box === "세로"), `쪽지 인쇄 PDF ${hoPages}쪽 = ceil(${firstOptionCount}/4), A4 세로`);
+  check(parseFloat(hoPrint.font) >= 8, `쪽지 글자 ${hoPrint.font}(8pt 이상)`);
+  const squash = (text) => String(text || "").replace(/\s+/g, "");
+  check(squash(hoPrint.first) === squash(firstSlip.whole), "인쇄 첫 쪽지 = 미리 보기(글자)", { print: hoPrint.first.slice(0, 80), preview: firstSlip.whole.slice(0, 80) });
+  execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "192", "-png", "-singlefile", hoPdfPath, path.join(OUT, "13-handout-page1")]);
+  await page.getByLabel("한 장에 쪽지 수").selectOption("6"); await sleep(600);
+  const six = await page.evaluate(() => ({ ok: document.querySelector("#classSectionsHandout")?.dataset.ok, font: document.querySelector("#classSectionsHandout")?.dataset.font,
+    blocked: document.querySelector("#classSectionsHandoutBlocked")?.textContent || "", disabled: document.querySelector("#classSectionsHandoutPrintOne")?.disabled }));
+  report.checks.handoutSix = six;
+  if (six.ok === "1") {
+    await page.getByRole("button", { name: "학생 배부용 인쇄(이 반)" }).click(); await sleep(900);
+    const clip6 = await clipped();
+    check(!clip6.length, "한 장에 6장: 잘린 쪽지 없음", clip6.slice(0, 5));
+    const six6 = path.join(OUT, "15-handout-6-print.pdf");
+    await page.pdf({ path: six6, format: "A4", preferCSSPageSize: true });
+    execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "192", "-png", "-singlefile", six6, path.join(OUT, "15-handout-6-page1")]);
+  }
+  check(six.ok === "1" ? Number(six.font) >= 8 && !six.disabled : /8pt보다 작아집니다/.test(six.blocked) && six.disabled, `한 장에 6장: ${six.ok === "1" ? `글자 ${six.font}pt` : "막힘 + 안내"}`, six);
+  await page.getByLabel("한 장에 쪽지 수").selectOption("4"); await sleep(600);
+  await page.getByRole("button", { name: /^학생 배부용 인쇄\(.+학년 전체\)$/ }).click(); await sleep(1500);
+  const hoGrade = await page.evaluate(() => ({ slips: document.querySelectorAll("#printBatch .cs-ho").length, pages: document.querySelectorAll("#printBatch .cs-ho-page").length,
+    status: document.getElementById("classSectionsStatus")?.textContent || "" }));
+  const gradeStudents = hrOptions.filter((text) => text.split(" ").slice(0, 2).join(" ") === hrOptions[0].split(" ").slice(0, 2).join(" ")).reduce((sum, text) => sum + Number(text.match(/\((\d+)명/)?.[1] || 0), 0);
+  report.checks.handoutGrade = { ...hoGrade, gradeStudents };
+  const clipGrade = await clipped();
+  check(!clipGrade.length, `학년 전체 쪽지: 잘린 쪽지 없음(${hoGrade.slips}명)`, clipGrade.slice(0, 5));
+  check(hoGrade.slips === gradeStudents && /학생 배부용 이동수업 안내: 반 \d+개/.test(hoGrade.status), `학년 전체 쪽지 ${hoGrade.slips}명 = 학년 담임반 합 ${gradeStudents}명`, report.checks.handoutGrade);
+  // 학생 찾기와 연결: 다른 학생을 찾으면 그 학생 쪽지가 미리 보기에
+  const other = hr1.rows[Math.min(3, hr1.rows.length - 1)]?.key;
+  if (other) {
+    await page.getByLabel("학생 찾기(현학년-반-번호)").fill(other); await page.getByLabel("학생 찾기(현학년-반-번호)").press("Enter"); await sleep(700);
+    check(await page.locator("#classSectionsHandoutPreview").getAttribute("data-student").catch(() => "") === other, `학생 찾기 ${other} → 그 학생 쪽지 미리 보기`);
+    await page.getByLabel("학생 찾기(현학년-반-번호)").fill(""); await page.getByLabel("학생 찾기(현학년-반-번호)").press("Enter"); await sleep(500);
+  }
+  await shot("14-handout-view.png", page.locator("#classSectionsHandout"));
   await page.getByLabel("출석부 보기 범위").selectOption("group"); await sleep(500);
 
   // ⑥ 학생 시간표: 학생 찾기 → 미리 보기, 반별 인쇄, 엑셀

@@ -5884,7 +5884,17 @@
         const merges = (sheet.merges || []).length
           ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((reference) => `<mergeCell ref="${reference}"/>`).join("")}</mergeCells>`
           : "";
-        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="${Number(sheet.fitToHeight) || 0}"/></worksheet>`;
+        // sheet.scale(10~400)이 있으면 쪽 맞춤 대신 배율: 엑셀은 쪽 맞춤일 때 수동 쪽 나눔(sheet.rowBreaks = 그 행 뒤에서 나눔)을 무시한다.
+        // sheet.headerText: 머리글(예: "&R&P/&N" = 오른쪽 위 '쪽/전체'). 6단계 담임반 이동수업 현황.
+        const scale = Number(sheet.scale) >= 10 && Number(sheet.scale) <= 400 ? Math.round(Number(sheet.scale)) : 0;
+        const sheetPr = scale ? "" : `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>`;
+        const pageSetup = scale
+          ? `<pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" scale="${scale}"/>`
+          : `<pageSetup paperSize="9" orientation="${sheet.orientation === "portrait" ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="${Number(sheet.fitToHeight) || 0}"/>`;
+        const headerFooter = sheet.headerText ? `<headerFooter><oddHeader>${xmlEscape(sheet.headerText)}</oddHeader></headerFooter>` : "";
+        const breaks = (sheet.rowBreaks || []).map(Number).filter((row) => Number.isInteger(row) && row > 0);
+        const breakXml = breaks.length ? `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">${breaks.map((row) => `<brk id="${row}" max="16383" man="1"/>`).join("")}</rowBreaks>` : "";
+        files[`xl/worksheets/sheet${index + 1}.xml`] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${sheetPr}${freeze}${cols}<sheetData>${rowsXml}</sheetData>${merges}<pageMargins left="0.25" right="0.25" top="0.4" bottom="0.4" header="0.2" footer="0.2"/>${pageSetup}${headerFooter}${breakXml}</worksheet>`;
       });
       return createXlsxBlob(files);
     }
