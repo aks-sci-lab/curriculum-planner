@@ -205,3 +205,12 @@ node -e 'const cs=require("./class-sections.js");const combos=JSON.parse(require
 - 교사 부족 제안: `블록 늘리기`·`학급 단위로 운영`(다시 풀어 확인되면 `제안 적용`), `블록 시간 추천 실행`, 교사 명단·5단계 교사 수 확인 안내.
 - 결과 머리글: 시안으로 계산 뒤 차수를 확정했고 입력이 같으면 '확정 결과 기준(시안 때 계산 · 입력 같음)'. 오류만 있고 미배정이 없으면 요약은 '학생은 모두 배정했지만 확인 필요 — …'.
 - 분반 카드 `li.cs-section`에 `data-room`(나이스 강의실 이름)·`data-course`·`data-size`·`data-capacity`.
+
+## 14. 출력물: 교실 배정·이동 출석부·학생 시간표 (`class-sections-print.js`)
+
+- **교실 배정**(`class-sections.js` 끝 '교실 배정' 구간, 순수·결정적): `classSectionsRoomList`(학년 교실 '2-1'… = 내년 학급 수, 특별실 `settings.rooms` + 이름 `settings.roomNames`, 다른 교실 `settings.extraRooms`) → `classSectionsAssignRooms`(블록마다 최소 비용 매칭: 비용 = 100 × (분반 인원 − 그 내년 반 학생 수), 특별실 과목은 그 종류 특별실, 모자라면 일반 교실(경고)·다른 교실, 그래도 모자라면 `room-short` 원인 문장; 직접 고른 교실 먼저, 같은 그룹은 같은 블록끼리, 다른 그룹은 블록 시간이 겹칠 때 같은 교실 금지; 시간이 없으면 다른 학년 특별실 겹침은 안내만) → `classSectionsValidateRooms`(`room-double`·`room-cross`·`special-mismatch`·`room-grade`·`room-missing`).
+- 저장: 직접 고른 교실만 `sectionResult.roomPins`(분반 id → 교실 이름). 자동 배정은 매번 같은 결과로 다시 계산(`classSectionsRoomPlan(차수, 학기)`, `cachedByStateRevision`). 다시 편성하면 직접 고른 값은 사라진다.
+- 화면: 분반 카드 '교실' 고르기(`data-cs-room-pick`), 블록 아래 `#classSectionsRoomSummary`(`data-errors`)·`#classSectionsRoomErrors`·`교실 자동으로 되돌리기`(`#classSectionsRoomReset`), 교사·시간 설정 `#classSectionsRoomSettings`. 블록표 엑셀 끝 열 '교실'.
+- **이동 출석부**: `classSectionsAttendanceSheet`(위 교시·교실·교사, 제목 '과목(강의실) 출석부', 순서·학년·반·번호·성명 + 날짜 칸(기본 17, `settings.print.attendanceDays`) + 비고, A4 세로·한 장·제목 줄 반복 `printTitles`). 내년 반을 모르면 현 학년-반-번호 + 경고. 단추 `#classSectionsAttendanceGroup`(그룹 = 파일, 분반마다 시트)·`#classSectionsAttendanceTeacher`(같은 학기 모든 그룹, 교사마다 파일 zip)·`#classSectionsAttendanceAll`(분반마다 '2027_1학기_과목(강의실)_교실_교사.xlsx' zip, `createXlsxBlob` 재사용).
+- **학생 시간표**: `classSectionsStudentTimetable`(같은 현 학년·학기 모든 그룹 배정 → 요일×교시 격자, 칸 = 과목 분반·교실·교사, 고정 시간 = 그 이름, 빈칸 '비움/학급 수업', 시간 없으면 'a블록: …' 목록, 재신청·미배정 '재신청 필요', 학급 단위 과목). 학생 찾기 칸에 한 학생 키 → `#classSectionsTimetablePreview`, `#classSectionsTimetablePrint`(현 반 고르기, 한 장에 2~4명, `#printBatch`), `#classSectionsTimetableExcel`(반별 시트).
+- 클릭 확인: `node e2e/class-sections-print-ui.cjs <폴더> <하네스 백업 .json.gz>`.
