@@ -294,6 +294,7 @@ test("compare modes: metrics for each mode, homeroom mode groups classmates more
   assert.ok(row("homeroom").sameHomeroomRatio >= row("move").sameHomeroomRatio);
   assert.ok(row("balance").maxSpread <= row("homeroom").maxSpread);
   assert.ok(["move", "homeroom", "balance"].includes(compared.recommended));
+  for (const item of compared.rows) assert.equal(item.moved, null, "no earlier result → nothing to compare");
   assert.ok(compared.reason.length > 10);
   // 세 방식은 같은 블록 배치를 쓴다(학생 배정만 다름)
   assert.deepEqual(compared.results.homeroom.placement, compared.results.move.placement);

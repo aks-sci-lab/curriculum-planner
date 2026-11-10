@@ -28,7 +28,7 @@ function context() {
     applicationRoundNumbers: () => ["1"],
     roundStatusData: (round) => state.rounds[round],
     isRoundLocked: (round) => state.roundStatuses[round]?.status === "confirmed",
-    hoursDefaultDepartment: (name) => ({ 물리학: "과학-물리", 화학: "과학-화학", 지구과학: "과학-지구" })[name] || "기타",
+    hoursDefaultDepartment: (name, area = "") => ({ 물리학: "과학-물리", 화학: "과학-화학", 지구과학: "과학-지구" })[name] || (/사회/.test(area) ? "사회-일사" : "기타"),
     hoursSettings: () => ({ teachers: { "과학-물리": 2, "과학-화학": 2 } }),
     hoursTargetYear: () => "2027",
     // 4단계 집계 모양만 흉내 낸다(그룹 2-1 택2, 과목 3개).
@@ -107,4 +107,37 @@ test("restore keeps settings and round entries only; app wiring stores classSect
   assert.match(view, /deferRenderUntilStepVisible\(8, "renderClassSections", renderClassSections\)/);
   const store = fs.readFileSync(path.join(root, "workspace-store.js"), "utf8");
   assert.match(store, /WORKSPACE_STORE_SPLIT_KEYS = \[[^\]]*"sectionResult"/);
+});
+
+test("plan 교과(군) gives the department default and the NEIS 편제명; class-unit subjects lower the suggested block count", () => {
+  const ctx = context();
+  ctx.collectApplicationSubjects = ({ currentGrade }) => currentGrade === "1"
+    ? { "2": [{ subject: "지구과학", area: "사회(역사/도덕 포함)", credit: "4" }, { subject: "물리학", area: "과학", credit: 3 }] } : null;
+  const group = ctx.classSectionsSource("1").groups[0];
+  const earth = group.courses.find((course) => course.key === "지구과학");
+  assert.equal(earth.area, "사회(역사/도덕 포함)");
+  assert.equal(earth.department, "과학-지구", "name rule first");
+  assert.equal(ctx.classSectionsNeisFamily(earth.area, earth.department), "사회(역사/도덕포함)");
+  assert.equal(ctx.classSectionsNeisFamily("", "과학-물리"), "과학");
+  assert.equal(ctx.classSectionsNeisFamily("", "제2외국어"), "제2외국어/한문");
+  // 학급 단위: 학생이 고른 학급 단위 과목 수만큼 블록 수 기본값을 줄인다(직접 입력하면 그 값)
+  const settings = ctx.classSectionsSettings();
+  assert.deepEqual(plain(ctx.classSectionsSuggestedBlocks(group, settings)), { blocks: 2, removed: 0 });
+  settings.courseModes["지구과학"] = "class";
+  assert.deepEqual(plain(ctx.classSectionsSuggestedBlocks(group, settings)), { blocks: 1, removed: 1 });
+  const entry = ctx.classSectionsEntry("1", group.key);
+  assert.equal(ctx.classSectionsGroupSettings({ maxClassSize: 30 }, group, entry).blocks, 1);
+  entry.blocks = 2;
+  assert.equal(ctx.classSectionsGroupSettings({ maxClassSize: 30 }, group, entry).blocks, 2);
+});
+
+test("solving every group of a semester together: inputs skip saved occupancy, view wires the button", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key);
+  const input = plain(ctx.classSectionsBuildInput("1", group, entry, { noOccupied: true }));
+  assert.deepEqual(input.occupied, []);
+  assert.equal(input.noOccupied, undefined);
+  assert.match(view, /id="classSectionsSolveSemester"[\s\S]*?>전 학년 함께 다시 계산</);
+  assert.match(view, /kind: "solveAll"/);
 });

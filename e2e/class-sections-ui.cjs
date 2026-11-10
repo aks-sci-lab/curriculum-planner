@@ -32,6 +32,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const groups = await page.locator("[data-cs-group]").allInnerTexts();
   console.log("groups:", groups.map((t) => t.replace(/\s+/g, " ")));
   await shot("01-step6-start.png");
+  // 담당 교과 기본값(편제표 교과군): 사회와 문화가 '기타'가 아닌지
+  const deptOf = async (name) => page.getByLabel(`${name} 담당 교과`).evaluate((el) => el.options[el.selectedIndex]?.textContent || "");
+  console.log("dept 사회와 문화:", await deptOf("사회와 문화").catch(() => "(없음)"));
+  // 앞 편성이 없는 그룹에서 먼저 방식 비교 → 이동 수 '–'
+  const fresh = page.locator("[data-cs-group]").filter({ hasText: "2-2 택3" }).first();
+  if (await fresh.count()) {
+    await fresh.click(); await sleep(300);
+    await page.getByRole("button", { name: "방식 비교·추천" }).click();
+    await page.getByText("편성 방식 비교", { exact: true }).waitFor({ timeout: 60000 });
+    await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
+    console.log("fresh compare moved:", (await page.locator('section[aria-label="편성 방식 비교"] tbody td:nth-child(5)').allInnerTexts()).join(","),
+      "|", await page.locator('section[aria-label="편성 방식 비교"] p.cs-note').last().innerText());
+    await page.locator("[data-cs-group]").first().click(); await sleep(300);
+  }
   // 기본 편성
   await page.getByRole("button", { name: "편성 계산" }).click();
   await page.locator("#classSectionsSummary").waitFor({ timeout: 60000 });
@@ -84,6 +98,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log(`group ${i}:`, (await groupButtons.nth(i).innerText()).replace(/\s+/g, " "), "|", await page.locator("#classSectionsSummary").innerText());
   }
   await shot("06-other-group.png");
+  // 전 학년 함께 다시 계산(1학기 그룹 3개)
+  await groupButtons.first().click(); await sleep(300);
+  await page.getByRole("button", { name: "전 학년 함께 다시 계산" }).click(); await sleep(500);
+  await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+  console.log("solve semester:", await page.locator("#classSectionsStatus").innerText(), "|", await page.locator("#classSectionsSummary").innerText());
+  // 학급 단위로 바꾸면 블록 수 제안
+  const five = page.locator("[data-cs-group]").filter({ hasText: "3-1 택5" }).first();
+  await five.click(); await sleep(300);
+  const firstCourse = await page.locator("[data-cs-mode]").first().getAttribute("data-cs-mode");
+  await page.getByLabel(`${firstCourse} 운영 방식`).selectOption("class"); await sleep(400);
+  console.log("blocks hint:", await page.locator("#classSectionsBlocksHint").innerText().catch(() => "(없음)"), "| blocks =", await page.getByLabel("블록 수").inputValue());
+  await page.locator("#workflowStep8Panel").screenshot({ path: path.join(OUT, "08-class-unit-hint.png") });
+  await page.getByLabel(`${firstCourse} 운영 방식`).selectOption("move"); await sleep(300);
+  await groupButtons.first().click(); await sleep(300);
   // 학생 찾기
   await groupButtons.first().click(); await sleep(300);
   await page.getByLabel("학생 찾기(현학년-반-번호)").fill("1-1-1"); await page.getByLabel("학생 찾기(현학년-반-번호)").press("Enter");

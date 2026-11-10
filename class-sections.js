@@ -1513,7 +1513,8 @@ function classSectionsMetrics(model, result, previous) {
     together += max;
     total += sum;
   }
-  let moved = 0;
+  // 앞 편성 결과가 없으면 비교할 것이 없으므로 null('–'로 표시).
+  let moved = previous?.assign ? 0 : null;
   if (previous?.assign) {
     for (const student of model.students) {
       const before = new Set(previous.assign[student.key] || []);
