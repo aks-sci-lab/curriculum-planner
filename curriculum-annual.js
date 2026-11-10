@@ -343,14 +343,22 @@ function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
     const fields = new Set([1, 2, 3].flatMap((grade) => annualGradeContent(base.data, subject, grade)));
     addSlot({ key, y: subject, fields, division: planDataDivision(subject.category), area: planDataKey(subject.area), category: planDataKey(subject.category) });
   }
+  // 같은 과목이라도 그 학년 입학생 편제표에서 편성 영역(학교 지정/학생 선택)이 Y 행과 다르면 한 행으로 합치지 않는다
+  // (예: 2025 입학생 학교 지정 '독서와 작문' 2-2가 Y의 3-1 택5 행에 들어가 학교 지정 이수학점이 줄던 문제).
+  // 나뉜 행은 '과목 키#학년' 슬롯이고, 원래 키의 Y 행에서는 그 학년 열을 뺀다(slot.skip).
   for (const grade of [2, 3]) {
     const source = sources[grade];
     for (const subject of planDataSubjects(source.data)) {
       const content = annualGradeContent(source.data, subject, grade);
       if (!content.length) continue;
-      const key = annualRowKey(subject);
-      if (slotByKey.has(key)) { for (const field of content) slotByKey.get(key).fields.add(field); continue; }
+      const sourceKey = annualRowKey(subject);
       const division = planDataDivision(subject.category), area = planDataKey(subject.area), category = planDataKey(subject.category);
+      const existing = slotByKey.get(sourceKey);
+      const conflicts = existing && existing.division && division && existing.division !== division;
+      if (existing && !conflicts) { for (const field of content) existing.fields.add(field); continue; }
+      if (conflicts) (existing.skip ||= new Set()).add(grade);
+      const key = conflicts ? `${sourceKey}#${grade}` : sourceKey;
+      if (slotByKey.has(key)) { for (const field of content) slotByKey.get(key).fields.add(field); continue; }
       const sameDivision = (slot) => slot.division === division || slot.category === category;
       let after = -1;
       const group = (source.data.groups || []).find((item) => item.members.includes(subject.id) && item.fields.some((field) => content.includes(field)));
@@ -361,14 +369,17 @@ function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
       }
       const field = content.find((item) => item !== "note");
       const lastIndex = (test) => { for (let index = slots.length - 1; index >= 0; index--) if (test(slots[index])) return index; return -1; };
+      // 같은 편성 영역 안에서는 같은 교과(군) 행 무리 뒤가 먼저다(교과(군) 이수학점·필수이수학점 칸을 annualJoinAreaRuns가 한 칸으로 합치게).
+      // 예: 2025 입학생 학교 지정 '독서와 작문' 2-2가 예술·교양 사이 별도 '국어' 칸으로 가 국어 이수학점이 12와 4로 나뉘던 문제.
+      if (after < 0 && field && area) after = lastIndex((slot) => sameDivision(slot) && slot.area === area && slot.fields.has(field));
+      if (after < 0 && area) after = lastIndex((slot) => sameDivision(slot) && slot.area === area);
       if (after < 0 && field) after = lastIndex((slot) => sameDivision(slot) && slot.fields.has(field));
-      if (after < 0) after = lastIndex((slot) => sameDivision(slot) && slot.area === area);
       if (after < 0) after = lastIndex((slot) => sameDivision(slot));
       // 이웃 행: 끼워 넣는 자리 바로 위(없으면 아래)의 Y 과목 행. 새 행은 이 행의 칸 모양을 쓴다.
       const position = after < 0 ? slots.length : after + 1;
       const above = slots.slice(0, position).reverse().find((slot) => slot.y && sameDivision(slot)) || slots.slice(0, position).reverse().find((slot) => slot.y);
       const below = slots.slice(position).find((slot) => slot.y && sameDivision(slot));
-      addSlot({ key, y: null, neighbor: (above || below)?.y || null, fields: new Set(content), division, area, category }, position);
+      addSlot({ key, sourceKey, only: conflicts ? grade : null, y: null, neighbor: (above || below)?.y || null, fields: new Set(content), division, area, category }, position);
     }
   }
 
@@ -379,7 +390,8 @@ function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
   for (const slot of slots) {
     const parts = {};
     for (const grade of [1, 2, 3]) {
-      const subject = sources[grade].byKey.get(slot.key);
+      if (slot.skip?.has(grade) || (slot.only && slot.only !== grade)) continue;
+      const subject = sources[grade].byKey.get(slot.sourceKey || slot.key);
       const content = annualGradeContent(sources[grade].data, subject, grade);
       if (subject && content.length) parts[grade] = { subject, content, source: sources[grade] };
     }

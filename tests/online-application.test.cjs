@@ -44,6 +44,10 @@ test("closure defaults open eligible courses and leave at-risk courses undecided
   assert.match(markup, /<td class="[^"]*\bis-undecided\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:2"/);
   assert.match(markup, /data-aggregate-course-info="1:2" title="기준 미달: 신청 5명이 개설기준 31\.50명보다 적습니다/);
   assert.doesNotMatch(markup, /<td class="[^"]*\bis-undecided\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:5"/);
+  // 미달이어도 '개설'로 정한 과목은 빨간 '미달' 대신 결정 표시(파란 '미달·개설'), 빨간 글자(is-risk)도 없음.
+  assert.match(markup, /class="af-tag is-decided" data-aggregate-course-info="1:5"[^>]*>미달·개설</);
+  assert.match(markup, /class="af-tag is-risk" data-aggregate-course-info="1:2"[^>]*>미달</);
+  assert.doesNotMatch(markup, /<td class="[^"]*\bis-risk\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:5"/);
   assert.equal(focused(markup).length, 0, "attention marks only in 'attention only' mode");
   // 처리할 것만 보기: 결정이 미정인 기준 미달 과목만 강조되고, 이미 개설/폐강을 정한 과목과 기준을 충족한 과목은 흐리게 남는다.
   // 목표(택1 × 10학급 = 10)와 맞지 않는 그룹의 총 학급수 칸은 연한 주황 + 목표와 차이 + 강조 + 자동 조정 단추.
@@ -285,6 +289,13 @@ test("curriculum management shows three cohort plans and a separate annual whole
   assert.match(markup, /2025.xlsx/);
   assert.match(markup, /3학년 2024 미업로드/);
   assert.match(markup, /data-annual-build="2026" disabled/, "building needs all three cohort plans");
+  // 좁은 카드에서도 읽히게 짧게: '3학년(2024) 편제표 필요'(여러 개면 '2·3학년(2025·2024) …')
+  assert.match(markup, />1·2·3학년\(2026·2025·2024\) 편제표 필요</);
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "legacy.css"), "utf8");
+  assert.match(css, /\.curriculum-cohort-card p \{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;/);
+  assert.match(css, /\.curriculum-cohort-card > p:not\(\.curriculum-cohort-file\) \{ -webkit-line-clamp: 3; \}/, "편제 점검 단추 옆 부제는 세 줄까지");
+  assert.match(css, /\.curriculum-cohort-card > \.curriculum-cohort-file \{ overflow-wrap: anywhere; word-break: break-all;/, "파일 이름은 글자 단위로 줄바꿈");
+  assert.match(markup, /<p title="수강신청: 3학년 과목 기준 · 현 2학년은 이 편제표의 3학년 과목으로 신청">수강신청: 3학년 과목 기준<\/p>/, "부제 title에 보이는 글자도");
   elements["#schoolYear"].value = "2027";
   ctx.renderCurriculumCohortUploads();
   assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]
@@ -1076,8 +1087,8 @@ test("workflow menus reveal their matching panels without changing the selected 
   vm.runInContext(functionSource("function renderWorkflowLayout(", "function switchRound("),ctx);
   ctx.renderWorkspaceContext=()=>{};
   ctx.renderWorkflowLayout();
-  // 편제표·수강신청·확인서·집계·시수 통계 5개 업무 메뉴와 보류 중인 이동수업·시간표 메뉴
-  assert.deepEqual(buttons.map((button)=>button.dataset.workflowStep),["1","2","3","4","7","5","6"]);
+  // 편제표·수강신청·확인서·집계·시수 통계·분반 편성 6개 업무 메뉴와 보류 중인 이동수업·시간표 메뉴
+  assert.deepEqual(buttons.map((button)=>button.dataset.workflowStep),["1","2","3","4","7","8","5","6"]);
   assert.equal(elements.get("#workflowStep1Panel").classList.states.hidden,false);
   ctx.switchWorkflowStep(3);
   assert.equal(elements.get("#certificatePanel").classList.states.hidden,false);
@@ -1094,6 +1105,12 @@ test("workflow menus reveal their matching panels without changing the selected 
   assert.equal(elements.get("#aggregatePanel").classList.states.hidden,true);
   assert.equal(ctx.hoursRendered,1);
   assert.equal(elements.get("#workflowMenuToggle").textContent,"단계 선택 · 5단계");
+  ctx.renderClassSections=()=>{ctx.classSectionsRendered=(ctx.classSectionsRendered||0)+1;};
+  ctx.switchWorkflowStep(8);
+  assert.equal(elements.get("#workflowStep8Panel").classList.states.hidden,false);
+  assert.equal(elements.get("#workflowStep7Panel").classList.states.hidden,true);
+  assert.equal(ctx.classSectionsRendered,1);
+  assert.equal(elements.get("#workflowMenuToggle").textContent,"단계 선택 · 6단계");
   ctx.switchWorkflowStep(5);
   assert.equal(elements.get("#classifierPanel").classList.states.hidden,false);
   ctx.switchWorkflowStep(6);
@@ -1504,4 +1521,18 @@ test("aggregate sheet splits large groups evenly, six subjects at most per row",
   assert.match(xml, /<f>SUM\(C7:H7,C12:H12,C17:H17\)\/5<\/f><v>32<\/v>/);
   assert.equal(ctx.aggregateTextLines("과목1", 16.375), 1);
   assert.equal(ctx.aggregateTextLines("세계시민과 지리(일반)", 16.375, 12, true), 2);
+});
+
+test("4단계 집계표 과목명은 괄호를 한 번만: 두 학기 과목은 '(1학기)' 하나만(학기 구분), 그 밖은 '(융합)' 그대로", () => {
+  const ctx = vm.createContext({ curriculumSelectionType: (type) => String(type || "") });
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("), ctx);
+  vm.runInContext(functionSource("function aggregateCourseDisplayName(", "function currentStudent("), ctx);
+  const subject = { subject: "과학의 역사와 문화 (1학기)", type: "융합선택" };
+  assert.equal(ctx.applicationCourseLabel(subject), "과학의 역사와 문화 (1학기)(융합)", "예전 표기(괄호 두 번)");
+  assert.equal(ctx.aggregateCourseDisplayName(subject, "1"), "과학의 역사와 문화 (1학기)", "같은 이름 두 학기 행을 구분");
+  assert.equal(ctx.aggregateCourseDisplayName({ ...subject, subject: "과학의 역사와 문화 (2학기)" }, "2"), "과학의 역사와 문화 (2학기)");
+  assert.equal(ctx.aggregateCourseDisplayName(subject, ""), "과학의 역사와 문화 (1학기)");
+  assert.equal(ctx.aggregateCourseDisplayName({ subject: "법과 사회", type: "진로선택" }, "2"), "법과 사회(진로)", "꼬리표 없는 과목은 그대로");
+  assert.match(functionSource("function aggregateRecords(", "function currentStudent("), /aggregateCourseDisplayName\(applicationSubject, semesterKey\)/,
+    "화면·엑셀 집계표(aggregateSheetModel)가 함께 쓰는 displayName");
 });

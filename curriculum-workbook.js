@@ -128,9 +128,9 @@ async function curriculumArchiveStore(operation, id, buffer) {
   });
   try {
     return await new Promise((resolve,reject)=>{
-      const tx=db.transaction("archives",operation==="get"?"readonly":"readwrite");
+      const tx=db.transaction("archives",operation==="get"||operation==="has"?"readonly":"readwrite");
       const store=tx.objectStore("archives");
-      const request=operation==="get"?store.get(id):store.put(buffer,id);
+      const request=operation==="get"?store.get(id):operation==="has"?store.getKey(id):store.put(buffer,id);
       tx.oncomplete=()=>resolve(request.result);
       tx.onerror=()=>reject(new Error("원본 편제표를 저장하거나 읽지 못했습니다."));
       tx.onabort=()=>reject(new Error("원본 편제표 저장이 중단되었습니다."));
@@ -346,7 +346,7 @@ document.getElementById("exportCurriculumPlan").addEventListener("click",async()
     link.href=url;
     link.download=derived?`${state.curriculumCohortYear}학년도_전학년_편제표.xlsx`:state.curriculumPlanFileName.replace(/\.xls[xb]$/i,"")+`_${state.curriculumCohortYear}학년도_신입생_수정.xlsx`;
     link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    status.textContent=derived?"전학년 편제표 엑셀을 저장했습니다.":state.curriculumImportedLayout?.officeImport?"원본 양식이 없어 기본 양식(화면 표 그대로)으로 저장했습니다. 제출용은 '교육청 양식으로 내보내기'를 쓰세요.":"원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
+    status.textContent=derived?"전학년 편제표 엑셀을 저장했습니다.":blob.basicFallback?"원본 엑셀이 이 브라우저에 없어(백업 복원·다른 PC) 기본 양식(화면 표 그대로)으로 저장했습니다. 학교 원래 양식으로 내보내려면 원본 엑셀을 '원본 교체'로 다시 올리세요.":state.curriculumImportedLayout?.officeImport?"원본 양식이 없어 기본 양식(화면 표 그대로)으로 저장했습니다. 제출용은 '교육청 양식으로 내보내기'를 쓰세요.":"원본 양식을 유지한 편제표 엑셀을 저장했습니다.";
   }catch(error){status.textContent=`편제표 내보내기 실패: ${error.message}`;}
   finally{button.disabled=false;}
 });

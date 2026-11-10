@@ -1323,7 +1323,12 @@ function courseCheckRenderDialog() {
     return `<p class="course-check-result-line"><b>현 ${currentGrade}학년 → ${Number(currentGrade) + 1}학년 과목</b> ${summary.checked}명 점검 · 위계 미충족 ${summary.violators.length}명 · 학기 학점 부족 ${summary.short.length}명 · 초과 ${summary.over.length}명 · 교과(군) 미달 ${summary.familyShort.length}명 · 국수영 기준 초과 ${summary.kemOver.length}명 · 확인 불가 ${summary.unknowns.length}명${neisLine}</p>
       ${courseCheckStudentTableHtml(summary, { grade: currentGrade })}`;
   }).join("");
-  body.innerHTML = `
+  // 점검 결과가 있으면 맨 위에(팝업을 연 이유), 없으면 안내만 맨 아래에.
+  const resultSection = `<section class="course-check-section" aria-labelledby="courseCheckResultTitle">
+      <h3 id="courseCheckResultTitle">현재 차수 결과 점검</h3>
+      ${results || '<p class="note">2단계에서 결과를 반영하면 학생별 점검 결과가 여기에 표시됩니다.</p>'}
+    </section>`;
+  body.innerHTML = `${results ? resultSection : ""}
     <section class="course-check-section" aria-labelledby="courseCheckRulesTitle">
       <h3 id="courseCheckRulesTitle">위계(선이수) 규칙</h3>
       <p class="note">'앞 과목 → 뒤 과목': 뒤 과목을 들으려면 앞 과목을 이전 학기까지 이수해야 합니다. 기본 규칙은 2022 개정 교육과정 대표 위계 중 편제표에 있는 과목만 보입니다. 이수 근거: 편제표 이전 학기 지정 과목, 같은 신청의 앞 학기 선택(같은 학기 불인정), 이전 학년 이수 결과.</p>
@@ -1359,10 +1364,7 @@ function courseCheckRenderDialog() {
       <p class="course-check-limits">교과 ${esc(limits.subjects)} + 창의적 체험활동 ${esc(limits.creative)} = ${esc(limits.subjects + limits.creative)}학점 · 국어·수학·영어 3년 누계 ${esc(limits.kemLimit)}학점 이하(교과 ${esc(limits.subjects)}학점 초과분의 ${esc(limits.kemExtraRatio)}%까지 더 허용) — 학생별 경고만</p>
       <div class="aggregate-sheet-wrap"><table class="course-check-required-table"><caption>현 ${esc(grade)}학년 · ${esc(year)}학년도 입학생 편제표</caption><thead><tr><th scope="col">교과(군)</th><th scope="col">필수 이수(기준)</th><th scope="col">편제표 '필수이수' 열(참고)</th></tr></thead><tbody>${requiredRows}</tbody></table></div>
     </section>
-    <section class="course-check-section" aria-labelledby="courseCheckResultTitle">
-      <h3 id="courseCheckResultTitle">현재 차수 결과 점검</h3>
-      ${results || '<p class="note">2단계에서 결과를 반영하면 학생별 점검 결과가 여기에 표시됩니다.</p>'}
-    </section>
+    ${results ? "" : resultSection}
     <p id="courseCheckDialogMessage" role="status"></p>`;
 }
 

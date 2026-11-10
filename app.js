@@ -49,6 +49,7 @@
       roundClosures: { "1": {} },
       roundStatuses: {},
       hoursStats: {},
+      classSections: {},
       courseChecks: {},
       curriculumCompliance: {},
       curriculumVersions: {},
@@ -174,7 +175,7 @@
     // lastCore: 마지막으로 저장(예약)한 본문 · pending/writing: 쓰기 대기·진행 · force: 다음 쓰기는 번호 확인 없이 모두 다시 씀(저장 재개)
     // migrate: 예전 localStorage 자료를 읽었으니 시작 후 옮김. 이때 lastSavedWorkspace는 localStorage의 작은 기록이다.
     const workspaceStoreState = { active: false, rev: "", known: new Set(), cache: new Map(), lastCore: null,
-      pending: null, writing: null, force: false, migrate: false, boot: null };
+      pending: null, writing: null, current: null, committedRevision: undefined, force: false, migrate: false, boot: null };
     let resolveWorkspaceStartup = null;
     // 저장 자료를 모두 읽은 뒤(새 저장소 읽기·옮기기 포함) 풀린다. PC 파일 자동 저장은 이것을 기다린 뒤 파일과 비교한다.
     const workspaceStartupReady = new Promise((resolve) => { resolveWorkspaceStartup = resolve; });
@@ -207,16 +208,49 @@
     }
 
     let toastTimer = null;
+    // 알림: 몇 초 뒤(긴 문구는 조금 더) 사라지고, 닫기 단추·단계 이동(hideAppToast)으로 바로 닫는다.
+    // 알림이 떠 있는 동안에도 뒤의 단추를 누를 수 있게 알림 자체는 클릭을 받지 않는다(닫기 단추만).
     function showAppToast(message, kind = "success") {
       const toast = document.getElementById("appToast");
       if (!toast) return;
       toast.textContent = message;
+      if (typeof document.createElement === "function" && typeof toast.append === "function") {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "app-toast-close";
+        close.setAttribute("aria-label", "알림 닫기");
+        close.addEventListener("click", hideAppToast);
+        toast.append(close);
+      }
       toast.classList.toggle("error", kind === "error");
       toast.classList.add("visible");
       if (toastTimer !== null) clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove("visible"), 3000);
+      toastTimer = setTimeout(hideAppToast, Math.min(8000, 3000 + String(message).length * 40));
+    }
+
+    function hideAppToast() {
+      if (toastTimer !== null) { clearTimeout(toastTimer); toastTimer = null; }
+      document.getElementById("appToast")?.classList.remove("visible");
     }
     window.showAppToast = showAppToast;
+
+    // 브라우저 기본 confirm 대신 앱 대화상자(#appConfirmDialog)로 묻는다. Promise<boolean>. 대화상자가 없으면(테스트·옛 화면) confirm.
+    function appConfirm(text, { title = "확인", ok = "확인", cancel = "취소" } = {}) {
+      const dialog = typeof document !== "undefined" ? document.getElementById("appConfirmDialog") : null;
+      if (!dialog || typeof dialog.showModal !== "function") return Promise.resolve(window.confirm(text));
+      if (dialog.open) dialog.close("cancel");
+      dialog.querySelector("#appConfirmTitle").textContent = title;
+      dialog.querySelector("#appConfirmText").textContent = text;
+      dialog.querySelector("#appConfirmOk").textContent = ok;
+      dialog.querySelector("#appConfirmCancel").textContent = cancel;
+      dialog.returnValue = "";
+      return new Promise((resolve) => {
+        dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+        dialog.showModal();
+        dialog.querySelector("#appConfirmCancel")?.focus();
+      });
+    }
+    window.appConfirm = appConfirm;
 
     // 편제표·결과 업로드·집계·통계는 브라우저 안에서만 처리하므로 로그인 없이 사용한다.
     // 교사 로그인은 서버에 자료를 만드는 웹 수강신청 기능에서만 요구한다.
@@ -416,6 +450,7 @@
           roundClosures: state.roundClosures,
           roundStatuses: state.roundStatuses,
           hoursStats: state.hoursStats,
+          classSections: state.classSections,
           courseChecks: state.courseChecks,
           curriculumCompliance: state.curriculumCompliance,
           curriculumVersions: state.curriculumVersions,
@@ -445,8 +480,9 @@
           curriculumBundleName: state.curriculumBundleName,
           curriculumBundlePick: state.curriculumBundlePick,
           workflowStep: state.workflowStep,
-          openingPercent: $("#openingPercent").value,
-          divisionPercent: $("#divisionPercent").value,
+          // 잘못된 기준 값은 저장하지 않는다(마지막으로 적용된 값, aggregateThresholdStoredValue).
+          openingPercent: typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#openingPercent") : $("#openingPercent").value,
+          divisionPercent: typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#divisionPercent") : $("#divisionPercent").value,
           maxClassSize: $("#maxClassSize").value,
           schoolYear: $("#schoolYear").value,
           round: $("#round").value,
@@ -544,7 +580,7 @@
       }
       workspaceStoreState.cache = split.cache;
       workspaceStoreState.lastCore = split.core;
-      workspaceStoreState.pending = { split, startupFlush: workspaceStartupFlush };
+      workspaceStoreState.pending = { split, startupFlush: workspaceStartupFlush, revision: stateRevision };
       if (!workspaceStoreState.writing) {
         workspaceStoreState.writing = flushWorkspaceStore().finally(() => { workspaceStoreState.writing = null; });
       }
@@ -556,6 +592,7 @@
       while (workspaceStoreState.pending) {
         const job = workspaceStoreState.pending;
         workspaceStoreState.pending = null;
+        workspaceStoreState.current = job;
         try {
           const result = await workspaceStoreWrite(job.split, {
             expectedRev: workspaceStoreState.rev, known: workspaceStoreState.known, force: workspaceStoreState.force
@@ -563,6 +600,7 @@
           workspaceStoreState.force = false;
           workspaceStoreState.rev = result.rev;
           workspaceStoreState.known = result.known;
+          workspaceStoreState.committedRevision = job.revision;
           writeWorkspaceStoreRecord(workspaceStoreRecord(job.split.core, result.rev, result.savedAt));
           if (!job.startupFlush) {
             try { localStorage.setItem(WORKSPACE_SAVED_AT_KEY, String(Date.now())); } catch { /* 시각 기록은 비교용이다. */ }
@@ -587,6 +625,8 @@
             renderWorkspaceStorageUsage();
           }
           return false;
+        } finally {
+          workspaceStoreState.current = null;
         }
       }
       return true;
@@ -594,6 +634,23 @@
 
     function workspaceStoreBusy() {
       return Boolean(workspaceStoreState.writing || workspaceStoreState.pending);
+    }
+
+    // 닫기·이동 전에 물어야 할 '아직 못 쓴 변경'이 있는지. 시작 정리용 저장(다음에 열 때 같은 자료로 다시 만들어짐)과
+    // 마지막으로 쓴 뒤 자료가 바뀌지 않은 저장(단계·고른 학생 같은 화면 위치만)은 끝나기 전에 떠나도 자료가 사라지지 않는다.
+    // IndexedDB 쓰기는 트랜잭션 하나라, 중간에 떠나면 앞 저장본(작은 기록이 가리키는 번호)이 그대로 남는다.
+    function workspaceStoreUnsaved() {
+      return [workspaceStoreState.current, workspaceStoreState.pending].some((job) =>
+        job && !job.startupFlush && job.revision !== workspaceStoreState.committedRevision);
+    }
+
+    // 앱이 스스로 다른 주소로 이동하기 전(구글 로그인 등)에 부른다: 지금 자료를 저장하고 쓰기가 끝날 때까지(최대 timeout) 기다린다.
+    // 그러면 beforeunload가 '사이트에서 나가시겠습니까?'를 묻지 않는다(저장 실패·다른 창 충돌이면 여전히 묻는다).
+    async function prepareWorkspaceNavigation(timeout = 5000) {
+      if (!statePersistenceReady || workspaceResetting) return;
+      if (!statePersistenceBlocked) persistState();
+      const writing = workspaceStoreState.writing;
+      if (writing) await Promise.race([writing, new Promise((resolve) => window.setTimeout(resolve, timeout))]);
     }
 
     // 시작할 때 저장 자료를 어디서 읽을지 정한다. null이면 예전처럼 localStorage 전체 자료를 바로 읽는다
@@ -866,7 +923,7 @@
       const recentBackup = Date.now() - lastWorkspaceBackup() < 10 * 60 * 1000;
       if (workspaceHasWork() && !recentBackup &&
           window.confirm("전체 초기화 전에 지금 작업 자료를 백업 파일로 내려받을까요?\n(권장: 초기화하면 되돌릴 수 없습니다)")) {
-        downloadWorkspaceBackup();
+        await downloadWorkspaceBackup();
       }
       const linkedFile = typeof workspaceFileHandle !== "undefined" && workspaceFileHandle ? `'${workspaceFileHandle.name}' ` : "";
       if (!window.confirm("모든 작업 자료를 이 브라우저에서 삭제합니다.\n\n· 편제표(입학생별·전학년)와 변경 이력, 보관된 원본 엑셀\n· 모든 차수의 신청 결과·개설/폐강 결정·확정 상태\n· 선택 그룹 설정과 학교·학년도 설정\n" +
@@ -902,7 +959,48 @@
       }
     }
 
-    const WORKSPACE_BACKUP_VERSION = 1;
+    // 백업 형식 2: workspace.students가 현재 차수 rounds[currentRound].students와 같으면 빼고 omitted에 적는다(복원할 때 채움).
+    // 예전 앱(형식 1)은 backupVersion이 더 크면 '더 새로운 버전' 오류로 거절하므로 학생을 빈 값으로 읽지 않는다.
+    const WORKSPACE_BACKUP_VERSION = 2;
+    function workspaceBackupCompact(workspace) {
+      const raw = (value) => typeof stateRawValue === "function" ? stateRawValue(value) : value;
+      const round = workspace?.rounds?.[workspace.currentRound];
+      if (!Array.isArray(raw(workspace?.students)) || !round || raw(round.students) !== raw(workspace.students)) return { workspace, omitted: [] };
+      const { students, ...rest } = workspace;
+      return { workspace: rest, omitted: ["students"] };
+    }
+
+    // 형식 2 백업에서 뺀 workspace.students를 현재 차수 학생으로 채운다. 예전 백업(필드가 있음)은 그대로 둔다.
+    function workspaceBackupExpand(backup) {
+      const workspace = backup?.workspace;
+      if (!workspace || typeof workspace !== "object" || !Array.isArray(backup.omitted) || !backup.omitted.includes("students") ||
+          Object.hasOwn(workspace, "students")) return workspace;
+      const students = workspace.rounds?.[workspace.currentRound]?.students;
+      if (!Array.isArray(students)) throw new Error("백업의 현재 차수 학생 자료를 찾지 못했습니다.");
+      return { ...workspace, students };
+    }
+
+    // 백업 파일 글자 읽기: gzip(.json.gz, 첫 두 바이트 1f 8b)이면 풀고, 아니면 예전처럼 글자 그대로(.json, 들여쓴 것 포함).
+    async function readWorkspaceBackupText(file) {
+      if (typeof file?.arrayBuffer !== "function") return file.text();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+        if (typeof DecompressionStream !== "function") throw new Error("이 브라우저는 압축 백업(.json.gz)을 열 수 없습니다. 최신 크롬·엣지에서 불러오세요.");
+        return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+      }
+      return new TextDecoder().decode(bytes);
+    }
+
+    // 내려받기용 gzip. CompressionStream이 없으면 null(예전처럼 .json으로 내려받는다).
+    async function workspaceBackupGzip(text) {
+      if (typeof CompressionStream !== "function" || typeof Response !== "function") return null;
+      try {
+        return await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+      } catch {
+        return null;
+      }
+    }
+
     function buildWorkspaceBackup() {
       syncActiveRound();
       syncActiveCurriculumCohort();
@@ -911,12 +1009,14 @@
         const key = localStorage.key(index);
         if (key?.startsWith("curriculum-color-semester-groups-v3")) groups[key] = localStorage.getItem(key);
       }
+      const { workspace, omitted } = workspaceBackupCompact(workspacePayload());
       return {
         type: "curriculum-workspace-backup",
         backupVersion: WORKSPACE_BACKUP_VERSION,
         appVersion: typeof APP_VERSION === "string" ? APP_VERSION : "",
         createdAt: new Date().toISOString(),
-        workspace: workspacePayload(),
+        workspace,
+        omitted,
         protectedStoredState,
         groups,
         pendingGroupSettings: typeof getApplicationGroupBackup === "function" ? getApplicationGroupBackup() : null,
@@ -924,9 +1024,21 @@
       };
     }
 
-    function downloadWorkspaceBackup() {
+    // 백업 파일 이름에 내려받은 날짜·시각(여러 번 받아도 어느 것이 최신인지 보이게): 교육과정_작업자료_백업_20261110-1432.json.gz
+    function workspaceBackupFileName(extension, now = new Date()) {
+      const pad = (value) => String(value).padStart(2, "0");
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+      return `교육과정_작업자료_백업_${stamp}${extension}`;
+    }
+
+    async function downloadWorkspaceBackup() {
       try {
-        downloadTextFile(JSON.stringify(buildWorkspaceBackup(), null, 2), "교육과정_작업자료_백업.json", "application/json");
+        // 들여쓰기 없이 쓰고 gzip으로 묶는다(660명·2차까지 27.6MB → 12.4MB → 압축 약 0.2MB). 불러오기는 .json·.json.gz 모두 읽는다.
+        const text = JSON.stringify(buildWorkspaceBackup(), typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined);
+        const packed = await workspaceBackupGzip(text);
+        const name = (extension) => typeof workspaceBackupFileName === "function" ? workspaceBackupFileName(extension) : `교육과정_작업자료_백업${extension}`;
+        if (packed) downloadTextFile(packed, name(".json.gz"), "application/gzip");
+        else downloadTextFile(text, name(".json"), "application/json");
         markWorkspaceBackup();
         showAppToast("백업 파일을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
       } catch (error) {
@@ -943,7 +1055,7 @@
       let storeReplaced = false;
       let blockedBeforeStore = null;
       try {
-        const backup = JSON.parse(await file.text());
+        const backup = JSON.parse(await readWorkspaceBackupText(file));
         if (backup.type !== "curriculum-workspace-backup" || !backup.groups ||
             typeof backup.groups !== "object" || Array.isArray(backup.groups)) {
           throw new Error("교육과정 작업 자료 백업 JSON을 선택하세요.");
@@ -951,6 +1063,7 @@
         if (Number(backup.backupVersion) > WORKSPACE_BACKUP_VERSION) {
           throw new Error("더 새로운 버전의 프로그램에서 만든 파일입니다. 프로그램을 최신 버전으로 업데이트하세요.");
         }
+        backup.workspace = workspaceBackupExpand(backup);
         validateWorkspaceData(backup.workspace);
         const entries = [[STORAGE_KEY, JSON.stringify(backup.workspace)]];
         const groupData = { ...backup.groups };
@@ -1062,6 +1175,13 @@
         : "<b>2</b> 웹 수강신청 관리";
       const activeTab = document.querySelector("#applicationWorkspaceTabs [aria-selected='true']");
       if (activeTab?.classList.contains("hidden")) openApplicationWorkspaceTab("groups");
+      // 아직 결과가 하나도 없으면(처음 준비할 때) 방식 선택(웹/외부)이 접힌 안내 속에 숨지 않게 한 번 펼친다. 접으면 다시 펴지 않는다.
+      const settings = $("#applicationModeSettings");
+      const hasResults = (state.students || []).length > 0 || Object.values(state.rounds || {}).some((round) => round?.students?.length);
+      if (settings && !hasResults && !renderApplicationMode.autoOpened) {
+        renderApplicationMode.autoOpened = true;
+        settings.open = true;
+      }
     }
 
     function selectApplicationMode(mode) {
@@ -1080,7 +1200,8 @@
         preparation.invalidGroups || !preparation.hasSelections;
       const round = state.currentRound;
       const roundState = typeof roundStatus === "function" ? roundStatus(round) : "draft";
-      // 시수 통계는 내년도·올해·전년도 입학생 편제표가 모두 있어야 계산할 수 있다.
+      // 시수 통계는 내년도·올해·전년도 입학생 편제표로 계산한다. 셋 다 없으면 '편제표 필요',
+      // 일부만 없으면 나머지 학년은 계산되므로 '일부 편제표 없음'.
       let missingCohorts = 0;
       if (typeof annualSourceCohorts === "function" && typeof $ === "function") {
         const schoolYear = Number($("#schoolYear")?.value);
@@ -1093,7 +1214,9 @@
         3: hasResult ? ["done", "가능"] : ["wait", "대기"],
         4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
           : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
-        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts ? ["todo", "편제표 필요"] : ["done", "가능"]
+        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts >= 3 ? ["todo", "편제표 필요"]
+          : missingCohorts ? ["todo", "일부 편제표 없음"] : ["done", "가능"],
+        8: !hasResult ? ["wait", "대기"] : roundState === "confirmed" ? ["done", "편성 가능"] : ["wait", "시안 가능"]
       };
     }
 
@@ -1136,6 +1259,7 @@
       $("#workflowStep2Panel").classList.toggle("hidden", step !== 2);
       $("#workflowStep6Panel").classList.toggle("hidden", step !== 6);
       $("#workflowStep7Panel").classList.toggle("hidden", step !== 7);
+      $("#workflowStep8Panel")?.classList.toggle("hidden", step !== 8);
       $("#certificatePanel").classList.toggle("hidden", step !== 3);
       $("#aggregatePanel").classList.toggle("hidden", step !== 4);
       $("#retakePanel").classList.toggle("hidden", step !== 4);
@@ -1147,6 +1271,7 @@
         if (typeof renderRoundCompare === "function") renderRoundCompare();
       }
       if (step === 7 && typeof renderHoursStats === "function") renderHoursStats();
+      if (step === 8 && typeof renderClassSections === "function") renderClassSections();
       // 3단계에 들어오면 목록의 첫 학생 확인서를 바로 보여 준다(이미 고른 학생이 목록에 있으면 그대로).
       if (step === 3 && typeof showFirstVisibleStudent === "function") showFirstVisibleStudent();
       // 안 보일 때 미뤄 둔 이 단계의 그리기(view-keep.js). 위에서 직접 그린 것은 이미 빠져 있다.
@@ -1173,14 +1298,16 @@
       schedule(next);
     }
 
-    // 내부 단계 번호 5·6(이동수업·시간표)은 보류 중이고 시수 통계는 7번으로 저장한다.
+    // 내부 단계 번호 5·6(이동수업 과목 분류·시간표)은 보류 중이고 시수 통계는 7번, 분반 편성(표시 6단계)은 8번으로 저장한다.
     function workflowStepLabel(step) {
-      return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
+      return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 8: "6단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
     }
 
     function switchWorkflowStep(step, skipPersist = false) {
       const next = Number(step);
-      state.workflowStep = [1, 2, 3, 4, 5, 6, 7].includes(next) ? next : 1;
+      state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8].includes(next) ? next : 1;
+      // 앞 단계의 알림(예: 4단계 학급수 조정)이 다음 단계 단추를 가리지 않게 닫는다.
+      if (typeof hideAppToast === "function") hideAppToast();
       renderWorkflowLayout();
       $("#workflowMenuToggle").setAttribute("aria-expanded", "false");
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
@@ -1218,7 +1345,8 @@
         `<option value="${round}">${round}차</option>`).join("");
       if (selector.innerHTML !== options) selector.innerHTML = options;
       selector.value = state.currentRound;
-      selector.disabled = step === 1 || step === 6 || step === 7;
+      // 5단계(7)·6단계(8)는 자기 화면에서 근거 차수를 고르므로 머리 줄 '결과 차수'는 잠근다.
+      selector.disabled = step === 1 || step === 6 || step === 7 || step === 8;
       const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
       const message = $("#workflowReadinessMessage");
       const action = $("#workflowNextAction");
@@ -1274,9 +1402,18 @@
         message.textContent = `${state.currentRound}차 결과가 확정되었습니다. 5단계에서 내년도 교과별 시수 통계를 작성하세요.`;
         action.textContent = "시수 통계로";
         action.dataset.nextStep = "7";
+      } else if (step === 8 && state.students.length) {
+        // 6단계는 자기 화면의 '차수'에서 고른 결과로 편성한다(4단계 문구를 쓰지 않는다).
+        message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 아래 6단계 화면 오른쪽의 '차수'에서 고른 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
+        action.textContent = roundConfirmed ? "4단계 집계 보기" : "집계·개설 확정으로";
+        action.dataset.nextStep = "4";
       } else {
+        // 단계마다 맞는 안내: 기준 미달 안내는 4단계(집계·개설)에서만 한다.
+        const uses = step === 3 ? "확인서는 두 학년 결과를 함께 사용합니다."
+          : step === 4 ? "집계는 두 학년 결과를 함께 사용합니다. 기준 미달은 폐강 확정이 아닙니다."
+            : "두 학년 결과를 함께 사용합니다.";
         message.textContent = state.students.length
-          ? `${state.currentRound}차 학생 ${state.students.length}명 · 확인서와 집계는 두 학년 결과를 함께 사용합니다. 기준 미달은 폐강 확정이 아닙니다.`
+          ? `${state.currentRound}차 학생 ${state.students.length}명 · ${uses}`
           : `${state.currentRound}차 결과가 없습니다. 2단계에서 외부 프로그램 결과 엑셀을 업로드하세요.`;
         action.textContent = state.students.length && step !== 4 ? "집계·개설/폐강 검토" : "결과 업로드로";
         action.dataset.nextStep = state.students.length && step !== 4 ? "4" : "2";
@@ -1377,6 +1514,7 @@
       state.roundClosures = { "1": {} };
       state.roundStatuses = {};
       state.hoursStats = {};
+      state.classSections = {};
       state.courseChecks = {};
       state.curriculumCompliance = {};
       state.curriculumVersions = {};
@@ -1496,6 +1634,9 @@
         state.hoursStats = plainObject(saved.hoursStats)
           ? Object.fromEntries(Object.entries(saved.hoursStats).filter(([year, value]) => /^\d{4}$/.test(year) && plainObject(value)))
           : {};
+        // 6단계 분반 편성(예전 저장분·백업에는 없음 → 빈 객체). 정리는 class-sections-view.js가 한다.
+        state.classSections = typeof classSectionsRestore === "function" ? classSectionsRestore(saved.classSections)
+          : plainObject(saved.classSections) ? saved.classSections : {};
         // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.
         if (typeof courseCheckMigrateRequired === "function") {
           const migrated = courseCheckMigrateRequired(saved.courseChecks, saved.curriculumCompliance);
@@ -1583,7 +1724,7 @@
         const savedStep = Number(saved.workflowStep);
         state.workflowStep = savedStep > 6 && !saved.schemaVersion
           ? ({7:4, 8:4, 9:5, 10:6})[savedStep] || 1
-          : [1, 2, 3, 4, 5, 6, 7].includes(savedStep) ? savedStep : 1;
+          : [1, 2, 3, 4, 5, 6, 7, 8].includes(savedStep) ? savedStep : 1;
         state.applicationMode = ["external", "web"].includes(saved.applicationMode)
           ? saved.applicationMode
           : "external";
@@ -1593,6 +1734,8 @@
           : state.fileName || "현 1학년: 업로드 없음 / 현 2학년: 업로드 없음";
         $("#openingPercent").value = saved.openingPercent || "90";
         $("#divisionPercent").value = saved.divisionPercent || "110";
+        // 복원한 값이 기준이 된다(예전 자료에 잘못된 값이 있으면 4단계가 경고하고 칸을 강조).
+        if (typeof aggregateThresholds === "function") aggregateThresholds.applied = null;
         // 반별 최대 인원은 나중에 추가된 값이라 이전 저장 자료·백업에는 없다. 없으면 34명.
         $("#maxClassSize").value = saved.maxClassSize || "34";
         $("#schoolYear").value = saved.schoolYear || $("#schoolYear").value;
@@ -2769,7 +2912,7 @@
       const colGroup = Array.from({ length: columnCount }, (_, column) => {
         const excelWidth = Number(layout.columnWidths?.[column]);
         const width = Number.isFinite(excelWidth) && excelWidth > 0
-          ? `${Math.max(44, Math.min(360, Math.round(excelWidth * 7 + 12)))}px`
+          ? `${Math.max(44, Math.min(240, Math.round(excelWidth * 7 + 12)))}px`
           : "100px";
         return `<col style="width:${width}">`;
       }).join("");
@@ -3387,8 +3530,16 @@
 
     // 1단계 위쪽(학교·학년도 설정·편제표 카드·변경 이력)과 편제표 표 사이 경계선 가운데의 접기 손잡이.
     // 접힌 상태 ▼ '학교·학년도·편제표 카드 펼치기', 펼친 상태 ▲ '접기'. 접근성 이름에는 예전 단추 이름(상단 펼치기/접기)도 남긴다.
+    // 올린 편제표가 하나도 없으면 업로드 카드를 접어 둘 이유가 없다(처음 쓰는 사람이 업로드 단추를 못 찾음).
+    function curriculumHasAnyUpload() {
+      if (state.curriculumPlanFileName || state.curriculumImportedLayout) return true;
+      return Object.values(state.curriculumCohorts || {}).some((cohort) => cohort && (cohort.fileName || cohort.importedLayout));
+    }
+
     function syncCurriculumTopToggle() {
-      const collapsed = Boolean(state.curriculumTopCollapsed);
+      // 첫 업로드 직후 카드가 갑자기 접히지 않도록, 빈 동안은 펼친 상태로 기억해 둔다.
+      if (!curriculumHasAnyUpload()) state.curriculumTopCollapsed = false;
+      const collapsed = Boolean(state.curriculumTopCollapsed) && curriculumHasAnyUpload();
       $("#teacherWorkspace").classList.toggle("curriculum-top-collapsed", collapsed);
       const toggle = $("#curriculumTopToggle");
       if (!toggle) return;
@@ -3400,6 +3551,8 @@
       if (label) label.textContent = collapsed ? "학교·학년도·편제표 카드 펼치기" : "접기";
       if (!arrow && !label) toggle.textContent = collapsed ? "상단 펼치기" : "상단 접기";
       $("#curriculumTopDivider")?.classList.toggle("is-collapsed", collapsed);
+      // 올린 편제표가 없으면 펼친 채로 두고 손잡이를 감춘다(접어도 아래에 볼 표가 없음).
+      $("#curriculumTopDivider")?.classList.toggle("hidden", !curriculumHasAnyUpload());
     }
 
     function renderCurriculumStep() {
@@ -3602,7 +3755,9 @@
             name: course.name,
             subjectName: applicationSubject?.subject || course.name,
             semesterKey: semesterKey === "1" || semesterKey === "2" ? semesterKey : "",
-            displayName: applicationSubject ? applicationCourseLabel(applicationSubject) : course.name,
+            displayName: applicationSubject
+              ? (typeof aggregateCourseDisplayName === "function" ? aggregateCourseDisplayName(applicationSubject, semesterKey) : applicationCourseLabel(applicationSubject))
+              : course.name,
             enrollment,
             enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
             recommendedClasses,
@@ -3638,6 +3793,15 @@
         ? matches.filter((subject) => subject.semester?.split("·").includes(semester))
         : matches;
       return semesterMatches.length === 1 ? semesterMatches[0] : matches.length === 1 ? matches[0] : null;
+    }
+
+    // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
+    // 두 학기에 나눠 신청받은 과목은 학기를 구분해야 하므로(같은 이름 두 행) '(1학기)' 하나만 남기고 과목 구분(융합 등)은 뺀다.
+    function aggregateCourseDisplayName(subject, semesterKey) {
+      const name = String(subject?.subject ?? "");
+      const tag = name.match(/\s*[（(]\s*([12])\s*학기\s*[)）]\s*$/);
+      if (!tag) return applicationCourseLabel(subject);
+      return `${name.slice(0, tag.index).trim()} (${tag[1]}학기)`;
     }
 
     function currentStudent() {
@@ -3725,24 +3889,55 @@
       return `현 ${student.grade}학년 ${student.classroom}반 ${student.number}번`;
     }
 
-    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
+    // 확인서 선택군 순서: 학기(1 → 2 → 학기 없음) → 그룹 설정 순서(편제표 순서) → 그룹 안 과목은 그룹 설정의 과목 순서.
+    // 학생이 고른 순서(웹 신청 순서)대로 두면 학기·묶음이 뒤섞인다.
+    function certificateGroupedSelections(student, groupSettings) {
+      const settings = Array.isArray(groupSettings) ? groupSettings : [];
+      const target = String(Number(student.grade) + 1);
+      const compact = (name) => (typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(String(name ?? "")) : String(name ?? ""))
+        .replace(/\s*\([12]학기\)/g, "").replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
       const groups = [];
-      for (const course of student.selections) {
+      (student.selections || []).forEach((course, order) => {
         const groupName = courseGroupLabel(course, student.grade, groupSettings);
+        const info = typeof applicationGroupForCourse === "function" ? applicationGroupForCourse(course, student.grade, groupSettings) : null;
+        const semester = String(info?.semester || (typeof resolveSemesterKey === "function" ? resolveSemesterKey(course) : "") || "");
+        const settingIndex = info ? settings.findIndex((item) => item.name === info.name && String(item.grade) === target &&
+          (!info.semester || String(item.semester) === String(info.semester))) : -1;
+        const setting = settingIndex >= 0 ? settings[settingIndex] : null;
+        const inGroup = setting ? (setting.courses || []).findIndex((name) => compact(name) === compact(course.name)) : -1;
+        const column = typeof courseIndexByColumn === "function" ? courseIndexByColumn(course.column) : -1;
         let group = groups.find((item) => item.name === groupName);
-        if (!group) { group = { name: groupName, courses: [] }; groups.push(group); }
-        group.courses.push(course);
-      }
+        if (!group) {
+          group = { name: groupName, courses: [], semesterRank: semester === "1" ? 1 : semester === "2" ? 2 : 3,
+            groupRank: Infinity, order };
+          groups.push(group);
+        }
+        // 그룹 설정에 없으면(웹 신청에서 받은 그룹 등) 과목 열 순서(편제표 순서)로 그룹 순서를 정한다.
+        group.groupRank = Math.min(group.groupRank, settingIndex >= 0 ? settingIndex : 5000 + (column >= 0 ? column : order));
+        group.courses.push({ course, rank: inGroup >= 0 ? inGroup : 10000 + (column >= 0 ? column : order) });
+      });
+      groups.sort((a, b) => a.semesterRank - b.semesterRank || a.groupRank - b.groupRank || a.order - b.order);
+      return groups.map((group) => ({ name: group.name, courses: group.courses.sort((a, b) => a.rank - b.rank).map((item) => item.course) }));
+    }
+
+    // 확인서 과목명: 선택군 칸에 학기가 있으므로 두 학기 과목 꼬리표 '(2학기)'는 뗀다('과학의 역사와 문화 (2학기)(융합)' → '과학의 역사와 문화(융합)').
+    function certificateCourseName(course) {
+      const label = course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name;
+      return String(label ?? "").replace(/\s*\([12]학기\)/g, "");
+    }
+
+    function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
+      const groups = certificateGroupedSelections(student, groupSettings);
       const body = groups.length
         ? groups.map((group) => group.courses.map((course, index) => `
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
-              <td class="course-cell">${escapeHtml(course.applicationSubject ? applicationCourseLabel(course.applicationSubject) : course.name)}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
+              <td class="course-cell">${escapeHtml(certificateCourseName(course))}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
       const coreCredits = student.selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
       const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
       const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span>국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span title="이번에 신청한 ${student.totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
       </div>` : "";
       // 과목이 많은 학생은 인쇄용 행 높이를 더 줄여 한 장에 담는다(학교명·서명 줄이 다음 장으로 넘어가지 않게).
@@ -3880,14 +4075,49 @@
         </div>`;
     }
 
+    // 개설·분반 기준(%): 칸 값이 범위 안이면 그 값을 '적용된 기준'(aggregateThresholds.applied)으로 쓴다.
+    // 칸에 잘못된 값이 있으면 적용하지 않고 마지막으로 적용된 값으로 계산·저장한다(기준 설정 창이 칸 옆에 오류를 보이고 닫기를 막음).
+    // 적용된 값이 없을 때(예전 자료에 잘못된 값이 저장된 경우)만 예전처럼 오류를 낸다.
     function aggregateThresholds() {
       const openingPercent = Number($("#openingPercent").value);
       const divisionPercent = Number($("#divisionPercent").value);
-      if (!Number.isInteger(openingPercent) || openingPercent < 1 || openingPercent > 200 ||
-          !Number.isInteger(divisionPercent) || divisionPercent < 1 || divisionPercent > 300) {
-        throw new Error("개설 기준은 1~200%, 분반 기준은 1~300%의 정수로 입력하세요.");
+      if (!aggregateThresholdFieldError("#openingPercent") && !aggregateThresholdFieldError("#divisionPercent")) {
+        aggregateThresholds.applied = { openingPercent, divisionPercent };
+        return { openingPercent, divisionPercent };
       }
-      return { openingPercent, divisionPercent };
+      if (aggregateThresholds.applied) return { ...aggregateThresholds.applied };
+      throw new Error("개설 기준은 1~200%, 분반 기준은 1~300%의 정수로 입력하세요.");
+    }
+
+    function aggregateThresholdFieldError(selector) {
+      const [min, max, label] = selector === "#openingPercent" ? [1, 200, "개설 기준"] : [1, 300, "분반 기준"];
+      const raw = String($(selector)?.value ?? "").trim();
+      const value = Number(raw);
+      return raw !== "" && Number.isInteger(value) && value >= min && value <= max ? "" : `${label}은 ${min}~${max} 사이의 정수(%)로 입력하세요.`;
+    }
+
+    // 저장할 값: 칸이 올바르면 칸 값, 아니면 마지막으로 적용된 값(잘못된 값을 저장하지 않음).
+    function aggregateThresholdStoredValue(selector) {
+      const key = selector === "#openingPercent" ? "openingPercent" : "divisionPercent";
+      if (!aggregateThresholdFieldError(selector)) return $(selector).value;
+      return aggregateThresholds.applied ? String(aggregateThresholds.applied[key]) : $(selector).value;
+    }
+
+    // 기준 설정 창의 칸 옆 오류 표시. 잘못된 값이 있으면 true. applied가 있으면 '지금 적용된 값'도 알려 준다.
+    function renderAggregateThresholdErrors() {
+      let invalid = false;
+      for (const [selector, key] of [["#openingPercent", "openingPercent"], ["#divisionPercent", "divisionPercent"]]) {
+        const field = $(selector);
+        const box = document.getElementById(`${selector.slice(1)}Error`);
+        const error = aggregateThresholdFieldError(selector);
+        if (field?.toggleAttribute) field.toggleAttribute("aria-invalid", Boolean(error));
+        if (box) {
+          box.hidden = !error;
+          box.textContent = error ? `${error}${aggregateThresholds.applied ? ` 지금 적용된 값: ${aggregateThresholds.applied[key]}%` : " 저장된 값이 올바르지 않아 집계를 표시하지 못합니다."}` : "";
+        }
+        if (error) invalid = true;
+      }
+      return invalid;
     }
 
     // 반별 최대 인원(학급수 자동 조정 기준). 이전 저장 자료처럼 값이 없거나 잘못되면 34명으로 본다.
@@ -3909,6 +4139,93 @@
     // 교사 결정이 없으면 기준을 충족한 과목은 개설, 기준 미달 과목은 미정으로 본다(확정 스냅샷과 같은 기준).
     function aggregateClosureDecision(closures, key, atRisk) {
       return Object.hasOwn(closures || {}, key) ? closures[key] : atRisk ? "" : "open";
+    }
+
+    // 이 차수의 개설/폐강 결정 + 앞 차수에서 교사가 정한 결정(같은 현 학년·같은 과목명)을 이어받은 것.
+    // 이 차수에 직접 정한 값(미정 "" 포함)이 있으면 그것이 우선이고, 이어받은 값은 메뉴에서 바꿀 수 있다.
+    // 이어받은 키는 숨은 속성 inherited(Map 키 → 앞 차수 번호)로 알려 준다(목록·저장에는 나오지 않음).
+    function effectiveRoundClosures(round) {
+      round = String(round);
+      const own = state.roundClosures?.[round] || {};
+      const compute = () => {
+        const merged = { ...own };
+        const inherited = new Map();
+        const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : Object.keys(state.rounds || {});
+        const earlier = rounds.filter((item) => Number(item) < Number(round)).sort((a, b) => Number(b) - Number(a));
+        const data = state.rounds?.[round];
+        if (earlier.length && data?.courses?.length) {
+          // 같은 과목 = 같은 현 학년 + 같은 학기 + 같은 그룹 + 같은 과목명. normalizeResultCourseName은 '(2학기)' 꼬리표를 떼므로
+          // 학기는 따로 맞춘다(두 학기 과목의 한 학기만 폐강해도 다른 학기로 번지지 않게). 키가 겹쳐 하나로 정할 수 없으면 이어받지 않는다.
+          const normalize = (name) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name || "").replace(/\s+/g, "");
+          const courseName = (course) => course.applicationSubject?.subject || course.subjectName || course.name;
+          const semesterTag = (text) => String(text || "").match(/[（(]\s*([12])\s*학기\s*[)）]/)?.[1] || "";
+          const semesterOf = (course, roundData) => {
+            const listed = String(course.applicationSubject?.semester ?? "");
+            if (/^[12]$/.test(listed)) return listed;
+            const tag = semesterTag(course.applicationSubject?.subject) || semesterTag(course.name);
+            if (tag) return tag;
+            const forced = roundData?.semesterAssignments?.[String(course.column)];
+            if (forced === "1" || forced === "2") return forced;
+            if (course.semesterKey === "1" || course.semesterKey === "2") return course.semesterKey;
+            return listed.includes("·") ? "1·2" : "";
+          };
+          const groupOf = (course, roundData) => {
+            const label = course.applicationSubject?.groupName ||
+              (typeof parseAssignedGroupLabel === "function" ? parseAssignedGroupLabel(roundData?.groupAssignments?.[String(course.column)] || "").category : "");
+            return String(label || "").replace(/\s+/g, "");
+          };
+          const identity = (course, grade, roundData) => `${grade}|${semesterOf(course, roundData)}|${normalize(courseName(course))}`;
+          // 같은 학년·학기·이름 과목이 여럿이면(다른 그룹) 그룹까지 같아야 하고, 그래도 여럿이면 이어받지 않는다.
+          const index = (roundData) => {
+            const map = new Map();
+            for (const course of roundData.courses) {
+              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
+              for (const grade of grades) {
+                const id = identity(course, grade, roundData);
+                if (!map.has(id)) map.set(id, []);
+                map.get(id).push({ course, grade, group: groupOf(course, roundData) });
+              }
+            }
+            return map;
+          };
+          const pick = (list, group) => {
+            if (list.length === 1) return list[0];
+            const same = group ? list.filter((item) => item.group === group) : [];
+            return same.length === 1 ? same[0] : null;
+          };
+          const currentIndex = index(data);
+          for (const prev of earlier) {
+            const prevData = state.rounds?.[prev];
+            if (!prevData?.courses?.length) continue;
+            const prevIndex = index(prevData);
+            const decided = new Map();
+            for (const [key, verdict] of Object.entries(state.roundClosures?.[prev] || {})) {
+              if (verdict !== "open" && verdict !== "closed") continue;
+              const separator = key.indexOf(":");
+              decided.set(key, { grade: key.slice(0, separator), column: key.slice(separator + 1), verdict });
+            }
+            for (const [id, list] of currentIndex) {
+              const before = prevIndex.get(id) || [];
+              for (const item of list) {
+                const key = `${item.grade}:${item.course.column}`;
+                if (Object.hasOwn(merged, key)) continue;
+                // 지금 차수에서도 같은 키 과목이 여럿이면 그룹으로 하나를 고를 수 있을 때만.
+                if (list.length > 1 && !(item.group && list.filter((other) => other.group === item.group).length === 1)) continue;
+                const match = pick(before, item.group);
+                if (!match) continue;
+                if (item.group && match.group && item.group !== match.group) continue;
+                const decision = decided.get(`${match.grade}:${match.course.column}`);
+                if (!decision) continue;
+                merged[key] = decision.verdict;
+                inherited.set(key, prev);
+              }
+            }
+          }
+        }
+        Object.defineProperty(merged, "inherited", { value: inherited, enumerable: false });
+        return merged;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("effectiveRoundClosures", round, compute) : compute();
     }
 
     // 택n 그룹의 총 학급수는 n × 학급 수와 같아야 한다. 택 수를 모르는 그룹(미분류 등)은 목표가 없다.
@@ -3947,7 +4264,7 @@
     }
 
     function aggregatePlanMessage(plan) {
-      if (plan.reason === "too-few") return `${plan.maxClassSize}명 이하로는 최소 ${plan.minimum}학급이 필요해 목표 ${plan.target}와 맞출 수 없음 — 협의회 결정 필요`;
+      if (plan.reason === "too-few") return `${plan.maxClassSize}명 이하로는 최소 ${plan.minimum}학급이 필요해 목표 ${plan.target}학급과 맞출 수 없음 — 협의회 결정 필요`;
       if (plan.reason === "no-courses") return `신청자가 있는 개설 과목이 없어 목표 ${plan.target}학급을 채울 수 없음 — 협의회 결정 필요`;
       if (plan.reason === "no-target") return "택 수를 알 수 없어 목표 학급수가 없음";
       return "";
@@ -3983,8 +4300,9 @@
     }
 
     function aggregateSettingsSummaryText(aggregate, maxClassSize) {
-      const opening = $("#openingPercent")?.value || "-";
-      const division = $("#divisionPercent")?.value || "-";
+      // 적용된 기준을 보여 준다(칸에 잘못된 값을 넣고 있는 동안에도 계산에 쓰는 값).
+      const opening = (typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#openingPercent") : $("#openingPercent")?.value) || "-";
+      const division = (typeof aggregateThresholdStoredValue === "function" ? aggregateThresholdStoredValue("#divisionPercent") : $("#divisionPercent")?.value) || "-";
       const classes = ["1", "2"].map((grade) => {
         const summary = aggregate?.reports.find((report) => String(report.summary.grade) === grade)?.summary;
         const planned = Number((typeof nextYearClassBases === "function" ? nextYearClassBases() : {})[String(Number(grade) + 1)]);
@@ -4026,6 +4344,50 @@
       return { courses, groups, count: courses.size + groups.size };
     }
 
+    // 기준 미달 과목을 교사 결정으로 나눈다: 미정(처리할 일, '처리할 것만'과 같은 기준) · 폐강 결정 · 개설 결정.
+    function aggregateRiskCounts(report, closures) {
+      const grade = String(report.summary.grade);
+      const counts = { risk: 0, undecided: 0, closed: 0, opened: 0 };
+      for (const semester of report.semesters) {
+        for (const group of semester.groups) {
+          for (const course of group.courses) {
+            if (!course.atRisk) continue;
+            const decision = aggregateClosureDecision(closures, `${grade}:${course.column}`, true);
+            counts.risk++;
+            if (decision === "closed") counts.closed++;
+            else if (decision === "open") counts.opened++;
+            else counts.undecided++;
+          }
+        }
+      }
+      return counts;
+    }
+
+    // '기준 미달 5과목(미정 2 · 폐강 결정 2 · 개설 결정 1)'. 결정이 하나도 없으면 예전처럼 '(폐강 확정 아님)'.
+    // short: 학년 탭용 '미달 5(미정 2)'.
+    function aggregateRiskText(counts, { short = false } = {}) {
+      const { risk = 0, undecided = 0, closed = 0, opened = 0 } = counts || {};
+      if (short) return `미달 ${risk}${risk && undecided !== risk ? `(미정 ${undecided})` : ""}`;
+      if (!risk) return "기준 미달 0과목";
+      if (undecided === risk) return `기준 미달 ${risk}과목(폐강 확정 아님)`;
+      const parts = [`미정 ${undecided}`, closed ? `폐강 결정 ${closed}` : "", opened ? `개설 결정 ${opened}` : ""].filter(Boolean);
+      return `기준 미달 ${risk}과목(${parts.join(" · ")})`;
+    }
+
+    // 학급 수 기준 한 줄(화면 전용): 계산은 내년 학급 수(4단계 설정·5단계와 같은 값) 기준이고, 없으면 명단의 반 수.
+    // 지금 반 수와 내년 학급 수가 다르거나 내년 값을 넣지 않았을 때만 보여 준다.
+    function aggregateClassBasisNote(summary) {
+      const grade = Number(summary?.grade);
+      if (!grade) return "";
+      if (summary.classSource !== "planned") {
+        return `<span class="aggregate-class-basis is-warn" title="4단계 집계 설정에서 내년 ${grade + 1}학년 학급 수를 넣으면 그 값으로 계산합니다.">내년 ${grade + 1}학년 학급 수 미입력 · 현 ${grade}학년 명단 ${summary.rosterClasses}반으로 계산</span>`;
+      }
+      if (summary.rosterClasses && summary.rosterClasses !== summary.classes) {
+        return `<span class="aggregate-class-basis" title="학급당 학생수·개설/분반 기준·목표 총 학급수는 내년 학급 수로 계산합니다.">현 ${grade}학년 명단 ${summary.rosterClasses}반 → 내년 ${grade + 1}학년 ${summary.classes}학급 기준</span>`;
+      }
+      return "";
+    }
+
     // 한 학년 집계표: 엑셀 시트와 같은 학교 양식(aggregateSheetModel → aggregateSheetHtml)에 학년 머리줄(위계·학점 요약,
     // 학년 전체 자동 조정·조정 취소)만 붙인다. 학생 수·학급당·개설/분반 기준은 양식 2~3행에 있으므로 따로 요약하지 않는다.
     function aggregateGradeSectionMarkup(report, { closures, round, locked, maxClassSize, attentionOnly, canUndo, prereq = null,
@@ -4041,6 +4403,7 @@
       return `<section class="aggregate-grade aggregate-form-grade" data-aggregate-grade-section="${escapeHtml(grade)}">
         <div class="aggregate-grade-head">
           <span class="aggregate-form-hint">과목명을 누르면 개설·폐강·미정을 정하고, 개설 학급수 칸은 눌러서 바로 고칩니다.</span>
+          ${aggregateClassBasisNote(report.summary)}
           ${typeof courseCheckAggregateNote === "function" ? courseCheckAggregateNote(grade, prereq) : ""}
           <div class="aggregate-grade-actions">
             <button class="button" type="button" data-aggregate-adjust="grade" data-grade="${escapeHtml(grade)}"${lockTitle}>학급수 자동 조정(학년 전체)</button>
@@ -4076,8 +4439,10 @@
       try {
         thresholds = aggregateThresholds();
       } catch (error) {
-        $("#aggregateDescription").textContent = error.message;
-        $("#aggregateContent").textContent = "유효한 기준 비율을 입력하면 집계를 다시 표시합니다.";
+        // 예전 자료에 잘못된 기준 값이 저장된 경우: 경고와 함께 기준 설정 창을 여는 단추, 창의 칸은 강조한다.
+        $("#aggregateDescription").textContent = `저장된 기준 값이 올바르지 않습니다: ${error.message}`;
+        $("#aggregateContent").innerHTML = '<div class="aggregate-empty">유효한 기준 비율을 입력하면 집계를 다시 표시합니다. <button class="button" type="button" data-open-aggregate-settings>기준 설정 열기</button></div>';
+        if (typeof renderAggregateThresholdErrors === "function") renderAggregateThresholdErrors();
         if (gradeBar) gradeBar.innerHTML = "";
         if (settingsSummary) settingsSummary.textContent = aggregateSettingsSummaryText(null, maxClassSize);
         $("#downloadAggregate").disabled = true;
@@ -4087,7 +4452,7 @@
       const classBases = typeof nextYearClassBases === "function" ? nextYearClassBases() : {};
       const round = String(state.currentRound);
       const locked = typeof isRoundLocked === "function" && isRoundLocked(round);
-      const closures = state.roundClosures?.[round] || {};
+      const closures = (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {});
       const aggregate = aggregateRecords(
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases, closures
@@ -4103,6 +4468,7 @@
           grade: String(report.summary.grade), students: report.summary.students, courses: courses.length,
           classes: groups.reduce((sum, group) => sum + group.totalClasses, 0),
           risk: courses.filter((course) => course.atRisk).length,
+          riskCounts: aggregateRiskCounts(report, closures),
           prereq: prereq?.grades.get(String(report.summary.grade))?.violators.length || 0,
           mismatch: groups.filter((group) => {
             const target = aggregateGroupTarget(group, report.summary.classes);
@@ -4114,17 +4480,18 @@
       const shownReports = aggregate.reports.filter((report) => !scope || String(report.summary.grade) === scope)
         .sort((a, b) => Number(a.summary.grade) - Number(b.summary.grade));
       const shownStats = gradeStats.filter((stat) => !scope || stat.grade === scope);
-      const atRiskCount = shownStats.reduce((sum, stat) => sum + stat.risk, 0);
+      const riskCounts = Object.fromEntries(["risk", "undecided", "closed", "opened"].map((key) =>
+        [key, shownStats.reduce((sum, stat) => sum + (stat.riskCounts?.[key] || 0), 0)]));
       const attentionCount = shownReports.reduce((sum, report) => sum + aggregateAttention(report, closures, maxClassSize, prereq).count, 0);
       const gradeLabel = (grade) => `현 ${grade}학년 → ${Number(grade) + 1}학년`;
       const tabs = [["", "전체", ""], ...gradeStats.map((stat) => [stat.grade, gradeLabel(stat.grade),
-        ` · ${stat.students}명 · 개설 ${stat.classes}학급 · 미달 ${stat.risk}${stat.mismatch ? ` · 목표 불일치 ${stat.mismatch}` : ""}${stat.prereq ? ` · 위계 경고 ${stat.prereq}명` : ""}`])]
+        ` · ${stat.students}명 · 개설 ${stat.classes}학급 · ${aggregateRiskText(stat.riskCounts, { short: true })}${stat.mismatch ? ` · 목표 불일치 ${stat.mismatch}` : ""}${stat.prereq ? ` · 위계 경고 ${stat.prereq}명` : ""}`])]
         .map(([value, label, detail]) => `<button type="button" class="aggregate-grade-tab" data-aggregate-grade="${value}" aria-pressed="${value === scope}"><strong>${label}</strong>${detail}</button>`).join("");
       const missingGrades = ["1", "2"].filter((grade) => !gradeStats.some((stat) => stat.grade === grade));
       const missingNote = missingGrades.length
         ? `<span class="aggregate-missing-note" role="status">${missingGrades.map((grade) => `현 ${grade}학년`).join("·")} 결과 없음 · 2단계에서 올리면 함께 집계</span>` : "";
       const totalLine = !scope
-        ? `<span class="aggregate-total-line">합계 ${shownStats.reduce((sum, stat) => sum + stat.students, 0)}명 · ${shownStats.reduce((sum, stat) => sum + stat.courses, 0)}과목 · 개설 ${shownStats.reduce((sum, stat) => sum + stat.classes, 0)}학급 · 기준 미달 ${atRiskCount}과목</span>` : "";
+        ? `<span class="aggregate-total-line">합계 ${shownStats.reduce((sum, stat) => sum + stat.students, 0)}명 · ${shownStats.reduce((sum, stat) => sum + stat.courses, 0)}과목 · 개설 ${shownStats.reduce((sum, stat) => sum + stat.classes, 0)}학급 · ${aggregateRiskText(riskCounts)}</span>` : "";
       if (gradeBar) {
         gradeBar.innerHTML = `<div class="aggregate-grade-tabs" role="group" aria-label="학년 선택">${tabs}</div>${missingNote}${totalLine}
           <button type="button" class="button aggregate-risk-filter" data-aggregate-risk-filter aria-pressed="${aggregateAttentionOnly}" title="결정이 미정인 기준 미달 과목, 학급당 인원이 최대 인원·분반 기준을 넘는 과목, 위계(선이수) 경고 학생이 있는 과목, 목표 학급수와 맞지 않는 그룹만 봅니다.">처리할 것만(${attentionCount})</button>`;
@@ -4137,7 +4504,7 @@
         undoGroups: canUndo ? aggregateAdjustUndo.groups : null
       })).join("");
       $("#aggregateDescription").textContent =
-        `${round}차${locked ? " · 확정됨(수정 잠금)" : ""} · ${scope ? `${gradeLabel(scope)} 신청` : `${aggregate.reports.length}개 학년`} · 기준 미달 ${atRiskCount}과목(폐강 확정 아님)`;
+        `${round}차${locked ? " · 확정됨(수정 잠금)" : ""} · ${scope ? `${gradeLabel(scope)} 신청` : `${aggregate.reports.length}개 학년`} · ${aggregateRiskText(riskCounts)}`;
       $("#downloadAggregate").disabled = false;
     }
 
@@ -4151,7 +4518,7 @@
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
         typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-        state.roundClosures?.[round] || {}
+        (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {})
       );
       const report = aggregate.reports.find((item) => String(item.summary.grade) === String(grade));
       if (!report) return null;
@@ -4439,7 +4806,8 @@
       const link = document.createElement("a");
       const url = URL.createObjectURL(workbook);
       link.href = url;
-      link.download = `${Number(sourceRound) + 1}차_수강신청_대상자${gradeSuffix ? `_${gradeSuffix}` : ""}(${sourceRound}차_기준).xlsx`;
+      const schoolYearText = String(document.getElementById?.("schoolYear")?.value || "").trim();
+      link.download = `${/^\d{4}$/.test(schoolYearText) ? `${schoolYearText}학년도_` : ""}${Number(sourceRound) + 1}차_수강신청_대상자${gradeSuffix ? `_${gradeSuffix}` : ""}(${sourceRound}차_기준).xlsx`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
@@ -4453,6 +4821,22 @@
         : String(state.curriculumCohortYear || schoolYear);
     }
     getApplicationCohortYear = applicationCohortYear;
+
+    // 원본 엑셀(IndexedDB curriculum-original-workbooks)이 이 브라우저에 있는지. 백업에는 원본을 넣지 않으므로 복원 뒤에는 없을 수 있다.
+    const curriculumArchivePresence = new Map();
+    function curriculumArchiveNote(layout) {
+      if (!layout || layout.derived || layout.officeImport) return "";
+      const id = layout.archiveId;
+      if (id && !curriculumArchivePresence.has(id) && typeof curriculumArchiveStore === "function") {
+        curriculumArchivePresence.set(id, null);
+        curriculumArchiveStore("has", id).then((key) => {
+          curriculumArchivePresence.set(id, key !== undefined && key !== null);
+          if (!curriculumArchivePresence.get(id)) renderCurriculumCohortUploads();
+        }).catch(() => curriculumArchivePresence.delete(id));
+      }
+      const missing = !id || curriculumArchivePresence.get(id) === false;
+      return missing ? '<p class="curriculum-cohort-file is-warn" title="원본 엑셀은 백업에 들어가지 않습니다. 엑셀 내보내기는 기본 양식으로 저장됩니다.">원본 엑셀 없음(다시 올리면 학교 양식으로 내보냄)</p>' : "";
+    }
 
     function renderCurriculumCohortUploads() {
       const schoolYear = Number($("#schoolYear").value);
@@ -4473,10 +4857,11 @@
             : grade === "2"
               ? `현 2학년은 이 편제표의 3학년 과목으로 신청`
               : "올해 전학년 편제표의 3학년 열을 만드는 데 사용 · 수강신청에는 쓰지 않음";
+        const cohortSubtitle = grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`;
         return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
           <h4>${year}학년도 입학생 · ${grade === "0" ? "내년도 신입생" : `현 ${grade}학년`}</h4>
-          <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
-          <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>
+          <p title="${escapeHtml(`${cohortSubtitle} · ${description}`)}">${cohortSubtitle}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
+          <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>${fileName && typeof curriculumArchiveNote === "function" ? curriculumArchiveNote(active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}
           <div>${typeof curriculumReconvertCardHtml === "function" ? curriculumReconvertCardHtml(year, active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}<button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
         </article>`;
@@ -4494,7 +4879,7 @@
       const annualCard = `<article class="curriculum-cohort-card curriculum-annual-card${annualActive ? " is-active" : ""}">
         <h4>${annualYear}학년도 전학년 편제표</h4>
         <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("annual", annualYear, built) : ""}
-        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => `${source.grade}학년(${source.year})`).join("·")} 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
+        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => source.grade).join("·")}학년(${missing.map((source) => source.year).join("·")}) 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
         <div><button class="button${built && !stale ? "" : " button-primary"}" type="button" data-annual-build="${annualYear}"${missing.length ? " disabled" : ""} aria-label="${annualYear}학년도 전학년 편제표 ${built ? "다시 만들기" : "만들기"}">${built ? "다시 만들기" : "만들기"}</button>
         <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
       </article>`;
@@ -6171,6 +6556,8 @@
         if (overDivision) lines.push(`분반기준 초과: 학급당 ${average}명이 분반기준 ${Number(summary.divisionLimit || 0).toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.`);
         if (prereqCount) lines.push(`위계 경고 ${prereqCount}명: 선이수 과목 없이 신청한 학생이 있습니다.`);
         if (!course.closed && decision === "") lines.push("교사 결정이 미정입니다. 개설 또는 폐강을 고르세요.");
+        const inheritedFrom = closures?.inherited?.get?.(key);
+        if (inheritedFrom) lines.push(`${inheritedFrom}차에서 정한 결정(${decision === "closed" ? "폐강" : "개설"})을 이어받았습니다. 바꾸려면 아래에서 고르세요.`);
         if (!lines.length) lines.push("충족: 개설기준 이상이고 학급당 인원이 기준 안에 있습니다.");
         const status = { key, decision, over, overDivision, prereqCount, lines, focus: attention ? attention.courses.has(key) : null };
         statuses.set(course, status);
@@ -6237,13 +6624,15 @@
         if (role === "head") {
           const undecided = !course.closed && status.decision === "";
           if (undecided) classes.push("is-undecided");
-          if (course.atRisk && !course.closed) classes.push("is-risk");
+          // 미달이어도 '개설'로 정했으면 빨간 경고 대신 결정 표시(인원 칸 모서리 '미달·개설').
+          if (course.atRisk && !course.closed && status.decision !== "open") classes.push("is-risk");
           return `<button type="button" class="af-course" data-aggregate-course="${esc(status.key)}" data-closure-round="${esc(round)}" data-decision="${esc(status.decision)}" data-course-label="${esc(name)}" data-group-label="${esc(info.label)}" data-course-status="${esc(status.lines.join("\n"))}" data-prereq-count="${status.prereqCount}"${locked ? " data-locked" : ""} aria-haspopup="dialog" aria-label="${esc(`${name} — 개설/폐강/미정 결정(지금 ${status.decision === "open" ? "개설" : status.decision === "closed" ? "폐강" : "미정"})`)}">${value}</button>`;
         }
         if (role === "count") {
-          if (course.atRisk && !course.closed) classes.push("is-risk");
-          const tagLabel = course.closed ? "" : course.atRisk ? "미달" : status.decision === "" ? "미정" : "";
-          const tag = tagLabel ? infoButton(tagLabel, course.atRisk ? "is-risk" : "is-undecided", status.lines.join("\n")) : "";
+          const decidedOpen = course.atRisk && !course.closed && status.decision === "open";
+          if (course.atRisk && !course.closed && !decidedOpen) classes.push("is-risk");
+          const tagLabel = course.closed ? "" : decidedOpen ? "미달·개설" : course.atRisk ? "미달" : status.decision === "" ? "미정" : "";
+          const tag = tagLabel ? infoButton(tagLabel, decidedOpen ? "is-decided" : course.atRisk ? "is-risk" : "is-undecided", status.lines.join("\n")) : "";
           const badge = status.prereqCount && typeof courseCheckCourseBadges === "function" ? courseCheckCourseBadges(prereq, status.key, name) : "";
           if (tag) styles.push(`padding-left:${cornerPad(tagLabel)}px`);
           if (badge) styles.push(`padding-right:${cornerPad(`위계 경고 ${status.prereqCount}`)}px`);
@@ -6431,7 +6820,7 @@
         state.students, state.courses, openingPercent, divisionPercent,
         state.classOverrides, state.semesterAssignments, state.groupAssignments,
         typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-        state.roundClosures?.[state.currentRound] || {}
+        (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(state.currentRound) : state.roundClosures?.[state.currentRound] || {})
       );
       // 4단계에서 학년 탭을 고르면 그 학년 시트만 만든다(시트 내용은 학교 서식 그대로).
       const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
@@ -6462,6 +6851,13 @@
       return files;
     }
 
+    // 집계표 엑셀 이름: 학년도·차수가 들어가야 여러 차수 파일을 구분할 수 있다(2026학년도_2차_과목별_수강신청_집계표_현1학년.xlsx).
+    function aggregateDownloadName(grade) {
+      const year = String(document.getElementById?.("schoolYear")?.value || "").trim();
+      const prefix = `${/^\d{4}$/.test(year) ? `${year}학년도_` : ""}${state.currentRound ? `${state.currentRound}차_` : ""}`;
+      return `${prefix}과목별_수강신청_집계표${grade ? `_현${grade}학년` : ""}.xlsx`;
+    }
+
     function downloadAggregate() {
       try {
         aggregateThresholds();
@@ -6474,7 +6870,7 @@
       const url = URL.createObjectURL(workbook);
       link.href = url;
       const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
-      link.download = grade ? `과목별_수강신청_집계표_현${grade}학년.xlsx` : "과목별_수강신청_집계표.xlsx";
+      link.download = aggregateDownloadName(grade);
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
@@ -6862,8 +7258,82 @@
       return rows;
     }
 
+    // 원본 교체 전 요약: 과목(이름 기준) 추가·삭제·학점 변경 수와, 이 편제표를 쓰는 확정 차수·신청 결과. 영향이 없으면 null.
+    function curriculumReplaceImpact(oldLayout, newLayout) {
+      const subjectsOf = (layout) => typeof planDataSubjects === "function" && layout?.planData ? planDataSubjects(layout.planData) : [];
+      const before = subjectsOf(oldLayout);
+      if (!before.length) return null;
+      const key = (name) => typeof planDataNameKey === "function" ? planDataNameKey(name) : String(name || "").replace(/\s+/g, "");
+      const signature = (item) => JSON.stringify([item.credits || {}, item.cross || null, item.category || "", item.area || ""]);
+      // 과목 키 단위로 비교한다: 'A, B' 한 행은 A·B 두 과목, 같은 과목이 여러 행이면 행 모양을 모아 한 과목으로(개수와 목록이 맞게).
+      const names = (item) => typeof planDataSubjectNames === "function" ? planDataSubjectNames(item.name) : String(item.name || "").split(/\s*,\s*/);
+      const map = (list) => {
+        const result = new Map();
+        for (const item of list) for (const name of names(item)) {
+          const id = key(name);
+          if (!id) continue;
+          const entry = result.get(id) || { name: String(name).trim(), signatures: [] };
+          entry.signatures.push(signature(item));
+          result.set(id, entry);
+        }
+        for (const entry of result.values()) entry.signature = entry.signatures.sort().join("|");
+        return result;
+      };
+      const oldMap = map(before), newMap = map(subjectsOf(newLayout));
+      const added = [...newMap.keys()].filter((name) => !oldMap.has(name)).map((name) => newMap.get(name).name);
+      const removed = [...oldMap.keys()].filter((name) => !newMap.has(name)).map((name) => oldMap.get(name).name);
+      const changed = [...newMap.keys()].filter((name) => oldMap.has(name) && oldMap.get(name).signature !== newMap.get(name).signature).length;
+      const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : [];
+      const locked = rounds.filter((round) => typeof isRoundLocked === "function" && isRoundLocked(round));
+      const withResults = rounds.filter((round) => state.rounds?.[round]?.students?.length);
+      const groups = typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+      const removedKeys = new Set(removed.map(key));
+      const touchedGroups = groups.filter((group) => (group.courses || []).some((name) => removedKeys.has(key(name)))).length;
+      if (!added.length && !removed.length && !changed) return null;
+      if (!locked.length && !withResults.length && !groups.length) return null;
+      return { added, removed, changed, locked, withResults, touchedGroups, groups: groups.length };
+    }
+
+    function curriculumReplaceMessage(impact, fileName) {
+      const list = (items) => items.length ? `${items.slice(0, 6).join(", ")}${items.length > 6 ? ` 외 ${items.length - 6}개` : ""}` : "";
+      return [`'${fileName}'(으)로 원본을 교체하면 편제표가 바뀝니다.`, "",
+        `· 학점·영역이 바뀌는 과목 ${impact.changed}개`,
+        impact.added.length ? `· 새로 생기는 과목 ${impact.added.length}개: ${list(impact.added)}` : "",
+        impact.removed.length ? `· 없어지는 과목 ${impact.removed.length}개: ${list(impact.removed)}` : "",
+        impact.locked.length ? `· 확정한 차수: ${impact.locked.map((round) => `${round}차`).join(", ")} — 확정 결과는 그대로지만 편제표와 맞지 않을 수 있습니다` : "",
+        impact.withResults.length && !impact.locked.length ? `· 신청 결과가 있는 차수: ${impact.withResults.map((round) => `${round}차`).join(", ")}` : "",
+        impact.groups ? `· 2단계 선택 그룹 ${impact.groups}개${impact.touchedGroups ? `(없어지는 과목이 든 그룹 ${impact.touchedGroups}개)` : ""}의 과목 구성이 바뀔 수 있습니다` : "",
+        "", "교체할까요? (취소하면 지금 편제표를 그대로 둡니다. 교체 뒤에도 변경 이력·실행취소로 되돌릴 수 있습니다.)"]
+        .filter((line, index, all) => line || (all[index - 1] && all[index + 1])).join("\n");
+    }
+
+    // 편제표 제목(첫 몇 줄)·파일 이름의 'YYYY학년도 입학생/신입생'이 올리려는 카드의 입학연도와 다르면 그 연도(같거나 못 찾으면 "").
+    function curriculumTitleYearMismatch(layout, fileName, cohortYear) {
+      const text = (layout?.rows || []).slice(0, 6).flat().map((cell) => String(cell?.v ?? cell?.text ?? cell ?? "")).join(" ");
+      const pattern = /(20\d{2})\s*학년도\s*(?:입학생|신입생|입학)/;
+      const found = text.match(pattern)?.[1] || String(fileName || "").match(pattern)?.[1] || "";
+      return found && found !== String(cohortYear) ? found : "";
+    }
+
+    // 카드의 '업로드'는 먼저 그 카드로 바꾼 뒤 파일을 고른다. 업로드가 실패·취소되면 원래 보던 카드로 되돌린다
+    // (예: 2027 카드에 울산 xlsb를 올리다 실패했는데 선택 카드가 2027로 남던 문제). 성공하면 기억을 지운다.
+    let curriculumUploadReturn = null;
+    function restoreCurriculumUploadCard() {
+      const back = curriculumUploadReturn;
+      curriculumUploadReturn = null;
+      if (!back) return false;
+      if (String(state.curriculumCohortYear) === back.year && state.curriculumPlanType === back.type) return false;
+      // 카드를 바꾸면 상태 줄이 '…불러왔습니다'로 바뀌므로, 실패·취소 안내를 그대로 남긴다.
+      const node = typeof document !== "undefined" ? document.getElementById("status") : null;
+      const kept = node ? { text: node.textContent, color: node.style.color } : null;
+      if (back.type === "annual" && typeof switchCurriculumAnnualPlan === "function") switchCurriculumAnnualPlan(back.year);
+      else if (typeof switchCurriculumCohort === "function") switchCurriculumCohort(back.year);
+      if (node && kept?.text) { node.textContent = kept.text; node.style.color = kept.color; }
+      return true;
+    }
+
     function handleCurriculumPlanWorkbook(file) {
-      if (!file) return;
+      if (!file) { restoreCurriculumUploadCard(); return; }
       if (!requireLocalWorkspaceAccess()) return;
       if (state.curriculumPlanType === "annual") {
         status.style.color = "#a44939";
@@ -6875,10 +7345,13 @@
       status.textContent = "";
       // 울산 편제 점검 프로그램(xlsb)은 curriculum-office-format.js가 읽는다.
       if (/\.xlsb$/i.test(file.name) && typeof importCurriculumOfficeXlsbFile === "function") {
-        importCurriculumOfficeXlsbFile(file).catch((error) => { status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
+        importCurriculumOfficeXlsbFile(file)
+          .then((ok) => { if (ok) curriculumUploadReturn = null; else restoreCurriculumUploadCard(); })
+          .catch((error) => { restoreCurriculumUploadCard(); status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
         return;
       }
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        restoreCurriculumUploadCard();
         status.style.color = "#a44939";
         status.textContent = "편제표는 .xlsx 형식만 지원합니다.";
         return;
@@ -6896,6 +7369,7 @@
       };
       const reader = new FileReader();
       reader.onerror = () => {
+        restoreCurriculumUploadCard();
         status.style.color = "#a44939";
         status.textContent = "편제표 파일을 읽지 못했습니다.";
       };
@@ -6904,7 +7378,8 @@
           const sheets = await parseWorkbook(reader.result, { expandMergedCells: true, includeLayout: true });
           verifyTarget();
           if (typeof isCurriculumOfficeProgram === "function" && isCurriculumOfficeProgram(sheets)) {
-            await importCurriculumOfficeProgram(sheets, file, verifyTarget);
+            if (await importCurriculumOfficeProgram(sheets, file, verifyTarget)) curriculumUploadReturn = null;
+            else restoreCurriculumUploadCard();
             return;
           }
           let plan = [];
@@ -6936,6 +7411,24 @@
             if (plan.length) break;
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
+          // 다른 입학연도 편제표를 이 카드에 올리는 실수를 막는다(제목의 'YYYY학년도 신입생'과 카드 연도 대조).
+          const titleYear = typeof curriculumTitleYearMismatch === "function" ? curriculumTitleYearMismatch(importedLayout, file.name, cohortYear) : "";
+          const ask = (text, options) => typeof appConfirm === "function" ? appConfirm(text, options) : Promise.resolve(window.confirm(text));
+          if (titleYear && !(await ask(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`,
+            { title: "입학연도 확인", ok: `${cohortYear}학년도로 올리기` }))) {
+            status.style.color = "#a44939";
+            restoreCurriculumUploadCard();
+            status.textContent = `업로드를 취소했습니다. ${titleYear}학년도 입학생 편제표는 ${titleYear}학년도 카드에 올리세요.`;
+            return;
+          }
+          // 이미 신청·확정에 쓰는 편제표를 교체하면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 보여 주고 확인을 받는다.
+          const impact = typeof curriculumReplaceImpact === "function" ? curriculumReplaceImpact(state.curriculumImportedLayout, importedLayout) : null;
+          if (impact && !(await ask(curriculumReplaceMessage(impact, file.name), { title: "원본 교체", ok: "교체" }))) {
+            status.style.color = "#5c6982";
+            restoreCurriculumUploadCard();
+            status.textContent = "원본 교체를 취소했습니다. 지금 편제표를 그대로 둡니다.";
+            return;
+          }
           importedLayout.archiveId = await storeCurriculumArchive(reader.result);
           // 원본을 새 변환기로 다시 읽을 때 업로드 뒤 고친 곳을 가려내도록 업로드 시점 데이터를 함께 둔다(curriculum-reconvert.js).
           if (typeof storeCurriculumOrigin === "function") await storeCurriculumOrigin(importedLayout).catch(() => {});
@@ -6951,17 +7444,21 @@
           if (typeof recordCurriculumVersion === "function" && !latestCurriculumSavedVersion(versionYear)) {
             recordCurriculumVersion(versionYear, importedLayout, { reason: "편제표 업로드", fileName: file.name, auto: true });
           }
+          curriculumUploadReturn = null;
           renderCurriculumStep();
           persistState();
           status.style.color = plan.length ? "#287956" : "#a44939";
           const repairNotes = typeof curriculumDataRepairNotes === "function" ? curriculumDataRepairNotes(importedLayout) : [];
           const autoNames = typeof curriculumAutoNameList === "function" ? curriculumAutoNameList(importedLayout) : [];
           if (autoNames.length) repairNotes.push(`공식 과목명으로 ${autoNames.length}곳 자동 수정(${autoNames.slice(0, 4).map((item) => `${item.from} → ${item.to}`).join(", ")}${autoNames.length > 4 ? " 등" : ""} · 표 위 '자동 수정' 안내에서 되돌리기)`);
+          // 표 위 'n개 과목 표시'와 같은 기준(과목 행 수). plan은 '가, 나' 행을 과목마다 세어 수가 달랐다.
+          const subjectRows = typeof planDataSubjects === "function" && importedLayout.planData ? planDataSubjects(importedLayout.planData).length : plan.length;
           status.textContent = plan.length
-            ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${plan.length}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
+            ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${subjectRows}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
-          const message = error instanceof Error ? error.message : "편제표 파일 처리 중 오류가 발생했습니다.";
+          const message = error?.message || "편제표 파일 처리 중 오류가 발생했습니다.";
+          restoreCurriculumUploadCard();
           status.style.color = "#a44939";
           status.textContent = message;
         }
@@ -6997,6 +7494,8 @@
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
+    // 파일 고르기 창을 취소하면(크롬 'cancel') 카드도 원래대로.
+    curriculumPlanInput.addEventListener("cancel", () => restoreCurriculumUploadCard());
     $("#curriculumCohortUploads").addEventListener("click", (event) => {
       const button = event.target.closest("[data-cohort-upload], [data-cohort-view], [data-annual-build], [data-annual-view]");
       if (!button || button.disabled) return;
@@ -7008,8 +7507,12 @@
         switchCurriculumAnnualPlan(button.dataset.annualView);
         return;
       }
+      const before = { year: String(state.curriculumCohortYear), type: state.curriculumPlanType === "annual" ? "annual" : "cohort" };
       switchCurriculumCohort(button.dataset.cohortUpload || button.dataset.cohortView);
-      if (button.dataset.cohortUpload) curriculumPlanInput.click();
+      if (button.dataset.cohortUpload) {
+        curriculumUploadReturn = before;
+        curriculumPlanInput.click();
+      }
     });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
     // Ctrl+Z(맥 ⌘+Z): 1단계 편제표 편집 실행취소. 편제표 칸에 글자를 입력하는 중이면 브라우저 기본(글자 되돌리기)을 그대로 두고,
@@ -7640,13 +8143,35 @@
     for (const selector of ["#openingPercent", "#divisionPercent", "#maxClassSize"]) {
       $(selector).addEventListener("input", () => {
         if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) return;
+        // 기준(%)이 범위 밖이면 칸 옆에 오류를 보이고 적용하지 않는다(집계·저장은 마지막으로 적용된 값).
+        if (selector !== "#maxClassSize" && renderAggregateThresholdErrors() && aggregateThresholds.applied) return;
         // 집계표 안에 개설/폐강 결정 칸이 함께 있으므로 집계표만 다시 그리면 결정 기본값도 함께 갱신된다.
         if (typeof renderRoundStatusControls === "function") renderRoundStatusControls();
         renderAggregate();
         persistStateSoon();
       });
     }
+    $("#aggregateSettingsForm").addEventListener("submit", (event) => {
+      // 잘못된 기준 값이 있으면 닫지 않는다(적용 전에 고치게).
+      if (!renderAggregateThresholdErrors()) return;
+      event.preventDefault();
+      document.querySelector('#aggregateSettingsDialog [aria-invalid]')?.focus();
+    });
+    $("#aggregateSettingsDialog").addEventListener("cancel", () => {
+      // Esc로 닫으면 잘못된 칸은 적용된 값으로 되돌린다.
+      const applied = aggregateThresholds.applied;
+      if (applied) {
+        for (const [selector, key] of [["#openingPercent", "openingPercent"], ["#divisionPercent", "divisionPercent"]]) {
+          if (aggregateThresholdFieldError(selector)) $(selector).value = String(applied[key]);
+        }
+        renderAggregateThresholdErrors();
+      }
+    });
+    $("#aggregateContent").addEventListener("click", (event) => {
+      if (event.target.closest("[data-open-aggregate-settings]")) $("#openAggregateSettings").click();
+    });
     $("#openAggregateSettings").addEventListener("click", () => {
+      renderAggregateThresholdErrors();
       const dialog = $("#aggregateSettingsDialog");
       const locked = typeof isRoundLocked === "function" && isRoundLocked(state.currentRound);
       $("#aggregateSettingsLockNote").textContent = locked
@@ -8027,8 +8552,9 @@
     window.addEventListener("beforeunload", (event) => {
       if (workspaceResetting || !statePersistenceReady) return;
       if (!statePersistenceBlocked) persistState();
-      // 새 저장소에 아직 쓰는 중이면(보통 0.1초 안에 끝난다) 닫기 전에 한 번 묻는다.
-      if (workspaceSaveFailed || statePersistenceBlocked || workspaceStoreBusy() ||
+      // 새 저장소에 아직 못 쓴 변경이 있으면(보통 0.1초 안에 끝난다) 닫기 전에 한 번 묻는다.
+      // 시작 정리용 저장·화면 위치만 바뀐 저장은 묻지 않는다(workspaceStoreUnsaved).
+      if (workspaceSaveFailed || statePersistenceBlocked || workspaceStoreUnsaved() ||
           (typeof getApplicationGroupStorageIssue === "function" && getApplicationGroupStorageIssue())) {
         event.preventDefault();
         event.returnValue = "";

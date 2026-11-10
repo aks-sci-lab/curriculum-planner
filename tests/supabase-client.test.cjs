@@ -16,7 +16,8 @@ class Element {
     this.disabled = false;
     this.textContent = "";
     const classes = new Set();
-    this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) };
+    this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c),
+      toggle: (c, force = !classes.has(c)) => { if (force) classes.add(c); else classes.delete(c); return force; } };
   }
   addEventListener(type, callback) { this.listeners[type] = callback; }
   appendChild(child) { child.parent = this; this.children.push(child); }
@@ -30,6 +31,7 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   getAttribute(name) { return this[name]; }
+  removeAttribute(name) { delete this[name]; }
   setCustomValidity(message) { this.validationMessage = message; }
   reportValidity() { return !this.validationMessage; }
   showModal() { this.open = true; }
@@ -310,6 +312,31 @@ test("grade menus scope curriculum groups and offer table-based assignment for u
   assert.equal(f.elements.applicationGradeWorkspace["aria-labelledby"],"applicationGrade2Tab");
 });
 
+test("grade tab clicks during a teacher action are remembered and applied when it finishes, not silently dropped", async () => {
+  let release;
+  const f=fixture({menus:true,respond:(request)=>request.url.includes("/auth/v1/settings")
+    ? new Promise((resolve)=>{ release=()=>resolve({data:{external:{google:true}}}); })
+    : Promise.resolve({data:[]})});
+  assert.equal(f.renderedGrade,"1");
+  await f.fire("cloudTeacherGoogleLogin","click");
+  // 작업 중에는 학년 탭을 disabled로 막지 않고(클릭이 사라짐) aria-disabled로 표시한다.
+  assert.equal(f.elements.applicationGrade2Tab.disabled,false);
+  assert.equal(f.elements.applicationGrade2Tab["aria-disabled"],"true");
+  await f.fire("applicationGrade2Tab","click");
+  assert.equal(f.context.state.applicationMenuGrade,"1","the grade must not change while the action runs");
+  assert.equal(f.elements.applicationGrade2Tab.classList.contains("is-pending"),true);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/끝나면 현 2학년 탭으로 바꿉니다/);
+  release();
+  await f.settle();
+  for (let i = 0; i < 200 && !f.redirects.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(f.redirects.length,1,f.elements.cloudTeacherMessage.textContent);
+  assert.equal(f.elements.applicationGrade2Tab["aria-disabled"],undefined);
+  assert.equal(f.context.state.applicationMenuGrade,"2");
+  assert.equal(f.renderedGrade,"2");
+  assert.equal(f.elements.applicationGrade2Tab["aria-selected"],"true");
+  assert.equal(f.elements.applicationGrade2Tab.classList.contains("is-pending"),false);
+});
+
 test("cohort group deployment loads versioned application scripts to bypass stale caches", () => {
   const html=fs.readFileSync(path.join(__dirname,"..","index.html"),"utf8");
   const versions=["app","xlsx-parser","course-groups","curriculum-workbook","supabase-client"].map((name)=>{
@@ -371,6 +398,9 @@ test("grade menus reject mixed and wrong-grade rosters and preserve each valid g
   f.roster = [{grade:"1",classroom:"1",number:"1",name:"1학년 학생"}];
   await upload();
   assert.match(f.elements.cloudRosterSummary.textContent,/현재 1학년 1명/);
+  // 명렬을 올린 탭에 머문다('수강신청 생성' 단추가 숨지 않게).
+  assert.notEqual(f.elements.applicationGroupsTab.clicked,true);
+  assert.match(f.elements.cloudTeacherMessage.textContent,/아래 '수강신청 생성'을 누르세요/);
   const first=f.elements.cloudRosterSummary.textContent;
   f.setGrade("2");
   assert.equal(f.elements.cloudCreateEvent.disabled,true);
@@ -549,6 +579,11 @@ test("teacher Google PKCE login persists session, exports Excel and clears it on
   assert.ok(f.storage.has("curriculum-teacher-session-v1"));
   assert.equal(f.history[0], "https://school.example/app/");
   assert.equal(f.step, 2);
+  // 로그인(토큰 교환)이 끝나면 머리 줄의 '로그인 처리 중…'을 지우고, 로그인 뒤 다른 작업에서는 다시 쓰지 않는다.
+  assert.notEqual(f.elements.teacherLoginMessage.textContent, "로그인 처리 중…");
+  await f.fire("cloudRefreshEvents", "click");
+  await f.settle();
+  assert.notEqual(f.elements.teacherLoginMessage.textContent, "로그인 처리 중…");
   f.elements.schoolName.value = "가상학교";
   f.elements.schoolYear.value = "2026";
   f.roster = Array.from({length:350},(_,index)=>{
@@ -1708,4 +1743,43 @@ test("teacher sees per-student lock status and can unlock one student or all stu
   assert.match(f.elements.cloudTeacherMessage.textContent, /모두 해제/);
   assert.equal(lockRows().length, 0);
   assert.match(card.querySelector(".course-code-locks").children[2].textContent, /실패 기록이 있는 학생이 없습니다/);
+});
+
+test("a grade re-render requested while a teacher action runs (startup restore after login) is applied when the action ends", async () => {
+  let release;
+  const f=fixture({menus:true,respond:(request)=>request.url.includes("/auth/v1/settings")
+    ? new Promise((resolve)=>{ release=()=>resolve({data:{external:{google:true}}}); })
+    : Promise.resolve({data:[]})});
+  assert.equal(f.renderedGrade,"1");
+  await f.fire("cloudTeacherGoogleLogin","click");
+  // 저장 자료 복원이 학년을 2로 되돌리고 같은 학년으로 다시 그리기를 부른다(app.js completeWorkspaceStoreBoot).
+  f.context.state.applicationMenuGrade="2";
+  f.context.switchApplicationMenuGrade("2");
+  assert.equal(f.renderedGrade,"1","not drawn while the action runs");
+  release();
+  for (let i = 0; i < 200 && !f.redirects.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(f.renderedGrade,"2","drawn for the restored grade once the action ends");
+  assert.equal(f.elements.applicationGrade2Tab["aria-selected"],"true");
+});
+
+test("'신청 마감'은 한 번 묻고(통합 신청이면 두 학년 모두 마감됨을 알림), 취소하면 서버에 요청하지 않는다", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "supabase-client.js"), "utf8");
+  const start = source.indexOf("  function closeEventQuestion(");
+  const ctx = vm.createContext({});
+  vm.runInContext(source.slice(start, source.indexOf("  function renderGradeEvents(", start)), ctx);
+  assert.match(ctx.closeEventQuestion({ round: 2, subjects: { "2": ["a"] } }), /^2차 수강신청을 마감할까요\?\n\n마감하면 학생이 더 이상 신청·수정할 수 없습니다/);
+  assert.match(ctx.closeEventQuestion({ round: 1, subjects: { "2": ["a"], "3": ["b"] } }), /두 학년 모두 마감됩니다/);
+  // 마감(열려 있을 때)만 묻고, 묻는 줄이 서버 요청보다 앞에 있다.
+  const handler = source.slice(source.indexOf('button(event.is_open ? "신청 마감" : "다시 열기"'), source.indexOf('button("신청 결과 저장"'));
+  // 앱 대화상자(window.appConfirm)로 묻고, 없을 때만 브라우저 confirm. 묻는 줄이 서버 요청보다 앞에 있다.
+  assert.match(handler, /if \(event\.is_open && !\(await \(typeof window\.appConfirm === "function"\n\s*\? window\.appConfirm\(closeEventQuestion\(event\), \{ title: "신청 마감", ok: "신청 마감" \}\)/);
+  assert.ok(handler.indexOf("window.appConfirm") > 0 && handler.indexOf("window.appConfirm") < handler.indexOf('rpc("manage_course_event"'));
+});
+
+test("그룹 카드 칸 폭: 그룹명 최소 120px(16px로 줄지 않음), '선택 수' 글자 꺾임 없음, 연동 안내는 아래 줄에 줄바꿈(칩이 카드 밖으로 넘치지 않게)", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "legacy.css"), "utf8");
+  assert.match(css, /\.course-group-grid \.course-group-name input \{ min-width:120px; \}/);
+  assert.match(css, /@container \(min-width:560px\) \{\n\s*\.course-group-grid fieldset \{ grid-template-columns:minmax\(200px,1fr\) auto auto; \}/);
+  assert.match(css, /\.course-group-grid \.course-group-count \{ white-space:nowrap; \}/);
+  assert.match(css, /\.course-group-grid \.course-group-linked-note \{ grid-column:1 \/ -1; white-space:normal; min-width:0; \}/);
 });

@@ -346,3 +346,35 @@ test("a store record without its IndexedDB data is protected instead of starting
   assert.equal(vm.runInContext("statePersistenceBlocked", f.context), true);
   assert.match(f.element("#workspaceSaveStatus").textContent, /복원 실패 · 기존 저장 원본 보호 중: 새 저장소\(IndexedDB\)에서 작업 자료를 찾지 못했습니다/);
 });
+
+test("leaving during the startup clean-up save or a view-only save is not unsaved work, and app navigation waits for the save", async () => {
+  const f = appFixture();
+  const { context } = f;
+  vm.runInContext("var workspaceResetting = false; workspaceStoreState.active = true;", context);
+  // 시작 정리용 저장: 쓰는 중이어도 떠날 때 묻지 않는다(다음에 열 때 같은 자료로 다시 만들어진다).
+  vm.runInContext("workspaceStartupFlush = true; try { persistState(); } finally { workspaceStartupFlush = false; }", context);
+  assert.equal(context.workspaceStoreBusy(), true);
+  assert.equal(context.workspaceStoreUnsaved(), false);
+  await f.settle();
+  assert.equal(context.workspaceStoreBusy(), false);
+  // 자료를 고친 저장은 끝날 때까지 '못 쓴 변경'이다.
+  vm.runInContext('state.schoolName = "바뀐 학교";', context);
+  f.element("#schoolName").value = "바뀐 학교";
+  assert.equal(context.persistState(), true);
+  assert.equal(context.workspaceStoreUnsaved(), true);
+  await f.settle();
+  assert.equal(context.workspaceStoreUnsaved(), false);
+  // 자료가 그대로이고 화면 위치만 다시 쓰는 저장은 묻지 않는다.
+  vm.runInContext("workspaceStoreState.lastCore = null;", context);
+  assert.equal(context.persistState(), true);
+  assert.equal(context.workspaceStoreBusy(), true);
+  assert.equal(context.workspaceStoreUnsaved(), false);
+  await f.settle();
+  // 앱이 스스로 이동하기 전(구글 로그인)에는 저장을 끝내고 나서 이동한다.
+  vm.runInContext('state.schoolName = "로그인 전";', context);
+  f.element("#schoolName").value = "로그인 전";
+  await context.prepareWorkspaceNavigation();
+  assert.equal(context.workspaceStoreBusy(), false);
+  assert.equal(context.workspaceStoreUnsaved(), false);
+  assert.equal(JSON.parse((await context.workspaceStoreRead()).raw).schoolName, "로그인 전");
+});

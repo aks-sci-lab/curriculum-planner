@@ -387,6 +387,16 @@ test("test bot 반복: 회차 계획·코드 이어받기·회차별 오류 주�
   const wrong = Core.compareTeacherApplications({ entries: [{ ...entries[0], selections: ["화학", "기하"] }], expected, uncertain, targetKeys: keys });
   assert.deepEqual(wrong.mismatched, ["1-1 가"]);
   assert.deepEqual(wrong.courseDiff.sort(), ["물리학", "화학"]);
+  // '폐강 신청 학생만' 재신청: 대상이 아닌 학생의 기존 결과는 '예상 밖 신청'(실패)이 아니라 '유지(대상 아님)'.
+  const others = [...entries, { grade: "1", classroom: "1", number: "3", name: "다", submittedAt: "t", selections: ["지구과학"] }];
+  const scope = new Set([...keys, "1-1-3"]);
+  const wrongly = Core.compareTeacherApplications({ entries: others, expected, uncertain, targetKeys: scope });
+  assert.equal(wrongly.extra.length, 1, "예전 판정: 대상 아닌 학생을 예상 밖으로 셌다");
+  const kept = Core.compareTeacherApplications({ entries: others, expected, uncertain, targetKeys: scope, keptKeys: new Set(["1-1-3"]) });
+  assert.equal(kept.problems, 0);
+  assert.equal(kept.kept, 1);
+  assert.deepEqual(kept.extra, []);
+  assert.deepEqual(kept.courseDiff, [], "유지 학생 과목은 과목별 인원 대조에서도 뺀다");
 
   // 회차 사이 변화
   const rows = [1, 2, 3].map((round) => ({ round, averageMs: round < 3 ? 20 : 80, maxMs: 50, failed: round === 2 ? 1 : 0, mismatches: 0 }));
@@ -593,4 +603,62 @@ test("test bot 정리: 끝나면 묻기 — 앱이 만든 [테스트] 신청은 
   const js = fs.readFileSync(path.join(root, "test-bot.js"), "utf8");
   assert.match(js, /const preferred = testEvent \? "delete" : "close";/);
   assert.match(js, /addEventListener\("cancel", \(\) => finish\("close"\)/);
+});
+
+test("test bot: 폐강 학생만 재신청에서 대상 아닌 학생은 실패가 아니라 '대상 아님'으로 따로 센다", async () => {
+  const replies = {
+    target: { open: true, reselectionAllowed: true, courses: [{ subject: "물리학" }, { subject: "화학" }],
+      groups: [{ name: "택1", semester: "1", count: 1, courses: ["물리학", "화학"] }], selections: [] },
+    other: { open: false, reselectionAllowed: false, courses: [], groups: [], selections: ["물리학"] },
+    closed: { open: false, courses: [], groups: [], selections: [] },
+  };
+  const make = (kind, number) => {
+    const saved = { selections: [] };
+    const rpc = async (name, args) => {
+      if (name === "save_course_selection" || /save/.test(name)) { saved.selections = args.p_selections || []; return { data: { ok: true }, ms: 1 }; }
+      return { data: { ...replies[kind], selections: kind === "target" ? saved.selections : replies[kind].selections }, ms: 1 };
+    };
+    return Core.runVirtualStudent({ grade: "1", classroom: "1", number: String(number), name: `가상${number}`, code: "123456", plan: {} },
+      { rpc, eventId: "e", mode: "hardened", rng: Core.createRng(1) });
+  };
+  const records = [await make("target", 1), await make("other", 2), await make("other", 3), await make("closed", 4)];
+  assert.equal(records[0].ok, true, records[0].failure);
+  assert.equal(records[1].status, "대상 아님");
+  assert.equal(records[1].ok, false);
+  assert.equal(records[3].status, "접수 마감", "대상 표시 없이 닫힌 신청은 여전히 실패");
+  const summary = Core.summarize(records);
+  assert.equal(summary.skipped, 2);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.reasons.some(([reason]) => reason.includes("재선택 대상")), false);
+  const info = Core.resultSheets(records).find((sheet) => sheet.name === "요약").rows;
+  assert.deepEqual(info.find((row) => row[0] === "대상 아님(건너뜀)"), ["대상 아님(건너뜀)", 2]);
+});
+
+test("test bot: 대상 범위 한 줄(반 번호는 이어지면 1~10으로 줄이고 인원 표시)", () => {
+  const students = Array.from({ length: 12 }, (_, index) => ({ grade: "1", classroom: String(index + 1), number: "1" }));
+  assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "1,2,3,4,5,6,7,8,9,10" }, students), { limited: true, text: "대상: 1~10반 · 10명(전체 12명 중)" });
+  assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "3, 1 2, 7" }), { limited: true, text: "대상: 1~3, 7반" });
+  assert.deepEqual(Core.scopeSummary({ scope: "first", count: 10 }, students), { limited: true, text: "대상: 처음 10명 · 10명(전체 12명 중)" });
+  assert.deepEqual(Core.scopeSummary({ scope: "all" }, students), { limited: false, text: "대상: 전체 · 12명" });
+  assert.deepEqual(Core.scopeSummary({}), { limited: false, text: "대상: 전체" });
+  assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "" }, students), { limited: true, text: "대상: 반 지정 없음 · 0명(전체 12명 중)" });
+});
+
+test("회차별 결과: '실패 단계 n개'에는 실패한 단계 이름과 사유(실제값)를 함께 적고, 사유가 비면 그렇다고 적는다", () => {
+  const step = (key, name, status, actual = "") => ({ key, name, status, expected: "", actual, ms: 0 });
+  const round = (number, steps) => ({ round: number, eventId: "e", status: "failed", steps, records: [], targets: [{}, {}] });
+  const report = { meta: {}, repeat: { count: 2, freshEvent: false }, notes: [], rounds: [
+    round(1, [step("students", "재신청", "pass", "성공 2명"), step("teacher", "교사 화면 대조", "fail", "학생 불일치 1명 (2-1-3)")]),
+    round(2, [step("students", "재신청", "fail", "")])
+  ] };
+  const { rows } = Core.repeatSummary(report);
+  assert.match(rows[0].status, /^실패 단계 1개 — 교사 화면 대조: 학생 불일치 1명 \(2-1-3\)$/);
+  assert.match(rows[1].status, /^실패 단계 1개 — 재신청: 실패 사유가 기록되지 않았습니다/);
+  assert.equal(rows[0].failures.length, 1);
+});
+
+test("테스트봇 화면: 회차별 결과 칸과 진행 문구는 길면 줄바꿈(잘리지 않게)", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "test-bot.html"), "utf8");
+  assert.match(html, /\.bot-round-table td:nth-child\(2\) \{ white-space:normal;/);
+  assert.match(html, /#botProgressText \{ overflow-wrap:anywhere; \}/);
 });

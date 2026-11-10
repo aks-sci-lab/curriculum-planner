@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>수강신청 테스트봇</title>
-  <link rel="stylesheet" href="styles.css?v=20261110-release">
+  <link rel="stylesheet" href="styles.css?v=20261110-release2">
   <style>
     body.test-bot { background:#f4f6f9; color:#1f2a3a; margin:0; font-size:15px; }
     .bot-shell { max-width:1100px; margin:0 auto; padding:16px; }
@@ -48,10 +48,16 @@
     .bot-rounds { margin:10px 0; overflow:auto; }
     .bot-rounds caption { text-align:left; font-weight:700; padding:4px 0; }
     .bot-round-table td, .bot-round-table th { white-space:nowrap; }
+    /* 결과 칸('실패 단계 n개 — 단계: 사유')은 길어서 한 줄이면 표 밖으로 잘린다 → 줄바꿈 */
+    .bot-round-table td:nth-child(2) { white-space:normal; min-width:14em; max-width:40em; overflow-wrap:anywhere; }
+    #botProgressText { overflow-wrap:anywhere; }
     .bot-round-table tr.bot-total-row td { font-weight:700; background:#f4f6f9; }
     .bot-rounds ul { margin:4px 0 0; padding-left:20px; font-size:14px; }
     .bot-subtitle { font-size:15px; margin:12px 0 0; }
     #botResults td:first-child { white-space:nowrap; }
+    #botScopeAll[hidden] { display:none; }
+    .bot-scope-notice { display:inline-flex; align-items:center; gap:6px; font-size:14px; color:#596780; }
+    .bot-scope-notice.is-limited { color:#8a3b12; background:#fff3e6; border:1px solid #f0c9a6; border-radius:6px; padding:4px 8px; font-weight:600; }
   </style>
 </head>
 <body class="test-bot">
@@ -132,6 +138,8 @@
           <button class="button" id="botPause" type="button" disabled>일시정지</button>
           <button class="button button-danger" id="botStop" type="button" disabled>중지</button>
           <button class="button" id="botDownload" type="button" disabled>결과 엑셀 저장</button>
+          <span id="botScopeNotice" class="bot-scope-notice" role="status" aria-live="polite"><span id="botScopeText"></span>
+            <button class="button" id="botScopeAll" type="button" hidden>전체로</button></span>
         </div>
         <progress id="botProgress" value="0" max="1"></progress>
         <p id="botProgressText" role="status" aria-live="polite">대기 중</p>
@@ -235,11 +243,11 @@
     <button class="button" id="botHelpClose" type="button">닫기</button>
   </dialog>
 
-  <script src="supabase-config.js?v=20261110-release"></script>
-  <script src="xlsx-parser.js?v=20261110-release"></script>
-  <script src="test-bot-bridge.js?v=20261110-release"></script>
-  <script src="course-checks.js?v=20261110-release"></script>
-  <script src="test-bot-core.js?v=20261110-release"></script>
-  <script src="test-bot.js?v=20261110-release"></script>
+  <script src="supabase-config.js?v=20261110-release2"></script>
+  <script src="xlsx-parser.js?v=20261110-release2"></script>
+  <script src="test-bot-bridge.js?v=20261110-release2"></script>
+  <script src="course-checks.js?v=20261110-release2"></script>
+  <script src="test-bot-core.js?v=20261110-release2"></script>
+  <script src="test-bot.js?v=20261110-release2"></script>
 </body>
 </html>

@@ -197,7 +197,7 @@ function curriculumDataSheetHtml(layout, filters = {}, selectionMode = false, co
   }
   const colGroup = Array.from({ length: width }, (_, column) => {
     const excelWidth = Number(layout.columnWidths?.[column]);
-    const pixels = Number.isFinite(excelWidth) && excelWidth > 0 ? `${Math.max(44, Math.min(360, Math.round(excelWidth * 7 + 12)))}px` : "100px";
+    const pixels = Number.isFinite(excelWidth) && excelWidth > 0 ? `${Math.max(44, Math.min(240, Math.round(excelWidth * 7 + 12)))}px` : "100px";
     return `<col style="width:${pixels}">`;
   }).join("");
   const bodyRows = visibleItems.map((item) => {
@@ -707,7 +707,11 @@ function curriculumSelectionOptions(layout, selection) {
   if (pair && names >= 2) actions.push("cross");
   if (grouped) actions.push("release");
   const primary = grouped ? "release" : pair && names === 2 ? "cross" : actions[0] || null;
-  return { fields, names, actions, primary };
+  // 고른 학기 열에 학점이 없는 과목(드래그가 위아래 다른 학기 과목까지 걸친 경우)은 묶기 전에 알린다(막지는 않음).
+  const inGroup = (item, field) => layout.planData.groups.some((group) => group.fields.includes(field) && group.members.includes(item.id));
+  const empty = members.filter((item) => !fields.some((field) => Number(item.credits?.[field]) > 0 || item.cross?.includes(field) || inGroup(item, field)))
+    .map((item) => item.name);
+  return { fields, names, actions, primary, empty };
 }
 
 // app.js가 드래그·Shift+클릭으로 칸을 고른 뒤(놓을 때) 부른다.
@@ -717,11 +721,14 @@ function showCurriculumSelectionActions(selection) {
   const options = curriculumSelectionOptions(layout, selection);
   const box = curriculumSelectionActionsBox();
   if (!options) { box.classList.add("hidden"); return; }
-  const { fields, names, actions, primary } = options;
+  const { fields, names, actions, primary, empty = [] } = options;
   const labels = { group: "선택과목군으로 묶기", cross: "교차집중으로 묶기", release: "묶음 풀기" };
   const buttons = actions.map((action) => `<button class="button${action === primary ? " button-primary" : ""}" type="button" data-selection-action="${action}"${action === primary ? ' aria-keyshortcuts="Control+M" title="단축키 Ctrl+M"' : ""}>${labels[action]}${action === primary ? ' <kbd class="curriculum-shortcut">Ctrl+M</kbd>' : ""}</button>`);
   buttons.push('<button class="button button-quiet" type="button" data-selection-action="cancel" aria-label="고르기 취소" title="취소(Esc)">×</button>');
-  box.innerHTML = `<span class="curriculum-selection-actions-label">${planViewEscape(planDataFieldLabel(fields))} · ${names}과목</span>${buttons.join("")}`;
+  const warn = empty.length && actions.some((action) => action !== "release")
+    ? `<span class="curriculum-selection-actions-warn" role="note" title="${planViewEscape(empty.join(", "))}">⚠ ${planViewEscape(planDataFieldLabel(fields))}에 학점 없는 과목 ${empty.length}개 포함(${planViewEscape(empty.slice(0, 2).join(", "))}${empty.length > 2 ? " 외" : ""}) — 범위를 확인하세요</span>`
+    : "";
+  box.innerHTML = `<span class="curriculum-selection-actions-label">${planViewEscape(planDataFieldLabel(fields))} · ${names}과목</span>${warn}${buttons.join("")}`;
   box.classList.remove("hidden");
   const rects = [...document.querySelectorAll("#curriculumPlanWrap .curriculum-cell-selected")].map((cell) => cell.getBoundingClientRect()).filter((rect) => rect.width);
   if (rects.length) {

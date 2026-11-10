@@ -104,15 +104,18 @@ test("입학생 편제표는 울산 N학년_편제표 열·순서·선택군 병
     // 교차집중: 과목마다 한 줄, 두 학기 같은 학점, 선택군 '가'
     ["학교지정", "예술", "일반", "음악", 2, 2, "", "", "", "", "가", "", "교차집중"],
     ["학교지정", "예술", "일반", "미술", 2, 2, "", "", "", "", "", "", "교차집중"],
-    ["학생선택", "과학", "일반", "물리학, 화학", "", "", 4, "", "", "", "A", "택2", ""],
+    // 선택군 구성 과목: 세부교과목 한 칸에 한 과목(편제표의 '물리학, 화학' 한 행 → 두 줄)
+    ["학생선택", "과학", "일반", "물리학", "", "", 4, "", "", "", "A", "택2", ""],
+    ["학생선택", "과학", "일반", "화학", "", "", 4, "", "", "", "", "", ""],
     ["학생선택", "사회(역사/도덕포함)", "일반", "세계사", "", "", 4, "", "", "", "", "", ""],
-    ["학생선택", "제2외국어/한문", "일반", "중국어, 일본어", "", "", 4, "", "", "", "", "", ""],
+    ["학생선택", "제2외국어/한문", "일반", "중국어", "", "", 4, "", "", "", "", "", ""],
+    ["학생선택", "제2외국어/한문", "일반", "일본어", "", "", 4, "", "", "", "", "", ""],
     ["학생선택", "기술⋅가정/정보", "진로", "인공지능 기초", "", "", "", "", "", 3, "B", "택1", ""],
     ["학생선택", "기술⋅가정/정보", "진로", "데이터 과학", "", "", "", "", "", 3, "", "", ""],
     // 그 외(소인수)는 메모의 학년·학기에 학점, 소계에는 넣지 않는다.
     ["소인수", "사회(역사/도덕포함)", "진로", "경제", "", "", 3, "", "", "", "", "", ""]
   ]);
-  assert.ok(sheet.merges.includes("M8:M9") && sheet.merges.includes("M10:M12") && sheet.merges.includes("N13:N14"));
+  assert.ok(sheet.merges.includes("M8:M9") && sheet.merges.includes("M10:M14") && sheet.merges.includes("N15:N16"));
   assert.ok(sheet.merges.includes("A3:A4") && sheet.merges.includes("O3:O4") && !sheet.merges.includes("G3:H3"));
   const footer = sheet.cells[sheet.footer];
   assert.equal(footer[0].v, "이수학점 소계");
@@ -122,9 +125,9 @@ test("입학생 편제표는 울산 N학년_편제표 열·순서·선택군 병
   // 2-1: 문학 4 + 택2 × 4. 소인수 경제 3은 넣지 않는다.
   assert.equal(footer[8].f, "SUM(I5:I9)+2*I10");
   assert.equal(footer[8].v, 12);
-  assert.equal(footer[11].f, "1*L13");
+  assert.equal(footer[11].f, "1*L15");
   // 학점이 하나도 없는 학기(3-1)는 과목 영역 전체 SUM으로 둔다.
-  assert.equal(footer[10].f, "SUM(K5:K15)");
+  assert.equal(footer[10].f, "SUM(K5:K17)");
   assert.equal(footer[11].v, 3);
   assert.equal(footer[14].f, `SUM(G${sheet.footer + 1}:L${sheet.footer + 1})`);
   assert.equal(sheet.cells[sheet.footer + 2][6].f, `G${sheet.footer + 1}+G${sheet.footer + 2}`);
@@ -147,7 +150,9 @@ test("전학년 편제표는 학년마다 해당 입학생 편제표의 그 학�
   // 1학년 열은 1학년 입학생(2026)에서만, 2학년 열은 2025 입학생에서만 온다(2025의 1학년 학점 4는 쓰지 않는다).
   assert.ok(names.includes("공통국어1:4,,,,,"));
   assert.ok(names.includes("공통국어1:,,9,,,"));
-  assert.equal(names.filter((name) => name.startsWith("물리학, 화학")).length, 1);
+  // 선택군 구성 과목은 한 칸에 한 과목
+  assert.equal(names.filter((name) => name.startsWith("물리학:")).length, 1);
+  assert.equal(names.filter((name) => name.startsWith("물리학, 화학")).length, 0);
   // 1학년 1학기 = 4+3+교차 2, 2학년 1학기 = 2025 입학생의 공통국어1 9 + 문학 4 + 택2×4, 3학년은 3학년 학점이 없는 편제표라 0
   assert.deepEqual(plain(sheet.cells[sheet.footer].slice(6, 12).map((cell) => cell.v)), [9, 2, 21, 0, 0, 3]);
 });
@@ -253,7 +258,8 @@ test("편성과목 입력 영역은 과목·학점·선택과목군·교차집�
   const sheet = ctx.curriculumOfficeCohortSheet(layout, { year: 2026, grade: 2, school: "천상고등학교" });
   const rows = sheet.cells.slice(4, sheet.footer).map((row) => [row[0].v, row[3].v, row[12].v, row[13].v]);
   assert.deepEqual(plain(rows), [["학교지정", "공통국어1", "", ""], ["학교지정", "대수", "", ""], ["학교지정", "음악", "가", ""], ["학교지정", "미술", "", ""],
-    ["학생선택", "물리학, 화학", "A", "택2"], ["학생선택", "세계사", "", ""], ["학생선택", "인공지능 기초, 데이터 과학", "B", "택1"], ["소인수", "수학과 문명의 발달", "", ""]]);
+    // 원래 울산 입력처럼 세부교과목 한 칸에 한 과목
+    ["학생선택", "물리학", "A", "택2"], ["학생선택", "화학", "", ""], ["학생선택", "세계사", "", ""], ["학생선택", "인공지능 기초", "B", "택1"], ["학생선택", "데이터 과학", "", ""], ["소인수", "수학과 문명의 발달", "", ""]]);
   assert.deepEqual(plain(sheet.cells[sheet.footer].slice(6, 12).map((cell) => cell.v)), [6, 2, 12, 0, 0, 3]);
   assert.deepEqual(plain(sheet.cells[sheet.footer + 1].slice(6, 12).map((cell) => cell.v)), [3, 3, 3, 3, 3, 3]);
 });
@@ -296,4 +302,26 @@ test("교육청 양식 단추·불러오기 확인 창이 화면에 있고 새 �
   assert.match(html, /id="curriculumOfficeImportDialog"/);
   assert.ok(html.indexOf("curriculum-office-format.js") > html.indexOf("curriculum-data-export.js"));
   assert.match(app, /isCurriculumOfficeProgram\(sheets\)/);
+});
+
+test("xlsb 읽기는 단계마다 진행 문구(1/3~3/3·경과 초)를 상태 줄에 보이고, 끝나거나 실패하면 읽는 중 표시를 끈다", async () => {
+  const status = { style: {}, textContent: "", attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
+  const seen = [];
+  const ctx = vm.createContext({
+    TextDecoder, setTimeout: (resolve) => { seen.push(status.textContent); resolve(); },
+    document: { getElementById: (id) => id === "status" ? status : null, addEventListener() {} },
+    state: { curriculumCohortYear: "2026", curriculumPlanType: "cohort", curriculumMutationRevision: 0 },
+    readZipDirectory: () => new Map(), readZipEntry: async () => new Uint8Array()
+  });
+  const appLink = office.slice(office.indexOf("\n// ---- 앱 연결 ----"));
+  vm.runInContext(office.slice(0, office.indexOf("\n// ---- 앱 연결 ----")), ctx);
+  vm.runInContext(appLink.slice(appLink.indexOf("function curriculumOfficeStatus("), appLink.indexOf("// 학년 시트 선택 확인 창.")), ctx);
+  const start = appLink.indexOf("async function importCurriculumOfficeXlsbFile(");
+  vm.runInContext(appLink.slice(start, appLink.indexOf("\nif (typeof document", start)), ctx);
+  const result = await ctx.importCurriculumOfficeXlsbFile({ arrayBuffer: async () => new ArrayBuffer(0) });
+  assert.equal(result, false, "빈 파일은 거절");
+  assert.deepEqual(seen.map((text) => text.match(/\((\d)\/3\)/)?.[1]), ["1", "2", "3"]);
+  assert.match(seen[0], /큰 파일은 30초쯤 걸립니다/);
+  assert.equal(status.attributes["aria-busy"], "false");
+  assert.match(status.textContent, /xlsb 파일을 읽지 못했습니다/, "실패하면 진행 문구 대신 오류");
 });

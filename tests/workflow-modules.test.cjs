@@ -302,6 +302,88 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.ok(overallocated.issues.some((issue) => issue.level === "error" && issue.text.includes("과학 세부 교과")));
 });
 
+
+test("hours statistics count net-increase (순증) small-class and joint courses as one class instead of 0", () => {
+  const entries = [
+    { grade: "2", semester: "1", subject: "경제", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점(순증)" },
+    { grade: "2", semester: "2", subject: "고급 물리학", area: "과학", credit: 3, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/3학점(순증)" },
+    { grade: "2", semester: "2", subject: "공동 과목", area: "과학", credit: 2, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/2학점" },
+    { grade: "2", semester: "1", subject: "윤리와 사상", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점" }
+  ];
+  const snapshot = { rows: [] };
+  const layout = { rows: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: () => null },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 11, "3": 11 } } }, roundStatuses: { "1": { status: "confirmed", snapshot } } },
+    $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
+    curriculumCohortLayout: (year) => year === "2026" ? layout : null,
+    curriculumPlanEntries: (value) => ({ entries: value === layout ? entries : [], issues: [] }),
+    applicationRoundNumbers: () => ["1"], roundStatusData: () => ({ students: [{ grade: "1" }] }), isRoundLocked: () => true,
+    buildRoundSnapshot: () => snapshot, roundSnapshotDrift: () => [],
+    normalizeResultCourseName: (name) => String(name).replace(/\s+/g, ""), resultExampleList: (items) => items.join(", "),
+    columnName: (index) => String.fromCharCode(65 + index), escapeHtml: String
+  });
+  vm.runInContext(hoursStats, ctx);
+  const stats = ctx.computeHoursStats("2027");
+  const item = (name) => stats.items.find((entry) => entry.subject === name);
+  assert.equal(item("경제").classes, 1, "소인수 순증");
+  assert.match(item("경제").basis, /소인수 순증/);
+  assert.equal(item("고급 물리학").classes, 1, "공동교육과정 순증은 우리 학교 시수");
+  assert.equal(item("공동 과목"), undefined, "순증이 아닌 공동교육과정은 다른 학교 운영이라 뺀다");
+  assert.equal(item("윤리와 사상").classes, 0, "순증이 아닌 소인수는 결과대로");
+});
+test("hours stats treat a course closed in an earlier round as closed, not as a missing result", () => {
+  const entries = [
+    { grade: "2", semester: "1", subject: "물리학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
+    { grade: "2", semester: "1", subject: "지구과학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
+    { grade: "2", semester: "2", subject: "화학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 }
+  ];
+  const snapshots = {
+    "1": { rows: [
+      { grade: "1", name: "물리학", semester: "1", classCount: 2, enrollment: 45, decision: "open" },
+      { grade: "1", name: "지구과학", semester: "1", classCount: 0, enrollment: 6, decision: "closed" },
+      { grade: "1", name: "화학", semester: "2", classCount: 2, enrollment: 50, decision: "open" }
+    ] },
+    "2": { rows: [
+      { grade: "1", name: "물리학", semester: "1", classCount: 2, enrollment: 48, decision: "open" },
+      { grade: "1", name: "화학", semester: "2", classCount: 2, enrollment: 53, decision: "open" }
+    ] }
+  };
+  const layout = { rows: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: () => null },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
+      roundStatuses: { "1": { status: "confirmed", snapshot: snapshots["1"] }, "2": { status: "confirmed", snapshot: snapshots["2"] } } },
+    $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
+    curriculumCohortLayout: (year) => year === "2026" ? layout : null,
+    curriculumPlanEntries: () => ({ entries, issues: [] }),
+    applicationRoundNumbers: () => ["1", "2"],
+    roundStatusData: () => ({ students: [{ grade: "1" }] }),
+    isRoundLocked: () => true,
+    buildRoundSnapshot: (round) => snapshots[round],
+    roundSnapshotDrift: () => [],
+    normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "").toLowerCase(),
+    resultExampleList: (items) => items.join(", "),
+    columnName: (index) => String.fromCharCode(65 + index),
+    escapeHtml: String
+  });
+  vm.runInContext(hoursStats, ctx);
+  const stats = ctx.computeHoursStats("2027");
+  const earth = stats.items.find((item) => item.subject === "지구과학");
+  assert.equal(earth.classes, 0);
+  assert.equal(earth.basis, "현 1학년 1차 폐강");
+  const texts = stats.issues.map((issue) => issue.text);
+  assert.equal(texts.some((text) => text.includes("지구과학") && text.includes("결과에 없어")), false);
+  const closedIssue = stats.issues.find((issue) => issue.text.includes("지구과학"));
+  assert.equal(closedIssue.level, "info");
+  assert.ok(closedIssue.text.includes("1차에서 폐강"));
+  // 앞 차수 폐강이 아닌 과목이 근거 차수에 없으면 여전히 과목명 확인 경고를 낸다.
+  snapshots["1"].rows[1].decision = "open";
+  const missing = ctx.computeHoursStats("2027").issues.find((issue) => issue.text.includes("지구과학"));
+  assert.equal(missing.level, "warning");
+  assert.ok(missing.text.includes("2차 결과에 없어"));
+});
+
 test("aggregate reports prefer positive planned class bases and otherwise use roster classes", () => {
   const ctx = vm.createContext({
     collectApplicationSubjects: () => [],
@@ -360,6 +442,17 @@ test("application mode toggles the matching workflow tab and persists without de
   assert.equal(selectedTab, "groups");
   assert.equal(state.students, results);
   assert.equal(persisted, 1);
+  // 결과가 있으면 방식·안내 상자를 저절로 펼치지 않는다. 결과가 없으면(처음) 한 번 펼쳐 방식 선택이 보이게 한다.
+  const settingsBox = { open: false };
+  elements.set("#applicationModeSettings", settingsBox);
+  ctx.renderApplicationMode();
+  assert.equal(settingsBox.open, false);
+  state.students = [];
+  ctx.renderApplicationMode();
+  assert.equal(settingsBox.open, true);
+  settingsBox.open = false;
+  ctx.renderApplicationMode();
+  assert.equal(settingsBox.open, false, "사용자가 접으면 다시 펴지 않는다");
 });
 
 function resultImportContext(extra = {}) {
@@ -458,7 +551,7 @@ test("backup status flags missing or old backups and nudges at most once per ten
     showAppToast: (message) => toasts.push(message),
     Date
   });
-  vm.runInContext(functionSource(app, "const BACKUP_TIME_KEY", "function downloadWorkspaceBackup("), ctx);
+  vm.runInContext(functionSource(app, "const BACKUP_TIME_KEY", "async function downloadWorkspaceBackup("), ctx);
   ctx.renderBackupStatus();
   assert.equal(label.classList.on, false, "nothing to protect yet");
   ctx.state.students = [{ id: "s" }];
@@ -516,7 +609,7 @@ test("full reset asks twice, keeps the teacher login and clears only this app's 
     window: { confirm: () => answers.confirm, prompt: () => answers.prompt, clearTimeout() {}, location: { reload: () => { reloaded++; } } }
   });
   vm.runInContext("var statePersistenceBlocked = false, statePersistenceTimer = null;", ctx);
-  vm.runInContext(functionSource(app, "const WORKSPACE_RESET_KEYS", "function downloadWorkspaceBackup("), ctx);
+  vm.runInContext(functionSource(app, "const WORKSPACE_RESET_KEYS", "async function downloadWorkspaceBackup("), ctx);
   answers.prompt = "취소";
   await ctx.resetWorkspaceAll();
   assert.equal(reloaded, 0);
@@ -547,7 +640,7 @@ test("plan and result names match across Roman numerals and spacing", () => {
   assert.equal(bare.normalizeResultCourseName("미적분 2"), "미적분2", "works without the app helper too");
 });
 
-test("the statistics badge waits for the three cohort plans even after the round is confirmed", () => {
+test("the statistics badge says which cohort plans are missing: some (partial) or all (needed)", () => {
   const cohorts = { "2027": { plan: [{}] }, "2026": { plan: [{}] } };
   const ctx = vm.createContext({
     state: { curriculumImportedLayout: {}, curriculumPlan: [{}], students: [{ id: "s" }], currentRound: "1" },
@@ -557,9 +650,11 @@ test("the statistics badge waits for the three cohort plans even after the round
     $: () => ({ value: "2026" })
   });
   vm.runInContext(functionSource(app, "function workflowStepStates(", "function renderWorkflowStepStates("), ctx);
-  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "2025 입학생 편제표가 없다");
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "일부 편제표 없음"], "2025 입학생 편제표만 없으면 나머지 학년은 계산된다");
   cohorts["2025"] = { plan: [{}] };
   assert.deepEqual(plain(ctx.workflowStepStates())[7], ["done", "가능"]);
+  for (const year of Object.keys(cohorts)) delete cohorts[year];
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "셋 다 없을 때만 '편제표 필요'");
 });
 
 test("bulk certificate printing reads the group settings once instead of once per course", () => {
@@ -715,7 +810,7 @@ test("round status locks threshold inputs while confirmed and the snapshot reuse
   assert.match(roundStatus, /const atRisk = course\.atRisk;/);
   assert.doesNotMatch(roundStatus, /course\.enrollment < summary\.openingLimit/);
   // 기준 비율·최대 인원을 바꾸면 잠금 상태를 갱신한 뒤 (개설/폐강 결정 칸이 들어 있는) 집계표를 다시 그린다.
-  assert.match(app, /for \(const selector of \["#openingPercent", "#divisionPercent", "#maxClassSize"\]\)[\s\S]{0,400}?renderRoundStatusControls\(\);\n\s+renderAggregate\(\);/);
+  assert.match(app, /for \(const selector of \["#openingPercent", "#divisionPercent", "#maxClassSize"\]\)[\s\S]{0,800}?renderRoundStatusControls\(\);\n\s+renderAggregate\(\);/);
   assert.match(roundStatus, /\["openingPercent", "divisionPercent", "maxClassSize"\]/);
   assert.doesNotMatch(app + hoursStats, /renderClosurePanel/);
 });
@@ -726,6 +821,24 @@ function aggregateHelpers(extra = {}) {
   vm.runInContext(functionSource(app, "function aggregateThresholds(", "function renderAggregate("), ctx);
   return { ctx, values };
 }
+
+test("4단계 기준 미달 요약은 교사 결정(미정·폐강·개설)을 나눠 보여 '처리할 것만'과 같은 기준으로 미정만 남은 일로 센다", () => {
+  const { ctx } = aggregateHelpers();
+  const course = (column, atRisk) => ({ column, atRisk, enrollment: atRisk ? 3 : 40, classCount: atRisk ? 0 : 2, capacity: 34 });
+  const report = { summary: { grade: "1", classes: 10, students: 300, openingLimit: 20 }, semesters: [{ name: "1학기", groups: [
+    { category: "택1", courses: [course("A", true), course("B", true), course("C", true), course("D", false)], totalClasses: 2 }] }] };
+  assert.deepEqual(plain(ctx.aggregateRiskCounts(report, {})), { risk: 3, undecided: 3, closed: 0, opened: 0 });
+  assert.equal(ctx.aggregateRiskText(ctx.aggregateRiskCounts(report, {})), "기준 미달 3과목(폐강 확정 아님)");
+  const closures = { "1:A": "closed", "1:B": "open", "1:D": "closed" };
+  const counts = ctx.aggregateRiskCounts(report, closures);
+  assert.deepEqual(plain(counts), { risk: 3, undecided: 1, closed: 1, opened: 1 });
+  assert.equal(ctx.aggregateRiskText(counts), "기준 미달 3과목(미정 1 · 폐강 결정 1 · 개설 결정 1)");
+  assert.equal(ctx.aggregateRiskText(counts, { short: true }), "미달 3(미정 1)");
+  assert.equal(ctx.aggregateRiskText({ risk: 0 }), "기준 미달 0과목");
+  // 미정 수는 '처리할 것만'의 미정 기준 미달 과목과 같다.
+  const attention = ctx.aggregateAttention(report, closures, 34, null);
+  assert.equal([...attention.courses].filter((key) => ["1:A", "1:B", "1:C"].includes(key)).length, counts.undecided);
+});
 
 test("class-count adjustment meets n × classes, gives extra classes to the fullest course, and leaves impossible groups alone", () => {
   const { ctx } = aggregateHelpers();
@@ -744,7 +857,7 @@ test("class-count adjustment meets n × classes, gives extra classes to the full
   assert.equal(impossible.ok, false);
   assert.equal(impossible.counts, null);
   assert.equal(impossible.minimum, 6);
-  assert.match(ctx.aggregatePlanMessage(impossible), /34명 이하로는 최소 6학급이 필요해 목표 5와 맞출 수 없음 — 협의회 결정 필요/);
+  assert.match(ctx.aggregatePlanMessage(impossible), /34명 이하로는 최소 6학급이 필요해 목표 5학급과 맞출 수 없음 — 협의회 결정 필요/);
   // 폐강 과목은 0학급으로 빠지고, 신청자 없는 과목도 0학급이다.
   assert.deepEqual(plan([["a", 50, true], ["b", 40], ["z", 0]], 3).counts, { a: 0, b: 3, z: 0 });
   // 최대 인원은 설정값을 쓴다(40명이면 80명은 2학급).
@@ -813,7 +926,7 @@ test("automatic class adjustment saves manual class counts, skips closed courses
   values["#maxClassSize"] = "10";
   const impossible = ctx.adjustAggregateClassCounts("1");
   assert.deepEqual(plain(impossible.changed), []);
-  assert.match(impossible.problems[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요해 목표 6와 맞출 수 없음/);
+  assert.match(impossible.problems[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요해 목표 6학급과 맞출 수 없음/);
   assert.deepEqual(plain(state.classOverrides), { "1:0": 4, "1:2": 2 });
   locked = true;
   assert.equal(ctx.adjustAggregateClassCounts("1"), null);
@@ -861,6 +974,37 @@ test("confirming a round lists class-plan issues and asks before confirming with
   assert.equal(ctx.isRoundLocked("1"), true);
 });
 
+test("confirming a round uses the app dialog (#roundConfirmDialog) instead of the browser confirm when it exists", () => {
+  const state = { currentRound: "1", students: [{ grade: "2" }], courses: [], classOverrides: {}, semesterAssignments: {}, groupAssignments: {},
+    roundClosures: { "1": {} }, roundStatuses: {} };
+  const report = { summary: { grade: "2", students: 1, classes: 11, classSource: "roster" }, semesters: [] };
+  const parts = {};
+  const part = (key) => (parts[key] ||= { textContent: "", focus() {} });
+  let onClose = null;
+  const dialog = { returnValue: "", opened: false, showModal() { this.opened = true; }, addEventListener: (type, handler) => { onClose = handler; },
+    querySelector: (selector) => part(selector) };
+  let browserConfirm = 0;
+  const ctx = vm.createContext({
+    state, document: { getElementById: (id) => id === "roundConfirmDialog" ? dialog : null }, window: { confirm: () => { browserConfirm += 1; return true; } },
+    aggregateThresholds: () => ({ openingPercent: 90, divisionPercent: 110 }), aggregateRecords: () => ({ reports: [report] }),
+    aggregateClassPlanIssues: () => [], syncActiveRound() {}, persistState() {}, renderAggregate() {}, renderRoundStatus() {}, renderWorkflowLayout() {},
+    status: { style: {}, textContent: "" }
+  });
+  vm.runInContext(roundStatus, ctx);
+  assert.equal(ctx.confirmCurrentRound(), "pending");
+  assert.equal(dialog.opened, true);
+  assert.equal(browserConfirm, 0, "브라우저 기본 확인 창을 쓰지 않는다");
+  assert.match(parts["#roundConfirmText"].textContent, /1차 결과를 확정할까요\?/);
+  assert.equal(parts["#roundConfirmTitle"].textContent, "1차 결과 확정");
+  dialog.returnValue = "cancel";
+  onClose();
+  assert.equal(ctx.isRoundLocked("1"), false, "취소하면 확정하지 않는다");
+  ctx.confirmCurrentRound();
+  dialog.returnValue = "ok";
+  onClose();
+  assert.equal(ctx.isRoundLocked("1"), true);
+});
+
 test("retake targets, the retake download and the aggregate tabs follow the selected current grade", () => {
   const state = {
     rounds: { "1": { courses: [{ column: "a", name: "물리", applicationCurrentGrade: "1" }, { column: "b", name: "기하", applicationCurrentGrade: "2" }],
@@ -890,6 +1034,14 @@ test("retake targets, the retake download and the aggregate tabs follow the sele
   vm.runInContext(functionSource(app, "function downloadRetakeList(", "function applicationCohortYear("), download);
   download.downloadRetakeList();
   assert.equal(link.download, "2차_수강신청_대상자_현2학년(1차_기준).xlsx");
+  // 학년도가 있으면 파일 이름 앞에 붙는다.
+  download.document.getElementById = (id) => id === "schoolYear" ? { value: "2026" } : null;
+  download.downloadRetakeList();
+  assert.equal(link.download, "2026학년도_2차_수강신청_대상자_현2학년(1차_기준).xlsx");
+  const names = vm.createContext({ state: { currentRound: "2" }, document: { getElementById: (id) => id === "schoolYear" ? { value: "2026" } : null } });
+  vm.runInContext(functionSource(app, "function aggregateDownloadName(", "function downloadAggregate("), names);
+  assert.equal(names.aggregateDownloadName("1"), "2026학년도_2차_과목별_수강신청_집계표_현1학년.xlsx");
+  assert.equal(names.aggregateDownloadName(""), "2026학년도_2차_과목별_수강신청_집계표.xlsx");
   assert.match(files["xl/workbook.xml"], /name="2차 대상자\(현2학년\)"/);
   assert.doesNotMatch(files["xl/worksheets/sheet1.xml"], />가</, "the other grade is not exported");
   assert.match(files["xl/worksheets/sheet1.xml"], />나</);
@@ -1006,4 +1158,293 @@ test("long help text and settings live in dialogs, leaving a one-line summary an
   assert.match(settings, /<b>2학년<\/b> 10학급 \(현1 1차 확정\)/);
   assert.match(settings, /<b>3학년<\/b> 11학급 \(현2 결과 없음\)/);
   assert.match(settings, /창체 2시간[\s\S]*data-open-dialog="hoursSettingsDialog"[^>]*>시수 설정</);
+});
+
+test("the shared guidance banner says the shortfall note only on step 4 and gives step 6 its own text", () => {
+  const elements = {};
+  const el = (id) => (elements[id] ||= { textContent: "", dataset: {}, innerHTML: "", value: "", disabled: false });
+  el("#schoolYear").value = "2026";
+  const ctx = vm.createContext({
+    $: el, document: { getElementById: () => null },
+    state: { workflowStep: 3, currentRound: "2", students: [{ grade: "1" }, { grade: "2" }], applicationMenuGrade: "1",
+      curriculumPlanType: "cohort", curriculumCohortYear: "2026", curriculumImportedLayout: {}, curriculumPlan: [{}] },
+    renderBackupStatus() {}, renderWorkflowStepStates() {}, applicationCohortYear: () => "2026",
+    applicationRoundNumbers: () => ["1", "2"], isRoundLocked: () => ctx.locked
+  });
+  ctx.locked = false;
+  const start = app.indexOf("    function renderWorkspaceContext(");
+  vm.runInContext(app.slice(start, app.indexOf("\n    function applicationRoundNumbers(", start)), ctx);
+  const banner = (step) => { ctx.state.workflowStep = step; ctx.renderWorkspaceContext(); return el("#workflowReadinessMessage").textContent; };
+  assert.match(banner(4), /기준 미달은 폐강 확정이 아닙니다/);
+  assert.doesNotMatch(banner(3), /기준 미달/);
+  assert.match(banner(3), /확인서는 두 학년 결과를 함께 사용합니다/);
+  const six = banner(8);
+  assert.doesNotMatch(six, /기준 미달/);
+  assert.match(six, /6단계는 4단계에서 정한 개설 과목·분반 수로/);
+  assert.doesNotMatch(six, /위 '차수'/, "머리 줄 '결과 차수'와 헷갈리지 않게 6단계 화면의 차수를 가리킨다");
+  assert.equal(el("#workspaceRound").disabled, true, "6단계에서는 머리 줄 결과 차수를 잠근다");
+  assert.equal(el("#workflowNextAction").textContent, "집계·개설 확정으로", "확정 전이면 확정하러 가기");
+  ctx.locked = true;
+  banner(8);
+  assert.equal(el("#workflowNextAction").textContent, "4단계 집계 보기");
+  assert.doesNotMatch(banner(6), /기준 미달/);
+});
+
+test("지금 반 수와 내년 학급 수가 다르면 4단계·5단계 화면에 어느 값으로 계산하는지 보인다", () => {
+  const { ctx } = aggregateHelpers();
+  assert.equal(ctx.aggregateClassBasisNote({ grade: "1", classes: 11, rosterClasses: 10, classSource: "planned" }).replace(/<[^>]+>/g, ""),
+    "현 1학년 명단 10반 → 내년 2학년 11학급 기준");
+  assert.equal(ctx.aggregateClassBasisNote({ grade: "1", classes: 11, rosterClasses: 11, classSource: "planned" }), "", "같으면 표시하지 않음");
+  assert.match(ctx.aggregateClassBasisNote({ grade: "2", classes: 10, rosterClasses: 10, classSource: "roster" }), /내년 3학년 학급 수 미입력 · 현 2학년 명단 10반으로 계산/);
+  // 계산은 내년 학급 수 기준(학급당·개설기준). 현 1학년 300명 10반 → 내년 11학급.
+  const rows = vm.createContext({ collectApplicationSubjects: () => [], state: {} });
+  vm.runInContext(functionSource(app, "function aggregateRecords(", "function currentStudent("), rows);
+  const students = Array.from({ length: 300 }, (_, index) => ({ grade: "1", classroom: String(index % 10 + 1) }));
+  const summary = rows.aggregateRecords(students, [], 90, 110, {}, {}, {}, { "2": 11 }).reports[0].summary;
+  assert.equal(summary.classes, 11);
+  assert.equal(summary.rosterClasses, 10);
+  assert.ok(Math.abs(summary.averageClassSize - 300 / 11) < 1e-9);
+  // 5단계 카드: 근거 차수 명단의 반 수
+  const hours = vm.createContext({ roundStatusData: () => ({ students }) });
+  vm.runInContext(hoursStats.slice(hoursStats.indexOf("function hoursRosterClasses("), hoursStats.indexOf("function hoursItemKey(")), hours);
+  assert.equal(hours.hoursRosterClasses({ grade: "2", source: { round: "2" } }), 10);
+  assert.equal(hours.hoursRosterClasses({ grade: "1", source: null }), null);
+});
+
+test("5단계: 확정 전 차수를 4단계 기준 비율이 잘못돼 읽지 못하면 그 차수만 건너뛰고 확인 항목으로 알린다", () => {
+  const entries = [
+    { grade: "2", semester: "1", subject: "문학", area: "국어", credit: 4, kind: "지정", names: 1, nameIndex: 0 },
+    { grade: "2", semester: "1", subject: "지구과학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 }
+  ];
+  const confirmed = { rows: [{ grade: "1", name: "물리학", semester: "1", classCount: 2, enrollment: 45, decision: "open" }] };
+  const locked = { "1": false, "2": true };
+  const layout = { rows: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: () => null },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
+      roundStatuses: { "2": { status: "confirmed", snapshot: confirmed } } },
+    $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
+    curriculumCohortLayout: (year) => year === "2026" ? layout : null,
+    curriculumPlanEntries: () => ({ entries, issues: [] }),
+    applicationRoundNumbers: () => ["1", "2"],
+    roundStatusData: () => ({ students: [{ grade: "1" }] }),
+    isRoundLocked: (round) => locked[round],
+    // 확정 전 차수는 지금 4단계 기준으로 집계한다 → 기준 비율 칸이 잘못되면 aggregateThresholds가 예외를 낸다.
+    buildRoundSnapshot: () => { throw new Error("개설 기준은 1~200%, 분반 기준은 1~300%의 정수로 입력하세요."); },
+    roundSnapshotDrift: () => [],
+    normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "").toLowerCase(),
+    resultExampleList: (items) => items.join(", "),
+    columnName: (index) => String.fromCharCode(65 + index),
+    escapeHtml: String
+  });
+  vm.runInContext(hoursStats, ctx);
+  // 근거 2차(확정)는 읽고, 앞 차수 1차(확정 전)의 폐강 정보만 건너뛴다.
+  const stats = ctx.computeHoursStats("2027");
+  assert.equal(stats.items.find((item) => item.subject === "문학").classes, 10, "5단계 표는 계속 계산된다");
+  const note = stats.issues.find((issue) => issue.thresholdRounds);
+  assert.ok(note && note.level === "warning" && note.action === "4");
+  assert.match(note.text, /^1차 기준 설정 값이 올바르지 않아 폐강 정보를 읽지 못했습니다/);
+  // 근거 차수 자체가 확정 전이면: 그 차수만 건너뛰고 '결과가 없다'고 하지 않는다.
+  locked["2"] = false;
+  const unconfirmed = ctx.computeHoursStats("2027");
+  assert.ok(unconfirmed.issues.some((issue) => /^2차 기준 설정 값이 올바르지 않아 수강신청 결과를 읽지 못했습니다/.test(issue.text)));
+  assert.equal(unconfirmed.issues.some((issue) => /수강신청 결과가 없어/.test(issue.text)), false);
+  assert.equal(unconfirmed.items.find((item) => item.subject === "문학").classes, 10);
+  const second = unconfirmed.grades.find((info) => info.grade === "2");
+  assert.equal(second.label, "2학년(2026 입학 · 현 1학년 · 4단계 기준 설정 오류)", "'결과 없음'이 아니라 기준 설정 오류");
+  assert.match(ctx.hoursSettingsSummary(unconfirmed), /data-hours-thresholds="2"[^>]*>현1 · 4단계 기준 설정 오류</);
+});
+
+test("5단계 담당 교과: 교과(군) '기술·가정/정보'는 과목명으로 나눈다(기술⋅가정이 정보 행에 들어가지 않게)", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(hoursStats.slice(hoursStats.indexOf("function hoursDefaultDepartment("), hoursStats.indexOf("function hoursSourceResult(")), ctx);
+  assert.equal(ctx.hoursDefaultDepartment("기술⋅가정", "기술·가정/정보"), "기술가정");
+  assert.equal(ctx.hoursDefaultDepartment("기술·가정", "기술·가정/정보"), "기술가정");
+  assert.equal(ctx.hoursDefaultDepartment("정보", "기술·가정/정보"), "정보");
+  assert.equal(ctx.hoursDefaultDepartment("인공지능 기초", "기술·가정/정보"), "정보");
+  assert.equal(ctx.hoursDefaultDepartment("로봇과 공학세계", "기술·가정/정보"), "기술가정");
+  assert.equal(ctx.hoursDefaultDepartment("일본어", "제2외국어"), "제2외국어");
+});
+
+test("4단계: 앞 차수에서 '개설'로 정한 미달 과목은 다음 차수에서도 그 결정을 이어받고(바꿀 수 있음), 이 차수에 직접 정한 값이 우선", () => {
+  const state = {
+    rounds: {
+      "1": { courses: [{ column: "c7", name: "일본어 회화", applicationCurrentGrade: "2" }, { column: "c8", name: "기하", applicationCurrentGrade: "2" }] },
+      "2": { courses: [{ column: "x3", name: "일본어 회화", applicationCurrentGrade: "2" }, { column: "x4", name: "기하", applicationCurrentGrade: "2" }] }
+    },
+    roundClosures: { "1": { "2:c7": "open", "2:c8": "closed" }, "2": {} }
+  };
+  const { ctx } = aggregateHelpers({ globals: { state, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "") } });
+  const merged = ctx.effectiveRoundClosures("2");
+  assert.deepEqual({ ...merged }, { "2:x3": "open", "2:x4": "closed" });
+  assert.equal(merged.inherited.get("2:x3"), "1");
+  assert.equal(ctx.aggregateClosureDecision(merged, "2:x3", true), "open", "미달이어도 1차 '개설' 결정을 이어받아 미정으로 돌아가지 않는다");
+  assert.deepEqual(Object.keys(merged), ["2:x3", "2:x4"], "숨은 inherited 속성은 목록에 나오지 않는다");
+  // 2차에서 직접 '미정'으로 바꾸면 그것이 우선
+  state.roundClosures["2"]["2:x3"] = "";
+  const changed = ctx.effectiveRoundClosures("2");
+  assert.equal(changed["2:x3"], "");
+  assert.equal(changed.inherited.has("2:x3"), false);
+  assert.deepEqual({ ...ctx.effectiveRoundClosures("1") }, { "2:c7": "open", "2:c8": "closed" }, "1차는 그대로");
+});
+
+test("4단계 이어받기는 학기·그룹까지 같은 과목만: 두 학기 과목의 한 학기 폐강은 다른 학기로 번지지 않고, 같은 이름의 다른 그룹 과목에도 번지지 않는다", () => {
+  // 실제 normalizeResultCourseName처럼 '(n학기)' 꼬리표를 뗀다(시드 10 회귀: 심화 영어 (2학기) 폐강이 (1학기)까지 폐강).
+  const normalize = (name) => String(name).replace(/[（(]\s*[12]\s*학기\s*[)）]/g, "").replace(/\s+/g, "");
+  const english = (column, semester) => ({ column, name: `심화 영어 (${semester}학기)`, applicationCurrentGrade: "2", semesterKey: semester,
+    applicationSubject: { subject: `심화 영어 (${semester}학기)`, semester } });
+  const state = {
+    rounds: {
+      "1": { courses: [english("e1", "1"), english("e2", "2"),
+        { column: "g1", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택1" } },
+        { column: "g2", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택5" } }] },
+      "2": { courses: [english("f1", "1"), english("f2", "2"),
+        { column: "h1", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택1" } },
+        { column: "h2", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택5" } }] }
+    },
+    // 1차: 심화 영어는 2학기만 폐강(1학기는 기준 충족이라 결정 없음), 음악 감상과 비평은 택1 그룹만 폐강
+    roundClosures: { "1": { "2:e2": "closed", "2:g1": "closed" }, "2": {} }
+  };
+  const { ctx } = aggregateHelpers({ globals: { state, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: normalize } });
+  const merged = { ...ctx.effectiveRoundClosures("2") };
+  assert.equal(merged["2:f2"], "closed", "같은 학기(2학기) 과목은 이어받음");
+  assert.equal(Object.hasOwn(merged, "2:f1"), false, "다른 학기(1학기) 과목으로 번지지 않음");
+  assert.equal(merged["2:h1"], "closed", "같은 그룹 과목은 이어받음");
+  assert.equal(Object.hasOwn(merged, "2:h2"), false, "같은 이름이라도 다른 그룹 과목으로 번지지 않음");
+  // 그룹을 알 수 없는 같은 이름 과목이 여럿이면 하나로 정할 수 없으니 이어받지 않는다.
+  for (const round of ["1", "2"]) for (const course of state.rounds[round].courses) delete course.applicationSubject.groupName;
+  state.roundClosures["2"] = {};
+  const ambiguous = { ...ctx.effectiveRoundClosures("2") };
+  assert.equal(Object.hasOwn(ambiguous, "2:h1") || Object.hasOwn(ambiguous, "2:h2"), false);
+  assert.equal(ambiguous["2:f2"], "closed");
+  // 학기 정보가 꼬리표로만 있는 결과 엑셀 과목(semesterKey 없음)도 학기를 구분한다.
+  const tagOnly = { rounds: { "1": { courses: [{ column: "a", name: "심화 영어 (1학기)", applicationCurrentGrade: "2" }, { column: "b", name: "심화 영어 (2학기)", applicationCurrentGrade: "2" }] },
+    "2": { courses: [{ column: "c", name: "심화 영어 (1학기)", applicationCurrentGrade: "2" }, { column: "d", name: "심화 영어 (2학기)", applicationCurrentGrade: "2" }] } },
+    roundClosures: { "1": { "2:b": "closed" }, "2": {} } };
+  const tagged = aggregateHelpers({ globals: { state: tagOnly, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: normalize } }).ctx;
+  assert.deepEqual({ ...tagged.effectiveRoundClosures("2") }, { "2:d": "closed" });
+});
+
+test("1단계 원본 교체: 신청·확정에 쓰는 편제표면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 요약해 묻는다", () => {
+  const subject = (name, credits, extra = {}) => ({ name, credits, category: "학생 선택 교육과정", area: "과학", ...extra });
+  const layout = (subjects) => ({ planData: { subjects } });
+  const ctx = vm.createContext({
+    state: { rounds: { "1": { students: [{}] }, "2": { students: [{}] } } },
+    planDataSubjects: (data) => data.subjects, planDataNameKey: (name) => String(name).replace(/\s+/g, ""),
+    applicationRoundNumbers: () => ["1", "2"], isRoundLocked: (round) => round === "1",
+    getApplicationGroupSettings: () => [{ name: "2-2 택3", courses: ["물리학", "화학", "지구과학"] }]
+  });
+  vm.runInContext(functionSource(app, "function curriculumReplaceImpact(", "function handleCurriculumPlanWorkbook("), ctx);
+  const before = layout([subject("물리학", { sem21: 3 }), subject("화학", { sem21: 3 }), subject("지구과학", { sem22: 3 })]);
+  const after = layout([subject("물리학", { sem21: 4 }), subject("화학", { sem21: 3 }), subject("생명과학", { sem22: 3 })]);
+  const impact = plain(ctx.curriculumReplaceImpact(before, after));
+  assert.deepEqual(impact.added, ["생명과학"]);
+  assert.deepEqual(impact.removed, ["지구과학"]);
+  assert.equal(impact.changed, 1);
+  assert.deepEqual(impact.locked, ["1"]);
+  assert.equal(impact.touchedGroups, 1);
+  const message = ctx.curriculumReplaceMessage(impact, "9월판.xlsx");
+  assert.match(message, /'9월판\.xlsx'\(으\)로 원본을 교체하면/);
+  assert.match(message, /확정한 차수: 1차/);
+  assert.match(message, /없어지는 과목 1개: 지구과학/);
+  assert.match(message, /없어지는 과목이 든 그룹 1개/);
+  // 여러 과목이 한 행에 묶인 행('A, B')은 과목마다 센다: 같은 과목이 양쪽 목록에 동시에 나오지 않고, 개수와 목록이 맞다.
+  ctx.planDataSubjectNames = (name) => String(name).split(/\s*,\s*/).filter(Boolean);
+  const grouped = layout([subject("물리학, 화학, 생명과학", {}), subject("지구과학", { sem22: 3 })]);
+  const split = layout([subject("물리학", {}), subject("화학, 지구과학", { sem22: 3 }), subject("천문학, 생명과학", {})]);
+  const counted = plain(ctx.curriculumReplaceImpact(grouped, split));
+  assert.deepEqual(counted.added, ["천문학"]);
+  assert.deepEqual(counted.removed, []);
+  assert.equal(counted.added.filter((name) => counted.removed.includes(name)).length, 0);
+  const many = plain(ctx.curriculumReplaceImpact(layout([subject("가", {})]), layout(Array.from({ length: 8 }, (_, index) => subject(`과목${index}`, {})))));
+  assert.equal(many.added.length, 8);
+  assert.match(ctx.curriculumReplaceMessage(many, "x.xlsx"), /새로 생기는 과목 8개: 과목0, 과목1, 과목2, 과목3, 과목4, 과목5 외 2개/);
+  // 같은 내용이거나 아직 쓰는 곳이 없으면 묻지 않는다
+  assert.equal(ctx.curriculumReplaceImpact(before, before), null);
+  assert.equal(ctx.curriculumReplaceImpact(null, after), null);
+  ctx.state.rounds = {}; ctx.isRoundLocked = () => false; ctx.getApplicationGroupSettings = () => [];
+  assert.equal(ctx.curriculumReplaceImpact(before, after), null);
+  // 제목의 입학연도와 카드 연도가 다르면 그 연도를 알려 준다(같거나 못 찾으면 빈 문자열).
+  const titled = (title) => ({ rows: [["", title, ""], ["구분", "교과(군)"]] });
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("2026학년도 신입생 3개년 교육과정 편제표"), "plan.xlsx", "2025"), "2026");
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("2026학년도 신입생 3개년 교육과정 편제표"), "plan.xlsx", "2026"), "");
+  assert.equal(ctx.curriculumTitleYearMismatch({ rows: [[{ v: "2024 학년도 입학생 교육과정" }]] }, "x.xlsx", "2025"), "2024");
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("교육과정 편제표"), "2027학년도 입학생 편제표.xlsx", "2026"), "2027");
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("교육과정 편제표"), "편제표.xlsx", "2026"), "");
+});
+
+test("1단계 엑셀 내보내기: 원본 엑셀이 이 브라우저에 없으면(백업 복원 뒤) 실패하지 않고 기본 양식으로 저장하고 알린다", async () => {
+  const source = fs.readFileSync(path.join(root, "curriculum-data-export.js"), "utf8");
+  const basic = { size: 10 };
+  const ctx = vm.createContext({ curriculumExportLayout: (layout) => layout, buildCurriculumBasicWorkbook: () => basic,
+    curriculumArchiveStore: async () => undefined });
+  vm.runInContext(source.slice(source.indexOf("async function buildCurriculumDataWorkbook("), source.indexOf("const directory = readZipDirectory(buffer)", source.indexOf("async function buildCurriculumDataWorkbook("))) + "}", ctx);
+  const layout = { planData: { subjects: [] }, planTemplate: {}, archiveId: "gone", sheetPath: "xl/worksheets/sheet1.xml" };
+  const blob = await ctx.buildCurriculumDataWorkbook(layout);
+  assert.equal(blob, basic);
+  assert.equal(blob.basicFallback, true);
+  const noArchive = await ctx.buildCurriculumDataWorkbook({ ...layout, archiveId: "" });
+  assert.equal(noArchive.basicFallback, true);
+  const workbook = fs.readFileSync(path.join(root, "curriculum-workbook.js"), "utf8");
+  assert.match(workbook, /blob\.basicFallback\?"원본 엑셀이 이 브라우저에 없어/);
+  assert.match(app, /원본 엑셀 없음\(다시 올리면 학교 양식으로 내보냄\)/);
+});
+
+
+test("앱 확인 대화상자(appConfirm): 브라우저 confirm 대신 #appConfirmDialog로 묻고 확인/취소를 Promise로 돌려준다, 대화상자가 없으면 confirm", async () => {
+  const parts = {};
+  const part = (selector) => (parts[selector] ||= { textContent: "", focus() {} });
+  let onClose = null;
+  const dialog = { open: false, returnValue: "", showModal() { this.open = true; }, close() { this.open = false; }, addEventListener: (type, handler) => { onClose = handler; }, querySelector: part };
+  let confirms = 0;
+  const ctx = vm.createContext({ document: { getElementById: (id) => id === "appConfirmDialog" ? dialog : null }, window: { confirm: () => { confirms += 1; return true; } }, Promise });
+  vm.runInContext(functionSource(app, "function appConfirm(", "window.appConfirm = appConfirm;"), ctx);
+  const pending = ctx.appConfirm("교체할까요?", { title: "원본 교체", ok: "교체" });
+  assert.equal(dialog.open, true);
+  assert.equal(parts["#appConfirmTitle"].textContent, "원본 교체");
+  assert.equal(parts["#appConfirmOk"].textContent, "교체");
+  dialog.returnValue = "ok"; onClose();
+  assert.equal(await pending, true);
+  const cancelled = ctx.appConfirm("마감할까요?");
+  dialog.returnValue = "cancel"; onClose();
+  assert.equal(await cancelled, false);
+  assert.equal(confirms, 0, "브라우저 기본 confirm을 쓰지 않는다");
+  // 원본 교체·입학연도 확인·신청 마감·교사 수 추천 적용이 이 대화상자를 쓴다.
+  assert.match(app, /await ask\(curriculumReplaceMessage\(impact, file\.name\), \{ title: "원본 교체", ok: "교체" \}\)/);
+  assert.match(hoursStats, /await appConfirm\(question, \{ title: "교사 수 추천 적용", ok: "추천 적용" \}\)/);
+});
+
+test("1단계 카드 업로드가 실패·취소되면 원래 보던 카드로 돌아간다(성공하면 그대로), 울산 불러오기 과목 수는 표와 같은 행 기준", () => {
+  const switched = [];
+  const state = { curriculumCohortYear: "2027", curriculumPlanType: "cohort" };
+  const ctx = vm.createContext({ state, switchCurriculumCohort: (year) => { switched.push(["cohort", year]); state.curriculumCohortYear = year; },
+    switchCurriculumAnnualPlan: (year) => { switched.push(["annual", year]); state.curriculumPlanType = "annual"; state.curriculumCohortYear = year; } });
+  vm.runInContext("var curriculumUploadReturn = null;", ctx);
+  vm.runInContext(functionSource(app, "function restoreCurriculumUploadCard(", "function handleCurriculumPlanWorkbook("), ctx);
+  vm.runInContext("curriculumUploadReturn = { year: '2026', type: 'cohort' };", ctx);
+  assert.equal(ctx.restoreCurriculumUploadCard(), true);
+  assert.deepEqual(plain(switched), [["cohort", "2026"]]);
+  assert.equal(ctx.restoreCurriculumUploadCard(), false, "한 번만 되돌린다");
+  vm.runInContext("curriculumUploadReturn = { year: '2026', type: 'annual' };", ctx);
+  ctx.restoreCurriculumUploadCard();
+  assert.deepEqual(plain(switched.at(-1)), ["annual", "2026"]);
+  // 업로드 흐름: 실패·취소 경로마다 되돌리고, 성공하면 기억을 지운다.
+  const handler = functionSource(app, "function handleCurriculumPlanWorkbook(", "function certificateTodayLabel(");
+  assert.match(handler, /\.then\(\(ok\) => \{ if \(ok\) curriculumUploadReturn = null; else restoreCurriculumUploadCard\(\); \}\)/, "xlsb 실패");
+  assert.ok((handler.match(/restoreCurriculumUploadCard\(\)/g) || []).length >= 7, "취소·오류 경로");
+  assert.match(handler, /curriculumUploadReturn = null;\n\s*renderCurriculumStep\(\);/, "성공");
+  assert.match(app, /curriculumUploadReturn = before;\n\s*curriculumPlanInput\.click\(\);/);
+  assert.match(app, /curriculumPlanInput\.addEventListener\("cancel", \(\) => restoreCurriculumUploadCard\(\)\);/);
+  const office = fs.readFileSync(path.join(root, "curriculum-office-format.js"), "utf8");
+  const count = vm.createContext({ planDataSubjects: (data) => data.subjects.filter((item) => !item.fixed) });
+  vm.runInContext(office.slice(office.indexOf("function curriculumOfficeSubjectRowCount("), office.indexOf("async function importCurriculumOfficeProgram(")), count);
+  assert.equal(count.curriculumOfficeSubjectRowCount({ planData: { subjects: [{ name: "가, 나" }, { name: "다" }, { fixed: true }] } }, 3), 2);
+  assert.match(office, /과목 \$\{subjectRows\}개, 선택과목군/);
+});
+
+test("1단계 업로드 상태 문구의 과목 수는 표 위 'n개 과목 표시'와 같은 기준(과목 행 수)", () => {
+  const handler = functionSource(app, "function handleCurriculumPlanWorkbook(", "function certificateTodayLabel(");
+  assert.match(handler, /const subjectRows = typeof planDataSubjects === "function" && importedLayout\.planData \? planDataSubjects\(importedLayout\.planData\)\.length : plan\.length;/);
+  assert.match(handler, /편제표 \$\{subjectRows\}개 과목을 불러왔습니다/);
+  assert.match(fs.readFileSync(path.join(root, "curriculum-data-view.js"), "utf8"), /visibleItems\.filter\(\(item\) => !item\.fixed\)\.length\}개 과목 표시/, "표 쪽 기준(고정 행 뺀 과목 행)");
 });

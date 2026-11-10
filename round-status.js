@@ -42,9 +42,10 @@ function buildRoundSnapshot(round) {
   const aggregate = aggregateRecords(
     data.students, data.courses, openingPercent, divisionPercent,
     data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases,
-    state.roundClosures?.[round] || {}
+    typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {}
   );
-  const closures = state.roundClosures?.[round] || {};
+  // 앞 차수에서 정한 개설/폐강(이 차수에 직접 정하지 않은 과목)도 이어받아 확정 스냅샷에 넣는다.
+  const closures = typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {};
   const rows = [];
   for (const { summary, semesters } of aggregate.reports) {
     for (const semester of semesters) {
@@ -160,7 +161,7 @@ function roundClassPlanIssues(round) {
     data.students, data.courses, openingPercent, divisionPercent,
     data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {},
     typeof nextYearClassBases === "function" ? nextYearClassBases() : {},
-    state.roundClosures?.[round] || {}
+    typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {}
   );
   return aggregateClassPlanIssues(aggregate);
 }
@@ -184,10 +185,34 @@ function confirmCurrentRound() {
     : undecided.length
       ? `${undecidedText}그래도 ${round}차 결과를 확정할까요?`
       : `${round}차 결과를 확정할까요? 확정하면 결과 교체·과목별 개설 반 수·개설 결정이 잠기고, 시수 통계는 이 시점의 결과를 사용합니다.`;
+  const finish = () => {
+    setRoundStatus(round, "confirmed", snapshot);
+    refreshAfterRoundStatusChange(`${round}차 결과를 확정했습니다. 5단계 시수 통계에서 이 결과를 사용합니다.`);
+    if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("차수 확정");
+    return true;
+  };
+  // 앱 대화상자(#roundConfirmDialog)로 묻고, 없으면(테스트·옛 화면) 브라우저 확인 창.
+  if (roundAskDialog({ title: `${round}차 결과 확정`, text: question, ok: planIssues.length || undecided.length ? "그래도 확정" : "확정" }, finish)) return "pending";
   if (!window.confirm(question)) return false;
-  setRoundStatus(round, "confirmed", snapshot);
-  refreshAfterRoundStatusChange(`${round}차 결과를 확정했습니다. 5단계 시수 통계에서 이 결과를 사용합니다.`);
-  if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("차수 확정");
+  return finish();
+}
+
+// 앱 안 확인 대화상자. 열었으면 true(답은 onYes로), 대화상자가 없으면 false.
+function roundAskDialog({ title, text, ok }, onYes) {
+  const dialog = typeof document !== "undefined" ? document.getElementById("roundConfirmDialog") : null;
+  if (!dialog || typeof dialog.showModal !== "function") return false;
+  dialog.querySelector("#roundConfirmTitle").textContent = title;
+  dialog.querySelector("#roundConfirmText").textContent = text;
+  dialog.querySelector("#roundConfirmOk").textContent = ok;
+  dialog.returnValue = "";
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue !== "ok") return;
+    try { onYes(); } catch (error) {
+      if (typeof status !== "undefined" && status) { status.style.color = "#a44939"; status.textContent = error?.message || "처리하지 못했습니다."; }
+    }
+  }, { once: true });
+  dialog.showModal();
+  dialog.querySelector("button[value=cancel]")?.focus();
   return true;
 }
 
@@ -210,9 +235,14 @@ function initRoundStatusControls() {
   });
   document.getElementById("roundUnlock").addEventListener("click", () => {
     const round = String(state.currentRound);
-    if (!window.confirm(`${round}차 확정을 해제할까요? 결과 교체·과목별 개설 반 수·개설 결정을 다시 수정할 수 있고, 시수 통계는 확정 전 결과로 계산됩니다.`)) return;
-    setRoundStatus(round, "review");
-    refreshAfterRoundStatusChange(`${round}차 확정을 해제했습니다. 수정 후 다시 확정하세요.`);
+    const question = `${round}차 확정을 해제할까요? 결과 교체·과목별 개설 반 수·개설 결정을 다시 수정할 수 있고, 시수 통계는 확정 전 결과로 계산됩니다.`;
+    const unlock = () => {
+      setRoundStatus(round, "review");
+      refreshAfterRoundStatusChange(`${round}차 확정을 해제했습니다. 수정 후 다시 확정하세요.`);
+    };
+    if (roundAskDialog({ title: `${round}차 확정 해제`, text: question, ok: "확정 해제" }, unlock)) return;
+    if (!window.confirm(question)) return;
+    unlock();
   });
   document.getElementById("downloadRoundCompare").addEventListener("click", downloadRoundCompare);
 }

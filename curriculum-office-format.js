@@ -164,7 +164,12 @@ function curriculumOfficeEntries(data, fields = OFFICE_FIELDS, { key = "" } = {}
       // 학점을 읽지 못한 묶음(0)은 구성 과목 운영학점(curriculum-data.js planDataGroupCredit)을 쓴다.
       const credit = Number(group.credit) > 0 ? Number(group.credit) : typeof planDataGroupCredit === "function" ? planDataGroupCredit(data, group) : 0;
       const values = OFFICE_FIELDS.map((field) => group.fields.includes(field) ? credit : "");
-      groupRows.get(group.id).push({ ...base, division: curriculumOfficeDivision(subject, { section: "choice" }), values });
+      // 울산 양식은 세부교과목 한 칸에 한 과목(불러올 때 이어진 같은 학점 줄을 '가, 나'로 묶은 것의 반대): 이름마다 한 줄.
+      // 선택군 소계는 택n × 학점이라 줄 수와 무관하다.
+      const names = officeSubjectNames(subject.name);
+      for (const name of names.length ? names : [base.name]) {
+        groupRows.get(group.id).push({ ...base, name, division: curriculumOfficeDivision(subject, { section: "choice" }), values });
+      }
     }
   });
   for (const group of groups) {
@@ -839,6 +844,16 @@ function curriculumOfficeStatus(message, ok) {
   node.textContent = message;
 }
 
+// 오래 걸리는 읽기의 진행 문구(빈 글자면 끝). 상태 줄에 보이고 aria-busy로 읽는 중임을 알린다.
+function curriculumOfficeProgress(message) {
+  const node = document.getElementById("status");
+  if (!node) return;
+  node.setAttribute("aria-busy", message ? "true" : "false");
+  if (!message) return;
+  node.style.color = "#38557f";
+  node.textContent = message;
+}
+
 // 학년 시트 선택 확인 창. 고른 학년(숫자) 또는 null(취소).
 function askCurriculumOfficeGrade(options, chosen, cohortYear) {
   const dialog = document.getElementById("curriculumOfficeImportDialog");
@@ -863,6 +878,12 @@ function askCurriculumOfficeGrade(options, chosen, cohortYear) {
 }
 
 // app.js의 편제표 업로드에서 울산 프로그램 파일을 알아보면 이 함수로 넘긴다.
+// 불러온 편제표의 과목 행 수(1단계 표의 'n개 과목 표시'와 같은 기준). 데이터가 없으면 fallback.
+function curriculumOfficeSubjectRowCount(layout, fallback = 0) {
+  if (typeof planDataSubjects === "function" && layout?.planData) return planDataSubjects(layout.planData).length;
+  return fallback;
+}
+
 async function importCurriculumOfficeProgram(sheets, file, verifyTarget = () => {}) {
   const years = curriculumOfficeProgramYears(sheets);
   const cohortYear = String(state.curriculumCohortYear);
@@ -907,7 +928,9 @@ async function importCurriculumOfficeProgram(sheets, file, verifyTarget = () => 
   renderCurriculumStep();
   persistState();
   const groupCount = data.groups.length;
-  curriculumOfficeStatus(`울산 편제 점검 프로그램 '${option.sheet}'에서 ${cohortYear}학년도 입학생 편제표를 불러왔습니다: 과목 ${planRows.length}개, 선택과목군 ${groupCount}개. 원본 양식이 없으므로 내보내기는 교육청 양식 또는 기본 양식으로 저장됩니다.`, true);
+  // 표 위 'n개 과목 표시'와 같은 기준(과목 행 수)으로 센다(과목명 하나씩 센 planRows는 '가, 나' 행을 둘로 세어 수가 달랐다).
+  const subjectRows = curriculumOfficeSubjectRowCount(layout, planRows.length);
+  curriculumOfficeStatus(`울산 편제 점검 프로그램 '${option.sheet}'에서 ${cohortYear}학년도 입학생 편제표를 불러왔습니다: 과목 ${subjectRows}개, 선택과목군 ${groupCount}개. 원본 양식이 없으므로 내보내기는 교육청 양식 또는 기본 양식으로 저장됩니다.`, true);
   return true;
 }
 
@@ -915,14 +938,24 @@ async function importCurriculumOfficeProgram(sheets, file, verifyTarget = () => 
 async function importCurriculumOfficeXlsbFile(file) {
   const cohortYear = String(state.curriculumCohortYear), planType = state.curriculumPlanType;
   const revision = state.curriculumMutationRevision;
+  // xlsb는 큰 파일이면 30초쯤 걸린다 → 단계마다 진행 문구를 보이고(화면을 한 번 그리게 쉰 뒤) 다음 단계로.
+  const started = Date.now();
+  const progress = async (step, text) => {
+    curriculumOfficeProgress(`울산 편제 점검 프로그램 파일 읽는 중 (${step}/3) · ${text} · ${Math.round((Date.now() - started) / 1000)}초 — 큰 파일은 30초쯤 걸립니다. 창을 닫지 마세요.`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  };
   try {
+    await progress(1, "파일 여는 중");
     const buffer = await file.arrayBuffer();
     const directory = readZipDirectory(buffer);
     const entries = {};
+    await progress(2, "압축 풀기");
     for (const name of directory.keys()) {
       if (/^xl\/(workbook\.bin|_rels\/workbook\.bin\.rels|sharedStrings\.bin|worksheets\/sheet\d+\.bin)$/.test(name)) entries[name] = await readZipEntry(buffer, directory, name);
     }
+    await progress(3, "시트 읽기");
     const sheets = curriculumOfficeXlsbSheets(entries, (name) => CURRICULUM_OFFICE_SHEET_PATTERN.test(name.trim()));
+    curriculumOfficeProgress("");
     if (!isCurriculumOfficeProgram(sheets)) {
       curriculumOfficeStatus("xlsb 파일은 울산 편제 점검 프로그램 파일만 읽을 수 있습니다. 다른 편제표는 엑셀에서 '다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 바꿔 올려 주세요.", false);
       return false;
@@ -933,6 +966,7 @@ async function importCurriculumOfficeXlsbFile(file) {
       }
     });
   } catch (error) {
+    curriculumOfficeProgress("");
     curriculumOfficeStatus(`xlsb 파일을 읽지 못했습니다(${error?.message || error}). 엑셀에서 '다른 이름으로 저장 → Excel 통합 문서(*.xlsx)'로 바꿔 올려 주세요.`, false);
     return false;
   }

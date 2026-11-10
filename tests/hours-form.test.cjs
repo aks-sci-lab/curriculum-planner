@@ -167,6 +167,17 @@ test("시수표 양식: 창체 행(자율·진로 × 학년별 학급 수)과 �
   assert.equal(ctx.hoursFormModel(ctx.computeHoursStats("2027")).memo.changes, "◈ 2026학년도 ⇒ 영어과 2명 감\n◈ 2027학년도 ⇒ 국어과 1명 감, 물리 1명 증");
   settings["2027"].staffMemo = "직접 쓴 메모";
   assert.equal(ctx.hoursFormModel(ctx.computeHoursStats("2027")).memo.changes, "직접 쓴 메모");
+  // 교과 교사 수가 하나도 없으면 '/ 0명' 대신 미입력 안내, 빈칸과 0명은 확인 필요 문구가 다르다.
+  const keepTeachers = settings["2027"].teachers;
+  settings["2027"].teachers = {};
+  assert.match(ctx.hoursFormModel(ctx.computeHoursStats("2027")).memo.fixed, /\/ 교과 교사 수\(미입력\)$/);
+  const blankIssues = ctx.computeHoursStats("2027").issues.map((issue) => issue.text).join("\n");
+  assert.match(blankIssues, /교사 수가 비어 있는 교과/);
+  assert.doesNotMatch(blankIssues, /0명으로 넣은 교과/);
+  settings["2027"].teachers = Object.fromEntries(Object.keys(keepTeachers).map((key) => [key, 0]));
+  const zeroIssues = ctx.computeHoursStats("2027").issues.map((issue) => issue.text).join("\n");
+  assert.match(zeroIssues, /교사 수를 0명으로 넣은 교과/);
+  settings["2027"].teachers = keepTeachers;
   // 창체 시수 설정: 자율·진로 따로, 예전 '창체 시수' 하나는 진로 1 + 나머지 자율.
   assert.deepEqual(plain(ctx.hoursCreativeParts({ creativeHours: 3 })), { 자율: 2, 진로: 1 });
   assert.deepEqual(plain(ctx.hoursCreativeParts({})), { 자율: 1, 진로: 1 });
@@ -177,13 +188,18 @@ test("교사 증감 메모 문구와 배분 메모 줄임말은 원래 양식과
   const ctx = statsContext(baseSettings(), plan);
   const rows = [
     { name: "국어과", previous: 9, current: 8 }, { name: "수학과", previous: 10, current: 10 }, { name: "영어과", previous: 9, current: 7 },
-    { name: "물리", previous: 2, current: 3 }, { name: "일반사회", previous: 2, current: 3 }, { name: "기술가정과", previous: 1, current: NaN }
+    { name: "물리", previous: 2, current: 3 }, { name: "일반사회", previous: 2, current: 3 }, { name: "기술가정과", previous: 1, current: 0 }
   ];
   assert.equal(ctx.hoursTeacherChangeLine("2026", rows), "◈ 2026학년도 ⇒ 국어과, 기술가정과 각1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증");
+  // 올해 교사 수가 빈칸(아직 입력 전)인 교과는 비교하지 않는다(0명으로 입력하면 '감'). 하나도 없으면 증감 줄 없음.
+  assert.equal(ctx.hoursTeacherChangeLine("2026", rows.map((row) => row.name === "기술가정과" ? { ...row, current: NaN } : row)),
+    "◈ 2026학년도 ⇒ 국어과 1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증");
+  assert.equal(ctx.hoursTeacherChangeLine("2026", rows.map((row) => ({ ...row, current: NaN }))), "", "올해 교사 수가 비어 있으면 증감 줄 없음");
   assert.equal(ctx.hoursTeacherChangeLine("2026", rows.map((row) => ({ ...row, previous: NaN }))), "", "전년도 값이 없으면 빈 줄");
   assert.equal(ctx.hoursTeacherChangeLine("2026", [{ name: "국어과", previous: 8, current: 8 }]), "◈ 2026학년도 ⇒ 교과 교사 수 변동 없음");
   assert.deepEqual(plain(["통합과학1", "과학탐구실험2", "융합과학 탐구", "기후변화와 환경생태", "통합사회2", "사회문제 탐구", "기후변화와 지속가능한 세계", "역사로 탐구하는 현대세계"]
     .map((name) => ctx.hoursShortSubject(name))), ["통과", "과탐실", "융과", "기환", "통사", "사문탐", "기후지속", "역탐현"]);
+  assert.equal(ctx.hoursShortSubject("과학과제 연구"), "과제연구", "'과과탐' 같은 알아보기 어려운 줄임말 대신");
 });
 
 test("엑셀 첫 시트는 같은 모델: 시트명·병합·틀 고정 D5·세로 인쇄, 배분 메모는 X~AA 칸에 나눠 적고 스타일 번호는 목록 안", () => {
@@ -221,6 +237,10 @@ test("엑셀 첫 시트는 같은 모델: 시트명·병합·틀 고정 D5·세�
   assert.match(html, /data-hours-allocation-note="과학-물리\|1"/);
   assert.match(html, /data-hours-creative-part="자율"/);
   assert.match(html, /data-hours-staff-memo="1"/);
+  // 회색 예시는 실제 값처럼 보이지 않게 '예:'·'예시)'로 시작하고, 배분 시수 칸에는 0 예시를 두지 않는다.
+  assert.match(html, /placeholder="예: 통과10 · 과탐실3"/);
+  assert.match(html, /data-hours-staff-memo="1"[^>]*placeholder="예시\) ◈/);
+  assert.doesNotMatch(html, /data-hours-allocation="[^"]*"[^>]*placeholder="0"/);
   assert.match(html, /class="hf-sum2Num[^"]*">/);
 });
 
@@ -286,4 +306,38 @@ test("createWorkbookBlob: 틀 고정 D5는 위 4행·왼쪽 3열, 세로 인쇄�
   assert.match(files["xl/worksheets/sheet2.xml"], /<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"\/>/);
   assert.match(files["xl/worksheets/sheet2.xml"], /orientation="landscape" fitToWidth="1" fitToHeight="0"/);
   assert.equal(ctx.createWorkbookBlob([{ name: "x", rows: [] }])["xl/styles.xml"], "REPORT");
+});
+
+test("5단계 '전년도 설정 불러오기' 등 결과 안내는 앱 알림·상태 줄로 보인다(선언 안 된 status → window.status로 사라지지 않게)", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "hours-stats.js"), "utf8");
+  assert.doesNotMatch(source, /(^|[^.\w])status\.(style|textContent)/m, "hours-stats.js는 전역 status를 쓰지 않는다");
+  const toasts = [];
+  const node = { style: {}, textContent: "" }, panelNode = { style: {}, textContent: "" };
+  const ctx = vm.createContext({
+    state: { hoursStats: {} }, document: { getElementById: (id) => id === "status" ? node : id === "hoursStatus" ? panelNode : null },
+    showAppToast: (message, kind) => toasts.push([message, kind]), hoursTargetYear: () => "2027", hoursPlainObject: (value) => !!value && typeof value === "object"
+  });
+  vm.runInContext(source.slice(source.indexOf("function hoursNotify("), source.indexOf("// '추천 적용'")), ctx);
+  ctx.loadPreviousHoursSettings();
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0][0], /2026학년도 시수 통계 자료가 없습니다/);
+  assert.equal(toasts[0][1], "error");
+  assert.equal(node.textContent, toasts[0][0]);
+  assert.equal(panelNode.textContent, toasts[0][0], "5단계 화면 안 상태 줄에도 보인다");
+  assert.match(require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "index.html"), "utf8"), /id="workflowStep7Panel"[\s\S]*?id="hoursStatus" role="status"[\s\S]*?id="hoursStatsContent"/);
+});
+
+test("5단계 증감 안내: 빈 이유(전년도/올해 교사 수)를 바로 말하고, 올해 교사 수가 빈칸이면 증감 열을 비우며, 추천은 '빈칸→n'", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "hours-stats.js"), "utf8");
+  const ctx = vm.createContext({});
+  vm.runInContext(source.slice(source.indexOf("function hoursChangeLineMissingText("), source.indexOf("// 전년도 교과별 교사 수: 메모")), ctx);
+  const stats = (rows) => ({ departments: rows.map(([previousTeachers, teachers], index) => ({ id: `d${index}`, previousTeachers, teachers })) });
+  assert.match(ctx.hoursChangeLineMissingText(stats([[8, null], [10, null]])), /^올해 교사 수가 없어/, "전년도는 있고 올해가 빈칸");
+  assert.match(ctx.hoursChangeLineMissingText(stats([[null, 8]])), /^전년도 교사 수가 없어/);
+  assert.match(ctx.hoursChangeLineMissingText(stats([[null, null]])), /^전년도·올해 교사 수가 없어/);
+  // 표의 증감 칸: 올해 교사 수가 빈칸이면 계산하지 않는다(-8, -11처럼 보이지 않게).
+  const table = source.slice(source.indexOf("function hoursPreviousTeachersSettings("), source.indexOf("function scheduleHoursRerender("));
+  assert.match(table, /department\.previousTeachers === null \|\| department\.teachers === null \|\| department\.teachers === undefined\n\s*\? null/);
+  assert.match(source, /`빈칸→\$\{hoursFormat\(row\.recommended, 1\)\}`/);
+  assert.match(source, /\$\{row\.current \?\? "빈칸"\}→\$\{row\.recommended\}/);
 });

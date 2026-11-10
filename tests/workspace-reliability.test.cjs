@@ -65,15 +65,16 @@ function fixture(saved) {
     renderSemesterClassifier() {}, renderAggregate() {}, renderWorkflowLayout() {},
     applyClassFilterOptions() {},
     showAppToast: (message) => notices.push(message),
-    downloadTextFile: (text) => { context.downloaded = JSON.parse(text); },
+    downloadTextFile: (text) => { context.downloadedText = text; context.downloaded = JSON.parse(text); },
   });
   vm.runInContext(app.slice(0, app.indexOf("function escapeHtml(")), context);
   for (const name of [
     "syncActiveRound", "syncActiveCurriculumCohort", "applicationRoundNumbers",
     "updateWorkspaceSaveStatus", "isWorkspaceStorageProtected", "workspacePayload", "persistState", "validateWorkspaceData",
-    "loadCurriculumPlanData", "restorePersistedState", "buildWorkspaceBackup", "downloadWorkspaceBackup", "restoreWorkspaceBackup",
+    "loadCurriculumPlanData", "restorePersistedState", "workspaceBackupCompact", "workspaceBackupExpand", "readWorkspaceBackupText", "workspaceBackupGzip",
+    "buildWorkspaceBackup", "workspaceBackupFileName", "downloadWorkspaceBackup", "restoreWorkspaceBackup",
   ]) vm.runInContext(source(name), context);
-  vm.runInContext("var WORKSPACE_BACKUP_VERSION = 1, APP_VERSION = 'test'; function markWorkspaceBackup() {}", context);
+  vm.runInContext("var WORKSPACE_BACKUP_VERSION = 2, APP_VERSION = 'test'; function markWorkspaceBackup() {}", context);
   const groups = fs.readFileSync(path.join(root, "course-groups.js"), "utf8");
   vm.runInContext(groups.slice(groups.indexOf("function validateApplicationGroupData("), groups.indexOf("(() => {")), context);
   return { context, storage, elements, element, timers, notices, writes: () => writes };
@@ -169,15 +170,17 @@ test("reading unchanged active round and cohort does not schedule unnecessary sa
   assert.equal(f.timers.size, 0);
 });
 
-test("workspace backups include groups and protected originals but never login tokens", () => {
+test("workspace backups include groups and protected originals but never login tokens", async () => {
   const f = fixture("{broken");
   f.storage.set(groupKey, "[]");
   f.storage.set("curriculum-teacher-session-v1", "private-session");
   f.context.restorePersistedState();
-  f.context.downloadWorkspaceBackup();
+  await f.context.downloadWorkspaceBackup();
   assert.equal(f.context.downloaded.protectedStoredState, "{broken");
   assert.equal(f.context.downloaded.groups[groupKey], "[]");
   assert.ok(!JSON.stringify(f.context.downloaded).includes("private-session"));
+  // 크기를 줄이려고 들여쓰기 없이 쓴다(읽기는 JSON.parse라 예전 들여쓴 백업도 그대로 읽힌다).
+  assert.equal(f.context.downloadedText.includes("\n"), false);
 });
 
 test("backup restore validates before writing and rolls back a partially failed import", async () => {
@@ -234,15 +237,25 @@ test("local file and offline work never require teacher login; student routes st
 test("aggregate thresholds reject invalid values instead of using different closure defaults", () => {
   const values = { "#openingPercent": "90", "#divisionPercent": "110" };
   const context = vm.createContext({ $: (id) => ({ value: values[id] }) });
-  vm.runInContext(source("aggregateThresholds"), context);
-  assert.equal(context.aggregateThresholds().openingPercent, 90);
+  for (const name of ["aggregateThresholds", "aggregateThresholdFieldError", "aggregateThresholdStoredValue"]) vm.runInContext(source(name), context);
+  // 저장된 값이 잘못된 경우(적용된 값 없음): 예전처럼 오류.
   for (const invalid of ["", "0", "-1", "201", "90.5", "Infinity"]) {
     values["#openingPercent"] = invalid;
     assert.throws(() => context.aggregateThresholds(), /정수/);
+    assert.match(context.aggregateThresholdFieldError("#openingPercent"), /개설 기준은 1~200 사이의 정수/);
   }
   values["#openingPercent"] = "90";
   values["#divisionPercent"] = "301";
   assert.throws(() => context.aggregateThresholds(), /정수/);
+  // 올바른 값이 한 번 적용되면, 칸에 잘못된 값을 넣어도 적용하지 않고(그 값으로 계산·저장하지 않고) 적용된 값을 쓴다.
+  values["#divisionPercent"] = "110";
+  assert.deepEqual({ ...context.aggregateThresholds() }, { openingPercent: 90, divisionPercent: 110 });
+  values["#openingPercent"] = "0";
+  assert.deepEqual({ ...context.aggregateThresholds() }, { openingPercent: 90, divisionPercent: 110 });
+  assert.equal(context.aggregateThresholdStoredValue("#openingPercent"), "90", "잘못된 값은 저장하지 않는다");
+  values["#openingPercent"] = "85";
+  assert.equal(context.aggregateThresholds().openingPercent, 85);
+  assert.equal(context.aggregateThresholdStoredValue("#openingPercent"), "85");
 });
 
 test("a slower earlier curriculum upload cannot replace the newer uploaded plan", async () => {
@@ -260,6 +273,8 @@ test("a slower earlier curriculum upload cannot replace the newer uploaded plan"
     storeCurriculumArchive: async () => "archive",
     recordCurriculumUndo() {},
   });
+  vm.runInContext("var curriculumUploadReturn = null;", f.context);
+  vm.runInContext(source("restoreCurriculumUploadCard"), f.context);
   vm.runInContext(source("handleCurriculumPlanWorkbook"), f.context);
   f.context.handleCurriculumPlanWorkbook({ name: "이전.xlsx" });
   f.context.handleCurriculumPlanWorkbook({ name: "최신.xlsx" });
@@ -270,7 +285,7 @@ test("a slower earlier curriculum upload cannot replace the newer uploaded plan"
   assert.match(f.element("#status").textContent, /새 업로드/);
 });
 
-test("the per-class maximum defaults to 34 for older saved data and is saved with the workspace", () => {
+test("the per-class maximum defaults to 34 for older saved data and is saved with the workspace", async () => {
   const older = fixture(JSON.stringify(valid()));
   older.context.restorePersistedState();
   assert.equal(older.element("#maxClassSize").value, "34", "data saved before the setting existed uses 34");
@@ -278,6 +293,86 @@ test("the per-class maximum defaults to 34 for older saved data and is saved wit
   saved.context.restorePersistedState();
   assert.equal(saved.element("#maxClassSize").value, "30");
   assert.equal(saved.context.workspacePayload().maxClassSize, "30");
-  saved.context.downloadWorkspaceBackup();
+  await saved.context.downloadWorkspaceBackup();
   assert.equal(saved.context.downloaded.workspace.maxClassSize, "30");
+});
+
+test("backup format 2 leaves out the duplicate current-round students, is gzipped, and old indented, new gzip and format-2 json backups all restore the same", async () => {
+  const students = [{ id: "1-1-1-가상", grade: "1", classroom: "1", number: "1", name: "가상", selections: [] }];
+  const workspace = valid({ students, courses: [], fileName: "결과.xlsx", schoolName: "가나고",
+    rounds: { "1": { fileName: "결과.xlsx", students, courses: [], classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } } });
+  const saved = fixture(JSON.stringify(workspace));
+  saved.context.restorePersistedState();
+  Object.assign(saved.context, { CompressionStream, DecompressionStream, Blob, Response, TextDecoder, Uint8Array });
+  let packed = null;
+  saved.context.downloadTextFile = (data, name) => { packed = { data, name }; };
+  await saved.context.downloadWorkspaceBackup();
+  assert.match(packed.name, /^교육과정_작업자료_백업_\d{8}-\d{4}\.json\.gz$/, "백업 파일 이름에 날짜·시각");
+  const bytes = new Uint8Array(await packed.data.arrayBuffer());
+  assert.deepEqual([bytes[0], bytes[1]], [0x1f, 0x8b], "gzip magic bytes");
+  const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  const backup = JSON.parse(text);
+  assert.equal(backup.backupVersion, 2);
+  assert.deepEqual(backup.omitted, ["students"]);
+  assert.equal(Object.hasOwn(backup.workspace, "students"), false, "current-round students are not stored twice");
+  assert.equal(backup.workspace.rounds["1"].students.length, 1);
+  // CompressionStream이 없는 브라우저는 예전처럼 .json으로 내려받는다.
+  delete saved.context.CompressionStream;
+  await saved.context.downloadWorkspaceBackup();
+  assert.match(packed.name, /^교육과정_작업자료_백업_\d{8}-\d{4}\.json$/);
+  assert.equal(saved.context.workspaceBackupFileName(".json.gz", new Date(2026, 10, 10, 9, 5)), "교육과정_작업자료_백업_20261110-0905.json.gz");
+  assert.deepEqual(JSON.parse(packed.data).omitted, ["students"]);
+
+  const restored = async (file) => {
+    const f = fixture(JSON.stringify(valid({ schoolName: "원래" })));
+    Object.assign(f.context, { DecompressionStream, Blob, Response, TextDecoder, Uint8Array });
+    f.context.window.location.reload = () => { f.context.reloaded = true; };
+    assert.equal(await f.context.restoreWorkspaceBackup(file), true, f.notices.at(-1));
+    return JSON.parse(f.storage.get(key));
+  };
+  const asFile = (data) => ({ arrayBuffer: async () => (typeof data === "string" ? new TextEncoder().encode(data) : data).buffer });
+  const fromGzip = await restored(asFile(bytes));
+  const fromJson = await restored(asFile(packed.data));
+  // 예전(형식 1) 들여쓴 백업: workspace.students가 들어 있다.
+  const legacy = JSON.stringify({ type: "curriculum-workspace-backup", backupVersion: 1, workspace, groups: {} }, null, 2);
+  const fromLegacy = await restored(asFile(legacy));
+  const fromLegacyText = await restored({ text: async () => legacy }); // PC 파일 경로(text만 있음)
+  for (const result of [fromGzip, fromJson, fromLegacy, fromLegacyText]) {
+    assert.equal(result.schoolName, "가나고");
+    assert.deepEqual(result.students, students, "students are filled from the current round");
+    assert.deepEqual(result.rounds["1"].students, students);
+  }
+  // 형식 2인데 현재 차수 학생이 없으면 빈 학생으로 읽지 않고 거절한다.
+  const broken = JSON.stringify({ ...backup, workspace: { ...backup.workspace, rounds: { "1": null } } });
+  const f = fixture(JSON.stringify(valid({ schoolName: "원래" })));
+  assert.equal(await f.context.restoreWorkspaceBackup({ text: async () => broken }), false);
+  assert.match(f.notices.at(-1), /현재 차수 학생 자료를 찾지 못했습니다/);
+});
+
+test("6단계 분반 편성 결과(classSections)는 형식 2 백업·PC 파일 경로로 복원되고, 예전 백업(없음)은 빈 값으로 시작한다", async () => {
+  const students = [{ id: "1-1-1-가상", grade: "1", classroom: "1", number: "1", name: "가상", selections: [] }];
+  const classSections = { settings: { teachers: [], spreadWarn: 3 },
+    "2": { "1:1:2-1 택3": { mode: "move", classCounts: {}, sectionResult: { signature: "abc", sections: [{ id: "a-물리학-1", students: ["1-1-1"] }], explain: { feasible: true } } } } };
+  const workspace = valid({ students, courses: [], fileName: "결과.xlsx", schoolName: "가나고", classSections,
+    rounds: { "1": { fileName: "결과.xlsx", students, courses: [], classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } } });
+  const saved = fixture(JSON.stringify(workspace));
+  saved.context.restorePersistedState();
+  assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext("state.classSections", saved.context))), classSections, "새로고침(저장 자료 다시 읽기) 뒤 그대로");
+  await saved.context.downloadWorkspaceBackup();
+  const backup = saved.context.downloaded;
+  assert.deepEqual(backup.workspace.classSections, classSections, "백업(형식 2)에 들어감");
+  const restoreInto = async (text) => {
+    const f = fixture(JSON.stringify(valid({ schoolName: "원래" })));
+    f.context.window.location.reload = () => { f.context.reloaded = true; };
+    assert.equal(await f.context.restoreWorkspaceBackup({ text: async () => text }), true, f.notices.at(-1));
+    const after = fixture(f.storage.get(key));
+    after.context.restorePersistedState();
+    return JSON.parse(JSON.stringify(vm.runInContext("state.classSections", after.context)));
+  };
+  // 백업 파일·PC 파일(같은 buildWorkspaceBackup 글자, text()만 넘김) 모두 같은 경로로 복원된다.
+  assert.deepEqual(await restoreInto(saved.context.downloadedText), classSections);
+  const legacy = { ...backup, backupVersion: 1, workspace: { ...backup.workspace, students } };
+  delete legacy.omitted;
+  delete legacy.workspace.classSections;
+  assert.deepEqual(await restoreInto(JSON.stringify(legacy, null, 2)), {}, "예전 백업은 빈 분반 편성으로 시작");
 });

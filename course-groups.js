@@ -5,6 +5,7 @@ var getGroupedApplicationSubjects;
 var setApplicationTargetGrades;
 var getApplicationGroupSettings;
 var switchApplicationMenuGrade;
+var flushPendingApplicationMenuGrade;
 var switchApplicationGroupCohort;
 var openApplicationWorkspaceTab;
 var getApplicationGroupStorageIssue;
@@ -622,10 +623,31 @@ function validateApplicationGroupData(groups, seeded) {
     return JSON.parse(JSON.stringify(relevantGroups));
   };
   const gradeTabs = ["1", "2"].map((grade) => document.getElementById(`applicationGrade${grade}Tab`));
+  // 온라인 신청 작업(연동·목록 갱신 등) 중에는 학년이 바뀌면 안 되므로 탭을 aria-disabled로 두고, 그동안 누른 학년은
+  // 기억했다가 작업이 끝나면(flushPendingApplicationMenuGrade, supabase-client.js teacherAction) 바꾼다. 클릭을 조용히 버리지 않는다.
+  let pendingMenuGrade = null;
+  const gradeTabsBusy = () => gradeTabs.some((tab) => tab.getAttribute("aria-disabled") === "true");
+  flushPendingApplicationMenuGrade = () => {
+    const pending = pendingMenuGrade;
+    pendingMenuGrade = null;
+    gradeTabs.forEach((tab) => tab.classList.remove("is-pending"));
+    if (pending && !gradeTabsBusy()) switchApplicationMenuGrade(pending.grade, pending.focus);
+  };
   switchApplicationMenuGrade = (grade, focus = false) => {
     grade = String(grade);
     const index = ["1", "2"].indexOf(grade);
     if (index < 0 || gradeTabs[index].disabled) return;
+    if (gradeTabsBusy()) {
+      // 같은 학년이어도 기억한다: 저장 자료 복원(로그인 직후 토큰 교환 중 등)이 같은 학년으로 다시 그리기를 부를 수 있다.
+      const differs = grade !== String(state.applicationMenuGrade || "1");
+      pendingMenuGrade = { grade, focus };
+      gradeTabs.forEach((tab, i) => tab.classList.toggle("is-pending", differs && i === index));
+      const message = document.getElementById("cloudTeacherMessage");
+      if (message && differs) message.textContent = `처리 중… 끝나면 현 ${grade}학년 탭으로 바꿉니다.`;
+      return;
+    }
+    pendingMenuGrade = null;
+    gradeTabs.forEach((tab) => tab.classList.remove("is-pending"));
     state.applicationMenuGrade = grade;
     gradeTabs.forEach((tab, i) => {
       tab.setAttribute("aria-selected", String(i === index));

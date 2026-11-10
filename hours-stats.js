@@ -140,6 +140,9 @@ function hoursDefaultDepartment(subject, area = "") {
   if (/음악/.test(name)) return "음악";
   if (/미술/.test(name)) return "미술";
   if (/일본어|중국어|프랑스어|독일어|스페인어|러시아어|아랍어|베트남어|한문/.test(name)) return "제2외국어";
+  // 교과(군) '기술·가정/정보'는 두 교과를 묶은 이름이라 과목명으로 먼저 나눈다(기술⋅가정이 정보 행에 들어가지 않게).
+  if (/기술.?가정|가정과학|생활과학|로봇|공학|창의.?공학|지식재산/.test(name)) return "기술가정";
+  if (/정보|인공지능|데이터|소프트웨어|프로그래밍|컴퓨터/.test(name)) return "정보";
   if (/국어/.test(field)) return "국어";
   if (/수학/.test(field)) return "수학";
   if (/영어/.test(field)) return "영어";
@@ -148,8 +151,8 @@ function hoursDefaultDepartment(subject, area = "") {
   if (/과학/.test(field)) return "과학-공통";
   if (/체육/.test(field)) return "체육";
   if (/예술/.test(field)) return /미술/.test(name) ? "미술" : "음악";
-  if (/정보/.test(field)) return "정보";
   if (/기술/.test(field)) return "기술가정";
+  if (/정보/.test(field)) return "정보";
   if (/외국어|한문/.test(field)) return "제2외국어";
   if (/교양/.test(field)) return "교양";
   return "기타";
@@ -157,7 +160,25 @@ function hoursDefaultDepartment(subject, area = "") {
 
 // 현 학년(내년도 학년 − 1)의 수강신청 결과 중 시수 통계 근거로 쓸 차수를 고른다.
 // 지정 차수 → 가장 최근에 확정된 차수 → 결과가 있는 가장 최근 차수(미확정) 순서다.
-function hoursSourceResult(currentGrade, settings) {
+// 확정 전 차수는 지금 4단계 기준으로 집계한다(buildRoundSnapshot). 기준 비율 칸이 잘못되면 aggregateThresholds가 예외를 내므로
+// 5단계 전체를 멈추지 않고 그 차수만 건너뛴다. failed: 건너뛴 차수 번호를 모으는 Set(선택).
+function hoursRoundSnapshot(round, failed = null) {
+  if (isRoundLocked(round) && state.roundStatuses?.[round]?.snapshot) return state.roundStatuses[round].snapshot;
+  try {
+    return buildRoundSnapshot(round);
+  } catch (error) {
+    failed?.add(String(round));
+    return null;
+  }
+}
+
+function hoursThresholdIssue(rounds, what) {
+  const list = [...rounds].sort((a, b) => Number(a) - Number(b)).map((round) => `${round}차`).join("·");
+  return { level: "warning", action: "4", thresholdRounds: [...rounds].join(","),
+    text: `${list} 기준 설정 값이 올바르지 않아 ${what}를 읽지 못했습니다. 4단계 '기준 설정'에서 개설·분반 기준(%)을 고치세요.` };
+}
+
+function hoursSourceResult(currentGrade, settings, failed = null) {
   const rounds = applicationRoundNumbers().slice().reverse();
   const hasGrade = (round) => roundStatusData(round)?.students?.some((student) => String(student.grade) === currentGrade);
   const pinned = String(settings.sourceRounds?.[String(Number(currentGrade) + 1)] || "");
@@ -167,12 +188,30 @@ function hoursSourceResult(currentGrade, settings) {
         state.roundStatuses[item]?.snapshot?.rows?.some((row) => row.grade === currentGrade)) ||
       rounds.find(hasGrade);
   if (!round) return null;
-  const snapshot = isRoundLocked(round) && state.roundStatuses[round]?.snapshot
-    ? state.roundStatuses[round].snapshot
-    : buildRoundSnapshot(round);
+  const snapshot = hoursRoundSnapshot(round, failed?.source);
   const rows = (snapshot?.rows || []).filter((row) => row.grade === currentGrade);
   if (!rows.length) return null;
-  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows };
+  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
+}
+
+// 근거 차수보다 앞 차수에서 폐강한 과목(정규화 이름 → { round, semesters }). 2차 재신청 결과에는 1차에 폐강한 과목이
+// 아예 없으므로, 이것이 없으면 '결과에 없음(과목명 불일치?)'으로 잘못 경고한다.
+function hoursEarlierClosed(currentGrade, round, failed = null) {
+  const closed = new Map();
+  for (const earlier of applicationRoundNumbers()) {
+    if (!(Number(earlier) < Number(round))) continue;
+    const snapshot = (isRoundLocked(earlier) && state.roundStatuses?.[earlier]?.snapshot) || roundStatusData(earlier)?.students?.length
+      ? hoursRoundSnapshot(earlier, failed) : null;
+    for (const row of snapshot?.rows || []) {
+      if (row.grade !== currentGrade || row.decision !== "closed") continue;
+      const key = normalizeResultCourseName(row.name);
+      const found = closed.get(key) || { round: earlier, semesters: new Set() };
+      found.round = earlier;
+      found.semesters.add(String(row.semester || ""));
+      closed.set(key, found);
+    }
+  }
+  return closed;
 }
 
 // 내년도 G학년 한 줄 설명: 입학연도 편제표와 선택과목 근거(현 G−1학년 결과)를 함께 보여 준다.
@@ -182,7 +221,21 @@ function hoursGradeLabel(info) {
   const current = `현 ${Number(info.grade) - 1}학년`;
   return info.source
     ? `${head} · ${current} ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"})`
-    : `${head} · ${current} 결과 없음)`;
+    : info.sourceFailed ? `${head} · ${current} · 4단계 기준 설정 오류)` : `${head} · ${current} 결과 없음)`;
+}
+
+// 결과는 있는데 4단계 기준 비율이 잘못돼 읽지 못한 학년: 누르면 4단계 '기준 설정'을 연다.
+function hoursThresholdLink(info, label) {
+  return `<button class="button button-quiet is-missing" type="button" data-hours-thresholds="${info.grade}" title="4단계 '기준 설정'의 개설·분반 기준(%)을 고치면 다시 계산합니다">${escapeHtml(label)}</button>`;
+}
+
+// 내년도 G학년 카드의 '현 G−1학년 명단 n반' 안내(근거 차수 명단의 반 수). 1학년(신입생)·결과 없음이면 null.
+function hoursRosterClasses(info) {
+  if (info?.grade === "1" || !info?.source || typeof roundStatusData !== "function") return null;
+  const currentGrade = String(Number(info.grade) - 1);
+  const students = roundStatusData(info.source.round)?.students || [];
+  const count = new Set(students.filter((student) => String(student.grade) === currentGrade).map((student) => String(student.classroom))).size;
+  return count || null;
 }
 
 function hoursItemKey(item) {
@@ -242,12 +295,23 @@ function hoursRecommendTeachers(units, { total, maxHours = HOURS_DEFAULT_MAX_TEA
   const needed = free.reduce((acc, unit) => acc + unit.lo, 0);
   if (remaining < 0 || needed > remaining) {
     const minimum = free.reduce((acc, unit) => acc + (unit.h1 || unit.h2 ? 1 : 0), 0);
-    return {
-      ...result, needed: needed + lockedTeachers,
-      reason: minimum > remaining
-        ? `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, remaining)}명뿐입니다.`
-        : `한 학기 1인당 ${maxHours}시간을 넘지 않으려면 교과 교사가 최소 ${needed + lockedTeachers}명 필요합니다(지금 ${totalTeachers}명).`
-    };
+    if (minimum > remaining || !(cap < Infinity)) {
+      return { ...result, needed: needed + lockedTeachers,
+        reason: `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, remaining)}명뿐입니다.` };
+    }
+    // 정원 안에서는 1인당 최대 시간을 지킬 수 없다: 그래도 정해진 교사 수 안에서 가장 고른 배치를 보여 주고(적용 가능),
+    // 최대 시간을 넘는 교과를 표시한다. 최대 시간을 지키는 교사 수(needed) 안도 함께 계산해 둔다.
+    const relaxed = hoursRecommendTeachers(units, { total: totalTeachers, maxHours: 0 });
+    const required = needed + lockedTeachers;
+    const alternative = hoursRecommendTeachers(units, { total: required, maxHours });
+    if (!relaxed.ok) return { ...result, needed: required, reason: relaxed.reason };
+    for (const row of relaxed.rows) {
+      row.recommendedOverCap = Boolean(row.recommendedPerTeacher) && Math.max(row.recommendedPerTeacher["1"], row.recommendedPerTeacher["2"]) > cap + 1e-9;
+      row.overCap = row.current > 0 && Math.max(row.hours["1"], row.hours["2"]) / row.current > cap;
+    }
+    return { ...relaxed, cap, needed: required, capExceeded: true, alternative: alternative.ok ? alternative : null,
+      reason: `한 학기 1인당 ${maxHours}시간을 넘지 않으려면 교과 교사가 최소 ${required}명 필요합니다(지금 ${totalTeachers}명). ` +
+        `${totalTeachers}명 안에서 가장 고른 배치를 보여 드립니다(${maxHours}시간 넘는 교과 ${relaxed.rows.filter((row) => row.recommendedOverCap).length}개 표시).` };
   }
   // 편차 기준값 후보(교과·교사 수마다 나오는 편차) 중, 모든 교과가 그 안에 들면서 합이 맞는 가장 작은 값을 찾는다.
   const windowOf = (unit, limit) => {
@@ -359,7 +423,7 @@ function hoursPerTeacherRange(list) {
 // 배분 메모에 쓰는 줄인 과목명(원래 양식: 통과·과탐실·융과·기환·통사·사문탐·기후지속). 목록에 없으면 낱말 첫 글자로 줄인다.
 var HOURS_SHORT_SUBJECTS = [
   [/^통합과학/, "통과"], [/^과학탐구실험/, "과탐실"], [/^융합과학/, "융과"], [/^기후변화와환경생태/, "기환"],
-  [/^통합사회/, "통사"], [/^사회문제탐구/, "사문탐"], [/^기후변화와지속가능/, "기후지속"], [/^과학의역사/, "과역"], [/^과학과제/, "과과탐"]
+  [/^통합사회/, "통사"], [/^사회문제탐구/, "사문탐"], [/^기후변화와지속가능/, "기후지속"], [/^과학의역사/, "과역"], [/^과학과제/, "과제연구"]
 ];
 function hoursShortSubject(subject) {
   const compact = String(subject ?? "").replace(/\s+/g, "");
@@ -372,8 +436,10 @@ function hoursShortSubject(subject) {
 // 메모 '◈ 2027학년도 ⇒ 국어과, 기술가정과 각1명 감, 영어과 2명 감, 물리, 일반사회 각1명 증'.
 // rows: [{ name, previous, current }] (교과 순서). 전년도 교사 수가 하나도 없으면 빈 문자열.
 function hoursTeacherChangeLine(year, rows) {
-  const list = (rows || []).filter((row) => Number.isFinite(row.previous) || Number.isFinite(row.current));
-  if (!list.some((row) => Number.isFinite(row.previous))) return "";
+  // 올해 교사 수를 아직 넣지 않은 교과는 비교하지 않는다(빈칸을 0명으로 보면 '국어과 8명 감'처럼 잘못 적힌다).
+  // 올해 교사 수가 하나도 없으면 증감 줄을 만들지 않는다.
+  const list = (rows || []).filter((row) => Number.isFinite(row.current) && (Number.isFinite(row.previous) || Number(row.current) > 0));
+  if (!list.length || !list.some((row) => Number.isFinite(row.previous))) return "";
   const groups = [];
   for (const sign of [-1, 1]) {
     const changes = list.map((row) => ({ name: row.name, delta: Math.round(((Number(row.current) || 0) - (Number(row.previous) || 0)) * 100) / 100 }))
@@ -455,8 +521,15 @@ function computeHoursStats(year = hoursTargetYear()) {
     const currentGrade = String(Number(grade) - 1);
     const needsResults = entries.some((entry) => entry.kind === "선택" || entry.kind === "소인수");
     if (needsResults && grade !== "1") {
-      info.source = hoursSourceResult(currentGrade, settings);
-      if (!info.source) {
+      const failed = { source: new Set(), closed: new Set() };
+      info.source = hoursSourceResult(currentGrade, settings, failed);
+      info.sourceFailed = !info.source && failed.source.size > 0;
+      for (const [rounds, what] of [[failed.source, "수강신청 결과"], [failed.closed, "폐강 정보"]]) {
+        if (rounds.size && !issues.some((issue) => issue.thresholdRounds === [...rounds].join(",") && issue.text.includes(what))) issues.push(hoursThresholdIssue(rounds, what));
+      }
+      if (!info.source && failed.source.size) {
+        // 결과는 있는데 기준 설정 때문에 읽지 못한 경우: '결과가 없다'고 하지 않는다(위 확인 항목으로 알림).
+      } else if (!info.source) {
         issues.push({ level: "error", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
       } else if (info.source.confirmed && typeof roundSnapshotDrift === "function") {
         // 확정 뒤 학급 수·기준 비율이 바뀌면 선택과목은 확정 시점 값, 지정 과목은 현재 학급 수로 계산돼 서로 어긋난다.
@@ -477,7 +550,9 @@ function computeHoursStats(year = hoursTargetYear()) {
     const usedResults = new Set();
     const shared = [];
     for (const entry of entries) {
-      if (entry.kind === "공동") {
+      // 순증(우리 학교가 따로 1반을 더 여는) 소인수·공동교육과정은 시수에 넣는다. 그 외 공동교육과정은 다른 학교 운영이라 뺀다.
+      const netIncrease = (entry.kind === "공동" || entry.kind === "소인수") && /순증/.test(String(entry.note || ""));
+      if (entry.kind === "공동" && !netIncrease) {
         shared.push(`${entry.subject}(${entry.grade}-${entry.semester})`);
         continue;
       }
@@ -502,6 +577,11 @@ function computeHoursStats(year = hoursTargetYear()) {
             ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`
             : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
           : "학교 지정 · 전체 학급";
+      } else if (netIncrease && (entry.kind === "공동" || grade === "1" || !(resultIndex.get(normalizeResultCourseName(entry.subject)) || [])
+        .some((row) => !row.semester || row.semester === entry.semester))) {
+        // 신청 결과에 없는 순증 과목은 1반으로 본다(0반이면 시수가 빠짐). 반 수가 다르면 상세 표에서 직접 입력.
+        item.autoClasses = 1;
+        item.basis = `${entry.kind === "공동" ? "공동교육과정" : "소인수"} 순증 · 1반으로 계산(다르면 직접 입력)`;
       } else if (grade === "1") {
         item.autoClasses = 0;
         item.basis = "1학년 선택과목 · 개설반 직접 입력";
@@ -525,8 +605,13 @@ function computeHoursStats(year = hoursTargetYear()) {
           item.basis = `현 ${currentGrade}학년 ${info.source.round}차${info.source.confirmed ? " 확정" : " 미확정"} 결과${closed ? " · 폐강" : ""}`;
         } else {
           item.autoClasses = 0;
-          item.basis = info.source ? "신청 결과에서 찾지 못함" : "신청 결과 없음";
-          if (info.source) {
+          const earlier = info.source?.earlierClosed?.get(normalizeResultCourseName(entry.subject));
+          const closedBefore = earlier && (earlier.semesters.has(entry.semester) || earlier.semesters.has(""));
+          item.basis = closedBefore ? `현 ${currentGrade}학년 ${earlier.round}차 폐강`
+            : info.source ? "신청 결과에서 찾지 못함" : "신청 결과 없음";
+          if (closedBefore) {
+            issues.push({ level: "info", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 현 ${currentGrade}학년 ${earlier.round}차에서 폐강해 개설반 0으로 계산했습니다.` });
+          } else if (info.source) {
             issues.push({ level: entry.kind === "소인수" ? "info" : "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}${entry.kind === "소인수" ? "(소인수)" : ""}: 현 ${currentGrade}학년 ${info.source.round}차 결과에 없어 개설반 0으로 계산했습니다. 과목명이 다르면 상세 표에서 개설반을 입력하세요.` });
           }
         }
@@ -613,9 +698,15 @@ function computeHoursStats(year = hoursTargetYear()) {
     creative2: (totals["2"] + totals.creative) / totals.teachers,
     creativeYear: (totals["1"] + totals["2"] + 2 * totals.creative) / totals.teachers / 2
   } : null;
-  const missingTeachers = included.filter((department) => department.items.length && !department.common && !(department.teachers > 0));
+  // 빈칸(아직 안 넣음)과 0명(넣었는데 0)은 따로 알린다.
+  const needsTeachers = included.filter((department) => department.items.length && !department.common && !(department.teachers > 0));
+  const missingTeachers = needsTeachers.filter((department) => department.teachers === null || department.teachers === undefined);
+  const zeroTeachers = needsTeachers.filter((department) => department.teachers === 0);
   if (missingTeachers.length) {
     issues.push({ level: "warning", text: `시수가 있는데 교사 수가 비어 있는 교과: ${missingTeachers.map((department) => hoursDepartmentName(department.id)).join(", ")}`, action: "focus:hoursTeachers-" + missingTeachers[0].id });
+  }
+  if (zeroTeachers.length) {
+    issues.push({ level: "warning", text: `시수가 있는데 교사 수를 0명으로 넣은 교과(1인당 평균 계산 안 함): ${zeroTeachers.map((department) => hoursDepartmentName(department.id)).join(", ")}`, action: "focus:hoursTeachers-" + zeroTeachers[0].id });
   }
   for (const common of departments.filter((department) => department.common)) {
     const over = ["1", "2"].filter((semester) => common.unallocated[semester] < 0);
@@ -810,7 +901,8 @@ function hoursSettingsSummary(stats) {
     const plan = info.hasLayout ? ""
       : ` <button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">${info.cohortYear} 편제표 미업로드 · 1단계에서 업로드</button>`;
     const source = info.grade === "1" ? ""
-      : info.source ? ` (현${Number(info.grade) - 1} ${info.source.round}차${info.source.confirmed ? " 확정" : " 임시"})` : ` (현${Number(info.grade) - 1} 결과 없음)`;
+      : info.source ? ` (현${Number(info.grade) - 1} ${info.source.round}차${info.source.confirmed ? " 확정" : " 임시"})`
+        : info.sourceFailed ? ` ${hoursThresholdLink(info, `현${Number(info.grade) - 1} · 4단계 기준 설정 오류`)}` : ` (현${Number(info.grade) - 1} 결과 없음)`;
     return `<span class="hours-summary-item"><b>${info.grade}학년</b> ${classes}${source}${plan}</span>`;
   }).join("");
   return `<p class="hours-summary-line hours-settings-summary">
@@ -870,18 +962,24 @@ function hoursRecommendationSection(stats) {
   const range = (value) => value ? `${hoursFormat(value[0], 1)}~${hoursFormat(value[1], 1)}` : "-";
   const pair = (value) => value ? `${hoursFormat(value["1"], 1)} / ${hoursFormat(value["2"], 1)}` : "-";
   const headline = recommendation.ok
-    ? `추천대로 하면 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)}${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}`
+    ? `${recommendation.capExceeded ? `${recommendation.reason} ` : ""}추천대로 하면 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)}${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}`
     : recommendation.reason;
+  // 최대 시간을 지키려면 더 필요한 교사 수 안(예: 61명안): 어느 교과에 몇 명이 더 필요한지 한 줄로.
+  const alternative = recommendation.capExceeded && recommendation.alternative
+    ? recommendation.alternative.rows.filter((row) => row.recommended !== recommendation.rows.find((item) => item.id === row.id)?.recommended)
+      .map((row) => `${hoursDepartmentName(row.id)} ${row.recommended}명`).join(", ") : "";
   const rows = recommendation.rows.map((row) => {
     const diff = row.diff;
-    const diffText = !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 충원` : `${hoursFormat(diff, 1)} 감원`;
+    // 지금 교사 수가 빈칸이면 '+1 충원'(0→1처럼 보임)이 아니라 '빈칸→n'.
+    const diffText = row.current === null || row.current === undefined ? (row.recommended ? `빈칸→${hoursFormat(row.recommended, 1)}` : "")
+      : !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 충원` : `${hoursFormat(diff, 1)} 감원`;
     return `<tr class="${row.locked ? "is-locked" : ""}${diff ? " is-changed" : ""}">
       <th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(row.id))}</th>
       <td>${hoursFormat(row.hours["1"], 1)}</td><td>${hoursFormat(row.hours["2"], 1)}</td>
       <td><input type="checkbox" data-hours-lock="${row.id}" data-focus-key="lock-${row.id}"${row.locked ? " checked" : ""}${row.current === null ? " disabled" : ""} aria-label="${escapeHtml(hoursDepartmentName(row.id))} 교사 수 고정"></td>
       <td>${row.current === null ? "-" : hoursFormat(row.current, 1)}</td>
       <td><b>${row.recommended}</b></td>
-      <td class="${diff > 0 ? "hours-up" : diff < 0 ? "hours-down" : ""}">${diffText}${row.overCap ? `${diffText ? "<br>" : ""}<span class="hours-note">지금 한 학기 ${recommendation.maxHours}시간 초과${row.locked ? "(고정)" : ""}</span>` : ""}</td>
+      <td class="${diff > 0 ? "hours-up" : diff < 0 ? "hours-down" : ""}">${diffText}${row.overCap ? `${diffText ? "<br>" : ""}<span class="hours-note">지금 한 학기 ${recommendation.maxHours}시간 초과${row.locked ? "(고정)" : ""}</span>` : ""}${row.recommendedOverCap ? `${diffText || row.overCap ? "<br>" : ""}<span class="hours-note is-warn">추천해도 ${recommendation.maxHours}시간 초과</span>` : ""}</td>
       <td>${pair(row.currentPerTeacher)}</td>
       <td>${pair(row.recommendedPerTeacher)}</td>
     </tr>`;
@@ -898,6 +996,7 @@ function hoursRecommendationSection(stats) {
     </div>
     <p class="note">교사 수는 정원·표시과목에 따라 학교가 정하므로 <b>추천만</b> 합니다. 1인당 시수가 학교 평균(1학기 ${recommendation.average ? hoursFormat(recommendation.average["1"], 1) : "-"} · 2학기 ${recommendation.average ? hoursFormat(recommendation.average["2"], 1) : "-"}시간)에서 가장 덜 벗어나도록 두 학기를 함께 보고 나누며, 같으면 지금 교사 수와 차이가 적은 쪽을 고릅니다. 시수가 있는 교과는 최소 1명입니다. '고정'한 교과는 바꾸지 않고 나머지 교사로 나눕니다. 진로(합계 제외) 교사는 추천에서 뺍니다.</p>
     ${recommendation.notes.map((note) => `<p class="note">${escapeHtml(note)}</p>`).join("")}
+    ${alternative ? `<p class="note" id="hoursRecommendAlternative">${hoursFormat(recommendation.needed, 1)}명이면 모든 교과가 ${recommendation.maxHours}시간 안: ${escapeHtml(alternative)} (나머지는 위와 같음). 기준 교과 교사 수를 ${hoursFormat(recommendation.needed, 1)}으로 바꾸면 그 안을 적용할 수 있습니다.</p>` : ""}
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-recommend-table">
       <thead><tr><th scope="col">교과</th><th scope="col">1학기 시수</th><th scope="col">2학기 시수</th><th scope="col">고정</th><th scope="col">현재 교사 수</th><th scope="col">추천</th><th scope="col">차이</th><th scope="col">현재 1인당<br>(1학기 / 2학기)</th><th scope="col">추천 시 1인당<br>(1학기 / 2학기)</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -961,10 +1060,18 @@ function renderHoursStatsView() {
         <option value="">자동 (최근 확정 차수)</option>
         ${rounds.map((round) => `<option value="${round}"${settings.sourceRounds[info.grade] === round ? " selected" : ""}>${round}차 · ${escapeHtml(roundStatusLabel(round))}</option>`).join("")}
       </select></label>
-      <span class="hours-source-state">${info.source ? `현 ${Number(info.grade) - 1}학년 ${info.source.round}차 ${info.source.confirmed ? "확정 결과" : "미확정 결과(임시)"}` : `현 ${Number(info.grade) - 1}학년 결과 없음`}</span>`;
+      <span class="hours-source-state">${info.source ? `현 ${Number(info.grade) - 1}학년 ${info.source.round}차 ${info.source.confirmed ? "확정 결과" : "미확정 결과(임시)"}`
+        : info.sourceFailed ? hoursThresholdLink(info, `현 ${Number(info.grade) - 1}학년 · 4단계 기준 설정 오류`) : `현 ${Number(info.grade) - 1}학년 결과 없음`}</span>`;
     return `<article class="hours-grade-card${info.hasLayout ? "" : " is-missing"}">
       <h4>내년도 ${info.grade}학년</h4>
       <label class="hours-classes">학급 수 <input id="hoursClasses${info.grade}" data-hours-classes="${info.grade}" data-focus-key="classes-${info.grade}" type="number" min="0" max="99" step="1" value="${info.classes ?? ""}" placeholder="입력"></label>
+      ${(() => {
+        // 지금 반 수와 내년 학급 수가 다를 수 있다(예: 현 1학년 10반 → 내년 2학년 11학급). 계산은 위에 넣은 내년 학급 수로 한다.
+        const roster = hoursRosterClasses(info);
+        if (!roster) return "";
+        const differs = info.classes > 0 && info.classes !== roster;
+        return `<p class="hours-roster-classes${differs ? " is-diff" : ""}">현 ${Number(info.grade) - 1}학년 명단 ${roster}반${differs ? ` → 내년 ${info.grade}학년 ${info.classes}학급으로 계산` : ""}</p>`;
+      })()}
       <p class="hours-plan-file">${info.cohortYear}학년도 입학생 편제표 · ${info.hasLayout ? escapeHtml(info.fileName || "불러옴") : `<button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">미업로드 · 1단계에서 업로드</button>`}</p>
       ${sourceSelect}
     </article>`;
@@ -1038,11 +1145,24 @@ function renderHoursStatsView() {
   if (headTop) for (const cell of form.rows[3].cells) cell.style.top = `${headTop}px`;
 }
 
+// 증감 줄이 비어 있는 이유: 전년도 교사 수가 없는지, 올해 교사 수가 없는지 바로 말한다.
+function hoursChangeLineMissingText(stats) {
+  const departments = (stats.departments || []).filter((department) => department.id !== "기타");
+  const hasPrevious = departments.some((department) => department.previousTeachers !== null && department.previousTeachers !== undefined);
+  const hasCurrent = departments.some((department) => department.teachers !== null && department.teachers !== undefined);
+  if (!hasPrevious && !hasCurrent) return "전년도·올해 교사 수가 없어 증감 줄을 비워 둡니다.";
+  if (!hasPrevious) return "전년도 교사 수가 없어 증감 줄을 비워 둡니다(아래 표나 '전년도 설정 불러오기'로 넣으세요).";
+  if (!hasCurrent) return "올해 교사 수가 없어 증감 줄을 비워 둡니다(시수표의 교사수 칸에 넣으면 자동으로 씁니다).";
+  return "전년도와 올해 교사 수를 함께 넣은 교과가 없어 증감 줄을 비워 둡니다.";
+}
+
 // 전년도 교과별 교사 수: 메모 '○○학년도 ⇒ …과 n명 증/감'을 자동으로 쓰는 데만 쓴다. '전년도 설정 불러오기'가 채운다.
 function hoursPreviousTeachersSettings(stats) {
   const rows = stats.departments.filter((department) => department.id !== "기타" && (department.items.length || department.teachers > 0 || department.previousTeachers !== null))
     .map((department) => {
-      const delta = department.previousTeachers === null ? null : Math.round(((department.teachers || 0) - department.previousTeachers) * 100) / 100;
+      // 올해 교사 수가 빈칸이면 증감도 비운다(빈칸을 0명으로 보면 '-8'처럼 잘못 보임).
+      const delta = department.previousTeachers === null || department.teachers === null || department.teachers === undefined
+        ? null : Math.round((department.teachers - department.previousTeachers) * 100) / 100;
       return `<tr><th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(department.id))}</th>
         <td><input class="hours-small-input" data-hours-previous-teachers="${department.id}" data-focus-key="previous-teachers-${department.id}" type="number" min="0" max="200" step="0.5" value="${department.previousTeachers ?? ""}" aria-label="${escapeHtml(hoursDepartmentName(department.id))} 전년도 교사 수"></td>
         <td>${department.teachers ?? "-"}</td>
@@ -1052,7 +1172,7 @@ function hoursPreviousTeachersSettings(stats) {
   return `<section class="hours-staff-settings" aria-labelledby="hoursPreviousTeachersTitle">
     <h4 id="hoursPreviousTeachersTitle">전년도(${Number(stats.year) - 1}학년도) 교과별 교사 수</h4>
     <p class="note">시수표 아래 메모의 '◈ ${stats.year}학년도 ⇒ …과 n명 증/감' 줄을 자동으로 씁니다. 메모는 시수표에서 직접 고칠 수 있습니다.</p>
-    <p class="hours-staff-line">${escapeHtml(memo.changeLine || "전년도 교사 수가 없어 증감 줄을 비워 둡니다.")}</p>
+    <p class="hours-staff-line">${escapeHtml(memo.changeLine || hoursChangeLineMissingText(stats))}</p>
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-staff-table">
       <thead><tr><th scope="col">교과</th><th scope="col">전년도 교사 수</th><th scope="col">올해 교사 수</th><th scope="col">증감</th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : ""}
@@ -1130,13 +1250,24 @@ function updateHoursSetting(target) {
   return true;
 }
 
+// 5단계 결과 안내: 앱 알림(어느 단계에서도 보임) + 상태 줄. 전역 'status'(window.status로 흡수됨)를 쓰지 않는다.
+function hoursNotify(message, ok = true) {
+  if (typeof showAppToast === "function") showAppToast(message, ok ? "success" : "error");
+  // 5단계 화면 안 상태 줄(#hoursStatus)과 앱 공통 상태 줄(#status) 모두에 쓴다.
+  for (const id of ["hoursStatus", "status"]) {
+    const node = typeof document !== "undefined" ? document.getElementById(id) : null;
+    if (!node) continue;
+    node.style.color = ok ? "#287956" : "#a44939";
+    node.textContent = message;
+  }
+}
+
 function loadPreviousHoursSettings() {
   const year = hoursTargetYear();
   const previousYear = String(Number(year) - 1);
   const previous = state.hoursStats?.[previousYear];
   if (!hoursPlainObject(previous)) {
-    status.style.color = "#a44939";
-    status.textContent = `${previousYear}학년도 시수 통계 자료가 없습니다. 교사 수와 전년도 평균은 직접 입력하세요.`;
+    hoursNotify(`${previousYear}학년도 시수 통계 자료가 없습니다. 교사 수와 전년도 평균은 직접 입력하세요.`, false);
     return;
   }
   const settings = hoursSettings(year, true);
@@ -1166,10 +1297,9 @@ function loadPreviousHoursSettings() {
   persistState();
   renderHoursStats();
   renderWorkspaceContext();
-  status.style.color = "#287956";
-  status.textContent = Object.keys(source.lastAverages).length
+  hoursNotify(Object.keys(source.lastAverages).length
     ? `${previousYear}학년도 교사 수·담당 교과와 평균 시수(전년도 값)를 불러왔습니다.`
-    : `${previousYear}학년도 교사 수·담당 교과를 불러왔습니다. 전년도 평균은 그 해 엑셀을 내려받은 기록이 없어 직접 입력하세요.`;
+    : `${previousYear}학년도 교사 수·담당 교과를 불러왔습니다. 전년도 평균은 그 해 엑셀을 내려받은 기록이 없어 직접 입력하세요.`, true);
 }
 
 // '추천 적용'·'공통 시수 자동 배분' 직전 값을 한 단계 기억해 '되돌리기'로 돌린다.
@@ -1181,16 +1311,14 @@ function hoursFinishChange(message) {
   persistState();
   renderHoursStats();
   renderWorkspaceContext();
-  status.style.color = "#287956";
-  status.textContent = message;
+  hoursNotify(message, true);
 }
 
-function applyHoursRecommendation() {
+async function applyHoursRecommendation() {
   const stats = computeHoursStats();
   const recommendation = stats.recommendation;
   if (!recommendation?.ok) {
-    status.style.color = "#a44939";
-    status.textContent = recommendation?.reason || "교사 수 추천을 계산하지 못했습니다.";
+    hoursNotify(recommendation?.reason || "교사 수 추천을 계산하지 못했습니다.", false);
     return;
   }
   const changes = recommendation.rows.filter((row) => !row.locked && row.recommended !== row.current);
@@ -1198,8 +1326,10 @@ function applyHoursRecommendation() {
     hoursFinishChange("지금 교사 수가 추천과 같습니다.");
     return;
   }
-  const list = changes.map((row) => `${hoursDepartmentName(row.id)} ${row.current ?? 0}→${row.recommended}`).join(", ");
-  if (!window.confirm(`교과별 교사 수를 추천값으로 바꿀까요? (${list})\n교사 수는 정원·표시과목에 따라 학교가 정하는 값입니다. '되돌리기'로 이전 값으로 돌릴 수 있습니다.`)) return;
+  const list = changes.map((row) => `${hoursDepartmentName(row.id)} ${row.current ?? "빈칸"}→${row.recommended}`).join(", ");
+  const question = `교과별 교사 수를 추천값으로 바꿀까요? (${list})\n교사 수는 정원·표시과목에 따라 학교가 정하는 값입니다. '되돌리기'로 이전 값으로 돌릴 수 있습니다.`;
+  const agreed = typeof appConfirm === "function" ? await appConfirm(question, { title: "교사 수 추천 적용", ok: "추천 적용" }) : window.confirm(question);
+  if (!agreed) return;
   const settings = hoursSettings(stats.year, true);
   hoursRememberUndo(settings, "추천 적용", ["teachers"]);
   for (const row of changes) settings.teachers[row.id] = row.recommended;
@@ -1215,8 +1345,7 @@ function autoAllocateHoursCommon(group) {
     members.map((member) => ({ id: member.id, hours: member.hours, teachers: member.teachers || 0 })),
     common.items.map((item) => ({ subject: item.subject, semester: item.semester, credit: item.credit, classes: item.classes })));
   if (!result.ok) {
-    status.style.color = "#a44939";
-    status.textContent = `${group} 공통 시수 자동 배분: ${result.reason}`;
+    hoursNotify(`${group} 공통 시수 자동 배분: ${result.reason}`, false);
     return;
   }
   const settings = hoursSettings(stats.year, true);
@@ -1301,7 +1430,7 @@ function hoursColumnLetter(index) {
 function hoursFormGradeHead(info) {
   if (info.grade === "1") return `1학년 (${info.cohortYear} 입학 · 신입생)`;
   const current = `현 ${Number(info.grade) - 1}학년`;
-  return `${info.grade}학년 (${info.cohortYear} 입학 · ${current}${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : " 결과 없음"})`;
+  return `${info.grade}학년 (${info.cohortYear} 입학 · ${current}${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : info.sourceFailed ? " · 4단계 기준 설정 오류" : " 결과 없음"})`;
 }
 
 function hoursStaffName(department) {
@@ -1318,7 +1447,7 @@ function hoursFormMemo(stats) {
     `◈ ${stats.year}학년도 비교과 교사 : ${roles.join(", ") || "없음"}`,
     "",
     "◈ 창체포함평균값",
-    `   ⇒ (교과시간총합 + 창체${count(stats.totals.creative)}시간) / ${count(stats.totals.teachers)}명`
+    `   ⇒ (교과시간총합 + 창체${count(stats.totals.creative)}시간) / ${stats.totals.teachers > 0 ? `${count(stats.totals.teachers)}명` : "교과 교사 수(미입력)"}`
   ].join("\n");
   const changeRows = stats.departments.filter((department) => department.id !== "기타")
     .map((department) => ({ name: hoursStaffName(department), previous: department.previousTeachers ?? NaN, current: department.teachers ?? NaN }));
@@ -1456,11 +1585,11 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
           const firstMember = placed.find((item) => !item.department.common)?.department === department && semester === "1";
           put(blockStart, 23, { v: note, k: "memo", split: true, input: { type: "text", value: note,
             attrs: { "data-hours-allocation-note": `${department.id}|${semester}`, "data-focus-key": `alloc-note-${department.id}-${semester}`,
-              "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 메모`, placeholder: "통과10 · 과탐실3" } } });
+              "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 메모`, placeholder: "예: 통과10 · 과탐실3" } } });
           merge(blockStart, 23, blockEnd, 26);
           put(blockStart, 27, { v: number(hoursNumber(allocation)), k: "ab", input: { type: "number", value: allocation ?? "",
             attrs: { ...(firstMember ? { id: `hoursAllocation-${department.group}` } : {}), "data-hours-allocation": `${department.id}|${semester}`,
-              "data-focus-key": `alloc-${department.id}-${semester}`, min: 0, max: 999, step: 1, placeholder: "0",
+              "data-focus-key": `alloc-${department.id}-${semester}`, min: 0, max: 999, step: 1, placeholder: "",
               "aria-label": `${hoursDepartmentName(department.id)} ${semester}학기 공통 과목 배분 시수` } } });
           merge(blockStart, 27, blockEnd, 27);
         }
@@ -1635,7 +1764,7 @@ function hoursFormHtml(model) {
       let content;
       if (cell?.memo) {
         content = `<div class="hf-memo-fixed">${escapeHtml(cell.memo.fixed)}</div>
-          <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 (전년도 교사 수를 시수 설정에 넣으면 자동으로 적습니다)">${escapeHtml(cell.memo.changes)}</textarea>
+          <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="예시) ◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 — 전년도·올해 교사 수를 넣으면 자동으로 적습니다">${escapeHtml(cell.memo.changes)}</textarea>
           ${cell.memo.edited ? '<button class="button button-quiet hf-memo-reset" type="button" data-hours-action="reset-memo">자동 문구로</button>' : ""}`;
       } else if (cell?.input) content = input(cell.input);
       else content = escapeHtml(hoursFormDisplay(cell));
@@ -1847,8 +1976,7 @@ function downloadHoursStats() {
   try {
     stats = computeHoursStats();
   } catch (error) {
-    status.style.color = "#a44939";
-    status.textContent = error.message;
+    hoursNotify(error.message, false);
     return;
   }
   if (!stats.items.length) return;
@@ -1866,8 +1994,7 @@ function downloadHoursStats() {
   persistState();
   const sheets = buildHoursWorkbookSheets(stats);
   downloadBlob(createWorkbookBlob(sheets, { stylesXml: sheets.stylesXml }), `${stats.year}학년도_교과별_시수통계.xlsx`);
-  status.style.color = "#287956";
-  status.textContent = `${stats.year}학년도 교과별 시수 통계를 내려받았습니다. 교과별 평균은 다음 해 '전년도 평균'으로 불러올 수 있습니다.`;
+  hoursNotify(`${stats.year}학년도 교과별 시수 통계를 내려받았습니다. 교과별 평균은 다음 해 '전년도 평균'으로 불러올 수 있습니다.`, true);
 }
 
 function initHoursStats() {
@@ -1888,6 +2015,13 @@ function initHoursStats() {
     else renderWorkspaceContext();
   };
   const openCohort = (event) => {
+    const thresholds = event.target.closest("[data-hours-thresholds]");
+    if (thresholds) {
+      thresholds.closest("dialog")?.close?.();
+      switchWorkflowStep("4");
+      document.getElementById("openAggregateSettings")?.click();
+      return;
+    }
     const cohort = event.target.closest("[data-hours-cohort]");
     if (!cohort) return;
     cohort.closest("dialog")?.close?.();

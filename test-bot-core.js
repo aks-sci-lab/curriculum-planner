@@ -510,6 +510,25 @@ var TestBotCore = (() => {
     return sorted;
   }
 
+  // 대상 학생 범위 한 줄: '대상: 1~10반 · 240명'. 반 번호는 이어진 것을 '1~10'으로 줄인다. all이면 limited=false.
+  function scopeSummary(opts = {}, students = null) {
+    const scope = opts.scope === "first" || opts.scope === "class" ? opts.scope : "all";
+    const picked = Array.isArray(students) ? selectStudents(students, opts) : null;
+    const count = picked ? ` · ${picked.length}명${scope === "all" ? "" : `(전체 ${students.length}명 중)`}` : "";
+    if (scope === "first") return { limited: true, text: `대상: 처음 ${Math.max(0, Math.floor(Number(opts.count) || 0))}명${count}` };
+    if (scope === "class") {
+      const numbers = [...new Set(String(opts.classes || "").split(/[,\s·]+/).filter(Boolean).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+      const ranges = [];
+      for (const value of numbers) {
+        const last = ranges.at(-1);
+        if (last && value === last[1] + 1) last[1] = value; else ranges.push([value, value]);
+      }
+      const label = ranges.map(([a, b]) => (a === b ? `${a}` : `${a}~${b}`)).join(", ");
+      return { limited: true, text: label ? `대상: ${label}반${count}` : `대상: 반 지정 없음${count}` };
+    }
+    return { limited: false, text: `대상: 전체${count}` };
+  }
+
   const WEAK_CODES = new Set(["012345", "123456", "234567", "345678", "456789", "567890", "987654", "876543", "765432",
     "654321", "543210", "098765", "121212", "123123", "112233", "000123"]);
   function isWeakCode(code) {
@@ -659,7 +678,14 @@ var TestBotCore = (() => {
         if (result.error) return fail("로그인 실패", `코드 변경 후 접속 실패: ${result.error}`);
       }
       const data = result.data || {};
-      if (!data.open) return fail("접수 마감", data.reselectionAllowed === false ? "재선택 대상이 아님" : "수강신청이 마감되었거나 열려 있지 않습니다.");
+      // 2차 이후 '폐강 신청 학생만' 재신청에서 대상이 아닌 학생은 서버가 접수를 닫아 둔다. 정상 동작이라 실패가 아니라 '대상 아님'으로 따로 센다.
+      if (!data.open && data.reselectionAllowed === false) {
+        record.status = SKIPPED_STATUS;
+        record.skipped = true;
+        record.notes.push("재선택 대상이 아님(건너뜀)");
+        return record;
+      }
+      if (!data.open) return fail("접수 마감", "수강신청이 마감되었거나 열려 있지 않습니다.");
       const groups = (data.groups || []).map((group) => ({ ...group, count: Number(group.count) }));
       const locked = Array.isArray(data.lockedSelections) ? data.lockedSelections : [];
       if (ctx.weights && !ctx.weights.size) {
@@ -727,6 +753,8 @@ var TestBotCore = (() => {
     }
   }
 
+  const SKIPPED_STATUS = "대상 아님";
+
   // 학생별 실행 계획(오류 주입 대상) 정하기.
   function planStudents(students, { wrongCodePercent = 0, wrongCodeTimes = 0, violationPercent = 0, resubmitPercent = 0, rng = Math.random } = {}) {
     const wrong = Number(wrongCodeTimes) > 0 ? pickIndexes(students.length, wrongCodePercent, rng) : new Set();
@@ -762,16 +790,19 @@ var TestBotCore = (() => {
     const expected = (record) => record.status === "잠김 확인";
     // 중지 단추로 끊긴 학생은 실패가 아니라 '중지됨'으로 따로 센다.
     const interrupted = (record) => record.status === "중지됨";
+    // 재선택 대상이 아닌 학생(서버가 접수를 닫아 둠)은 '대상 아님'으로 따로 센다.
+    const skipped = (record) => record.status === SKIPPED_STATUS;
     for (const record of done) {
-      if (record.ok || expected(record) || interrupted(record)) continue;
+      if (record.ok || expected(record) || interrupted(record) || skipped(record)) continue;
       const key = `${record.status}: ${String(record.failure || "").replace(/\d+분/g, "N분").slice(0, 80)}`;
       reasons.set(key, (reasons.get(key) || 0) + 1);
     }
     return {
       total: done.length,
       ok: done.filter((record) => record.ok).length,
-      failed: done.filter((record) => !record.ok && !expected(record) && !interrupted(record)).length,
+      failed: done.filter((record) => !record.ok && !expected(record) && !interrupted(record) && !skipped(record)).length,
       interrupted: done.filter(interrupted).length,
+      skipped: done.filter(skipped).length,
       codeChanged: done.filter((record) => record.newCode).length,
       requests: times.length,
       averageMs: times.length ? Math.round(times.reduce((sum, ms) => sum + ms, 0) / times.length) : 0,
@@ -800,7 +831,7 @@ var TestBotCore = (() => {
       ["수강신청 id", meta.eventId || ""],
       ["서버 방식", meta.mode === "hardened" ? "반·번호+코드(새 방식)" : "코드만(예전 방식)"],
       ["실행 시각", meta.startedAt || ""],
-      ["대상 학생", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["코드 변경", summary.codeChanged],
+      ["대상 학생", summary.total], ["성공", summary.ok], ["실패", summary.failed], ["대상 아님(건너뜀)", summary.skipped], ["코드 변경", summary.codeChanged],
       ["요청 수", summary.requests], ["평균 응답(ms)", summary.averageMs], ["최대 응답(ms)", summary.maxMs],
       ["규칙 위반 거절", summary.violationsRefused], ["규칙 위반 저장됨", summary.violationsAccepted], ["잠김 확인", summary.locked],
       ["위계 경고 과목 저장됨", summary.prerequisiteSaved], ["위계 경고 과목 거절(비정상)", summary.prerequisiteRefused],
@@ -861,7 +892,8 @@ var TestBotCore = (() => {
     }
   }
 
-  function compareTeacherApplications({ entries = [], expected = new Map(), uncertain = new Set(), targetKeys = new Set() } = {}) {
+  // keptKeys: 이번 회차에 재선택 대상이 아니어서(서버가 접수를 닫음) 기존 결과를 그대로 둔 학생. '예상 밖 신청'이 아니라 '유지(대상 아님)'로 센다.
+  function compareTeacherApplications({ entries = [], expected = new Map(), uncertain = new Set(), targetKeys = new Set(), keptKeys = new Set() } = {}) {
     const byKey = new Map(entries.map((entry) => [seatKey(entry), entry]));
     const checked = [...expected].filter(([key]) => !uncertain.has(key));
     const mismatched = [];
@@ -870,7 +902,11 @@ var TestBotCore = (() => {
       const stored = Array.isArray(entry?.selections) ? entry.selections : [];
       if (!entry || !entry.submittedAt || !sameSet(stored, item.selections)) mismatched.push(item.label || key);
     }
-    const submitted = entries.filter((entry) => targetKeys.has(seatKey(entry)) && entry.submittedAt && !uncertain.has(seatKey(entry)));
+    const inScope = entries.filter((entry) => targetKeys.has(seatKey(entry)) && entry.submittedAt && !uncertain.has(seatKey(entry)));
+    // 봇이 고르지 않은 '유지' 학생은 대조에서 뺀다(그 학생의 기존 결과는 봇이 기대값을 모른다).
+    const kept = inScope.filter((entry) => keptKeys.has(seatKey(entry)) && !expected.has(seatKey(entry)));
+    const keptSet = new Set(kept.map(seatKey));
+    const submitted = inScope.filter((entry) => !keptSet.has(seatKey(entry)));
     const extra = submitted.filter((entry) => !expected.has(seatKey(entry))).map(seatLabel);
     const count = (lists) => {
       const map = new Map();
@@ -882,7 +918,7 @@ var TestBotCore = (() => {
     const courseDiff = [...new Set([...botCounts.keys(), ...teacherCounts.keys()])]
       .filter((name) => (botCounts.get(name) || 0) !== (teacherCounts.get(name) || 0));
     const others = entries.filter((entry) => !targetKeys.has(seatKey(entry)) && entry.submittedAt).length;
-    return { expected: checked.length, submitted: submitted.length, mismatched, extra, courseDiff, others,
+    return { expected: checked.length, submitted: submitted.length, kept: kept.length, mismatched, extra, courseDiff, others,
       uncertain: [...uncertain].filter((key) => targetKeys.has(key)).length, problems: mismatched.length + extra.length + courseDiff.length };
   }
 
@@ -1122,10 +1158,13 @@ var TestBotCore = (() => {
           }
           const summary = summarize(round.records);
           step.expected = `${targets.length}명 모두 저장·다시 불러오기 일치${opts.violationPercent ? ", 규칙 위반은 서버가 거절" : ""}`;
-          step.actual = `성공 ${summary.ok}명, 실패 ${summary.failed}명${summary.locked ? `, 잠김 확인 ${summary.locked}명` : ""}, 코드 변경 ${summary.codeChanged}명, 평균 응답 ${summary.averageMs}ms` +
+          step.actual = `성공 ${summary.ok}명, 실패 ${summary.failed}명${summary.locked ? `, 잠김 확인 ${summary.locked}명` : ""}${summary.skipped ? `, 대상 아님 ${summary.skipped}명` : ""}, 코드 변경 ${summary.codeChanged}명, 평균 응답 ${summary.averageMs}ms` +
             (summary.violationsRefused + summary.violationsAccepted ? `, 위반 거절 ${summary.violationsRefused}/${summary.violationsRefused + summary.violationsAccepted}` : "") +
             (isStopped() ? ` · 중지됨(${round.records.length}/${targets.length}명 처리)` : "");
-          if (isStopped() || summary.ok + summary.locked !== targets.length || summary.failed || summary.violationsAccepted) step.status = "fail";
+          const unprocessed = targets.length - (summary.ok + summary.locked + summary.skipped + summary.failed);
+          if (unprocessed > 0 && !isStopped()) step.actual += ` · 결과가 없는 학생 ${unprocessed}명(응답 없음·건너뜀)`;
+          if (summary.violationsAccepted) step.actual += ` · 서버가 받아들인 규칙 위반 ${summary.violationsAccepted}명`;
+          if (isStopped() || summary.ok + summary.locked + summary.skipped !== targets.length || summary.failed || summary.violationsAccepted) step.status = "fail";
         });
         if (isStopped()) throw stopError();
 
@@ -1137,10 +1176,15 @@ var TestBotCore = (() => {
           }
           await keepTeacher();
           const data = await teacherCall("applications");
-          const result = compareTeacherApplications({ entries: data?.entries || [], expected, uncertain, targetKeys: scopeKeys });
+          // '폐강 신청 학생만' 재신청: 재선택 대상이 아닌 학생(건너뜀)과 이번 회차 대상이 아닌 학생의 기존 결과는 '유지'.
+          const targetKeySet = new Set(round.targets.map(seatKey));
+          const keptKeys = new Set([...round.records.filter((record) => record?.skipped).map(seatKey),
+            ...[...scopeKeys].filter((key) => !targetKeySet.has(key))]);
+          const result = compareTeacherApplications({ entries: data?.entries || [], expected, uncertain, targetKeys: scopeKeys, keptKeys });
           round.teacher = result;
           step.expected = `신청 완료 ${result.expected}명, 학생별 선택·과목별 인원 모두 일치${plan.round > 1 && !plan.freshEvent ? "(이전 회차 저장분 포함)" : ""}`;
           step.actual = `교사 화면 신청 완료 ${result.submitted}명, 학생 불일치 ${result.mismatched.length}명, 과목 인원 불일치 ${result.courseDiff.length}과목` +
+            (result.kept ? `, 유지(대상 아님) ${result.kept}명` : "") +
             (result.extra.length ? `, 예상 밖 신청 ${result.extra.length}명` : "") +
             (result.mismatched.length ? ` (${result.mismatched.slice(0, 5).join(", ")})` : "") +
             (result.courseDiff.length ? ` (${result.courseDiff.slice(0, 5).join(", ")})` : "") +
@@ -1205,11 +1249,15 @@ var TestBotCore = (() => {
   function roundRow(round) {
     const summary = summarize(round.records);
     const checks = [round.teacher, round.locks].filter(Boolean);
-    const failedSteps = round.steps.filter((step) => step.status === "fail").length;
+    const failed = round.steps.filter((step) => step.status === "fail");
+    const failedSteps = failed.length;
+    // '실패 단계 n개'만 보이고 사유 칸이 비던 문제: 어느 단계가 왜 실패했는지(실제값)를 함께 적는다.
+    const failures = failed.map((step) => `${step.name}: ${String(step.actual || "").trim() || "실패 사유가 기록되지 않았습니다(체크리스트의 기대값 확인)"}`);
     return {
       round: round.round, eventId: round.eventId, stopped: round.status === "stopped",
-      status: round.status === "stopped" ? `중지됨(끝나지 않음 · 처리 ${summary.ok + summary.locked + summary.failed}/${round.targets.length}명)` : failedSteps ? `실패 단계 ${failedSteps}개` : round.status === "done" ? "통과" : "진행 중",
-      targets: round.targets.length, total: summary.total, ok: summary.ok, failed: summary.failed, locked: summary.locked,
+      status: round.status === "stopped" ? `중지됨(끝나지 않음 · 처리 ${summary.ok + summary.locked + summary.skipped + summary.failed}/${round.targets.length}명)` : failedSteps ? `실패 단계 ${failedSteps}개 — ${failures.join(" / ")}` : round.status === "done" ? "통과" : "진행 중",
+      failures,
+      targets: round.targets.length, total: summary.total, ok: summary.ok, failed: summary.failed, locked: summary.locked, skipped: summary.skipped,
       violationsRefused: summary.violationsRefused, mismatches: checks.length ? checks.reduce((sum, item) => sum + item.problems, 0) : null,
       requests: summary.requests, averageMs: summary.averageMs, maxMs: summary.maxMs, failedSteps,
     };
@@ -1253,7 +1301,7 @@ var TestBotCore = (() => {
     const sum = (key) => finished.reduce((total, row) => total + (row[key] || 0), 0);
     const checked = finished.filter((row) => row.mismatches !== null);
     const totals = {
-      rounds: finished.length, targets: sum("targets"), total: sum("total"), ok: sum("ok"), failed: sum("failed"), locked: sum("locked"),
+      rounds: finished.length, targets: sum("targets"), total: sum("total"), ok: sum("ok"), failed: sum("failed"), locked: sum("locked"), skipped: sum("skipped"),
       violationsRefused: sum("violationsRefused"), mismatches: checked.length ? checked.reduce((total, row) => total + row.mismatches, 0) : null,
       requests: all.requests, averageMs: all.averageMs, maxMs: all.maxMs, failedSteps: sum("failedSteps"),
     };
@@ -1264,8 +1312,8 @@ var TestBotCore = (() => {
   function repeatReportSheets(report) {
     const labels = { pending: "대기", running: "진행 중", pass: "통과", fail: "실패", skip: "건너뜀" };
     const { rows, totals, trends } = repeatSummary(report);
-    const header = ["회차", "수강신청 id", "결과", "대상", "처리", "성공", "실패", "잠김 확인", "위반 거절", "대조 불일치", "요청 수", "평균 응답(ms)", "최대 응답(ms)"];
-    const line = (row, label, eventId, status) => [label, eventId, status, row.targets, row.total, row.ok, row.failed, row.locked, row.violationsRefused,
+    const header = ["회차", "수강신청 id", "결과", "대상", "처리", "성공", "실패", "잠김 확인", "대상 아님", "위반 거절", "대조 불일치", "요청 수", "평균 응답(ms)", "최대 응답(ms)"];
+    const line = (row, label, eventId, status) => [label, eventId, status, row.targets, row.total, row.ok, row.failed, row.locked, row.skipped || 0, row.violationsRefused,
       row.mismatches === null ? "대조 안 함" : row.mismatches, row.requests, row.averageMs, row.maxMs];
     const roundSheet = [header,
       ...rows.map((row) => line(row, `${row.round}회차`, row.eventId, row.status)),
@@ -1290,7 +1338,7 @@ var TestBotCore = (() => {
     prerequisiteViolations, choosePrerequisiteSafe, choosePrerequisiteViolation,
     generateRoster, parseRosterSheets, readWorkspaceSettings, buildResultEntries, buildWideRows, buildFormRows,
     resultFileName, courseCounts, createXlsxBytes, UNKNOWN_COURSE,
-    parseEventInput, parseCodeSheets, selectStudents, isWeakCode, makeNewCode, createRpcClient, detectServerMode,
+    parseEventInput, parseCodeSheets, selectStudents, scopeSummary, isWeakCode, makeNewCode, createRpcClient, detectServerMode,
     runVirtualStudent, planStudents, runPool, summarize, resultSheets,
     REPEAT_MAX, normalizeRepeat, repeatPlan, carryCodes, roundTargets, updateExpected, compareTeacherApplications, compareLocks,
     runRepeatedTest, roundRow, compareRounds, repeatSummary, repeatReportSheets,

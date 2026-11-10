@@ -536,27 +536,38 @@ var updateRetakeReadiness;
   async function teacherAction(action) {
     if (teacherBusy) return;
     teacherBusy = true;
-    const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button"),
-      byId("applicationGrade1Tab"), byId("applicationGrade2Tab"), byId("schoolYear")];
+    const buttons = [...byId("supabaseTeacherPanel").querySelectorAll("button"), byId("schoolYear")];
     const previous = buttons.map((button) => button.disabled);
     buttons.forEach((button) => { button.disabled = true; });
+    // 학년 탭은 disabled로 막지 않는다(누른 것이 조용히 무시됨): aria-disabled로 표시하고, 그동안 누른 학년은 끝난 뒤 바꾼다(course-groups.js).
+    const gradeTabs = [byId("applicationGrade1Tab"), byId("applicationGrade2Tab")];
+    gradeTabs.forEach((tab) => tab.setAttribute("aria-disabled", "true"));
     byId("cloudRosterInput").disabled = true;
     byId("cloudTeacherMessage").textContent = "처리 중…";
-    byId("teacherLoginMessage").textContent = "로그인 처리 중…";
+    // 머리 줄 문구: 로그인 전(로그인·토큰 교환 중)에만 '로그인 처리 중…'을 보이고, 끝나면 원래 문구로 되돌린다.
+    const loginMessage = byId("teacherLoginMessage");
+    const loginBefore = loginMessage.textContent;
+    const loginBusyText = "로그인 처리 중…";
+    if (!session) loginMessage.textContent = loginBusyText;
+    let failed = false;
     try {
       await action();
     } catch (error) {
+      failed = true;
       byId("cloudTeacherMessage").textContent = error.message;
-      byId("teacherLoginMessage").textContent = error.message;
+      loginMessage.textContent = error.message;
     } finally {
+      if (!failed && loginMessage.textContent === loginBusyText) loginMessage.textContent = session ? "" : (loginBefore === loginBusyText ? "" : loginBefore);
       teacherBusy = false;
       buttons.forEach((button, index) => { button.disabled = previous[index]; });
+      gradeTabs.forEach((tab) => tab.removeAttribute("aria-disabled"));
       byId("cloudRosterInput").disabled = false;
       byId("cloudDownloadCodes").disabled = !latestCodes;
       byId("cloudSendTestBot").disabled = !latestCodes;
       byId("cloudPrintCodes").disabled = false;
       byId("cloudCreateEvent").disabled = !pendingRoster || !session;
       updateRetakeReadiness();
+      if (typeof flushPendingApplicationMenuGrade === "function") flushPendingApplicationMenuGrade();
     }
   }
 
@@ -577,6 +588,12 @@ var updateRetakeReadiness;
     eventsLoaded = true;
     renderGradeEvents();
     await syncLinkedResults();
+  }
+
+  // '신청 마감' 확인 문구(마감하면 학생이 신청·수정할 수 없음, 다시 열기로 되돌림).
+  function closeEventQuestion(event) {
+    const mixed = event?.subjects?.["2"]?.length && event?.subjects?.["3"]?.length;
+    return `${event?.round ?? ""}차 수강신청을 마감할까요?${mixed ? " (1·2학년 통합 신청이라 두 학년 모두 마감됩니다)" : ""}\n\n마감하면 학생이 더 이상 신청·수정할 수 없습니다. 필요하면 '다시 열기'로 되돌릴 수 있습니다.`;
   }
 
   function renderGradeEvents() {
@@ -634,6 +651,10 @@ var updateRetakeReadiness;
         byId("cloudTeacherMessage").textContent = "이력의 복원 버튼은 해당 기록 시각 직전 상태로 되돌립니다.";
       }), "button button-quiet"));
       section.appendChild(button(event.is_open ? "신청 마감" : "다시 열기", () => teacherAction(async () => {
+        // 마감은 학생 화면을 바로 닫으므로 한 번 묻는다(다시 열기로 되돌릴 수 있음).
+        if (event.is_open && !(await (typeof window.appConfirm === "function"
+          ? window.appConfirm(closeEventQuestion(event), { title: "신청 마감", ok: "신청 마감" })
+          : Promise.resolve(window.confirm(closeEventQuestion(event)))))) return;
         const result = await rpc("manage_course_event", { p_event: event.id, p_action: event.is_open ? "close" : "open" }, true);
         await refreshEvents();
         await syncLinkedResults();
@@ -1106,6 +1127,8 @@ var updateRetakeReadiness;
         provider: "google", redirect_to: redirect.href, code_challenge: challenge,
         code_challenge_method: "s256", prompt: "select_account",
       }).toString();
+      // 이동 전에 작업 자료 저장을 끝내 두어 '사이트에서 나가시겠습니까?'가 뜨지 않게 한다(app.js).
+      if (typeof prepareWorkspaceNavigation === "function") await prepareWorkspaceNavigation();
       window.location.assign(authorize.href);
     });
   });
@@ -1181,8 +1204,8 @@ var updateRetakeReadiness;
       pendingRoster = roster;
       byId("cloudCreateEvent").disabled = false;
       byId("cloudRosterSummary").textContent = `${file.name} · 현재 ${currentGrade}학년 ${roster.length}명 · 신청 대상: ${grades.map((g) => `${g}학년`).join(", ")}만`;
-      byId("applicationGroupsTab").click();
-      byId("cloudTeacherMessage").textContent = "해당 학년의 그룹·선택 수를 설정한 뒤 온라인 신청 관리 탭에서 수강신청 생성을 누르세요.";
+      // 명렬을 올린 탭(온라인 신청 관리)에 그대로 둔다: 다른 탭으로 옮기면 바로 아래 '수강신청 생성' 단추가 숨는다.
+      byId("cloudTeacherMessage").textContent = "명렬을 확인했습니다. ① 과목·그룹 확인 탭에서 그룹·선택 수를 확인한 뒤 아래 '수강신청 생성'을 누르세요.";
       byId("courseGroupMessage").textContent = `명렬 기준 ${grades.map((g) => `${g}학년`).join(", ")} 그룹만 설정하세요. 설정 후 온라인 신청 관리 탭에서 신청을 생성합니다.`;
     });
   });
