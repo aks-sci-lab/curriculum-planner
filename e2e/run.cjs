@@ -479,8 +479,14 @@ async function stepPersistence({ page, h, report, dialogs }) {
     result.estimate = await page.evaluate(async () => { const e = await navigator.storage.estimate(); return { usage: e.usage, quota: e.quota, localStorage: JSON.stringify(localStorage).length }; });
     const backupDownload = page.waitForEvent("download");
     await page.locator("#downloadWorkspaceBackup").click();
-    const backupFile = await savedCopy(await (await backupDownload).path(), "workspace-backup.json");
+    const backupEvent = await backupDownload;
+    // 백업은 gzip(.json.gz)으로 내려받는다(CompressionStream 지원 브라우저). 내려받은 이름 그대로 저장해 복원에 쓴다.
+    result.backupName = backupEvent.suggestedFilename();
+    const backupFile = await savedCopy(await backupEvent.path(), /\.gz$/.test(result.backupName) ? "workspace-backup.json.gz" : "workspace-backup.json");
     result.backupBytes = fs.statSync(backupFile).size;
+    const head = fs.readFileSync(backupFile).subarray(0, 2);
+    result.backupGzip = head[0] === 0x1f && head[1] === 0x8b;
+    h.check(/\.json\.gz$/.test(result.backupName) && result.backupGzip, "중요", "저장", "백업 파일이 gzip(.json.gz)으로 내려받아지지 않음", { actual: { name: result.backupName, gzip: result.backupGzip } });
     // 전체 초기화(확인 창: 백업 권유 → 거절, 삭제 확인 → 수락, '초기화' 입력)
     page.removeAllListeners("dialog");
     page.on("dialog", async (dialog) => {

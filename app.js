@@ -887,7 +887,7 @@
       const recentBackup = Date.now() - lastWorkspaceBackup() < 10 * 60 * 1000;
       if (workspaceHasWork() && !recentBackup &&
           window.confirm("전체 초기화 전에 지금 작업 자료를 백업 파일로 내려받을까요?\n(권장: 초기화하면 되돌릴 수 없습니다)")) {
-        downloadWorkspaceBackup();
+        await downloadWorkspaceBackup();
       }
       const linkedFile = typeof workspaceFileHandle !== "undefined" && workspaceFileHandle ? `'${workspaceFileHandle.name}' ` : "";
       if (!window.confirm("모든 작업 자료를 이 브라우저에서 삭제합니다.\n\n· 편제표(입학생별·전학년)와 변경 이력, 보관된 원본 엑셀\n· 모든 차수의 신청 결과·개설/폐강 결정·확정 상태\n· 선택 그룹 설정과 학교·학년도 설정\n" +
@@ -923,7 +923,48 @@
       }
     }
 
-    const WORKSPACE_BACKUP_VERSION = 1;
+    // 백업 형식 2: workspace.students가 현재 차수 rounds[currentRound].students와 같으면 빼고 omitted에 적는다(복원할 때 채움).
+    // 예전 앱(형식 1)은 backupVersion이 더 크면 '더 새로운 버전' 오류로 거절하므로 학생을 빈 값으로 읽지 않는다.
+    const WORKSPACE_BACKUP_VERSION = 2;
+    function workspaceBackupCompact(workspace) {
+      const raw = (value) => typeof stateRawValue === "function" ? stateRawValue(value) : value;
+      const round = workspace?.rounds?.[workspace.currentRound];
+      if (!Array.isArray(raw(workspace?.students)) || !round || raw(round.students) !== raw(workspace.students)) return { workspace, omitted: [] };
+      const { students, ...rest } = workspace;
+      return { workspace: rest, omitted: ["students"] };
+    }
+
+    // 형식 2 백업에서 뺀 workspace.students를 현재 차수 학생으로 채운다. 예전 백업(필드가 있음)은 그대로 둔다.
+    function workspaceBackupExpand(backup) {
+      const workspace = backup?.workspace;
+      if (!workspace || typeof workspace !== "object" || !Array.isArray(backup.omitted) || !backup.omitted.includes("students") ||
+          Object.hasOwn(workspace, "students")) return workspace;
+      const students = workspace.rounds?.[workspace.currentRound]?.students;
+      if (!Array.isArray(students)) throw new Error("백업의 현재 차수 학생 자료를 찾지 못했습니다.");
+      return { ...workspace, students };
+    }
+
+    // 백업 파일 글자 읽기: gzip(.json.gz, 첫 두 바이트 1f 8b)이면 풀고, 아니면 예전처럼 글자 그대로(.json, 들여쓴 것 포함).
+    async function readWorkspaceBackupText(file) {
+      if (typeof file?.arrayBuffer !== "function") return file.text();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+        if (typeof DecompressionStream !== "function") throw new Error("이 브라우저는 압축 백업(.json.gz)을 열 수 없습니다. 최신 크롬·엣지에서 불러오세요.");
+        return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+      }
+      return new TextDecoder().decode(bytes);
+    }
+
+    // 내려받기용 gzip. CompressionStream이 없으면 null(예전처럼 .json으로 내려받는다).
+    async function workspaceBackupGzip(text) {
+      if (typeof CompressionStream !== "function" || typeof Response !== "function") return null;
+      try {
+        return await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+      } catch {
+        return null;
+      }
+    }
+
     function buildWorkspaceBackup() {
       syncActiveRound();
       syncActiveCurriculumCohort();
@@ -932,12 +973,14 @@
         const key = localStorage.key(index);
         if (key?.startsWith("curriculum-color-semester-groups-v3")) groups[key] = localStorage.getItem(key);
       }
+      const { workspace, omitted } = workspaceBackupCompact(workspacePayload());
       return {
         type: "curriculum-workspace-backup",
         backupVersion: WORKSPACE_BACKUP_VERSION,
         appVersion: typeof APP_VERSION === "string" ? APP_VERSION : "",
         createdAt: new Date().toISOString(),
-        workspace: workspacePayload(),
+        workspace,
+        omitted,
         protectedStoredState,
         groups,
         pendingGroupSettings: typeof getApplicationGroupBackup === "function" ? getApplicationGroupBackup() : null,
@@ -945,10 +988,13 @@
       };
     }
 
-    function downloadWorkspaceBackup() {
+    async function downloadWorkspaceBackup() {
       try {
-        // 들여쓰기 없이 쓴다(660명·2차까지 17.7MB → 약 절반). 읽는 쪽은 JSON.parse라 예전 들여쓴 백업도 그대로 읽는다.
-        downloadTextFile(JSON.stringify(buildWorkspaceBackup(), typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined), "교육과정_작업자료_백업.json", "application/json");
+        // 들여쓰기 없이 쓰고 gzip으로 묶는다(660명·2차까지 27.6MB → 12.4MB → 압축 약 0.2MB). 불러오기는 .json·.json.gz 모두 읽는다.
+        const text = JSON.stringify(buildWorkspaceBackup(), typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined);
+        const packed = await workspaceBackupGzip(text);
+        if (packed) downloadTextFile(packed, "교육과정_작업자료_백업.json.gz", "application/gzip");
+        else downloadTextFile(text, "교육과정_작업자료_백업.json", "application/json");
         markWorkspaceBackup();
         showAppToast("백업 파일을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
       } catch (error) {
@@ -965,7 +1011,7 @@
       let storeReplaced = false;
       let blockedBeforeStore = null;
       try {
-        const backup = JSON.parse(await file.text());
+        const backup = JSON.parse(await readWorkspaceBackupText(file));
         if (backup.type !== "curriculum-workspace-backup" || !backup.groups ||
             typeof backup.groups !== "object" || Array.isArray(backup.groups)) {
           throw new Error("교육과정 작업 자료 백업 JSON을 선택하세요.");
@@ -973,6 +1019,7 @@
         if (Number(backup.backupVersion) > WORKSPACE_BACKUP_VERSION) {
           throw new Error("더 새로운 버전의 프로그램에서 만든 파일입니다. 프로그램을 최신 버전으로 업데이트하세요.");
         }
+        backup.workspace = workspaceBackupExpand(backup);
         validateWorkspaceData(backup.workspace);
         const entries = [[STORAGE_KEY, JSON.stringify(backup.workspace)]];
         const groupData = { ...backup.groups };
