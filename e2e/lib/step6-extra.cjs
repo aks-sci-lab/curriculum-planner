@@ -610,4 +610,80 @@ async function specialRoomScenario({ page, h, info, semester = "1" }) {
   return out;
 }
 
-module.exports = { readRooms, checkRoomsAll, pinRoom, pinKept, editScenario, attendanceScenario, timetableScenario, specialRoomScenario, readPlacement };
+// 담임학급별 출석부(학기 전체, 두 학년): 담임반 수 = 내년 학급 수, 반 학생 수 합 = 학년 학생 수, 현황 칸 = 분반 명렬표,
+// zip 파일 수 = 반 수, 화면 담임반 목록·표 인원, 인쇄(이 반 = 현황 1장 + 그 반 분반 출석부, 학년 전체 = 반 수)
+async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextClasses }) {
+  const out = {};
+  const semester = groupKey.split(":")[1];
+  // 기대: 학기 모든 그룹 명렬표 → 학생 → 강의실 목록
+  const roomsOf = new Map();
+  let sections = 0;
+  for (const g of info.filter((x) => x.key.split(":")[1] === semester)) {
+    await S6.selectGroup(page, g.key);
+    const r = await readRooms(page);
+    if (!r.sections.length) continue;
+    sections += r.sections.length;
+    const model = S6.modelFromExports(await S6.exportGroup(page, dir, `${safeName(g.key)}-hr`), { semester });
+    for (const sec of model.sections) for (const st of sec.students) roomsOf.set(st, [...(roomsOf.get(st) || []), sec.room]);
+  }
+  await S6.selectGroup(page, groupKey);
+  const gradeCount = new Map(); for (const k of classMap.keys()) gradeCount.set(k[0], (gradeCount.get(k[0]) || 0) + 1);
+  const file = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsAttendanceHomeroomFile").click(), path.join(dir, `${safeName(groupKey)}-homeroom-file.xlsx`)));
+  const list = (file[0]?.rows || []).slice(2).filter((r) => Number(r[0]));
+  const perGrade = new Map();
+  for (const r of list) { const m = String(r[2]).match(/(내년|현) (\d)학년/); const grade = m ? (m[1] === "내년" ? String(Number(m[2]) - 1) : m[2]) : "?"; const e = perGrade.get(grade) || { rooms: 0, students: 0 }; e.rooms++; e.students += Number(r[3]) || 0; perGrade.set(grade, e); }
+  out.file = { sheets: file.length, first: file[0]?.name, homerooms: list.length, perGrade: Object.fromEntries(perGrade), gradeCount: Object.fromEntries(gradeCount) };
+  const gradeBad = [...gradeCount].filter(([g, n]) => perGrade.get(g)?.rooms !== nextClasses || perGrade.get(g)?.students !== n);
+  h.check(file[0]?.name === "목록" && file.length === list.length + 1 && !gradeBad.length, "중요", "6단계", `담임학급 전체 파일: 담임반 수(학년별 내년 ${nextClasses}학급)·반 학생 수 합(학년 학생 수)이 다름`, { actual: out.file });
+  // 현황 시트: 학생 줄 = 그 담임반 학생(내년 반), 칸의 강의실 = 명렬표
+  const bad = [];
+  for (const sheet of file.slice(1)) {
+    const head = sheet.rows.findIndex((r) => r[0] === "번호" && compact(r[1]) === "현학년-반-번호");
+    const title = String(sheet.rows[0]?.[0] || "");
+    const m = title.match(/(내년|현) (\d)학년 (\S+)반/);
+    const rows = sheet.rows.slice(head + 1).filter((r) => /^\d+-\d+-\d+$/.test(String(r[1] || "")));
+    const problems = [];
+    for (const r of rows) {
+      const key = String(r[1]);
+      const next = classMap.get(key);
+      if (m && m[1] === "내년" && next && String(next.classroom) !== m[3]) problems.push(`${key}: 내년 ${next.classroom}반인데 ${m[3]}반 시트`);
+      const cells = r.slice(3, r.length - 2).map((v) => String(v || "")).filter(Boolean);
+      const got = cells.map((c) => (c.split("\n")[0].match(/(\S+)$/) || [])[1]).sort();
+      const want = (roomsOf.get(key) || []).slice().sort();
+      if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${key}: 칸 ${got.join(",")} ≠ 명렬표 ${want.join(",")}`);
+    }
+    if (problems.length) bad.push({ sheet: sheet.name, students: rows.length, problems: problems.slice(0, 3) });
+  }
+  out.statusBad = bad.length;
+  h.check(!bad.length, "중요", "6단계", `담임학급 이동수업 현황 시트 ${bad.length}개의 학생·칸이 내년 반·분반 명렬표와 다름`, { actual: bad.slice(0, 4) });
+  // zip
+  const zipFile = await saveDownload(page, () => page.locator("#classSectionsAttendanceHomeroom").click(), path.join(dir, `${safeName(groupKey)}-homeroom.zip`));
+  const names = JSON.parse(require("node:child_process").execFileSync("python3", ["-I", "-c", "import zipfile,sys,json; print(json.dumps(zipfile.ZipFile(sys.argv[1]).namelist(), ensure_ascii=False))", zipFile], { encoding: "utf8" }));
+  out.zip = { files: names.length, sample: names.slice(0, 2) };
+  h.check(names.length === list.length, "중요", "6단계", `담임학급별 zip 파일 ${names.length}개 ≠ 담임반 ${list.length}개`, { actual: out.zip });
+  // 화면: 범위 '담임반별'
+  const view = page.locator("#classSectionsAttendanceView");
+  if (!(await view.evaluate((el) => el.open).catch(() => true))) { await view.locator("summary").click(); await sleep(300); }
+  await page.locator("#classSectionsAttendanceScope").selectOption("homeroom"); await sleep(500);
+  const options = await page.locator("#classSectionsHomeroomPick option").evaluateAll((els) => els.map((o) => ({ value: o.value, text: o.textContent })));
+  const firstOwn = options.findIndex((o) => new RegExp(`(내년 ${Number(groupKey[0]) + 1}|현 ${groupKey[0]})학년`).test(o.text));
+  if (firstOwn >= 0) { await page.locator("#classSectionsHomeroomPick").selectOption(options[firstOwn].value); await sleep(400); }
+  const screen = await page.evaluate(() => ({ rows: document.querySelectorAll("#classSectionsHomeroomTable tbody tr[data-student]").length, pick: document.querySelector("#classSectionsHomeroomPick")?.selectedOptions[0]?.textContent || "" }));
+  const pickedN = Number((screen.pick.match(/\((\d+)명/) || [])[1]);
+  const pickedSections = Number((screen.pick.match(/분반 (\d+)\)/) || [])[1]);
+  out.screen = { options: options.length, ...screen };
+  h.check(options.length === list.length && screen.rows === pickedN, "중요", "6단계", `출석부 보기 '담임반별': 담임반 ${options.length}개(파일 ${list.length}개)·표 학생 ${screen.rows}명(목록 ${pickedN}명)`, { actual: out.screen });
+  const printCount = async (button) => {
+    const before = await page.evaluate(() => window.__prints || 0);
+    await page.locator(button).click(); await sleep(800);
+    return page.evaluate((b) => ({ hr: document.querySelectorAll("#printBatch .cs-hr-page").length, att: document.querySelectorAll("#printBatch .cs-att-page").length, printed: (window.__prints || 0) - b }), before);
+  };
+  out.print = { one: await printCount("#classSectionsHomeroomPrintOne"), grade: await printCount("#classSectionsHomeroomPrintGrade") };
+  h.check(out.print.one.hr === 1 && out.print.one.att === pickedSections && out.print.grade.hr === nextClasses && out.print.one.printed && out.print.grade.printed, "중요", "6단계",
+    `담임반 인쇄: 이 반 현황 ${out.print.one.hr}장·분반 출석부 ${out.print.one.att}장(기대 1·${pickedSections}), 학년 전체 현황 ${out.print.grade.hr}장(기대 ${nextClasses})`, { actual: out.print });
+  await page.locator("#classSectionsAttendanceScope").selectOption("group"); await sleep(300);
+  out.sections = sections;
+  return out;
+}
+
+module.exports = { homeroomScenario, readRooms, checkRoomsAll, pinRoom, pinKept, editScenario, attendanceScenario, timetableScenario, specialRoomScenario, readPlacement };
