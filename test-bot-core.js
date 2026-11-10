@@ -892,7 +892,8 @@ var TestBotCore = (() => {
     }
   }
 
-  function compareTeacherApplications({ entries = [], expected = new Map(), uncertain = new Set(), targetKeys = new Set() } = {}) {
+  // keptKeys: 이번 회차에 재선택 대상이 아니어서(서버가 접수를 닫음) 기존 결과를 그대로 둔 학생. '예상 밖 신청'이 아니라 '유지(대상 아님)'로 센다.
+  function compareTeacherApplications({ entries = [], expected = new Map(), uncertain = new Set(), targetKeys = new Set(), keptKeys = new Set() } = {}) {
     const byKey = new Map(entries.map((entry) => [seatKey(entry), entry]));
     const checked = [...expected].filter(([key]) => !uncertain.has(key));
     const mismatched = [];
@@ -901,7 +902,11 @@ var TestBotCore = (() => {
       const stored = Array.isArray(entry?.selections) ? entry.selections : [];
       if (!entry || !entry.submittedAt || !sameSet(stored, item.selections)) mismatched.push(item.label || key);
     }
-    const submitted = entries.filter((entry) => targetKeys.has(seatKey(entry)) && entry.submittedAt && !uncertain.has(seatKey(entry)));
+    const inScope = entries.filter((entry) => targetKeys.has(seatKey(entry)) && entry.submittedAt && !uncertain.has(seatKey(entry)));
+    // 봇이 고르지 않은 '유지' 학생은 대조에서 뺀다(그 학생의 기존 결과는 봇이 기대값을 모른다).
+    const kept = inScope.filter((entry) => keptKeys.has(seatKey(entry)) && !expected.has(seatKey(entry)));
+    const keptSet = new Set(kept.map(seatKey));
+    const submitted = inScope.filter((entry) => !keptSet.has(seatKey(entry)));
     const extra = submitted.filter((entry) => !expected.has(seatKey(entry))).map(seatLabel);
     const count = (lists) => {
       const map = new Map();
@@ -913,7 +918,7 @@ var TestBotCore = (() => {
     const courseDiff = [...new Set([...botCounts.keys(), ...teacherCounts.keys()])]
       .filter((name) => (botCounts.get(name) || 0) !== (teacherCounts.get(name) || 0));
     const others = entries.filter((entry) => !targetKeys.has(seatKey(entry)) && entry.submittedAt).length;
-    return { expected: checked.length, submitted: submitted.length, mismatched, extra, courseDiff, others,
+    return { expected: checked.length, submitted: submitted.length, kept: kept.length, mismatched, extra, courseDiff, others,
       uncertain: [...uncertain].filter((key) => targetKeys.has(key)).length, problems: mismatched.length + extra.length + courseDiff.length };
   }
 
@@ -1171,10 +1176,15 @@ var TestBotCore = (() => {
           }
           await keepTeacher();
           const data = await teacherCall("applications");
-          const result = compareTeacherApplications({ entries: data?.entries || [], expected, uncertain, targetKeys: scopeKeys });
+          // '폐강 신청 학생만' 재신청: 재선택 대상이 아닌 학생(건너뜀)과 이번 회차 대상이 아닌 학생의 기존 결과는 '유지'.
+          const targetKeySet = new Set(round.targets.map(seatKey));
+          const keptKeys = new Set([...round.records.filter((record) => record?.skipped).map(seatKey),
+            ...[...scopeKeys].filter((key) => !targetKeySet.has(key))]);
+          const result = compareTeacherApplications({ entries: data?.entries || [], expected, uncertain, targetKeys: scopeKeys, keptKeys });
           round.teacher = result;
           step.expected = `신청 완료 ${result.expected}명, 학생별 선택·과목별 인원 모두 일치${plan.round > 1 && !plan.freshEvent ? "(이전 회차 저장분 포함)" : ""}`;
           step.actual = `교사 화면 신청 완료 ${result.submitted}명, 학생 불일치 ${result.mismatched.length}명, 과목 인원 불일치 ${result.courseDiff.length}과목` +
+            (result.kept ? `, 유지(대상 아님) ${result.kept}명` : "") +
             (result.extra.length ? `, 예상 밖 신청 ${result.extra.length}명` : "") +
             (result.mismatched.length ? ` (${result.mismatched.slice(0, 5).join(", ")})` : "") +
             (result.courseDiff.length ? ` (${result.courseDiff.slice(0, 5).join(", ")})` : "") +
