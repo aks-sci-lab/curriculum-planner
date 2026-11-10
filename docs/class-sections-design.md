@@ -193,3 +193,15 @@ node -e 'const cs=require("./class-sections.js");const combos=JSON.parse(require
 ```
 
 `combos.json` = `{ "subjects": [...], "choose": 3, "combos": { "과목A|과목B|과목C": 인원 }, "sections": { "과목A": 4 } }` (`sections`가 없으면 `ceil(신청/capacity)`). 교과별 교사 수 상한은 `departmentTeachers`·`departments`(과목 → 교과)를 함께 넘긴다.
+
+## 13. 6·7차 보완
+
+- 입력 서명(`classSectionsSignature`)은 사용자 입력만: 다른 학년 편성 결과에서 온 `occupied`·같은 학생 그룹 시간 `cohortTimes`는 넣지 않는다. 다른 학년 편성이 이 결과보다 나중에 따로 바뀌면 `#classSectionsOtherChanged` 안내(함께 계산은 같은 `batch`라 안내 없음).
+- 학생 키 정규화 `classSectionsStudentKey`/`classSectionsKeyPart`(앞 0·'반'/'번' 제거): 그룹 자료·배정표·이름·명렬표·나이스가 함께 쓴다. 배정표는 학년별로 **합치기**(파일에 있는 학생만 갱신, "갱신 n명 · 유지 m명", 명단에 없는 학생 수 경고), `배정표 지우기`.
+- 학급 단위 과목: 나이스 행·배정표 양식은 그 현 학년 학생 전체. 새 반 번호도 정규화, 과목이 정해지지 않은 반은 경고. 블록표·분반 명렬표에 '학급 단위 과목' 시트(맨 뒤, 내년 반 → 과목·반별 학생 수). 내년 반을 모르면 나이스 '확인 필요' 시트에 "n명분 행은 반 배정표를 올린 뒤 생성".
+- 과목 운영·담당 교과·특별실은 현 학년별(`settings.courseModes[현학년][과목]` 등, 예전 값은 모든 학년에 복사해 옮김). 교사 id 중복은 다시 매기고 경고.
+- 같은 현 학년·학기 그룹끼리 블록 시간이 겹치면 `cohort-clash` 오류(그룹 하나 계산은 다른 그룹의 입력 블록 시간 `cohortTimes`, 함께 계산은 `classSectionsValidateAcross`).
+- 폐강 과목 신청은 `closedRequests`(재신청 대상)로 따로 세고 편성 가능 여부·미배정에서 뺀다.
+- 교사 부족 제안: `블록 늘리기`·`학급 단위로 운영`(다시 풀어 확인되면 `제안 적용`), `블록 시간 추천 실행`, 교사 명단·5단계 교사 수 확인 안내.
+- 결과 머리글: 시안으로 계산 뒤 차수를 확정했고 입력이 같으면 '확정 결과 기준(시안 때 계산 · 입력 같음)'. 오류만 있고 미배정이 없으면 요약은 '학생은 모두 배정했지만 확인 필요 — …'.
+- 분반 카드 `li.cs-section`에 `data-room`(나이스 강의실 이름)·`data-course`·`data-size`·`data-capacity`.

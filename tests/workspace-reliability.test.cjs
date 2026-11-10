@@ -237,15 +237,25 @@ test("local file and offline work never require teacher login; student routes st
 test("aggregate thresholds reject invalid values instead of using different closure defaults", () => {
   const values = { "#openingPercent": "90", "#divisionPercent": "110" };
   const context = vm.createContext({ $: (id) => ({ value: values[id] }) });
-  vm.runInContext(source("aggregateThresholds"), context);
-  assert.equal(context.aggregateThresholds().openingPercent, 90);
+  for (const name of ["aggregateThresholds", "aggregateThresholdFieldError", "aggregateThresholdStoredValue"]) vm.runInContext(source(name), context);
+  // 저장된 값이 잘못된 경우(적용된 값 없음): 예전처럼 오류.
   for (const invalid of ["", "0", "-1", "201", "90.5", "Infinity"]) {
     values["#openingPercent"] = invalid;
     assert.throws(() => context.aggregateThresholds(), /정수/);
+    assert.match(context.aggregateThresholdFieldError("#openingPercent"), /개설 기준은 1~200 사이의 정수/);
   }
   values["#openingPercent"] = "90";
   values["#divisionPercent"] = "301";
   assert.throws(() => context.aggregateThresholds(), /정수/);
+  // 올바른 값이 한 번 적용되면, 칸에 잘못된 값을 넣어도 적용하지 않고(그 값으로 계산·저장하지 않고) 적용된 값을 쓴다.
+  values["#divisionPercent"] = "110";
+  assert.deepEqual({ ...context.aggregateThresholds() }, { openingPercent: 90, divisionPercent: 110 });
+  values["#openingPercent"] = "0";
+  assert.deepEqual({ ...context.aggregateThresholds() }, { openingPercent: 90, divisionPercent: 110 });
+  assert.equal(context.aggregateThresholdStoredValue("#openingPercent"), "90", "잘못된 값은 저장하지 않는다");
+  values["#openingPercent"] = "85";
+  assert.equal(context.aggregateThresholds().openingPercent, 85);
+  assert.equal(context.aggregateThresholdStoredValue("#openingPercent"), "85");
 });
 
 test("a slower earlier curriculum upload cannot replace the newer uploaded plan", async () => {

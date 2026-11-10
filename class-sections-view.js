@@ -31,6 +31,20 @@ function classSectionsSettings() {
   if (!classSectionsPlain(store.settings)) store.settings = {};
   const settings = store.settings;
   if (!Array.isArray(settings.teachers)) settings.teachers = [];
+  // 교사 id가 겹치면(삭제 후 다시 만들기 등) 두 사람이 한 사람으로 배정되므로 뒤의 것을 다시 매긴다.
+  const seenIds = new Set();
+  for (const teacher of settings.teachers) {
+    if (!teacher || typeof teacher !== "object") continue;
+    let id = String(teacher.id || "") || `t${seenIds.size + 1}`;
+    if (seenIds.has(id)) {
+      let serial = 2;
+      while (seenIds.has(`${id}~${serial}`)) serial += 1;
+      CLASS_SECTIONS_VIEW.teacherIdWarning = `교사 id가 겹쳐 '${id}'를 '${id}~${serial}'로 바꿨습니다(같은 사람으로 배정되지 않게).`;
+      id = `${id}~${serial}`;
+    }
+    if (teacher.id !== id) teacher.id = id;
+    seenIds.add(id);
+  }
   if (!Array.isArray(settings.fixedSlots)) settings.fixedSlots = [];
   for (const key of ["rooms", "courseModes", "courseDepartments", "courseRooms"]) if (!classSectionsPlain(settings[key])) settings[key] = {};
   if (!(Number(settings.spreadWarn) > 0)) settings.spreadWarn = 4;
@@ -40,6 +54,21 @@ function classSectionsSettings() {
   if (!classSectionsPlain(settings.reserve)) settings.reserve = {};
   if (!classSectionsPlain(settings.promotion)) settings.promotion = {};
   return settings;
+}
+
+// 과목 운영(이동/학급 단위)·담당 교과·특별실은 현 학년마다 따로 둔다(2학년 '정보' 학급 단위가 3학년 '정보'에 번지지 않게).
+// 예전 저장값(과목 이름 → 값, 모든 학년 공통)은 처음 읽을 때 1·2·3학년에 복사해 옮긴다.
+function classSectionsCourseConf(settings, kind, grade) {
+  const store = settings[kind];
+  const values = Object.values(store);
+  if (values.length && values.some((value) => !classSectionsPlain(value))) {
+    const flat = Object.fromEntries(Object.entries(store).filter(([, value]) => !classSectionsPlain(value)));
+    for (const key of Object.keys(flat)) delete store[key];
+    for (const g of ["1", "2", "3"]) store[g] = { ...(classSectionsPlain(store[g]) ? store[g] : {}), ...flat };
+  }
+  const key = String(grade);
+  if (!classSectionsPlain(store[key])) store[key] = {};
+  return store[key];
 }
 
 function classSectionsEntry(round, groupKey, create = true) {
@@ -78,7 +107,7 @@ function classSectionsEffectiveClassMap(group) {
   const map = classSectionsClassMap(group.grade);
   if (map) return { map, basis: "map" };
   if (classSectionsPromotion(group).value === "same") {
-    return { map: Object.fromEntries(group.students.map((student) => [student.key, { classroom: String(student.homeroom), number: "" }])), basis: "same" };
+    return { map: Object.fromEntries((group.gradeStudents || group.students).map((student) => [student.key, { classroom: String(student.homeroom), number: "" }])), basis: "same" };
   }
   return { map: null, basis: "none" };
 }
@@ -160,7 +189,10 @@ function classSectionsSourceCompute(round, thresholds) {
     const grade = String(summary.grade);
     const plan = classSectionsPlanSubjects(grade);
     const targetGrade = String(Number(grade) + 1);
-    const gradeStudents = data.students.filter((student) => String(student.grade) === grade);
+    const gradeRecords = data.students.filter((student) => String(student.grade) === grade);
+    // 그 현 학년 학생 전체(학급 단위 과목 나이스 행·내년 반 배정표 양식은 신청하지 않은 학생도 대상).
+    const gradeStudents = gradeRecords.map((student) => ({ key: classSectionsStudentKey(grade, student.classroom, student.number),
+      homeroom: classSectionsKeyPart(student.classroom), number: classSectionsKeyPart(student.number) }));
     for (const semester of semesters) {
       const semesterKey = semester.order === 1 || semester.order === 2 ? String(semester.order) : "";
       if (!semesterKey) continue;
@@ -181,7 +213,7 @@ function classSectionsSourceCompute(round, thresholds) {
         }
         const credits = new Map();
         const students = [];
-        for (const student of gradeStudents) {
+        for (const student of gradeRecords) {
           const picked = [];
           for (const selection of student.selections || []) {
             const key = columns.get(String(selection.column));
@@ -190,15 +222,15 @@ function classSectionsSourceCompute(round, thresholds) {
             const value = Number(selection.credits);
             if (value > 0) credits.set(key, value);
           }
-          if (picked.length) students.push({ key: `${grade}-${student.classroom}-${student.number}`, homeroom: String(student.classroom), number: String(student.number), courses: picked });
+          if (picked.length) students.push({ key: classSectionsStudentKey(grade, student.classroom, student.number), homeroom: classSectionsKeyPart(student.classroom), number: classSectionsKeyPart(student.number), courses: picked });
         }
         for (const course of courses) course.credits = credits.get(course.key) || course.planCredits || 0;
         // 학급 수 기준은 내년 학급 수(4단계 기준 설정·확정 스냅샷). 없을 때만 지금 명단의 반 수.
-        const rosterClasses = new Set(gradeStudents.map((student) => String(student.classroom))).size;
+        const rosterClasses = new Set(gradeStudents.map((student) => student.homeroom)).size;
         const nextClasses = Number(classBases?.[targetGrade]) || 0;
         const classes = nextClasses || rosterClasses || Number(summary.classes) || 0;
         groups.push({ key: `${grade}:${semesterKey}:${group.category}`, grade, targetGrade, semester: semesterKey, category: group.category,
-          choice: Number(group.choiceCount), classes, rosterClasses, nextClasses, courses, students,
+          choice: Number(group.choiceCount), classes, rosterClasses, nextClasses, courses, students, gradeStudents,
           label: `현${grade} → ${targetGrade}학년 ${semesterKey}학기 · ${group.category}` });
       }
     }
@@ -221,7 +253,7 @@ function classSectionsTimesText(times) {
 
 // 학급 단위 과목은 이동 블록에서 빠지므로, 학생이 고른 학급 단위 과목 수(가장 많은 학생 기준)만큼 블록 수를 줄여 제안한다.
 function classSectionsSuggestedBlocks(group, settings = classSectionsSettings()) {
-  const classUnit = new Set(group.courses.filter((course) => settings.courseModes[course.key] === "class").map((course) => course.key));
+  const classUnit = new Set(group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class").map((course) => course.key));
   if (!classUnit.size) return { blocks: group.choice, removed: 0 };
   const removed = group.students.reduce((max, student) => Math.max(max, student.courses.filter((key) => classUnit.has(key)).length), 0);
   return { blocks: Math.max(1, group.choice - removed), removed };
@@ -263,8 +295,8 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
     const sections = entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount;
     const capacities = String(entry.capacities[course.key] || "").split(/[,\s]+/).map(Number).filter((value) => value > 0);
     return { key: course.key, name: course.name, sections, capacity: base.capacity, capacities,
-      department: settings.courseDepartments[course.key] || course.department, room: settings.courseRooms[course.key] || "",
-      credits: course.credits, mode: settings.courseModes[course.key] === "class" ? "class" : "move" };
+      department: classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] || course.department, room: classSectionsCourseConf(settings, "courseRooms", group.grade)[course.key] || "",
+      credits: course.credits, mode: classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class" ? "class" : "move" };
   });
   const teachers = classSectionsTeacherList(settings);
   let departmentTeachers = null;
@@ -289,11 +321,21 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
       for (const id of block.sectionIds || []) {
         const section = result.sections.find((item) => item.id === id);
         if (!section) continue;
-        const department = otherSettings.courseDepartments[section.courseKey] || other.courses.find((course) => course.key === section.courseKey)?.department || "";
+        const department = classSectionsCourseConf(otherSettings, "courseDepartments", other.grade)[section.courseKey] || other.courses.find((course) => course.key === section.courseKey)?.department || "";
         if (department) departments[department] = (departments[department] || 0) + 1;
         if (section.teacherId) teacherIds.push(section.teacherId);
       }
       occupied.push({ label: `${other.label} ${block.letter}블록`, times: block.times, departments: teachers.length ? {} : departments, teacherIds });
+    }
+  }
+  // 같은 현 학년·학기의 다른 그룹(같은 학생) 블록 시간: 겹치면 검증기가 오류로 알린다.
+  const cohortTimes = [];
+  for (const other of source.groups) {
+    if (other.key === group.key || other.grade !== group.grade || other.semester !== group.semester) continue;
+    const otherEntry = classSectionsEntry(round, other.key, false);
+    for (const [letter, text] of Object.entries(otherEntry?.blockTimes || {})) {
+      const times = classSectionsParseTimes(text);
+      if (times.length) cohortTimes.push({ label: `${other.label} ${letter}블록`, times });
     }
   }
   const fixedSlots = settings.fixedSlots.map((slot) => ({ label: slot.label, times: classSectionsParseTimes(slot.times),
@@ -302,7 +344,7 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
   return {
     groupId: `${round}:${group.key}`, label: group.label, grade: group.grade, targetGrade: group.targetGrade, semester: group.semester,
     blocks, maxSectionsPerBlock: base.maxSectionsPerBlock || undefined, defaultCapacity: base.capacity,
-    courses, students: classSectionsHomeroomStudents(group), teachers, departmentTeachers, rooms, occupied, fixedSlots, spreadWarn: settings.spreadWarn,
+    courses, students: classSectionsHomeroomStudents(group), cohortTimes, teachers, departmentTeachers, rooms, occupied, fixedSlots, spreadWarn: settings.spreadWarn,
     homeroomBasis: classSectionsEffectiveClassMap(group).map ? "next" : "current", recommendExclude: classSectionsEffectiveClassMap(group).map ? [] : ["homeroom"],
     mode: entry.mode || "move", seed: Number(entry.seed) || 1,
     pins: { sections: { ...entry.pins.sections }, students: { ...entry.pins.students }, teachers: { ...entry.pins.teachers } },
@@ -418,6 +460,7 @@ async function classSectionsSolveSemesterCurrent() {
   try {
     const all = await classSectionsRunSolver({ kind: "solveAll", input: { groups: inputs, teachers: inputs[0]?.teachers || [], seed: inputs[0]?.seed || 1 } });
     let problems = 0;
+    const batch = `all-${new Date().toISOString()}`;
     all.groups.forEach((item, index) => {
       const result = item.result;
       const prefix = `${inputs[index].groupId}::`;
@@ -427,10 +470,11 @@ async function classSectionsSolveSemesterCurrent() {
       result.issues = [...(result.issues || []), ...own];
       const hard = result.issues.filter((issue) => issue.severity === "error" && issue.type !== "unassigned");
       if (hard.length && result.explain?.feasible) {
-        result.explain = { ...result.explain, feasible: false, summary: `${result.explain.summary} 오류 ${hard.length}건: ${hard.slice(0, 2).map((issue) => issue.message).join(" / ")}` };
+        result.explain = { ...result.explain, feasible: false,
+          summary: `${result.unassigned.length ? result.explain.summary : "학생은 모두 배정했지만 확인 필요 —"} 오류 ${hard.length}건: ${hard.slice(0, 2).map((issue) => issue.message).join(" / ")}` };
       }
       if (!result.explain?.feasible) problems += 1;
-      classSectionsSaveResult(classSectionsEntry(round, groups[index].key, true), result, inputs[index], groups[index], source);
+      classSectionsSaveResult(classSectionsEntry(round, groups[index].key, true), result, inputs[index], groups[index], source, batch);
     });
     const orderText = (all.orders || []).length > 1 ? ` · 순서 ${all.orders.length}가지 비교 → ‘${all.chosenOrder}’` : "";
     const shortText = (all.shortages || []).length ? ` · 교사 부족 ${all.shortages.length}곳(예: ${all.shortages[0].message})` : "";
@@ -450,7 +494,7 @@ function classSectionsBlockDemand(round, group, entry, settings) {
   const source = classSectionsSource(round);
   const base = classSectionsGroupSettings(source, group, entry);
   const letters = Array.from({ length: base.blocks }, (_, index) => "abcdefghij"[index]);
-  const departmentOf = (key) => settings.courseDepartments[key] || group.courses.find((course) => course.key === key)?.department || "";
+  const departmentOf = (key) => classSectionsCourseConf(settings, "courseDepartments", group.grade)[key] || group.courses.find((course) => course.key === key)?.department || "";
   const result = entry.sectionResult;
   const demand = Object.fromEntries(letters.map((letter) => [letter, {}]));
   if (result?.blocks?.length === letters.length) {
@@ -462,7 +506,7 @@ function classSectionsBlockDemand(round, group, entry, settings) {
   } else {
     let turn = 0;
     for (const course of group.courses) {
-      if (settings.courseModes[course.key] === "class") continue;
+      if (classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class") continue;
       const count = entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount;
       const dept = departmentOf(course.key);
       for (let k = 0; k < count; k += 1) {
@@ -545,8 +589,9 @@ function classSectionsApplyTimes() {
   classSectionsChanged();
 }
 
-function classSectionsSaveResult(entry, result, input, group, source) {
+function classSectionsSaveResult(entry, result, input, group, source, batch = "") {
   entry.sectionResult = classSectionsCompactResult(result, input, !source.locked);
+  entry.sectionResult.batch = batch || entry.sectionResult.createdAt;
   entry.inputStudents = Object.fromEntries(group.students.map((student) => [student.key, student.courses.slice()]));
 }
 
@@ -617,7 +662,7 @@ function renderClassSectionsView() {
   const courseRows = group.courses.map((course) => {
     const sections = entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount;
     const differs = sections !== course.classCount;
-    const department = settings.courseDepartments[course.key] || course.department;
+    const department = classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] || course.department;
     const deptOptions = (typeof HOURS_DEPARTMENTS !== "undefined" ? HOURS_DEPARTMENTS : []).map((item) =>
       `<option value="${esc(item.id)}"${item.id === department ? " selected" : ""}>${esc(typeof hoursDepartmentName === "function" ? hoursDepartmentName(item.id) : item.id)}</option>`).join("");
     const key = esc(course.key);
@@ -627,9 +672,9 @@ function renderClassSectionsView() {
       <td>${course.classCount}</td>
       <td><input class="cs-num" type="number" min="0" max="30" value="${sections}" data-cs-sections="${key}" data-focus-key="cs-sections-${key}" aria-label="${key} 6단계 분반 수">${differs ? `<span class="cs-diff" title="4단계 확정 ${course.classCount}개">4단계와 다름</span>` : ""}</td>
       <td><input class="cs-text" type="text" inputmode="numeric" value="${esc(entry.capacities[course.key] || "")}" placeholder="${base.capacity}" data-cs-capacities="${key}" data-focus-key="cs-cap-${key}" aria-label="${key} 분반별 정원(쉼표로 구분)"></td>
-      <td><select data-cs-mode="${key}" data-focus-key="cs-mode-${key}" aria-label="${key} 운영 방식"><option value="move">이동</option><option value="class"${settings.courseModes[course.key] === "class" ? " selected" : ""}>학급 단위</option></select></td>
+      <td><select data-cs-mode="${key}" data-focus-key="cs-mode-${key}" aria-label="${key} 운영 방식"><option value="move">이동</option><option value="class"${classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class" ? " selected" : ""}>학급 단위</option></select></td>
       <td><select data-cs-dept="${key}" data-focus-key="cs-dept-${key}" aria-label="${key} 담당 교과">${deptOptions}</select></td>
-      <td><input class="cs-text" type="text" value="${esc(settings.courseRooms[course.key] || "")}" placeholder="없음" data-cs-room="${key}" data-focus-key="cs-room-${key}" aria-label="${key} 특별실"></td>
+      <td><input class="cs-text" type="text" value="${esc(classSectionsCourseConf(settings, "courseRooms", group.grade)[course.key] || "")}" placeholder="없음" data-cs-room="${key}" data-focus-key="cs-room-${key}" aria-label="${key} 특별실"></td>
     </tr>`;
   }).join("");
   const blockRows = Array.from({ length: base.blocks }, (_, index) => {
@@ -742,6 +787,27 @@ function classSectionsCompareHtml(group, entry) {
     <p class="cs-note">${compare.baselineAt ? `앞 편성 대비 이동 = ${esc(new Date(compare.baselineAt).toLocaleString("ko-KR"))}에 저장한 편성 결과에서 분반이 바뀐 학생·과목 수.` : "앞 편성 결과가 없어 이동 수는 ‘–’로 표시합니다."}</p></section>`;
 }
 
+// 결과 머리글: 시안으로 계산한 뒤 그 차수를 확정했으면, 입력이 같을 때 '확정 결과 기준(시안 때 계산 · 입력 같음)'.
+function classSectionsResultBasis(round, group, entry, result) {
+  if (!result.draft) return "확정 결과 기준";
+  const locked = typeof isRoundLocked === "function" && isRoundLocked(round);
+  if (!locked) return "확정 전 시안";
+  const same = result.signature === classSectionsSignature(classSectionsBuildInput(round, group, entry));
+  return same ? "확정 결과 기준(시안 때 계산 · 입력 같음)" : "확정 전 시안 · 입력 변경됨";
+}
+
+// 같은 학기 다른 학년 편성이 이 결과보다 나중에 따로 바뀌었으면(블록 시간이 있을 때만 교사 겹침에 영향) 안내한다.
+function classSectionsOtherChangedHtml(round, group, result) {
+  const store = classSectionsStore()[round] || {};
+  const source = classSectionsSource(round);
+  const timed = (result.blocks || []).some((block) => block.times?.length);
+  if (!timed) return "";
+  const newer = source.groups.filter((other) => other.key !== group.key && other.semester === group.semester && other.grade !== group.grade)
+    .filter((other) => { const saved = store[other.key]?.sectionResult; return saved && saved.batch !== result.batch && String(saved.createdAt) > String(result.createdAt); });
+  if (!newer.length) return "";
+  return `<p class="cs-note is-warn" id="classSectionsOtherChanged">다른 학년 편성(${classSectionsEsc(newer.map((item) => item.label).join(", "))})이 이 결과보다 나중에 바뀌어 학년 간 교사 겹침을 다시 확인해야 합니다. ‘전 학년 함께 다시 계산’을 권합니다.</p>`;
+}
+
 function classSectionsResultHtml(round, group, entry, result, settings) {
   const esc = classSectionsEsc;
   const explain = result.explain || {};
@@ -750,20 +816,21 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   const errors = issues.filter((issue) => issue.severity === "error");
   const warnings = issues.filter((issue) => issue.severity !== "error");
   const suggestions = (explain.suggestions || []).map((item, index) => `<li>${esc(item.message)}${item.verified ? ' <span class="cs-tag">확인됨</span>' : ""}
-    ${["capacity", "sections", "block-limit"].includes(item.type) ? `<button class="button" type="button" data-cs-apply="${index}">제안 적용</button>` : ""}</li>`).join("");
+    ${["capacity", "sections", "block-limit", "more-blocks", "class-unit"].includes(item.type) ? `<button class="button" type="button" data-cs-apply="${index}">제안 적용</button>`
+      : item.type === "recommend-times" ? `<button class="button" type="button" data-cs-apply="${index}">블록 시간 추천 실행</button>` : ""}</li>`).join("");
   const causes = (explain.causes || []).map((item) => `<li>${esc(item.message)}</li>`).join("");
   const blocks = result.blocks.map((block) => {
     const cards = block.sectionIds.map((id) => {
       const section = result.sections.find((item) => item.id === id);
       if (!section) return "";
-      const department = settings.courseDepartments[section.courseKey] || group.courses.find((course) => course.key === section.courseKey)?.department || "";
+      const department = classSectionsCourseConf(settings, "courseDepartments", group.grade)[section.courseKey] || group.courses.find((course) => course.key === section.courseKey)?.department || "";
       const eligible = teachers.filter((teacher) => teacher.departments.includes(department) || teacher.courses.includes(section.courseName));
       const pinned = entry.pins.teachers[section.id] || "";
       const teacherSelect = teachers.length ? `<select data-cs-teacher="${esc(section.id)}" data-focus-key="cs-teacher-${esc(section.id)}" aria-label="${esc(section.roomName)} 담당 교사">
         <option value="">${section.teacherId ? `자동(${esc(teachers.find((teacher) => teacher.id === section.teacherId)?.name || section.teacherId)})` : "자동(없음)"}</option>
         ${(eligible.length ? eligible : teachers).map((teacher) => `<option value="${esc(teacher.id)}"${pinned === teacher.id ? " selected" : ""}>${esc(teacher.name)}</option>`).join("")}</select>` : "";
       const over = section.size > section.capacity;
-      return `<li class="cs-section${over ? " is-over" : ""}" data-section-id="${esc(section.id)}">
+      return `<li class="cs-section${over ? " is-over" : ""}" data-section-id="${esc(section.id)}" data-room="${esc(section.roomName)}" data-course="${esc(section.courseName)}" data-size="${section.size}" data-capacity="${section.capacity}">
         <strong title="${esc(section.courseName)}${section.roomNo ? ` ${section.roomNo}반` : ""}">${esc(section.courseName)}${section.roomNo ? ` ${classSectionsCircled(section.roomNo)}` : ""}</strong>
         <span class="cs-size" aria-label="인원">${section.size}/${section.capacity}명</span>
         <span class="cs-neis" title="나이스 개설강의실 이름(내보내기에 이 이름을 씀)">나이스 ${esc(section.roomName)}</span>
@@ -781,7 +848,8 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   }
   const metrics = result.metrics || {};
   return `<section class="cs-card" aria-label="편성 결과">
-    <h4>편성 결과 <span class="cs-note">${esc(CLASS_SECTIONS_MODE_LABELS?.[result.mode] || result.mode)} · ${result.draft ? "확정 전 시안" : "확정 결과 기준"} · ${esc(new Date(result.createdAt).toLocaleString("ko-KR"))}</span></h4>
+    <h4>편성 결과 <span class="cs-note">${esc(CLASS_SECTIONS_MODE_LABELS?.[result.mode] || result.mode)} · ${esc(classSectionsResultBasis(round, group, entry, result))} · ${esc(new Date(result.createdAt).toLocaleString("ko-KR"))}</span></h4>
+    ${classSectionsOtherChangedHtml(round, group, result)}
     <p class="cs-summary" id="classSectionsSummary" data-feasible="${explain.feasible ? "true" : "false"}">${esc(explain.summary || "")}</p>
     <p class="cs-note" id="classSectionsMetrics">미배정 ${metrics.unassignedStudents || 0}명 · <span title="같은 과목 분반 인원의 최대 − 최소(과목 중 가장 큰 값)">분반 인원 차이 최대 ${metrics.maxSpread || 0}명</span> · <span title="같은 담임반 학생이 같은 분반에 모인 비율(과목·반마다 가장 많이 모인 분반 기준)">같은 반끼리 ${Math.round((metrics.sameHomeroomRatio || 0) * 100)}%(같은 담임반 학생이 같은 분반에 모인 비율)</span>${metrics.moved !== null && metrics.moved !== undefined ? ` · 앞 편성 대비 이동 ${metrics.moved}` : ""}</p>
     ${causes ? `<h5>원인</h5><ul class="cs-list">${causes}</ul>` : ""}
@@ -800,13 +868,14 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
       <button class="button" id="classSectionsExportNeis" type="button">나이스 편성 엑셀</button>
       <button class="button" id="classSectionsClassMapTemplate" type="button">내년 반 배정표 양식</button>
       <label class="button">내년 반 배정표 올리기<input id="classSectionsClassMap" type="file" accept=".xlsx" hidden></label>
-      <span class="cs-note">${classSectionsClassMap(group.grade) ? `내년 반 배정표 ${Object.keys(classSectionsClassMap(group.grade)).length}명 반영` : "내년 반이 없으면 나이스 파일의 반·번호는 비우고 참고 열(현 학년-반-번호)을 붙입니다."}</span>
+      ${classSectionsClassMap(group.grade) ? `<button class="button" id="classSectionsClassMapClear" type="button">배정표 지우기</button>` : ""}
+      <span class="cs-note">${classSectionsClassMap(group.grade) ? `내년 반 배정표 ${(group.gradeStudents || group.students).filter((student) => classSectionsClassMap(group.grade)[student.key]).length}/${(group.gradeStudents || group.students).length}명 반영` : "내년 반이 없으면 나이스 파일의 반·번호는 비우고 참고 열(현 학년-반-번호)을 붙입니다."}</span>
     </div>
   </section>`;
 }
 
 function classSectionsClassUnitHtml(group, entry, settings) {
-  const courses = group.courses.filter((course) => settings.courseModes[course.key] === "class");
+  const courses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class");
   if (!courses.length) return "";
   const esc = classSectionsEsc;
   const split = classSectionsClassUnitPlan(group, entry, settings);
@@ -818,11 +887,15 @@ function classSectionsClassUnitHtml(group, entry, settings) {
   return `<section class="cs-card" aria-label="학급 단위 과목"><h4>학급 단위 과목 · 내년 반 배정 <span class="cs-note">추천 비율 ${esc(split.ratio)} · 내년 ${split.homerooms.length}학급 · ${esc(status)}</span></h4>
     <p class="cs-note" id="classSectionsClassUnitNote">학급 단위 과목은 이동 블록에서 빠집니다. 반 배분은 내년 ${group.targetGrade}학년 ${split.homerooms.length}학급 기준입니다${split.mapped ? "(학생 희망을 새 반 기준으로 반영)" : ". 내년 반이 정해지지 않아 학생별 과목은 아직 정하지 않습니다(오류 아님)"}.</p>
     <button class="button" type="button" id="classSectionsClassUnitReset">추천으로 되돌리기</button>
+    ${entry.sectionResult ? "" : `<button class="button" id="classSectionsExportBlocks" type="button">블록표 엑셀</button>
+      <button class="button" id="classSectionsExportNeis" type="button">나이스 편성 엑셀</button>
+      <button class="button" id="classSectionsClassMapTemplate" type="button">내년 반 배정표 양식</button>
+      <label class="button">내년 반 배정표 올리기<input id="classSectionsClassMap" type="file" accept=".xlsx" hidden></label>`}
     <table class="cs-table"><thead><tr><th>내년 반</th><th>과목</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
 function classSectionsClassUnitPlan(group, entry, settings) {
-  const courses = group.courses.filter((course) => settings.courseModes[course.key] === "class").map((course) => ({ key: course.key, name: course.name,
+  const courses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class").map((course) => ({ key: course.key, name: course.name,
     sections: entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount }));
   const count = group.nextClasses || group.rosterClasses || group.classes || 0;
   const homerooms = Array.from({ length: count }, (_, index) => String(index + 1));
@@ -867,6 +940,7 @@ function renderClassSectionsTeachers() {
     <td><button class="button" type="button" data-cs-f-remove="${index}" aria-label="고정 시간 ${index + 1} 삭제">삭제</button></td></tr>`).join("");
   body.innerHTML = `
     <section><h3>교사 <span class="cs-note">${settings.teachers.length}명 · 교과 단위가 기본, 과목으로 좁힐 수 있음</span></h3>
+      ${CLASS_SECTIONS_VIEW.teacherIdWarning ? `<p class="cs-note is-warn" id="classSectionsTeacherIdWarning">${esc(CLASS_SECTIONS_VIEW.teacherIdWarning)}</p>` : ""}
       <div class="cs-actions"><button class="button" type="button" id="classSectionsTeacherAdd">교사 추가</button>
       <button class="button" type="button" id="classSectionsTeacherFromHours">5단계 교사 수로 명단 만들기</button></div>
       <div class="cs-scroll" data-scroll-key="cs-teachers"><table class="cs-table"><thead><tr><th>이름</th><th>별칭</th><th>교과</th><th>과목(선택)</th><th>불가 시간</th><th>사유</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7">교사 명단이 없습니다. 없으면 5단계 교과별 교사 수만으로 블록당 분반을 제한합니다.</td></tr>'}</tbody></table></div>
@@ -917,6 +991,12 @@ function classSectionsApplySuggestion(index) {
       entry.classCounts[course.courseKey] = course.toSections;
       entry.capacities[course.courseKey] = Array(course.toSections).fill(course.capacity).join(",");
     }
+  } else if (item.type === "more-blocks") {
+    entry.blocks = item.blocks;
+  } else if (item.type === "class-unit") {
+    classSectionsCourseConf(classSectionsSettings(), "courseModes", context.group.grade)[item.courseKey] = "class";
+  } else if (item.type === "recommend-times") {
+    return void classSectionsRecommendTimesCurrent();
   } else if (item.type === "block-limit") {
     entry.maxSectionsPerBlock = item.maxSectionsPerBlock;
   }
@@ -953,6 +1033,14 @@ function classSectionsHandleClick(event) {
   if (target.id === "classSectionsExportRosters") return classSectionsExport("rosters");
   if (target.id === "classSectionsExportNeis") return classSectionsExport("neis");
   if (target.id === "classSectionsClassMapTemplate") return classSectionsExport("classMapTemplate");
+  if (target.id === "classSectionsClassMapClear") {
+    const context = classSectionsCurrent();
+    if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm(`현 ${context.group.grade}학년 내년 반 배정표를 지울까요?`)) return;
+    const maps = classSectionsStore().classMaps;
+    if (classSectionsPlain(maps)) delete maps[String(context.group.grade)];
+    classSectionsSetStatus(`현 ${context.group.grade}학년 내년 반 배정표를 지웠습니다.`);
+    return classSectionsChanged();
+  }
   if (target.id === "classSectionsClassUnitReset") {
     const context = classSectionsCurrent();
     context.entry.classUnit.assign = {};
@@ -972,9 +1060,9 @@ function classSectionsHandleChange(event) {
     else entry[data.csField] = target.value === "" ? undefined : Number(target.value);
   } else if (data.csSections !== undefined) entry.classCounts[data.csSections] = Math.max(0, Number(target.value) || 0);
   else if (data.csCapacities !== undefined) entry.capacities[data.csCapacities] = target.value.trim();
-  else if (data.csMode !== undefined) settings.courseModes[data.csMode] = target.value === "class" ? "class" : "move";
-  else if (data.csDept !== undefined) settings.courseDepartments[data.csDept] = target.value;
-  else if (data.csRoom !== undefined) settings.courseRooms[data.csRoom] = target.value.trim();
+  else if (data.csMode !== undefined) classSectionsCourseConf(settings, "courseModes", context.group.grade)[data.csMode] = target.value === "class" ? "class" : "move";
+  else if (data.csDept !== undefined) classSectionsCourseConf(settings, "courseDepartments", context.group.grade)[data.csDept] = target.value;
+  else if (data.csRoom !== undefined) classSectionsCourseConf(settings, "courseRooms", context.group.grade)[data.csRoom] = target.value.trim();
   else if (data.csBlockMax !== undefined) entry.blockMax[data.csBlockMax] = target.value === "" ? undefined : Number(target.value);
   else if (data.csBlockTimes !== undefined) entry.blockTimes[data.csBlockTimes] = target.value.trim();
   else if (data.csTeacher !== undefined) { if (target.value) entry.pins.teachers[data.csTeacher] = target.value; else delete entry.pins.teachers[data.csTeacher]; }
@@ -1006,7 +1094,10 @@ function classSectionsHandleTeacherEvent(event) {
       for (const [department, value] of Object.entries(counts)) {
         const label = typeof hoursDepartmentName === "function" ? hoursDepartmentName(department) : department;
         for (let k = settings.teachers.filter((teacher) => teacher.department === department).length; k < Number(value); k += 1) {
-          settings.teachers.push({ id: `t-${department}-${k + 1}`, name: `${label} ${k + 1}`, department, unavailable: [] });
+          const used = new Set(settings.teachers.map((teacher) => String(teacher.id)));
+          let serial = k + 1;
+          while (used.has(`t-${department}-${serial}`)) serial += 1;
+          settings.teachers.push({ id: `t-${department}-${serial}`, name: `${label} ${serial}`, department, unavailable: [] });
           made += 1;
         }
       }
@@ -1049,9 +1140,59 @@ function classSectionsHandleTeacherEvent(event) {
 }
 
 // ---- 내보내기 ----
+// '학급 단위 과목' 시트: 내년 반 → 과목, 반별 학생 수(내년 반을 알 때만), 비고.
+function classSectionsClassUnitSheet(group, entry, settings) {
+  const plan = classSectionsClassUnitPlan(group, entry, settings);
+  const effective = classSectionsEffectiveClassMap(group);
+  const counts = new Map();
+  if (effective.map) for (const student of group.gradeStudents || group.students) {
+    const room = effective.map[student.key]?.classroom;
+    if (room) counts.set(room, (counts.get(room) || 0) + 1);
+  }
+  const nameOf = new Map(group.courses.map((course) => [course.key, course.name]));
+  const note = effective.basis === "map" ? "내년 반 배정표 기준" : effective.basis === "same" ? "진급 때 반 그대로(지금 반 기준)" : "학생 배정은 반 배정표를 올린 뒤";
+  const rows = [[`${group.label} 학급 단위 과목 (내년 ${group.targetGrade}학년 ${plan.homerooms.length}학급, 비율 ${plan.ratio})`], ["내년 반", "과목", "학생 수", "비고"],
+    ...plan.homerooms.map((room) => [`${room}반`, nameOf.get(plan.assign[room]) || "(미정)", effective.map ? (counts.get(room) || 0) : "", note])];
+  return { name: "학급 단위 과목", rows, widths: [10, 22, 10, 30], merges: ["A1:D1"], freeze: "A3", orientation: "portrait" };
+}
+
 function classSectionsStudentNames(round) {
   const data = typeof roundStatusData === "function" ? roundStatusData(round) : null;
-  return new Map((data?.students || []).map((student) => [`${student.grade}-${student.classroom}-${student.number}`, String(student.name || "")]));
+  return new Map((data?.students || []).map((student) => [classSectionsStudentKey(student.grade, student.classroom, student.number), String(student.name || "")]));
+}
+
+// 올린 배정표를 학년별 지도에 합친다(파일에 있는 학생만 갱신, 나머지 유지). 반영 수는 실제로 학생과 맞은 수.
+function classSectionsMergeClassMap(map) {
+  const store = classSectionsStore();
+  if (!classSectionsPlain(store.classMaps)) store.classMaps = {};
+  const known = new Set();
+  const round = CLASS_SECTIONS_VIEW.round || classSectionsDefaultRound();
+  for (const group of round ? classSectionsSource(round).groups : []) for (const student of group.gradeStudents || group.students) known.add(student.key);
+  const parts = [];
+  let updated = 0;
+  let unmatched = 0;
+  const byGrade = new Map();
+  for (const [key, value] of Object.entries(map)) {
+    const grade = key.split("-")[0];
+    if (!byGrade.has(grade)) byGrade.set(grade, []);
+    byGrade.get(grade).push([key, value]);
+  }
+  for (const [grade, list] of byGrade) {
+    if (!classSectionsPlain(store.classMaps[grade])) store.classMaps[grade] = {};
+    const target = store.classMaps[grade];
+    let changed = 0;
+    let missing = 0;
+    for (const [key, value] of list) {
+      if (known.size && !known.has(key)) { missing += 1; continue; }
+      target[key] = { classroom: classSectionsKeyPart(value.classroom), number: classSectionsKeyPart(value.number) };
+      changed += 1;
+    }
+    const kept = Object.keys(target).length - changed;
+    updated += changed;
+    unmatched += missing;
+    parts.push(`현 ${grade}학년 갱신 ${changed}명 · 유지 ${kept}명${missing ? ` · 명단에 없는 학생 ${missing}명(반·번호 표기 확인)` : ""}`);
+  }
+  return { updated, unmatched, text: `내년 반 배정표: ${parts.join(" / ") || "읽은 학생 0명"}` };
 }
 
 async function classSectionsReadClassMap(file) {
@@ -1059,17 +1200,9 @@ async function classSectionsReadClassMap(file) {
   try {
     const sheets = await parseWorkbook(await file.arrayBuffer());
     const { map, errors } = classSectionsClassMapFromRows(sheets[0]?.rows || []);
-    const store = classSectionsStore();
-    if (!classSectionsPlain(store.classMaps)) store.classMaps = {};
-    const counts = {};
-    for (const [key, value] of Object.entries(map)) {
-      const grade = key.split("-")[0];
-      if (!classSectionsPlain(store.classMaps[grade]) || !counts[grade]) store.classMaps[grade] = {};
-      store.classMaps[grade][key] = { classroom: String(value.classroom), number: String(value.number || "") };
-      counts[grade] = (counts[grade] || 0) + 1;
-    }
+    const result = classSectionsMergeClassMap(map);
     if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
-    classSectionsSetStatus(`내년 반 배정표: ${Object.entries(counts).map(([grade, count]) => `현 ${grade}학년 ${count}명`).join(", ") || "0명"} 읽음${errors.length ? ` · 확인 ${errors.length}건(${errors.slice(0, 2).join(" ")})` : ""}`, errors.length > 0 || !Object.keys(counts).length);
+    classSectionsSetStatus(`${result.text}${errors.length ? ` · 확인 ${errors.length}건(${errors.slice(0, 2).join(" ")})` : ""}`, errors.length > 0 || result.unmatched > 0 || !result.updated);
   } catch (error) {
     classSectionsSetStatus(`내년 반 배정표를 읽지 못했습니다: ${error?.message || error}`, true);
   }
@@ -1080,15 +1213,20 @@ function classSectionsExport(kind) {
   const context = classSectionsCurrent();
   if (!context?.entry || typeof createWorkbookBlob !== "function" || typeof downloadBlob !== "function") return;
   const { round, group, entry } = context;
-  const result = entry.sectionResult;
+  let result = entry.sectionResult;
   const year = String((Number($("#schoolYear")?.value) || new Date().getFullYear()) + 1);
   const base = `${year}_${group.targetGrade}학년_${group.semester}학기_${String(group.category).replace(/[\\/:*?"<>|]/g, "")}`;
   if (kind === "classMapTemplate") {
     const rows = [["현 학년", "현 반", "현 번호", "새 반", "새 번호"],
-      ...group.students.map((student) => [group.grade, student.homeroom, student.number, "", ""])];
+      ...(group.gradeStudents || group.students).map((student) => [group.grade, student.homeroom, student.number, "", ""])];
     return downloadBlob(createWorkbookBlob([{ name: "내년 반 배정", rows, widths: [10, 10, 10, 10, 10], freeze: "A2", orientation: "portrait" }]), `${year}_현${group.grade}학년_내년반배정표.xlsx`);
   }
-  if (!result) return;
+  const settingsForUnits = classSectionsSettings();
+  const hasClassUnit = group.courses.some((course) => classSectionsCourseConf(settingsForUnits, "courseModes", group.grade)[course.key] === "class");
+  // 학급 단위 과목만 있는 그룹은 이동 편성 결과가 없어도 내보낼 수 있다.
+  if (!result && !hasClassUnit) return;
+  if (!result) result = { blocks: [], sections: [], assign: {}, unassigned: [], draft: true, explain: { summary: "이동 수업 편성 없음(학급 단위 과목만)" } };
+  const unitSheet = hasClassUnit ? classSectionsClassUnitSheet(group, entry, settingsForUnits) : null;
   const names = classSectionsStudentNames(round);
   const sectionById = new Map(result.sections.map((section) => [section.id, section]));
   if (kind === "blocks") {
@@ -1100,7 +1238,7 @@ function classSectionsExport(kind) {
       rows.push([`${block.letter}블록`, classSectionsTimesText(block.times), section.roomName, section.courseName, section.size, section.capacity, teacherName.get(section.teacherId) || ""]);
     }
     rows.push([], ["요약", result.explain?.summary || ""]);
-    return downloadBlob(createWorkbookBlob([{ name: "블록표", rows, widths: [8, 16, 18, 22, 8, 8, 14], merges: ["A1:G1"], freeze: "A3", orientation: "portrait" }]), `${base}_블록표.xlsx`);
+    return downloadBlob(createWorkbookBlob([{ name: "블록표", rows, widths: [8, 16, 18, 22, 8, 8, 14], merges: ["A1:G1"], freeze: "A3", orientation: "portrait" }, ...(unitSheet ? [unitSheet] : [])]), `${base}_블록표.xlsx`);
   }
   if (kind === "rosters") {
     const members = new Map(result.sections.map((section) => [section.id, []]));
@@ -1112,18 +1250,19 @@ function classSectionsExport(kind) {
         rows: [[`${section.roomName} (${section.courseName}) ${list.length}명`], ["번호", "현 학년-반-번호", "현 반", "현 번호", "성명"],
           ...list.map((key, index) => { const [, classroom, number] = key.split("-"); return [index + 1, key, Number(classroom) || classroom, Number(number) || number, names.get(key) || ""]; })] };
     });
-    return downloadBlob(createWorkbookBlob(sheets), `${base}_분반명렬표.xlsx`);
+    // '학급 단위 과목' 시트는 맨 뒤(분반 시트는 앞에 분반마다 하나).
+    return downloadBlob(createWorkbookBlob([...sheets, ...(unitSheet ? [unitSheet] : [])]), `${base}_분반명렬표.xlsx`);
   }
   if (kind === "neis") {
     const settings = classSectionsSettings();
     const courses = Object.fromEntries(group.courses.map((course) => {
-      const department = settings.courseDepartments[course.key] || course.department;
+      const department = classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] || course.department;
       return [course.key, { family: classSectionsNeisFamily(course.area, department), credits: course.credits }];
     }));
     const effective = classSectionsEffectiveClassMap(group);
     const map = effective.map || {};
-    const students = group.students.map((student) => ({ key: student.key, classroom: map[student.key]?.classroom || "", number: map[student.key]?.number || "", name: names.get(student.key) || "" }));
-    const unitCourses = group.courses.filter((course) => settings.courseModes[course.key] === "class");
+    const students = (group.gradeStudents || group.students).map((student) => ({ key: student.key, classroom: map[student.key]?.classroom || "", number: map[student.key]?.number || "", name: names.get(student.key) || "" }));
+    const unitCourses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class");
     const classUnit = unitCourses.length ? { byClass: classSectionsClassUnitPlan(group, entry, settings).assign,
       courses: Object.fromEntries(unitCourses.map((course) => [course.key, { name: course.name, ...courses[course.key] }])) } : null;
     const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students, classUnit });

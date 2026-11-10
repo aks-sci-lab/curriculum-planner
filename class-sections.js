@@ -115,7 +115,7 @@ function classSectionsSignature(input) {
     teachers: src.teachers || null,
     departmentTeachers: src.departmentTeachers || null,
     rooms: src.rooms || null,
-    occupied: src.occupied || null,
+    // occupied(다른 학년 편성 결과에서 온 교사·교과 사용량)는 사용자 입력이 아니므로 넣지 않는다(다른 그룹을 편성할 때마다 '입력 변경됨'이 되지 않게).
     fixedSlots: src.fixedSlots || null
   };
   return classSectionsHash(classSectionsStable(pick));
@@ -125,6 +125,16 @@ function classSectionsStudentCourseList(student) {
   if (Array.isArray(student?.courses)) return student.courses.map((item) => classSectionsText(typeof item === "object" ? (item.key ?? item.name) : item)).filter(Boolean);
   if (Array.isArray(student?.selections)) return student.selections.map((item) => classSectionsText(item?.key ?? item?.applicationSubject ?? item?.name)).filter(Boolean);
   return [];
+}
+
+// 학생 키 조각: 앞뒤 공백·끝의 '학년/반/번'·숫자의 앞 0을 없앤다('01반' → '1'). 그룹 자료·배정표·이름·명렬표·나이스가 모두 이것을 쓴다.
+function classSectionsKeyPart(value) {
+  const text = classSectionsText(value).replace(/\s+/g, "").replace(/(학년|반|번)$/, "");
+  return /^\d+$/.test(text) ? String(Number(text)) : text;
+}
+
+function classSectionsStudentKey(grade, classroom, number) {
+  return `${classSectionsKeyPart(grade)}-${classSectionsKeyPart(classroom)}-${classSectionsKeyPart(number)}`;
 }
 
 function classSectionsHomeroomOf(student) {
@@ -327,7 +337,8 @@ function classSectionsNormalize(input) {
     teachers, departmentTeachers: src.departmentTeachers || null, rooms: src.rooms || null, occupied, partial, previous,
     // baseline: 비교용 기존 배정(옮긴 수 지표만, 배정 비용에는 쓰지 않음). previous는 유지 비용·부분 재계산에 쓴다.
     baseline: src.baseline && typeof src.baseline === "object" ? src.baseline : previous,
-    teacherPins: pins.teachers || {}, issues, unassignedInput, sectionById, courseByKey: byKey,
+    teacherPins: pins.teachers || {}, issues, unassignedInput,
+    cohortTimes: (src.cohortTimes || []).map((item) => ({ label: classSectionsText(item.label), times: classSectionsSlots(item.times) })).filter((item) => item.times.length), sectionById, courseByKey: byKey,
     options: {
       placementSteps: Number(src.placementSteps) || 0, evalIterations: Number(src.evalIterations) || 0, finalIterations: Number(src.finalIterations) || 0,
       timeLimitMs: Number(src.timeLimitMs) || 20000, suggest: src.suggest !== false,
@@ -473,7 +484,7 @@ function classSectionsInitialPlacement(model, rng) {
         // 제약 때문에 둘 곳이 없으면 가장 덜 찬 블록에 두고 문제로 알린다.
         best = 0;
         for (let b = 1; b < B; b += 1) if (place.total[b] < place.total[best]) best = b;
-        issues.push({ type: "placement-forced", severity: "error", sectionId: section.id,
+        issues.push({ type: "placement-forced", severity: "error", sectionId: section.id, department: model.courses[c].department || "",
           message: `${model.courses[c].name} 분반을 둘 블록이 없습니다(블록당 최대 분반·교사·특별실 제한). ${model.blocks[best].letter}블록에 억지로 둡니다.` });
       }
       classSectionsPut(model, place, section.index, best);
@@ -1374,7 +1385,10 @@ function classSectionsBuildResult(model, place, sectionOf, unassigned) {
   const blocks = model.blocks.map((block) => ({ id: block.id, letter: block.letter, label: block.label,
     maxSections: Number.isFinite(block.maxSections) ? block.maxSections : null, times: block.times.slice(),
     sectionIds: sections.filter((section) => section.blockId === block.id).map((section) => section.id) }));
-  return { blocks, sections, assign, unassigned: [...model.unassignedInput, ...unassigned] };
+  // 폐강 과목 신청(재신청 대상)은 미배정에서 따로 센다: 편성 가능 여부·미배정 수에 넣지 않는다.
+  const closedRequests = model.unassignedInput.filter((item) => item.reason === "closed");
+  const others = model.unassignedInput.filter((item) => item.reason !== "closed");
+  return { blocks, sections, assign, unassigned: [...others, ...unassigned], closedRequests };
 }
 
 // ---- 검증기 ----
@@ -1386,7 +1400,7 @@ function classSectionsValidate(input, result, options) {
   const sectionById = new Map((result.sections || []).map((section) => [section.id, section]));
   const blockById = new Map((result.blocks || []).map((block) => [block.id, block]));
   const counts = new Map();
-  const unassignedSet = new Set((result.unassigned || []).map((item) => `${item.studentKey}|${item.courseKey}`));
+  const unassignedSet = new Set([...(result.unassigned || []), ...(result.closedRequests || [])].map((item) => `${item.studentKey}|${item.courseKey}`));
   for (const student of model.students) {
     const ids = result.assign?.[student.key] || [];
     const usedBlocks = new Map();
@@ -1405,6 +1419,14 @@ function classSectionsValidate(input, result, options) {
     for (const c of student.courses) {
       const key = model.courses[c].key;
       if (!usedCourses.has(key) && !unassignedSet.has(`${student.key}|${key}`)) issues.push({ type: "missing", severity: "error", studentKey: student.key, message: `${student.key}: ${model.courses[c].name} 배정도 미배정 기록도 없음` });
+    }
+  }
+  // 같은 학생 집단(같은 현 학년·학기)의 다른 그룹 블록과 시간이 겹치면 학생이 두 과목을 동시에 들어야 한다.
+  for (const block of result.blocks || []) {
+    for (const other of model.cohortTimes || []) {
+      const shared = (block.times || []).filter((slot) => other.times.includes(slot));
+      if (shared.length) issues.push({ type: "cohort-clash", severity: "error", blockId: block.id,
+        message: `${block.letter}블록이 같은 학생이 듣는 ${other.label}와 같은 시간(${shared.map((slot) => slot.replace(":", "")).join(", ")})입니다.` });
     }
   }
   const unassignedCount = (result.unassigned || []).length;
@@ -1432,7 +1454,7 @@ function classSectionsValidate(input, result, options) {
   }
   model.blocks.forEach((block, b) => {
     const dept = model.supply.dept[b];
-    if (dept) for (const [name, limit] of dept) { const used = perBlockDept.get(`${block.id}|${name}`) || 0; if (used > limit) issues.push({ type: "teacher-count", severity: "error", blockId: block.id, message: `${block.letter}블록 ${name} 분반 ${used}개 > 그 시간 가능한 교사 ${limit}명` }); }
+    if (dept) for (const [name, limit] of dept) { const used = perBlockDept.get(`${block.id}|${name}`) || 0; if (used > limit) issues.push({ type: "teacher-count", severity: "error", blockId: block.id, department: name, message: `${block.letter}블록 ${name} 분반 ${used}개 > 그 시간 가능한 교사 ${limit}명` }); }
     const rooms = model.supply.rooms[b];
     if (rooms) for (const [name, limit] of rooms) { const used = perBlockRoom.get(`${block.id}|${name}`) || 0; if (used > limit) issues.push({ type: "room-count", severity: "error", blockId: block.id, message: `${block.letter}블록 ${name} 분반 ${used}개 > 특별실 ${limit}개` }); }
   });
@@ -1462,6 +1484,17 @@ function classSectionsValidate(input, result, options) {
 // 여러 그룹 결과의 교사 겹침(학년 간). groups: [{ input, result }]
 function classSectionsValidateAcross(groups, teachersRaw) {
   const issues = [];
+  // 같은 현 학년·학기 그룹끼리 블록 시간이 겹치면(같은 학생이 두 그룹 과목을 다 들음) 오류.
+  for (let i = 0; i < groups.length; i += 1) for (let j = i + 1; j < groups.length; j += 1) {
+    const a = groups[i];
+    const b = groups[j];
+    if (String(a.input.grade ?? "") !== String(b.input.grade ?? "") || String(a.input.semester ?? "") !== String(b.input.semester ?? "")) continue;
+    for (const x of a.result.blocks || []) for (const y of b.result.blocks || []) {
+      const shared = (x.times || []).filter((slot) => (y.times || []).includes(slot));
+      if (shared.length) issues.push({ type: "cohort-clash", severity: "error", groupId: a.input.groupId,
+        message: `${a.input.label || a.input.groupId} ${x.letter}블록과 ${b.input.label || b.input.groupId} ${y.letter}블록이 같은 시간(${shared.map((slot) => slot.replace(":", "")).join(", ")})입니다 — 같은 학생이 두 과목을 동시에 들어야 합니다.` });
+    }
+  }
   const busy = new Map();
   const names = new Map((teachersRaw || []).map((teacher) => [classSectionsText(teacher.id ?? teacher.name), classSectionsText(teacher.name ?? teacher.id)]));
   for (const { input, result } of groups) {
@@ -1581,6 +1614,37 @@ function classSectionsExplain(model, result, place) {
   return causes;
 }
 
+function classSectionsTeacherSuggestions(model, result, input, deadline) {
+  const short = (result.issues || []).filter((issue) => ["teacher-count", "teacher-shortage", "placement-forced"].includes(issue.type) && issue.severity === "error");
+  if (!short.length || !input) return [];
+  const departments = [...new Set(short.map((issue) => issue.department).filter(Boolean))];
+  const out = [];
+  const late = () => deadline && classSectionsNow() > deadline;
+  const ok = (trial) => trial.explain.feasible;
+  const blockCount = model.blocks.length;
+  if (blockCount < CLASS_SECTIONS_BLOCK_LETTERS.length && !late()) {
+    const letter = CLASS_SECTIONS_BLOCK_LETTERS[blockCount];
+    const blocks = Array.isArray(input.blocks) ? [...input.blocks, { id: letter }] : blockCount + 1;
+    const trial = classSectionsSolve({ ...input, blocks, suggest: false });
+    if (ok(trial)) out.push({ type: "more-blocks", verified: true, blocks: blockCount + 1,
+      message: `블록을 ${blockCount + 1}개로 늘리면(새 블록 시간은 따로 정함) 교사 수 안에서 모두 배정됩니다.` });
+  }
+  for (const course of model.courses.filter((item) => departments.includes(item.department)).sort((a, b) => a.demand - b.demand)) {
+    if (late() || out.some((item) => item.type === "class-unit")) break;
+    const courses = (input.courses || []).map((raw) => (classSectionsText(raw.key ?? raw.name) === course.key ? { ...raw, mode: "class" } : raw));
+    const trial = classSectionsSolve({ ...input, courses, suggest: false });
+    if (ok(trial)) out.push({ type: "class-unit", verified: true, courseKey: course.key, courseName: course.name,
+      message: `${course.name}을(를) 학급 단위로 운영하면(이동 블록에서 빠짐) 교사 수 안에서 모두 배정됩니다.` });
+  }
+  if (model.blocks.some((block) => block.times.length) || (input.occupied || []).length) {
+    out.push({ type: "recommend-times", verified: false,
+      message: "블록 시간 추천을 실행해 다른 학년 블록과 같은 교과 교사가 겹치지 않는 시간으로 바꿔 보세요." });
+  }
+  out.push({ type: "check-teachers", verified: false,
+    message: `교사 명단·5단계 교사 수를 확인하세요${departments.length ? `: ${departments.join(", ")} 교사가 그 시간에 모자랍니다` : ""}.` });
+  return out;
+}
+
 // 미배정이 있을 때: 어느 분반을 몇 명으로 올리면 모두 배정되는지(같은 배치에서 확인한 값).
 function classSectionsCapacitySuggestion(model, place, rng, deadline, maxRaise) {
   const limit = maxRaise || 2;
@@ -1641,6 +1705,8 @@ function classSectionsSuggest(model, place, result, rng, deadline, input) {
     }
     return suggestions;
   }
+  // 교사 수 부족(그 시간 가능한 교사 < 블록의 교과 분반): 블록 늘리기·학급 단위로 운영을 다시 풀어 확인, 시간 추천·교사 수 확인은 안내.
+  suggestions.push(...classSectionsTeacherSuggestions(model, result, input, deadline));
   if (!result.unassigned.length) return suggestions;
   const structural = result.unassigned.some((item) => item.reason === "closed" || item.reason === "too-many");
   const onlyStructural = result.unassigned.every((item) => item.reason === "closed" || item.reason === "too-many");
@@ -1752,9 +1818,12 @@ function classSectionsExplainResult(model, place, result, deadline, input) {
   if (blockLimit) parts.push(`블록 한도 초과: ${blockLimit.message.replace(/^분반 /, "분반 ")}(블록별 ${result.metrics.blockSections.join("·")}개).`);
   const otherHard = hard.filter((issue) => !["block-over", "placement-forced"].includes(issue.type) || !blockLimit);
   if (otherHard.length) parts.push(`오류 ${otherHard.length}건: ${otherHard.slice(0, 3).map((issue) => issue.message).join(" / ")}${otherHard.length > 3 ? " …" : ""}`);
-  const summary = feasible
+  const closed = result.closedRequests || [];
+  const closedText = closed.length ? ` 재신청 대상 ${new Set(closed.map((item) => item.studentKey)).size}명(폐강 과목 ${closed.length}건)은 따로 셉니다.` : "";
+  if (!feasible && !result.unassigned.length && !parts.length) parts.push(`학생은 모두 배정했지만 확인할 오류가 ${hard.length}건 있습니다.`);
+  const summary = (feasible
     ? `모든 학생 배정(분반 ${model.sections.length}개, 블록별 ${result.metrics.blockSections.join("·")}개).`
-    : parts.join(" ");
+    : (!result.unassigned.length && !parts[0].startsWith("학생은") ? `학생은 모두 배정했지만 확인 필요 — ${parts.join(" ")}` : parts.join(" "))) + closedText;
   return { feasible, causes, suggestions, summary };
 }
 
@@ -2328,13 +2397,14 @@ function classSectionsNeisExport(result, opts) {
   }
   // 학급 단위 과목: 내년 반이 있는 학생만 그 반의 과목으로 한 줄(개설강의실 'N(학년 N반)'), 없으면 반 배정표를 올린 뒤.
   let classUnitWaiting = 0;
+  const classUnitUndecided = new Map();
   if (options.classUnit && Object.keys(options.classUnit.byClass || {}).length) {
     for (const info of options.students || []) {
-      const classroom = classSectionsText(info.classroom).replace(/반$/, "");
+      const classroom = classSectionsKeyPart(info.classroom);
       if (!classroom) { classUnitWaiting += 1; continue; }
       const courseKey = options.classUnit.byClass[classroom];
       const course = courseKey ? options.classUnit.courses?.[courseKey] || {} : null;
-      if (!course) continue;
+      if (!course) { classUnitUndecided.set(classroom, (classUnitUndecided.get(classroom) || 0) + 1); continue; }
       const credits = Number(course.credits) || "";
       const row = [classSectionsText(options.year), classSectionsText(options.semester), grade, classSectionsText(course.family),
         `${course.name || courseKey}${credits !== "" ? `(${credits})` : ""}`, `${classroom}(${grade}학년 ${classroom}반)`, grade ? `${grade}학년` : "",
@@ -2344,7 +2414,11 @@ function classSectionsNeisExport(result, opts) {
     }
   }
   const warnings = ["나이스 '조회' 파일 양식을 따랐습니다. 실제 업로드 양식과 다를 수 있으니 확인하세요."];
-  if (classUnitWaiting) warnings.push(`학급 단위 과목: 내년 반이 없는 학생 ${classUnitWaiting}명은 행을 만들지 않았습니다(과목별 반 수만 확정, 학생 배정은 반 배정표를 올린 뒤).`);
+  if (classUnitWaiting) warnings.push(`학급 단위 과목: 내년 반이 없는 학생 ${classUnitWaiting}명분 행은 반 배정표를 올린 뒤 생성합니다(과목별 반 수만 확정).`);
+  if (options.classUnit && !Object.keys(options.classUnit.byClass || {}).length && (options.students || []).length) {
+    warnings.push(`학급 단위 과목: 반마다 과목이 정해지지 않아 ${(options.students || []).length}명분 행을 만들지 않았습니다.`);
+  }
+  for (const [classroom, count] of classUnitUndecided) warnings.push(`학급 단위 과목: 내년 ${classroom}반에 정한 과목이 없어 ${count}명분 행을 만들지 않았습니다(반 배정표의 새 반 번호를 확인하세요).`);
   if (missingClass) warnings.push(`내년 반·번호가 없는 학생 ${missingClass}명: 반·번호 칸을 비웠습니다(참고 열의 현 학년-반-번호로 확인). 내년 반 배정표를 올리면 채워집니다.`);
   if (rows.slice(2).some((row) => !row[3])) warnings.push("편제명(교과군)이 빈 행이 있습니다.");
   return { rows, warnings };
@@ -2359,11 +2433,11 @@ function classSectionsClassMapFromRows(rows) {
   const map = {};
   const errors = [];
   (rows || []).slice(1).forEach((row, index) => {
-    const values = (row || []).map((value) => classSectionsText(value).replace(/(학년|반|번)$/, ""));
+    const values = (row || []).map(classSectionsKeyPart);
     if (!values.some(Boolean)) return;
     const [grade, classroom, number, nextClass, nextNumber] = values;
     if (!grade || !classroom || !number || !nextClass) { errors.push(`${index + 2}행: 현 학년·반·번호·새 반이 필요합니다.`); return; }
-    map[`${Number(grade) || grade}-${Number(classroom) || classroom}-${Number(number) || number}`] = { classroom: nextClass, number: nextNumber || "" };
+    map[classSectionsStudentKey(grade, classroom, number)] = { classroom: nextClass, number: nextNumber || "" };
   });
   return { map, errors };
 }
@@ -2395,7 +2469,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
   return [classSectionsText, classSectionsCompact, classSectionsNow, classSectionsRng, classSectionsSlot, classSectionsSlots, classSectionsOverlap,
     classSectionsStable, classSectionsHash, classSectionsSignature, classSectionsStudentCourseList, classSectionsHomeroomOf, classSectionsChangedStudents,
     classSectionsNormalize, classSectionsSupply, classSectionsPlacementNew, classSectionsCanPlace, classSectionsPut, classSectionsCooccurrence,
-    classSectionsInitialPlacement, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
+    classSectionsInitialPlacement, classSectionsTeacherSuggestions, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
     classSectionsUnitDelta, classSectionsUnitApply, classSectionsUnitPlaceOne, classSectionsRouterRebuild, classSectionsRouterRecount,
     classSectionsRouterCost, classSectionsRouterSnapshot, classSectionsRouterRestore, classSectionsRouterSearch, classSectionsRouterSnapshotY,
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,
