@@ -37,7 +37,7 @@ test("static UI bindings refer to unique shipped or dynamically generated IDs", 
     "curriculum-versions.js", "hours-stats.js", "curriculum-subject-actions.js", "curriculum-choice-blocks.js", "curriculum-data.js", "curriculum-data-view.js",
     "curriculum-subject-list.js", "curriculum-annual.js", "workspace-file.js", "app-version.js", "course-checks.js", "curriculum-compliance.js",
     "workspace-store.js", "view-keep.js", "workspace-header.js", "neis-enrollment.js", "curriculum-reconvert.js", "curriculum-office-format.js",
-    "curriculum-data-export.js", "curriculum-workbook.js"];
+    "curriculum-data-export.js", "curriculum-workbook.js", "class-sections.js", "class-sections-view.js"];
   const sources = filenames.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
   const declared = new Set([...ids, ...sources.flatMap((source) =>
     [...source.matchAll(/\bid="([^"$]+)"/g)].map((match) => match[1]))]);
@@ -59,6 +59,9 @@ test("index.html loads every app script once, the shared helpers before app.js, 
   for (const file of ["view-keep.js", "workspace-store.js", "course-checks.js", "curriculum-annual.js"]) assert.ok(at(file) < at("app.js"), `${file} before app.js`);
   assert.ok(at("neis-enrollment.js") < at("course-checks.js"), "neis-enrollment.js before course-checks.js");
   assert.ok(at("workspace-header.js") > at("app.js"), "workspace-header.js after app.js");
+  // 6단계 분반 편성: 순수 계산은 app.js 앞, 화면 연결은 app.js·hours-stats.js 뒤.
+  assert.ok(at("class-sections.js") >= 0 && at("class-sections.js") < at("app.js"), "class-sections.js before app.js");
+  assert.ok(at("class-sections-view.js") > at("hours-stats.js"), "class-sections-view.js after hours-stats.js");
   const versions = new Set(scripts.filter((item) => item.version).map((item) => item.version));
   assert.equal(versions.size, 1, `one cache version: ${[...versions].join(", ")}`);
   const testBot = fs.readFileSync(path.join(root, "test-bot.html"), "utf8");

@@ -1,0 +1,110 @@
+// 6단계 분반 편성 화면 연결(class-sections-view.js)의 입력 모으기·저장 모양·복원. 화면 클릭 확인은 Playwright(사용자처럼)로 따로 한다.
+// 학생 자료는 합성(가명)이다.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { test } = require("node:test");
+
+const root = path.join(__dirname, "..");
+const solver = fs.readFileSync(path.join(root, "class-sections.js"), "utf8");
+const view = fs.readFileSync(path.join(root, "class-sections-view.js"), "utf8");
+const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
+function context() {
+  const students = [];
+  for (let c = 1; c <= 4; c += 1) for (let n = 1; n <= 10; n += 1) {
+    const pick = (c + n) % 2 ? ["c1", "c2"] : ["c2", "c3"];
+    students.push({ id: `${c}-${n}`, grade: "1", classroom: c, number: n, name: `가명${c}${n}`, selections: pick.map((column) => ({ column, credits: 3 })) });
+  }
+  const courses = [{ column: "c1", name: "물리학" }, { column: "c2", name: "화학" }, { column: "c3", name: "지구과학" }];
+  const state = { rounds: { "1": { students, courses } }, currentRound: "1", roundStatuses: { "1": { status: "confirmed", snapshot: {
+    maxClassSize: 30, classBases: { "2": 2 }, rows: [{ grade: "1", semester: "1", group: "2-1 택2", name: "화학", classCount: 3 }] } } }, roundClosures: {}, students: [] };
+  const elements = { "#schoolYear": { value: "2026" }, "#maxClassSize": { value: "34" } };
+  const ctx = vm.createContext({
+    state, performance, console,
+    $: (selector) => elements[selector] || null,
+    applicationRoundNumbers: () => ["1"],
+    roundStatusData: (round) => state.rounds[round],
+    isRoundLocked: (round) => state.roundStatuses[round]?.status === "confirmed",
+    hoursDefaultDepartment: (name) => ({ 물리학: "과학-물리", 화학: "과학-화학", 지구과학: "과학-지구" })[name] || "기타",
+    hoursSettings: () => ({ teachers: { "과학-물리": 2, "과학-화학": 2 } }),
+    hoursTargetYear: () => "2027",
+    // 4단계 집계 모양만 흉내 낸다(그룹 2-1 택2, 과목 3개).
+    aggregateRecords: (list) => ({ reports: [{ summary: { grade: "1", classes: 4 }, semesters: [{ order: 1, groups: [{ category: "2-1 택2", choiceCount: 2,
+      courses: courses.map((course) => ({ column: course.column, name: course.name, subjectName: course.name, classCount: 2,
+        enrollment: list.filter((student) => student.selections.some((selection) => selection.column === course.column)).length })) }] }] }] })
+  });
+  vm.runInContext(solver, ctx);
+  vm.runInContext(view, ctx);
+  return ctx;
+}
+
+test("source: groups from the round result, stage-4 counts from the confirmed snapshot, student keys without names", () => {
+  const ctx = context();
+  const source = plain(ctx.classSectionsSource("1"));
+  assert.equal(source.locked, true);
+  assert.equal(source.maxClassSize, 30);
+  assert.equal(source.groups.length, 1);
+  const group = source.groups[0];
+  assert.equal(group.key, "1:1:2-1 택2");
+  assert.equal(group.label, "현1 → 2학년 1학기 · 2-1 택2");
+  assert.equal(group.classes, 2, "next-year classes from the snapshot");
+  assert.deepEqual(group.courses.map((course) => [course.key, course.classCount, course.credits]), [["물리학", 2, 3], ["화학", 3, 3], ["지구과학", 2, 3]]);
+  assert.equal(group.students.length, 40);
+  assert.deepEqual(group.students[0], { key: "1-1-1", homeroom: "1", number: "1", courses: ["화학", "지구과학"] });
+  assert.ok(!JSON.stringify(group).includes("가명"), "no names in the gathered input");
+});
+
+test("input: 6th-step counts and per-section capacities, block times, hours teacher counts, pins; signature tracks inputs", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key);
+  entry.classCounts["물리학"] = 3;
+  entry.capacities["화학"] = "30,31, 32";
+  entry.blockTimes.a = "월1, 수2 금3";
+  entry.pins.sections["물리학#1"] = "b";
+  const input = plain(ctx.classSectionsBuildInput("1", group, entry));
+  assert.equal(input.blocks.length, 2);
+  assert.equal(input.maxSectionsPerBlock, 2);
+  assert.equal(input.defaultCapacity, 30);
+  assert.deepEqual(input.blocks[0].times, [{ day: "월", period: 1 }, { day: "수", period: 2 }, { day: "금", period: 3 }]);
+  assert.equal(input.courses.find((course) => course.key === "물리학").sections, 3);
+  assert.deepEqual(input.courses.find((course) => course.key === "화학").capacities, [30, 31, 32]);
+  assert.deepEqual(input.departmentTeachers, { "과학-물리": 2, "과학-화학": 2 });
+  assert.deepEqual(input.pins.sections, { "물리학#1": "b" });
+  const before = ctx.classSectionsSignature(input);
+  entry.capacities["화학"] = "30,30,30";
+  assert.notEqual(ctx.classSectionsSignature(ctx.classSectionsBuildInput("1", group, entry)), before);
+  // 계산 결과를 저장하는 모양: 학생은 키만
+  const result = ctx.classSectionsSolve({ ...input, maxSectionsPerBlock: 4 });
+  ctx.classSectionsSaveResult(entry, result, input, group, { locked: true });
+  assert.equal(entry.sectionResult.draft, false);
+  assert.ok(Object.keys(entry.sectionResult.assign).every((key) => /^1-\d+-\d+$/.test(key)));
+  assert.ok(!JSON.stringify(entry).includes("가명"));
+});
+
+test("teacher list: department by default, narrowed to courses, unavailable slots with reason", () => {
+  const ctx = context();
+  const settings = ctx.classSectionsSettings();
+  settings.teachers.push({ id: "t1", name: "김교사", alias: "물리A", department: "과학-물리", courses: "물리학", unavailable: ["월1", "수5"], reason: "육아시간" });
+  settings.teachers.push({ id: "t2", name: "" });
+  const list = plain(ctx.classSectionsTeacherList(settings));
+  assert.deepEqual(list, [{ id: "t1", name: "물리A", departments: ["과학-물리"], courses: ["물리학"],
+    unavailable: [{ day: "월", period: 1, reason: "육아시간" }, { day: "수", period: 5, reason: "육아시간" }] }]);
+  assert.equal(settings.spreadWarn, 4);
+});
+
+test("restore keeps settings and round entries only; app wiring stores classSections and step 8", () => {
+  const ctx = context();
+  assert.deepEqual(plain(ctx.classSectionsRestore(undefined)), {});
+  assert.deepEqual(plain(ctx.classSectionsRestore({ settings: { teachers: [] }, "1": { "1:1:g": { mode: "move" }, bad: 3 }, junk: {} })),
+    { settings: { teachers: [] }, "1": { "1:1:g": { mode: "move" } } });
+  assert.match(app, /classSections: state\.classSections,/);
+  assert.match(app, /state\.classSections = typeof classSectionsRestore === "function"/);
+  assert.match(app, /if \(step === 8 && typeof renderClassSections === "function"\) renderClassSections\(\);/);
+  assert.match(view, /deferRenderUntilStepVisible\(8, "renderClassSections", renderClassSections\)/);
+  const store = fs.readFileSync(path.join(root, "workspace-store.js"), "utf8");
+  assert.match(store, /WORKSPACE_STORE_SPLIT_KEYS = \[[^\]]*"sectionResult"/);
+});

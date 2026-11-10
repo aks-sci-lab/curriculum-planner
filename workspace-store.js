@@ -5,7 +5,8 @@
 //
 // 나누는 규칙(큰 항목을 새로 추가할 때 여기만 보면 된다):
 // · 작업 자료(workspacePayload)의 2단계 경로까지는 모두 항목별로 나눈다. 예: rounds.1 → students·courses…,
-//   curriculumCohorts.2026 → importedLayout·plan…, courseChecks → prior·neis…, roundStatuses.1 → snapshot…
+//   curriculumCohorts.2026 → importedLayout·plan…, courseChecks → prior·neis…, roundStatuses.1 → snapshot…,
+//   classSections.1 → 그룹('현학년:학기:그룹')마다 한 조각, 그 안의 분반 편성 결과(sectionResult)는 따로
 // · 그 아래는 WORKSPACE_STORE_SPLIT_KEYS 이름의 객체, 편제표 표(rows 배열이 있는 객체), WORKSPACE_STORE_SPLIT_ARRAYS 배열의 항목만 더 나눈다.
 // · 나눈 결과 중 WORKSPACE_STORE_BLOB_MIN 글자 이상인 값은 내용 해시를 이름으로 한 조각(blob)이 된다. 같은 내용(예: 변경 이력 시점의
 //   편제표와 지금 편제표, 활성 차수 학생과 차수 자료 학생, 표의 서식 표와 양식의 서식 표)은 한 번만 저장한다.
@@ -13,7 +14,7 @@ var WORKSPACE_DB_NAME = "curriculum-workspace-db";
 var WORKSPACE_STORE_FORMAT = 1;
 var WORKSPACE_STORE_BLOB_MIN = 2048;
 var WORKSPACE_STORE_SPLIT_DEPTH = 2;
-var WORKSPACE_STORE_SPLIT_KEYS = ["importedLayout", "changeBaseline", "planTemplate", "format", "snapshot", "layout", "neis", "prior"];
+var WORKSPACE_STORE_SPLIT_KEYS = ["importedLayout", "changeBaseline", "planTemplate", "format", "snapshot", "layout", "neis", "prior", "sectionResult"];
 var WORKSPACE_STORE_SPLIT_ARRAYS = [/^curriculumVersions\.[^.]+$/];
 // 조각 참조 표시. JSON 글자 안에서는 {"\u0000b":"해시"} 로 보인다(실제 자료의 글자 값 안에는 따옴표가 이스케이프되므로 생길 수 없다).
 var WORKSPACE_STORE_REF = "\u0000b";

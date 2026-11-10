@@ -329,22 +329,86 @@ test("NEIS rows: header, room name rule (block letter + name without spaces + nu
   assert.equal(ctx.classSectionsRoomName("c", "지구과학", 1, 1), "c지구과학");
   const input = synthetic({ courses: EIGHT, choose: 3, students: 120, capacity: 30, sizeFor: 20, seed: 6 });
   const result = plain(ctx.classSectionsSolve(input));
-  const rows = plain(ctx.classSectionsNeisRows(result, { year: 2027, semester: 1, targetGrade: 2,
+  const exported = plain(ctx.classSectionsNeisExport(result, { year: 2027, semester: 1, targetGrade: 2,
     courses: Object.fromEntries(input.courses.map((course) => [course.key, { family: "사회(역사/도덕포함)", credits: 3 }])),
     students: [{ key: input.students[0].key, classroom: "3", number: 12, name: "" }] }));
-  assert.deepEqual(rows[1], ["학년도", "학기", "학년", "편제명", "개설과목(학점)", "개설강의실", "계열/학년/학과", "반", "번호", "성명"]);
+  const rows = exported.rows;
+  assert.deepEqual(rows[1], ["학년도", "학기", "학년", "편제명", "개설과목(학점)", "개설강의실", "계열/학년/학과", "반", "번호", "성명", "참고: 현 학년-반-번호"]);
   assert.equal(rows.length, 2 + input.students.length * 3);
   const mine = rows.filter((row, index) => index >= 2 && row[7] === "3반");
   assert.equal(mine.length, 3);
+  for (const row of mine) assert.equal(row[8], "12");
   for (const row of rows.slice(2)) {
     assert.match(row[5], /^[a-c][^\s]+$/);
     assert.match(row[4], /\(3\)$/);
     assert.equal(row[6], "2학년");
   }
-  const multi = result.sections.find((section) => section.countInBlock > 1);
-  if (multi) assert.match(multi.roomName, /\d$/);
-  const single = result.sections.find((section) => section.countInBlock === 1);
-  if (single) assert.doesNotMatch(single.roomName, /\d$/);
+  // 내년 반이 없는 학생은 반·번호를 비우고 참고 열에 현 학년-반-번호, 경고 문구
+  const other = rows.find((row, index) => index >= 2 && row[10] === input.students[1].key);
+  assert.equal(other[7], "");
+  assert.equal(other[8], "");
+  assert.ok(exported.warnings.some((text) => /내년 반·번호가 없는 학생/.test(text)));
+  assert.equal(plain(ctx.classSectionsNeisRows(result, { reference: false }))[1].length, 10);
+  // 번호 규칙: 어느 블록에서든 2개 이상이면 그 과목 모든 분반에 번호, 한 번도 없으면 번호 없음
+  const byCourse = new Map();
+  for (const section of result.sections) { if (!byCourse.has(section.courseKey)) byCourse.set(section.courseKey, []); byCourse.get(section.courseKey).push(section); }
+  for (const list of byCourse.values()) {
+    const multi = list.some((section) => section.countInBlock > 1);
+    for (const section of list) {
+      if (multi) assert.match(section.roomName, /\d$/, section.roomName);
+      else assert.doesNotMatch(section.roomName, /\d$/, section.roomName);
+    }
+  }
+  // 내년 반 배정표(고정 양식)
+  const mapped = plain(ctx.classSectionsClassMapFromRows([["현 학년", "현 반", "현 번호", "새 반", "새 번호"], ["1", "3반", "12", "5", "7"], ["1", "", "3", "", ""]]));
+  assert.deepEqual(mapped.map, { "1-3-12": { classroom: "5", number: "7" } });
+  assert.equal(mapped.errors.length, 1);
+});
+
+test("room numbers follow teachers when every section has one (same teacher = same number, e.g. physics a1 a2 b2 c1)", () => {
+  const ctx = context();
+  const result = {
+    blocks: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    sections: [
+      { id: "p1", courseKey: "물리학", courseName: "물리학", ord: 1, blockId: "a", blockLetter: "a", noInBlock: 1, teacherId: "T1" },
+      { id: "p2", courseKey: "물리학", courseName: "물리학", ord: 2, blockId: "a", blockLetter: "a", noInBlock: 2, teacherId: "T2" },
+      { id: "p3", courseKey: "물리학", courseName: "물리학", ord: 3, blockId: "b", blockLetter: "b", noInBlock: 1, teacherId: "T2" },
+      { id: "p4", courseKey: "물리학", courseName: "물리학", ord: 4, blockId: "c", blockLetter: "c", noInBlock: 1, teacherId: "T1" },
+      { id: "w1", courseKey: "세계사", courseName: "세계사", ord: 1, blockId: "a", blockLetter: "a", noInBlock: 1, teacherId: "H1" },
+      { id: "w2", courseKey: "세계사", courseName: "세계사", ord: 2, blockId: "b", blockLetter: "b", noInBlock: 1, teacherId: "H1" }
+    ]
+  };
+  ctx.classSectionsAssignRoomNames(result);
+  assert.deepEqual(result.sections.map((section) => section.roomName), ["a물리학1", "a물리학2", "b물리학2", "c물리학1", "a세계사", "b세계사"]);
+  // 교사가 비면 블록 안 순번
+  result.sections[2].teacherId = "";
+  ctx.classSectionsAssignRoomNames(result);
+  assert.deepEqual(result.sections.slice(0, 4).map((section) => section.roomName), ["a물리학1", "a물리학2", "b물리학1", "c물리학1"]);
+});
+
+test("more sections than blocks × limit: not feasible, cause shown, and a verified 'raise capacity to cut sections' suggestion", () => {
+  const ctx = context();
+  let input = null;
+  for (let seed = 5; seed < 20 && !input; seed += 1) {
+    const candidate = ctx.classSectionsFromCombos(comboSynthetic({ subjects: EIGHT.map((course) => course.name), choose: 3, students: 338, comboCount: 30, seed, capacity: 34, maxSectionsPerBlock: 11 }));
+    if (candidate.courses.reduce((sum, course) => sum + course.sections, 0) === 34) input = candidate;
+  }
+  assert.ok(input, "a synthetic group with 34 sections > 33 slots");
+  const result = plain(ctx.classSectionsSolve(input));
+  assert.equal(result.explain.feasible, false);
+  assert.match(result.explain.summary, /블록 한도 초과: 분반 34개 > 블록 3개/);
+  assert.ok(result.issues.some((issue) => issue.type === "block-over" && issue.severity === "error"));
+  assert.ok(result.explain.causes.some((cause) => cause.type === "block-limit"));
+  const fewer = result.explain.suggestions.find((item) => item.type === "sections");
+  assert.ok(fewer, JSON.stringify(result.explain.suggestions));
+  assert.equal(fewer.verified, true);
+  assert.match(fewer.message, /정원 3[56]명\(분반 \d+→\d+개\)/);
+  const changed = new Map(fewer.courses.map((item) => [item.courseKey, item]));
+  const applied = plain(ctx.classSectionsSolve({ ...input, suggest: false, courses: input.courses.map((course) => changed.has(course.key)
+    ? { ...course, sections: changed.get(course.key).toSections, capacity: changed.get(course.key).capacity } : course) }));
+  assert.equal(applied.explain.feasible, true, applied.explain.summary);
+  assert.ok(applied.metrics.blockSections.every((count) => count <= 11));
+  assert.ok(result.explain.suggestions.some((item) => item.type === "block-limit" && item.maxSectionsPerBlock === 12));
 });
 
 test("min cost flow and the worker source run the same solver", () => {
