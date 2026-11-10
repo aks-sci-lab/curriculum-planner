@@ -3755,7 +3755,9 @@
             name: course.name,
             subjectName: applicationSubject?.subject || course.name,
             semesterKey: semesterKey === "1" || semesterKey === "2" ? semesterKey : "",
-            displayName: applicationSubject ? applicationCourseLabel(applicationSubject) : course.name,
+            displayName: applicationSubject
+              ? (typeof aggregateCourseDisplayName === "function" ? aggregateCourseDisplayName(applicationSubject, semesterKey) : applicationCourseLabel(applicationSubject))
+              : course.name,
             enrollment,
             enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
             recommendedClasses,
@@ -3791,6 +3793,19 @@
         ? matches.filter((subject) => subject.semester?.split("·").includes(semester))
         : matches;
       return semesterMatches.length === 1 ? semesterMatches[0] : matches.length === 1 ? matches[0] : null;
+    }
+
+    // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
+    // 학기 칸(1학기/2학기 묶음) 안에 놓이면 학기 꼬리표는 떼고 '과학의 역사와 문화(융합)', 학기를 모르는 칸이면
+    // 두 학기 구분이 필요하므로 '(1학기)' 하나만 남긴다.
+    function aggregateCourseDisplayName(subject, semesterKey) {
+      const label = applicationCourseLabel(subject);
+      const name = String(subject?.subject ?? "");
+      const tag = name.match(/\s*[（(]\s*([12])\s*학기\s*[)）]\s*$/);
+      if (!tag) return label;
+      const base = name.slice(0, tag.index).trim();
+      if (semesterKey === "1" || semesterKey === "2") return applicationCourseLabel({ ...subject, subject: base });
+      return `${base} (${tag[1]}학기)`;
     }
 
     function currentStudent() {
@@ -4846,9 +4861,10 @@
             : grade === "2"
               ? `현 2학년은 이 편제표의 3학년 과목으로 신청`
               : "올해 전학년 편제표의 3학년 열을 만드는 데 사용 · 수강신청에는 쓰지 않음";
+        const cohortSubtitle = grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`;
         return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
           <h4>${year}학년도 입학생 · ${grade === "0" ? "내년도 신입생" : `현 ${grade}학년`}</h4>
-          <p title="${escapeHtml(description)}">${grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
+          <p title="${escapeHtml(`${cohortSubtitle} · ${description}`)}">${cohortSubtitle}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
           <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>${fileName && typeof curriculumArchiveNote === "function" ? curriculumArchiveNote(active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}
           <div>${typeof curriculumReconvertCardHtml === "function" ? curriculumReconvertCardHtml(year, active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}<button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
@@ -7439,8 +7455,10 @@
           const repairNotes = typeof curriculumDataRepairNotes === "function" ? curriculumDataRepairNotes(importedLayout) : [];
           const autoNames = typeof curriculumAutoNameList === "function" ? curriculumAutoNameList(importedLayout) : [];
           if (autoNames.length) repairNotes.push(`공식 과목명으로 ${autoNames.length}곳 자동 수정(${autoNames.slice(0, 4).map((item) => `${item.from} → ${item.to}`).join(", ")}${autoNames.length > 4 ? " 등" : ""} · 표 위 '자동 수정' 안내에서 되돌리기)`);
+          // 표 위 'n개 과목 표시'와 같은 기준(과목 행 수). plan은 '가, 나' 행을 과목마다 세어 수가 달랐다.
+          const subjectRows = typeof planDataSubjects === "function" && importedLayout.planData ? planDataSubjects(importedLayout.planData).length : plan.length;
           status.textContent = plan.length
-            ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${plan.length}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
+            ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${subjectRows}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
           const message = error?.message || "편제표 파일 처리 중 오류가 발생했습니다.";

@@ -292,7 +292,10 @@ test("curriculum management shows three cohort plans and a separate annual whole
   // 좁은 카드에서도 읽히게 짧게: '3학년(2024) 편제표 필요'(여러 개면 '2·3학년(2025·2024) …')
   assert.match(markup, />1·2·3학년\(2026·2025·2024\) 편제표 필요</);
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "legacy.css"), "utf8");
-  assert.match(css, /@media screen and \(min-width: 1360px\) \{[^}]*\}\s*\/\*[^*]*\*\/\s*\.curriculum-cohort-card p \{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;/);
+  assert.match(css, /\.curriculum-cohort-card p \{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;/);
+  assert.match(css, /\.curriculum-cohort-card > p:not\(\.curriculum-cohort-file\) \{ -webkit-line-clamp: 3; \}/, "편제 점검 단추 옆 부제는 세 줄까지");
+  assert.match(css, /\.curriculum-cohort-card > \.curriculum-cohort-file \{ overflow-wrap: anywhere; word-break: break-all;/, "파일 이름은 글자 단위로 줄바꿈");
+  assert.match(markup, /<p title="수강신청: 3학년 과목 기준 · 현 2학년은 이 편제표의 3학년 과목으로 신청">수강신청: 3학년 과목 기준<\/p>/, "부제 title에 보이는 글자도");
   elements["#schoolYear"].value = "2027";
   ctx.renderCurriculumCohortUploads();
   assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]
@@ -1518,4 +1521,17 @@ test("aggregate sheet splits large groups evenly, six subjects at most per row",
   assert.match(xml, /<f>SUM\(C7:H7,C12:H12,C17:H17\)\/5<\/f><v>32<\/v>/);
   assert.equal(ctx.aggregateTextLines("과목1", 16.375), 1);
   assert.equal(ctx.aggregateTextLines("세계시민과 지리(일반)", 16.375, 12, true), 2);
+});
+
+test("4단계 집계표 과목명은 괄호를 한 번만: 학기 칸 안이면 학기 꼬리표를 떼고 '(융합)', 학기를 모르면 '(1학기)' 하나만", () => {
+  const ctx = vm.createContext({ curriculumSelectionType: (type) => String(type || "") });
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("), ctx);
+  vm.runInContext(functionSource("function aggregateCourseDisplayName(", "function currentStudent("), ctx);
+  const subject = { subject: "과학의 역사와 문화 (1학기)", type: "융합선택" };
+  assert.equal(ctx.applicationCourseLabel(subject), "과학의 역사와 문화 (1학기)(융합)", "예전 표기(괄호 두 번)");
+  assert.equal(ctx.aggregateCourseDisplayName(subject, "1"), "과학의 역사와 문화(융합)");
+  assert.equal(ctx.aggregateCourseDisplayName(subject, ""), "과학의 역사와 문화 (1학기)");
+  assert.equal(ctx.aggregateCourseDisplayName({ subject: "법과 사회", type: "진로선택" }, "2"), "법과 사회(진로)", "꼬리표 없는 과목은 그대로");
+  assert.match(functionSource("function aggregateRecords(", "function currentStudent("), /aggregateCourseDisplayName\(applicationSubject, semesterKey\)/,
+    "화면·엑셀 집계표(aggregateSheetModel)가 함께 쓰는 displayName");
 });
