@@ -316,3 +316,20 @@ test("전학년 편제표: 같은 과목이라도 학년 열마다 편성 영역
   assert.equal(choice.credits.sem22, undefined, "학생 선택 행에는 2학년 학교 지정 학점이 들어가지 않는다");
   assert.ok(school.row < choice.row, "학교 지정 영역(위)에 놓인다");
 });
+
+test("전학년 편제표: 다른 입학생 편제표에서 온 학교 지정 국어 과목은 같은 영역의 국어 행 무리 바로 뒤(예술·교양 사이 별도 '국어' 칸이 아님)", () => {
+  const ctx = context();
+  const raw2025 = fixture(2025);
+  raw2025.rows[5][3] = "독서와 작문"; // 2025 입학생: 학교 지정 국어 2-2
+  // Y 편제표에서 국어보다 뒤의 다른 교과 학교 지정 행(음악·미술)에도 2-2 칸이 있으면 예전에는 그 뒤로 갔다.
+  const raw2026 = fixture(2026);
+  raw2026.rows[7][9] = "2";
+  const y2026 = converted(ctx, raw2026, 2026), y2025 = converted(ctx, raw2025, 2025), y2024 = converted(ctx, fixture(2024), 2024);
+  const layout = ctx.buildAnnualCurriculumLayout({ 2026: { plan: [], layout: y2026 }, 2025: { plan: [], layout: y2025 }, 2024: { plan: [], layout: y2024 } }, 2026);
+  const subjects = ctx.planDataSubjects(layout.planData);
+  const names = subjects.map((item) => item.name.trim());
+  const writing = names.indexOf("독서와 작문"), music = names.indexOf("음악, 미술");
+  assert.ok(writing >= 0 && music >= 0, names.join(" / "));
+  assert.ok(writing < music, `국어 행 무리 뒤, 음악 앞: ${names.join(" / ")}`);
+  assert.ok(subjects.slice(0, writing).every((item) => item.area === "국어"), "앞 행이 모두 국어 → 교과(군) 한 칸으로 합쳐진다");
+});
