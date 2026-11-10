@@ -102,7 +102,7 @@ function modelFromExports(files, { semester }) {
     const room = head.split(" (")[0];
     const students = sheet.rows.slice(2).filter((r) => r[1]).map((r) => r[1]);
     const info = byRoom.get(room) || {};
-    sections.push({ id: room, room, semester, subject: info.course || head.match(/\((.*)\)/)?.[1] || "", block: info.block, times: info.times || [], teacher: info.teacher,
+    sections.push({ id: room, room, semester, subject: String(info.course || head.match(/\((.*)\)/)?.[1] || "").replace(/\s*[(（]\s*[12]\s*학기\s*[)）]\s*$/, ""), block: info.block, times: info.times || [], teacher: info.teacher,
       capacity: info.capacity, students, title: head, titleCount: Number((head.match(/(\d+)명$/) || [])[1]) });
   }
   return { sections, byRoom };
@@ -113,7 +113,7 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   const { sections, byRoom } = modelFromExports(files, { semester });
   const sel = new Map();
   for (const [student, list] of selections) {
-    const mine = list.filter((x) => courseNames.includes(x.subject) && !classUnitCourses.includes(x.subject)).map((x) => ({ subject: x.subject, semester }));
+    const mine = list.filter((x) => courseNames.includes(x.subject) && (!x.semester || x.semester === semester) && !classUnitCourses.includes(x.subject)).map((x) => ({ subject: x.subject, semester }));
     if (mine.length) sel.set(student, mine);
   }
   const check = Timetable.checkTimetable({ sections, selections: sel });
@@ -146,6 +146,11 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   h.check(!badNames.length && !dupRooms.length, "중요", "6단계", `${label}: 개설강의실 이름 규칙 위반 ${badNames.length}건·중복 ${dupRooms.length}건`, { actual: { badNames: badNames.slice(0, 5), dupRooms } });
   // 나이스 편성 엑셀: 2줄 머리글·10열 + 참고 열, 학생·과목당 한 줄, 최종 선택과 같음, 강의실 이름 = 명렬표
   const neis = files.neis[0].rows;
+  // 두 학기 과목 꼬리표 '(1학기)/(2학기)'가 나이스 개설과목·강의실 이름·명렬표에 들어가면 안 됨
+  const TAG = /[(（]\s*[12]\s*학기\s*[)）]|[12]학기\)/;
+  const taggedRows = neis.slice(2).filter((r) => TAG.test(String(r[4])) || TAG.test(String(r[5]))).map((r) => `${r[4]} / ${r[5]}`);
+  const taggedRooms = sections.filter((x) => TAG.test(x.room) || TAG.test(x.title || "")).map((x) => x.room);
+  if (taggedRows.length || taggedRooms.length) h.issue("중요", "6단계", `${label}: 두 학기 과목 꼬리표 '(n학기)'가 나이스 개설과목·강의실 이름·명렬표에 들어감(${taggedRows.length}줄) [수정 대기]`, { actual: { rows: [...new Set(taggedRows)].slice(0, 4), rooms: taggedRooms.slice(0, 4) }, pending: true });
   const head2 = (neis[1] || []).map(compact);
   const headOk = compact(neis[0]?.[0]) === "개설과목" && compact(neis[0]?.[6]) === "편성학생" && Timetable.NEIS_COLUMNS.every((name, i) => head2[i] === compact(name)) && /참고/.test(neis[1]?.[10] || "");
   h.check(headOk, "중요", "6단계", `${label}: 나이스 편성 엑셀 머리글(2줄·10열+참고 열)이 다름`, { actual: neis.slice(0, 2) });
@@ -153,7 +158,7 @@ function checkGroup({ h, label, files, screen, selections, semester, courseNames
   const seen = new Set(); const dups = []; const exported = new Map(); const roomMismatch = [];
   const roomsOf = new Map(); for (const s of sections) for (const st of s.students) roomsOf.set(`${st}|${s.subject}`, s.room);
   for (const r of rows) {
-    const subject = String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, "");
+    const subject = String(r[4]).replace(/\(\d+(?:\.\d+)?\)$/, "").replace(/^\([^)]*\)/, "").replace(/\s*[(（]\s*[12]\s*학기\s*[)）]\s*$/, "");
     if (classUnitCourses.includes(subject) || CLASS_UNIT_ROOM.test(String(r[5]))) continue; // 학급 단위 행은 run.cjs에서 담임반 배정과 대조
     const key = `${r[10]}|${subject}`;
     if (seen.has(key)) dups.push(key); seen.add(key);
