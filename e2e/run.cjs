@@ -762,6 +762,11 @@ async function stepResultTwice({ page, h, report, roster, dialogs }) {
     fs.writeFileSync(file, writeXlsx([{ name: "결과", rows: [["차수", "학년", "반", "번호", "성명", "선택과목"], ...students.map((s, i) => [Number(round), Number(grade), Number(s.classroom), Number(s.number), s.name, picks[i].join(", ")])] }]));
     await gotoStep(page, 2);
     await selectGradeTab(page, grade);
+    // 결과 엑셀은 '외부 프로그램 결과 취합' 방식에서만 올린다(웹 방식이면 결과 탭이 숨겨짐) → 사용자처럼 방식을 바꾼다.
+    if (!(await page.locator("#applicationModeExternal").isVisible())) await page.locator("#applicationModeSettings summary").click();
+    await page.locator("#applicationModeExternal").click();
+    await sleep(300);
+    out.mode = await text(page, "#applicationModeStatus");
     await page.locator("#applicationResultsTab").click();
     await page.locator("#addApplicationRound").click();
     await sleep(500);
