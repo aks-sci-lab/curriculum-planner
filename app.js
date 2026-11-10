@@ -49,6 +49,7 @@
       roundClosures: { "1": {} },
       roundStatuses: {},
       hoursStats: {},
+      classSections: {},
       courseChecks: {},
       curriculumCompliance: {},
       curriculumVersions: {},
@@ -416,6 +417,7 @@
           roundClosures: state.roundClosures,
           roundStatuses: state.roundStatuses,
           hoursStats: state.hoursStats,
+          classSections: state.classSections,
           courseChecks: state.courseChecks,
           curriculumCompliance: state.curriculumCompliance,
           curriculumVersions: state.curriculumVersions,
@@ -1093,7 +1095,8 @@
         3: hasResult ? ["done", "가능"] : ["wait", "대기"],
         4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
           : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
-        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts ? ["todo", "편제표 필요"] : ["done", "가능"]
+        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts ? ["todo", "편제표 필요"] : ["done", "가능"],
+        8: !hasResult ? ["wait", "대기"] : roundState === "confirmed" ? ["todo", "편성 가능"] : ["todo", "시안 가능"]
       };
     }
 
@@ -1136,6 +1139,7 @@
       $("#workflowStep2Panel").classList.toggle("hidden", step !== 2);
       $("#workflowStep6Panel").classList.toggle("hidden", step !== 6);
       $("#workflowStep7Panel").classList.toggle("hidden", step !== 7);
+      $("#workflowStep8Panel")?.classList.toggle("hidden", step !== 8);
       $("#certificatePanel").classList.toggle("hidden", step !== 3);
       $("#aggregatePanel").classList.toggle("hidden", step !== 4);
       $("#retakePanel").classList.toggle("hidden", step !== 4);
@@ -1147,6 +1151,7 @@
         if (typeof renderRoundCompare === "function") renderRoundCompare();
       }
       if (step === 7 && typeof renderHoursStats === "function") renderHoursStats();
+      if (step === 8 && typeof renderClassSections === "function") renderClassSections();
       // 3단계에 들어오면 목록의 첫 학생 확인서를 바로 보여 준다(이미 고른 학생이 목록에 있으면 그대로).
       if (step === 3 && typeof showFirstVisibleStudent === "function") showFirstVisibleStudent();
       // 안 보일 때 미뤄 둔 이 단계의 그리기(view-keep.js). 위에서 직접 그린 것은 이미 빠져 있다.
@@ -1173,14 +1178,14 @@
       schedule(next);
     }
 
-    // 내부 단계 번호 5·6(이동수업·시간표)은 보류 중이고 시수 통계는 7번으로 저장한다.
+    // 내부 단계 번호 5·6(이동수업 과목 분류·시간표)은 보류 중이고 시수 통계는 7번, 분반 편성(표시 6단계)은 8번으로 저장한다.
     function workflowStepLabel(step) {
-      return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
+      return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 8: "6단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
     }
 
     function switchWorkflowStep(step, skipPersist = false) {
       const next = Number(step);
-      state.workflowStep = [1, 2, 3, 4, 5, 6, 7].includes(next) ? next : 1;
+      state.workflowStep = [1, 2, 3, 4, 5, 6, 7, 8].includes(next) ? next : 1;
       renderWorkflowLayout();
       $("#workflowMenuToggle").setAttribute("aria-expanded", "false");
       $("#workflowMenuToggle").textContent = `단계 선택 · ${workflowStepLabel(state.workflowStep)}`;
@@ -1377,6 +1382,7 @@
       state.roundClosures = { "1": {} };
       state.roundStatuses = {};
       state.hoursStats = {};
+      state.classSections = {};
       state.courseChecks = {};
       state.curriculumCompliance = {};
       state.curriculumVersions = {};
@@ -1496,6 +1502,9 @@
         state.hoursStats = plainObject(saved.hoursStats)
           ? Object.fromEntries(Object.entries(saved.hoursStats).filter(([year, value]) => /^\d{4}$/.test(year) && plainObject(value)))
           : {};
+        // 6단계 분반 편성(예전 저장분·백업에는 없음 → 빈 객체). 정리는 class-sections-view.js가 한다.
+        state.classSections = typeof classSectionsRestore === "function" ? classSectionsRestore(saved.classSections)
+          : plainObject(saved.classSections) ? saved.classSections : {};
         // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.
         if (typeof courseCheckMigrateRequired === "function") {
           const migrated = courseCheckMigrateRequired(saved.courseChecks, saved.curriculumCompliance);
@@ -1583,7 +1592,7 @@
         const savedStep = Number(saved.workflowStep);
         state.workflowStep = savedStep > 6 && !saved.schemaVersion
           ? ({7:4, 8:4, 9:5, 10:6})[savedStep] || 1
-          : [1, 2, 3, 4, 5, 6, 7].includes(savedStep) ? savedStep : 1;
+          : [1, 2, 3, 4, 5, 6, 7, 8].includes(savedStep) ? savedStep : 1;
         state.applicationMode = ["external", "web"].includes(saved.applicationMode)
           ? saved.applicationMode
           : "external";

@@ -153,6 +153,7 @@ function classSectionsChangedStudents(previousStudents, students) {
 //   teachers: [{ id, name, departments:[], courses:[], unavailable:[{day,period,reason}] }], departmentTeachers: { 교과: 수 },
 //   rooms: { 특별실: 수 }, occupied: [{ label, times, teacherIds, departments:{교과:수}, rooms:{특별실:수} }], fixedSlots: (occupied와 같은 모양),
 //   mode, seed, previous: { sections:[{id, blockId}], assign:{ 학생key:[분반id] }, teacherOf }, partial, changedStudents,
+//   baseline: { assign } (비교 지표 '기존 대비 이동'만, 없으면 previous),
 //   placementSteps, evalIterations, finalIterations, timeLimitMs, suggest(기본 true)
 // }
 function classSectionsNormalize(input) {
@@ -324,6 +325,8 @@ function classSectionsNormalize(input) {
     groupId: classSectionsText(src.groupId), label: classSectionsText(src.label), grade: src.grade ?? null, targetGrade: src.targetGrade ?? null,
     semester: src.semester ?? null, defaultCapacity, mode, seed: Number(src.seed) || 1, courses, classUnitCourses, blocks, sections, students,
     teachers, departmentTeachers: src.departmentTeachers || null, rooms: src.rooms || null, occupied, partial, previous,
+    // baseline: 비교용 기존 배정(옮긴 수 지표만, 배정 비용에는 쓰지 않음). previous는 유지 비용·부분 재계산에 쓴다.
+    baseline: src.baseline && typeof src.baseline === "object" ? src.baseline : previous,
     teacherPins: pins.teachers || {}, issues, unassignedInput, sectionById, courseByKey: byKey,
     options: {
       placementSteps: Number(src.placementSteps) || 0, evalIterations: Number(src.evalIterations) || 0, finalIterations: Number(src.finalIterations) || 0,
@@ -1287,6 +1290,7 @@ function classSectionsAssignTeachers(spec) {
     teacherOf[section.id] = teacher.id;
     assignTo(teacher, section, 1);
   }
+  const noQualified = new Map();
   const rest = sections.filter((section) => !teacherOf[section.id]).sort((a, b) => eligible.get(a.id).length - eligible.get(b.id).length || (a.id < b.id ? -1 : 1));
   for (const section of rest) {
     const list = eligible.get(section.id).filter((teacher) => free(teacher, section) && teacher.hours + (section.credits || 0) <= teacher.maxHours);
@@ -1314,9 +1318,13 @@ function classSectionsAssignTeachers(spec) {
       }
     }
     if (chosen) { teacherOf[section.id] = chosen.teacher.id; assignTo(chosen.teacher, section, 1); }
-    else issues.push({ type: "teacher-missing", severity: teachers.length ? "warn" : "info", sectionId: section.id,
+    else if (!teachers.some((teacher) => qualified(teacher, section))) noQualified.set(section.courseName, (noQualified.get(section.courseName) || 0) + 1);
+    else issues.push({ type: "teacher-missing", severity: "warn", sectionId: section.id,
       message: `${section.courseName}${section.label ? ` ${section.label}` : ""}: 그 시간에 맡을 수 있는 교사가 없습니다.` });
   }
+  // 명단에 그 과목·교과 교사가 아예 없으면 과목마다 한 번만 안내(교사를 일부만 입력한 경우).
+  for (const [name, count] of noQualified) issues.push({ type: "teacher-none", severity: "info", courseName: name,
+    message: `${name}: 교사 명단에 담당 교사가 없어 분반 ${count}개의 교사를 비워 둡니다.` });
   const load = {};
   for (const teacher of teachers) load[teacher.id] = teacher.hours;
   return { teacherOf, issues, load };
@@ -1702,7 +1710,7 @@ function classSectionsSolve(input, presetPlacement) {
   result.mode = model.mode;
   result.seed = model.seed;
   result.signature = classSectionsSignature(input);
-  result.metrics = classSectionsMetrics(model, result, model.previous);
+  result.metrics = classSectionsMetrics(model, result, model.baseline);
   classSectionsAssignRoomNames(result, model.blocks.map((block) => block.id));
   result.issues = [...model.issues, ...placed.issues, ...teacherIssues, ...classSectionsValidate(model, result)];
   result.explain = classSectionsExplainResult(model, placed.place, result, deadline, input);
