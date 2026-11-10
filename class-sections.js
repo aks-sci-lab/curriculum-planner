@@ -1956,7 +1956,9 @@ function classSectionsSolve(input, presetPlacement) {
   const model = classSectionsNormalize(input);
   const deadline = start + model.options.timeLimitMs;
   const rng = classSectionsRng(model.seed);
-  const weights = CLASS_SECTIONS_MODE_WEIGHTS[model.mode];
+  // keepWeight: 직접 고치기 뒤 다시 풀 때 앞 배정(previous)에서 바뀌는 학생에게 큰 비용(기본 4).
+  const keepWeight = Number(input?.keepWeight);
+  const weights = keepWeight > 0 ? { ...CLASS_SECTIONS_MODE_WEIGHTS[model.mode], keep: keepWeight } : CLASS_SECTIONS_MODE_WEIGHTS[model.mode];
   let placed;
   if (presetPlacement) {
     const place = classSectionsPlacementNew(model);
