@@ -787,7 +787,8 @@ async function stepResultTwice({ page, h, report, roster, dialogs }) {
     await page.locator("#addApplicationRound").click();
     await sleep(500);
     out.addRound = await text(page, "#status");
-    h.check(/3차/.test(out.addRound), "중요", "2단계·결과", "결과 엑셀 점검용 3차를 추가하지 못함", { actual: out.addRound });
+    h.check(/^3(차)?를 추가했습니다/.test(out.addRound), "중요", "2단계·결과", "결과 엑셀 점검용 3차를 추가하지 못함", { actual: out.addRound });
+    h.check(/3차를 추가했습니다/.test(out.addRound), "경미", "2단계·결과", "차수 추가 안내 글자에 '차'가 빠짐('3를 추가했습니다.' → '3차를 추가했습니다.', app.js #addApplicationRound 처리기)", { expected: "3차를 추가했습니다.", actual: out.addRound });
     const before = dialogs.length;
     await page.locator("#rosterInput").setInputFiles(file);
     await page.locator("#resultImportPreview:not(.hidden)").waitFor({ timeout: 20000 });
@@ -820,6 +821,7 @@ async function stepResultTwice({ page, h, report, roster, dialogs }) {
       const line = preview.split("\n").find((l) => /같은 과목 두 학기 신청/.test(l)) || "";
       out.certificate[`${s.classroom}-${s.number}`] = line;
       if (i === 0) h.check(/같은 과목 두 학기 신청\(심화 영어 1·2학기\) → 재신청 필요/.test(preview), "중요", "3단계", "두 학기 모두 고른 학생 확인서 점검란에 '같은 과목 두 학기 신청 … → 재신청 필요'가 없음", { expected: "같은 과목 두 학기 신청(심화 영어 1·2학기) → 재신청 필요", actual: preview.slice(0, 600) });
+      if (i === 0) h.check(!/재신청 필요 · 이상 없음/.test(line), "경미", "3단계", "확인서 위계 점검란에 '같은 과목 두 학기 신청 … → 재신청 필요'와 '이상 없음'이 한 줄에 함께 나옴", { actual: line });
       else h.check(!line, "중요", "3단계", `한 학기만 고른 학생 확인서에 '같은 과목 두 학기 신청'이 보임(${s.classroom}-${s.number})`, { actual: line });
     }
     await h.screenshot(page, "result-twice-certificate");
