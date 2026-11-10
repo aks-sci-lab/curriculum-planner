@@ -381,6 +381,22 @@ test("same course in two semesters shows in the check table and the certificate 
   assert.match(table, /<li class="is-violation is-twice">같은 과목 두 학기 신청\(물리학 1·2학기\) → 재신청 필요<\/li>/);
   const paper = ctx.courseCheckCertificateHtml(student);
   assert.match(paper, /paper-checks has-issue/);
-  assert.match(paper, /<b>위계 점검<\/b> 같은 과목 두 학기 신청\(물리학 1·2학기\) → 재신청 필요 · /);
+  // 두 학기 신청이 있으면 '이상 없음'을 붙이지 않는다(앞뒤 모순).
+  assert.match(paper, /<b>위계 점검<\/b> 같은 과목 두 학기 신청\(물리학 1·2학기\) → 재신청 필요<\/p>/);
+  assert.doesNotMatch(paper, /이상 없음/);
+  assert.doesNotMatch(table, /이상 없음/, "검증 팝업 표에도 '이상 없음'이 없다");
   assert.equal((paper.match(/<p>/g) || []).length, 2, "점검란은 두 줄 그대로(인쇄 1장)");
+  const issues = ctx.courseCheckResultIssues(ctx.state.students.filter((item) => item.grade === "1"), { grade: "1" });
+  assert.doesNotMatch([...issues.warnings, ...issues.info].join("\n"), /모두 이상 없음/, "검증 요약도 두 학기 신청이 있으면 '모두 이상 없음' 없음");
+});
+
+test("certificate check line keeps '이전 학년 이수 확인 필요' without '이상 없음' when a same-course-twice note is present", () => {
+  const ctx = checksContext();
+  ctx.applicationSameCourseTwice = () => [{ name: "물리학", semesters: ["1", "2"] }];
+  for (const student of ctx.state.students) {
+    const paper = ctx.courseCheckCertificateHtml(student);
+    if (!paper) continue;
+    assert.doesNotMatch(paper, /이상 없음/);
+    assert.match(paper, /<b>위계 점검<\/b> 같은 과목 두 학기 신청\(물리학 1·2학기\) → 재신청 필요/);
+  }
 });
