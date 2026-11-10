@@ -1291,33 +1291,45 @@ function classSectionsAssignTeachers(spec) {
     assignTo(teacher, section, 1);
   }
   const noQualified = new Map();
+  // 교사별 맡은 분반(교환 탐색용).
+  const assigned = new Map(teachers.map((teacher) => [teacher.id, new Set()]));
+  for (const [sectionId, teacherId] of Object.entries(teacherOf)) assigned.get(teacherId)?.add(sectionId);
+  const sectionById = new Map(sections.map((section) => [section.id, section]));
+  const give = (teacher, section) => { teacherOf[section.id] = teacher.id; assigned.get(teacher.id).add(section.id); assignTo(teacher, section, 1); };
+  const take = (teacher, section) => { delete teacherOf[section.id]; assigned.get(teacher.id).delete(section.id); assignTo(teacher, section, -1); };
+  const fits = (teacher, section) => free(teacher, section) && teacher.hours + (section.credits || 0) <= teacher.maxHours;
+  // 교환 지역 탐색(증가 경로): 맡을 교사가 없으면, 막고 있는 분반 하나를 다른 교사에게 넘기기를 깊이 depth까지 시도한다(고정 분반은 그대로).
+  const place = (section, depth, seen) => {
+    const list = eligible.get(section.id).filter((teacher) => !seen.has(teacher.id));
+    let best = null;
+    for (const teacher of list) {
+      if (!fits(teacher, section)) continue;
+      const score = teacher.hours - (previous[section.id] === teacher.id ? 100 : 0);
+      if (!best || score < best.score) best = { teacher, score };
+    }
+    if (best) { give(best.teacher, section); return true; }
+    if (depth <= 0) return false;
+    for (const teacher of list) {
+      const blockers = [...assigned.get(teacher.id)].map((id) => sectionById.get(id))
+        .filter((other) => other.blockKey === section.blockKey || classSectionsOverlap(other.times, section.times));
+      if (blockers.length !== 1 || pins[blockers[0].id]) continue;
+      const blocker = blockers[0];
+      take(teacher, blocker);
+      if (fits(teacher, section)) {
+        give(teacher, section);
+        seen.add(teacher.id);
+        if (place(blocker, depth - 1, seen)) return true;
+        seen.delete(teacher.id);
+        take(teacher, section);
+      }
+      give(teacher, blocker);
+    }
+    return false;
+  };
   const rest = sections.filter((section) => !teacherOf[section.id]).sort((a, b) => eligible.get(a.id).length - eligible.get(b.id).length || (a.id < b.id ? -1 : 1));
   for (const section of rest) {
-    const list = eligible.get(section.id).filter((teacher) => free(teacher, section) && teacher.hours + (section.credits || 0) <= teacher.maxHours);
-    let chosen = null;
-    for (const teacher of list) {
-      const score = teacher.hours - (previous[section.id] === teacher.id ? 100 : 0);
-      if (!chosen || score < chosen.score) chosen = { teacher, score };
-    }
-    if (!chosen) {
-      // 한 단계 교체: 막고 있는 분반을 다른 교사에게 넘긴다(고정 분반은 건드리지 않음).
-      for (const teacher of eligible.get(section.id)) {
-        const blockers = sections.filter((other) => teacherOf[other.id] === teacher.id && !pins[other.id]
-          && (other.blockKey === section.blockKey || classSectionsOverlap(other.times, section.times)));
-        if (blockers.length !== 1) continue;
-        const blocker = blockers[0];
-        assignTo(teacher, blocker, -1);
-        const alt = eligible.get(blocker.id).find((other) => other !== teacher && free(other, blocker));
-        if (alt && free(teacher, section)) {
-          teacherOf[blocker.id] = alt.id;
-          assignTo(alt, blocker, 1);
-          chosen = { teacher };
-          break;
-        }
-        assignTo(teacher, blocker, 1);
-      }
-    }
-    if (chosen) { teacherOf[section.id] = chosen.teacher.id; assignTo(chosen.teacher, section, 1); }
+    const chosen = place(section, Number(spec.depth) >= 0 ? Number(spec.depth) : 3, new Set()) ? { teacher: byId.get(teacherOf[section.id]) } : null;
+    if (chosen) { /* place()가 이미 배정함 */ }
     else if (!teachers.some((teacher) => qualified(teacher, section))) noQualified.set(section.courseName, (noQualified.get(section.courseName) || 0) + 1);
     else issues.push({ type: "teacher-missing", severity: "warn", sectionId: section.id,
       message: `${section.courseName}${section.label ? ` ${section.label}` : ""}: 그 시간에 맡을 수 있는 교사가 없습니다.` });
@@ -1513,7 +1525,8 @@ function classSectionsMetrics(model, result, previous) {
     together += max;
     total += sum;
   }
-  let moved = 0;
+  // 앞 편성 결과가 없으면 비교할 것이 없으므로 null('–'로 표시).
+  let moved = previous?.assign ? 0 : null;
   if (previous?.assign) {
     for (const student of model.students) {
       const before = new Set(previous.assign[student.key] || []);
@@ -1830,17 +1843,92 @@ function classSectionsTeacherSections(model, result) {
 }
 
 // ---- 여러 그룹(학년 간 교사·특별실 겹침) ----
-// spec: { groups:[그룹 input], teachers, rooms, fixedSlots, seed }. 학기별로 먼저 푼 그룹의 블록 시간 사용량을 다음 그룹이 뺀다.
+// spec: { groups:[그룹 input], teachers, departmentTeachers, rooms, fixedSlots, seed }.
+// 같은 학기 그룹은 앞에서 푼 그룹의 블록 시간 사용량(교과 교사·특별실)을 뒤 그룹이 뺀다. 순서에 따라 결과가 달라지므로
+// 여러 순서(입력 순서·거꾸로·교사 수가 빠듯한 그룹 먼저·나중)를 모두 풀고 가장 좋은 것을 고른다
+// (평가: 미배정 → 교사 불가/겹침/부족 위반 → 분반 인원 차이). 같은 seed면 같은 결과.
 // 반환 teacherOf는 '그룹id::분반id' 키, 그룹별 result.teacherOf는 분반id 키.
 function classSectionsSolveAll(spec) {
   const start = classSectionsNow();
-  const groups = (spec.groups || []).map((group, order) => ({ group, order }))
-    .sort((a, b) => String(a.group.semester ?? "").localeCompare(String(b.group.semester ?? "")) || a.order - b.order);
+  const base = (spec.groups || []).map((group, order) => ({ group, order }));
+  const fixedSlots = classSectionsMergeFixed([...(spec.fixedSlots || []), ...base.flatMap(({ group }) => group.fixedSlots || [])]);
+  const timed = base.some(({ group }) => Array.isArray(group.blocks) && group.blocks.some((block) => classSectionsSlots(block.times).length));
+  const limited = (spec.teachers || []).length || spec.departmentTeachers || spec.rooms || base.some(({ group }) => (group.teachers || []).length || group.departmentTeachers || group.rooms);
+  const orders = timed && limited && base.length > 1 ? classSectionsSolveAllOrders(base, spec) : [{ label: "입력 순서", list: base }];
+  const runs = orders.map((order) => ({ order, run: classSectionsSolveAllOnce(spec, order.list, fixedSlots) }));
+  for (const item of runs) item.score = classSectionsSolveAllScore(item.run);
+  runs.sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1] || a.score[2] - b.score[2] || orders.indexOf(a.order) - orders.indexOf(b.order));
+  const best = runs[0].run;
+  const shortages = classSectionsTeacherShortages(best.results, spec, fixedSlots);
+  const shortageIssues = shortages.map((item) => ({ type: "teacher-shortage", severity: "error", department: item.department, slot: item.slot, message: item.message }));
+  // 그룹 결과 순서는 입력 순서로 돌려준다.
+  const byGroup = new Map(best.results.map((item) => [item.input.groupId, item]));
+  const ordered = base.map(({ group }) => byGroup.get(group.groupId)).filter(Boolean);
+  return { groups: ordered.map(({ input, result }) => ({ groupId: input.groupId, label: input.label, result })),
+    teacherOf: best.teacherResult?.teacherOf || {}, teacherLoad: best.teacherResult?.load || {},
+    issues: [...(best.teacherResult?.issues || []), ...best.across, ...shortageIssues], shortages,
+    orders: runs.map((item) => ({ label: item.order.label, groups: item.order.list.map(({ group }) => group.label || group.groupId), score: item.score })),
+    chosenOrder: runs[0].order.label, elapsedMs: Math.round(classSectionsNow() - start) };
+}
+
+function classSectionsMergeFixed(list) {
+  const seen = new Map();
+  for (const item of list) {
+    const key = `${classSectionsText(item.label)}|${classSectionsSlots(item.times).join(",")}`;
+    const prev = seen.get(key);
+    if (prev) prev.teacherIds = [...new Set([...prev.teacherIds, ...(item.teacherIds || []).map(classSectionsText)])];
+    else seen.set(key, { label: item.label, times: classSectionsSlots(item.times), teacherIds: (item.teacherIds || []).map(classSectionsText) });
+  }
+  return [...seen.values()];
+}
+
+// 시도할 순서들(학기 순서는 지키고 학기 안에서만 바꿈). 압박 = 교과별 (분반 수 / 교사 수)의 최댓값.
+function classSectionsSolveAllOrders(base, spec) {
+  const counts = new Map();
+  for (const teacher of spec.teachers || []) for (const name of teacher.departments || []) counts.set(name, (counts.get(name) || 0) + 1);
+  for (const [name, value] of Object.entries(spec.departmentTeachers || {})) if (!counts.has(name)) counts.set(name, Number(value) || 0);
+  const pressure = ({ group }) => {
+    let max = 0;
+    for (const course of group.courses || []) {
+      const supply = counts.get(course.department);
+      if (!supply) continue;
+      max = Math.max(max, (Number(course.sections ?? course.classCount) || 0) / supply);
+    }
+    return max;
+  };
+  const semesterOf = ({ group }) => String(group.semester ?? "");
+  const bySemester = (list) => list.slice().sort((a, b) => semesterOf(a).localeCompare(semesterOf(b)));
+  const stable = (list, compare) => bySemester(list.map((item, index) => ({ item, index })).sort((a, b) => compare(a.item, b.item) || a.index - b.index).map(({ item }) => item));
+  const candidates = [
+    { label: "입력 순서", list: bySemester(base) },
+    { label: "거꾸로", list: bySemester(base.slice().reverse()) },
+    { label: "교사 수가 빠듯한 그룹 먼저", list: stable(base, (a, b) => pressure(b) - pressure(a)) },
+    { label: "교사 수가 빠듯한 그룹 나중", list: stable(base, (a, b) => pressure(a) - pressure(b)) }
+  ];
+  const seen = new Set();
+  return candidates.filter((item) => { const key = item.list.map(({ order }) => order).join(","); if (seen.has(key)) return false; seen.add(key); return true; });
+}
+
+function classSectionsSolveAllScore(run) {
+  let unassigned = 0;
+  let violations = 0;
+  let spread = 0;
+  for (const { result } of run.results) {
+    unassigned += result.unassigned.length;
+    spread += result.metrics?.maxSpread || 0;
+    violations += (result.issues || []).filter((issue) => issue.severity === "error" && issue.type !== "unassigned").length;
+  }
+  violations += (run.teacherResult?.issues || []).filter((issue) => issue.severity === "error" || issue.type === "teacher-missing").length;
+  violations += run.across.filter((issue) => issue.severity === "error").length;
+  return [unassigned, violations, spread];
+}
+
+function classSectionsSolveAllOnce(spec, list, fixedSlots) {
   const results = [];
   const occupied = [];
-  for (const { group } of groups) {
-    const input = { ...group, teachers: group.teachers || spec.teachers, rooms: group.rooms || spec.rooms,
-      fixedSlots: [...(spec.fixedSlots || []), ...(group.fixedSlots || [])], occupied: [...(group.occupied || []), ...occupied],
+  for (const { group } of list) {
+    const input = { ...group, teachers: group.teachers || spec.teachers, departmentTeachers: group.departmentTeachers || spec.departmentTeachers,
+      rooms: group.rooms || spec.rooms, fixedSlots, occupied: [...(group.occupied || []), ...occupied],
       seed: group.seed ?? spec.seed, timeLimitMs: group.timeLimitMs ?? spec.timeLimitMs };
     const result = classSectionsSolve(input);
     results.push({ input, result });
@@ -1858,7 +1946,7 @@ function classSectionsSolveAll(spec) {
       occupied.push({ label: `${group.label || group.groupId} ${block.letter}블록`, times: block.times, departments, rooms });
     }
   }
-  // 교사는 모든 그룹을 함께 배정(같은 시간 겹침 방지).
+  // 교사는 모든 그룹을 함께 배정(같은 시간 겹침 방지, 교환 지역 탐색 포함).
   let teacherResult = null;
   if ((spec.teachers || []).length) {
     const sections = [];
@@ -1872,7 +1960,7 @@ function classSectionsSolveAll(spec) {
     const qualify = (map, input) => Object.fromEntries(Object.entries(map || {}).map(([id, teacher]) => [`${input.groupId || ""}::${id}`, teacher]));
     const pins = Object.assign({}, ...results.map(({ input }) => qualify(input.pins?.teachers, input)));
     const previous = Object.assign({}, ...results.map(({ input }) => qualify(input.previous?.teacherOf, input)));
-    teacherResult = classSectionsAssignTeachers({ teachers: spec.teachers, sections, fixedSlots: spec.fixedSlots, pins, previous });
+    teacherResult = classSectionsAssignTeachers({ teachers: spec.teachers, sections, fixedSlots, pins, previous });
     for (const { input, result } of results) {
       result.teacherOf = {};
       for (const section of result.sections) {
@@ -1884,9 +1972,200 @@ function classSectionsSolveAll(spec) {
     }
   }
   const across = classSectionsValidateAcross(results, spec.teachers);
-  return { groups: results.map(({ input, result }) => ({ groupId: input.groupId, label: input.label, result })),
-    teacherOf: teacherResult?.teacherOf || {}, teacherLoad: teacherResult?.load || {}, issues: [...(teacherResult?.issues || []), ...across],
-    elapsedMs: Math.round(classSectionsNow() - start) };
+  return { results, teacherResult, across };
+}
+
+// 교과별 '그 시각에 가능한 교사 수' (교사 명단 → 교과·과목 자격, 불가 시간·고정 시간 제외; 명단이 없으면 departmentTeachers).
+function classSectionsSlotSupply(spec, fixedSlots, courseDepartment) {
+  const teachers = (spec.teachers || []).map((raw) => ({ id: classSectionsText(raw.id ?? raw.name), departments: new Set((raw.departments || []).map(classSectionsText)),
+    courses: (raw.courses || []).map(classSectionsText), unavailable: new Set((raw.unavailable || []).map(classSectionsSlot)) }));
+  for (const teacher of teachers) for (const course of teacher.courses) { const dept = courseDepartment(course); if (dept) teacher.departments.add(dept); }
+  const busy = new Map();
+  for (const slot of fixedSlots || []) for (const id of slot.teacherIds || []) for (const time of classSectionsSlots(slot.times)) {
+    if (!busy.has(time)) busy.set(time, new Set());
+    busy.get(time).add(classSectionsText(id));
+  }
+  const counts = spec.departmentTeachers || {};
+  return (department, slot) => {
+    if (teachers.length) {
+      const known = teachers.some((teacher) => teacher.departments.has(department));
+      if (!known) return Infinity;
+      return teachers.filter((teacher) => teacher.departments.has(department) && !teacher.unavailable.has(slot) && !busy.get(slot)?.has(teacher.id)).length;
+    }
+    return counts[department] !== undefined ? Number(counts[department]) || 0 : Infinity;
+  };
+}
+
+// 교사 부족 설명: 시각마다 교과별로 (그 시각 블록들의 분반 수) > (가능한 교사 수)이면 '어느 교과가 어느 시간에 몇 명 모자람'.
+function classSectionsTeacherShortages(results, spec, fixedSlots) {
+  const departmentOf = new Map();
+  for (const { input } of results) for (const course of input.courses || []) {
+    const key = classSectionsText(course.key ?? course.name);
+    if (course.department) { departmentOf.set(key, course.department); departmentOf.set(classSectionsText(course.name), course.department); }
+  }
+  const supply = classSectionsSlotSupply(spec, fixedSlots, (course) => departmentOf.get(course));
+  const demand = new Map();
+  for (const { input, result } of results) {
+    for (const block of result.blocks || []) {
+      for (const slot of block.times || []) {
+        for (const id of block.sectionIds) {
+          const section = result.sections.find((item) => item.id === id);
+          const department = departmentOf.get(section?.courseKey);
+          if (!department) continue;
+          const key = `${department}|${slot}`;
+          if (!demand.has(key)) demand.set(key, { department, slot, count: 0, parts: new Map() });
+          const entry = demand.get(key);
+          entry.count += 1;
+          const label = `${input.label || input.groupId} ${block.letter}블록`;
+          entry.parts.set(label, (entry.parts.get(label) || 0) + 1);
+        }
+      }
+    }
+  }
+  const list = [];
+  for (const entry of demand.values()) {
+    const available = supply(entry.department, entry.slot);
+    if (!(entry.count > available)) continue;
+    const [day, period] = entry.slot.split(":");
+    list.push({ department: entry.department, slot: entry.slot, demand: entry.count, supply: available, short: entry.count - available,
+      message: `${entry.department}: ${day}요일 ${period}교시 분반 ${entry.count}개(${[...entry.parts].map(([label, count]) => `${label} ${count}`).join(", ")}) > 가능한 교사 ${available}명 → ${entry.count - available}명 모자람` });
+  }
+  return list.sort((a, b) => b.short - a.short || a.slot.localeCompare(b.slot) || a.department.localeCompare(b.department));
+}
+
+// ---- 블록 시간 추천(블록 → 요일·교시. 전체 시간표가 아니라 블록 칸 배치까지만) ----
+// spec: { days:["월",…], periods:7, fixedSlots:[{ label, times, teacherIds }], teachers, departmentTeachers, reserve:{ 학년: 남길 시간 },
+//   groups:[{ groupId, label, grade(수업 듣는 학년), blocks:[{ id, hours, departments:{ 교과: 분반 수 } }] }], seed, iterations }
+// 같은 학년(같은 학생) 블록끼리는 시간이 겹치면 안 되고, 다른 학년끼리는 같은 시각 같은 교과 분반 합이 그 시각 교사 수를 넘지 않게 한다.
+// 비용 = 1000×교사 부족 + 50×블록이 같은 날 두 번 + 학년별 요일 몰림(시간²) + 남길 시간 부족. 탐욕 시작 + 지역 탐색(시드 고정).
+function classSectionsRecommendTimes(spec) {
+  const start = classSectionsNow();
+  const rng = classSectionsRng(Number(spec.seed) || 1);
+  const days = (spec.days && spec.days.length ? spec.days : ["월", "화", "수", "목", "금"]).map(classSectionsText).filter(Boolean);
+  const periods = Math.max(1, Math.min(12, Math.floor(Number(spec.periods) || 7)));
+  const fixedSlots = classSectionsMergeFixed(spec.fixedSlots || []);
+  const blocked = new Set(fixedSlots.flatMap((slot) => slot.times));
+  const all = [];
+  for (const day of days) for (let p = 1; p <= periods; p += 1) all.push(`${day}:${p}`);
+  const slotsIndex = new Map(all.map((slot, index) => [slot, index]));
+  const usable = all.filter((slot) => !blocked.has(slot));
+  const departmentOf = () => "";
+  const supplyOf = classSectionsSlotSupply(spec, fixedSlots, departmentOf);
+  const blocks = [];
+  for (const group of spec.groups || []) {
+    for (const block of group.blocks || []) {
+      blocks.push({ groupId: group.groupId, label: `${group.label || group.groupId} ${block.id}블록`, id: block.id, grade: classSectionsText(group.grade),
+        hours: Math.max(1, Math.min(usable.length, Math.floor(Number(block.hours) || 1))), departments: Object.entries(block.departments || {}).filter(([, n]) => Number(n) > 0), slots: [] });
+    }
+  }
+  const grades = [...new Set(blocks.map((block) => block.grade))];
+  const issues = [];
+  for (const grade of grades) {
+    const need = blocks.filter((block) => block.grade === grade).reduce((sum, block) => sum + block.hours, 0);
+    const reserve = Number(spec.reserve?.[grade]) || 0;
+    if (need + reserve > usable.length) issues.push({ type: "grid-full", severity: "error", grade,
+      message: `${grade}학년: 블록 시간 ${need}시간 + 남길 시간 ${reserve}시간 > 쓸 수 있는 칸 ${usable.length}개(고정 시간 제외)` });
+  }
+  // 상태: 학년별 칸 점유, 칸×교과 수요
+  const used = new Map(grades.map((grade) => [grade, new Map()]));
+  const demand = new Map();
+  const supplyCache = new Map();
+  const supply = (dept, slot) => {
+    const key = `${dept}|${slot}`;
+    if (!supplyCache.has(key)) supplyCache.set(key, supplyOf(dept, slot));
+    return supplyCache.get(key);
+  };
+  const overAt = (dept, slot, value) => Math.max(0, value - supply(dept, slot));
+  const dayOf = (slot) => slot.split(":")[0];
+  const dayLoad = new Map();
+  const loadKey = (grade, day) => `${grade}|${day}`;
+  // 한 블록을 slot에 넣거나(+1) 뺄 때(-1) 비용 변화
+  const delta = (block, slot, sign) => {
+    let cost = 0;
+    for (const [dept, n] of block.departments) {
+      const key = `${dept}|${slot}`;
+      const before = demand.get(key) || 0;
+      cost += 1000 * (overAt(dept, slot, before + sign * n) - overAt(dept, slot, before));
+    }
+    const day = dayOf(slot);
+    const sameDay = block.slots.filter((other) => other !== slot && dayOf(other) === day).length;
+    if (block.hours <= days.length) cost += sign * 50 * sameDay;
+    const load = dayLoad.get(loadKey(block.grade, day)) || 0;
+    cost += (load + sign) ** 2 - load ** 2;
+    return cost;
+  };
+  const apply = (block, slot, sign) => {
+    for (const [dept, n] of block.departments) { const key = `${dept}|${slot}`; demand.set(key, (demand.get(key) || 0) + sign * n); }
+    const key = loadKey(block.grade, dayOf(slot));
+    dayLoad.set(key, (dayLoad.get(key) || 0) + sign);
+    const grid = used.get(block.grade);
+    if (sign > 0) { grid.set(slot, block); block.slots.push(slot); }
+    else { grid.delete(slot); block.slots.splice(block.slots.indexOf(slot), 1); }
+  };
+  const order = blocks.slice().sort((a, b) => b.hours - a.hours || b.departments.reduce((s, [, n]) => s + n, 0) - a.departments.reduce((s, [, n]) => s + n, 0));
+  for (const block of order) {
+    for (let h = 0; h < block.hours; h += 1) {
+      let best = null;
+      for (const slot of usable) {
+        if (used.get(block.grade).has(slot)) continue;
+        const cost = delta(block, slot, 1) + rng() * 1e-3;
+        if (!best || cost < best.cost) best = { slot, cost };
+      }
+      if (!best) break;
+      apply(block, best.slot, 1);
+    }
+  }
+  const iterations = Number(spec.iterations) || Math.min(20000, 2000 + blocks.length * 400);
+  for (let it = 0; it < iterations && blocks.length; it += 1) {
+    const block = blocks[Math.floor(rng() * blocks.length)];
+    if (!block.slots.length) continue;
+    const from = block.slots[Math.floor(rng() * block.slots.length)];
+    const grid = used.get(block.grade);
+    const to = usable[Math.floor(rng() * usable.length)];
+    if (to === from) continue;
+    const other = grid.get(to);
+    if (other === block) continue;
+    // 빈 칸으로 옮기기 또는 같은 학년 다른 블록과 칸 맞바꾸기
+    let change = delta(block, from, -1);
+    apply(block, from, -1);
+    if (other) { change += delta(other, to, -1); apply(other, to, -1); }
+    change += delta(block, to, 1);
+    apply(block, to, 1);
+    if (other) { change += delta(other, from, 1); apply(other, from, 1); }
+    const temp = 2 * (1 - it / iterations) + 0.01;
+    if (change <= 0 || rng() < Math.exp(-change / temp)) continue;
+    if (other) { apply(other, from, -1); }
+    apply(block, to, -1);
+    if (other) apply(other, to, 1);
+    apply(block, from, 1);
+  }
+  // 결과·부족·남는 칸
+  const shortages = [];
+  for (const [key, count] of demand) {
+    const [dept, slot] = [key.slice(0, key.lastIndexOf("|")), key.slice(key.lastIndexOf("|") + 1)];
+    const available = supply(dept, slot);
+    if (count > available) {
+      const [day, period] = slot.split(":");
+      shortages.push({ department: dept, slot, demand: count, supply: available, short: count - available,
+        message: `${dept}: ${day}요일 ${period}교시 분반 ${count}개 > 가능한 교사 ${available}명 → ${count - available}명 모자람` });
+    }
+  }
+  const sortSlots = (list) => list.slice().sort((a, b) => slotsIndex.get(a) - slotsIndex.get(b));
+  const toTime = (slot) => { const [day, period] = slot.split(":"); return { day, period: Number(period) }; };
+  const groups = (spec.groups || []).map((group) => ({ groupId: group.groupId,
+    blocks: blocks.filter((block) => block.groupId === group.groupId).map((block) => ({ id: block.id, times: sortSlots(block.slots).map(toTime) })) }));
+  const free = Object.fromEntries(grades.map((grade) => [grade, usable.length - used.get(grade).size]));
+  for (const grade of grades) {
+    const reserve = Number(spec.reserve?.[grade]) || 0;
+    if (reserve && free[grade] < reserve) issues.push({ type: "reserve", severity: "warn", grade, message: `${grade}학년: 남는 칸 ${free[grade]}개 < 공통 과목용 ${reserve}시간` });
+  }
+  for (const block of blocks) {
+    const daysUsed = new Set(block.slots.map(dayOf)).size;
+    if (block.hours <= days.length && daysUsed < block.slots.length) issues.push({ type: "same-day", severity: "warn", message: `${block.label}: 같은 날 두 시간 이상` });
+    if (block.slots.length < block.hours) issues.push({ type: "unplaced", severity: "error", message: `${block.label}: ${block.hours}시간 중 ${block.slots.length}시간만 배치(칸 부족)` });
+  }
+  return { groups, shortages: shortages.sort((a, b) => b.short - a.short || a.slot.localeCompare(b.slot)), free, issues,
+    grid: { days, periods, blocked: [...blocked] }, elapsedMs: Math.round(classSectionsNow() - start) };
 }
 
 // ---- 방식별 비교·추천 ----
@@ -1898,8 +2177,11 @@ function classSectionsCompare(input, modes) {
     if (results[mode]) continue;
     results[mode] = classSectionsSolve({ ...input, mode, suggest: false }, base.placement && Object.fromEntries(Object.entries(base.placement)));
   }
-  const rows = list.map((mode) => ({ mode, label: CLASS_SECTIONS_MODE_LABELS[mode], ...results[mode].metrics }));
-  const recommendation = classSectionsRecommend(rows, Boolean(input.previous));
+  // recommendExclude: 비교표에는 보이되 추천에서는 뺄 방식(예: 내년 반 배정표가 없을 때의 담임반 묶기 — 진급 때 반이 바뀌면 효과 없음).
+  const exclude = new Set(Array.isArray(input.recommendExclude) ? input.recommendExclude : []);
+  const rows = list.map((mode) => ({ mode, label: CLASS_SECTIONS_MODE_LABELS[mode], excluded: exclude.has(mode), ...results[mode].metrics }));
+  const candidates = rows.filter((row) => !row.excluded);
+  const recommendation = classSectionsRecommend(candidates.length ? candidates : rows, Boolean(input.previous));
   return { results, rows, recommended: recommendation.mode, reason: recommendation.reason };
 }
 
@@ -2044,7 +2326,25 @@ function classSectionsNeisExport(result, opts) {
       rows.push(row);
     }
   }
+  // 학급 단위 과목: 내년 반이 있는 학생만 그 반의 과목으로 한 줄(개설강의실 'N(학년 N반)'), 없으면 반 배정표를 올린 뒤.
+  let classUnitWaiting = 0;
+  if (options.classUnit && Object.keys(options.classUnit.byClass || {}).length) {
+    for (const info of options.students || []) {
+      const classroom = classSectionsText(info.classroom).replace(/반$/, "");
+      if (!classroom) { classUnitWaiting += 1; continue; }
+      const courseKey = options.classUnit.byClass[classroom];
+      const course = courseKey ? options.classUnit.courses?.[courseKey] || {} : null;
+      if (!course) continue;
+      const credits = Number(course.credits) || "";
+      const row = [classSectionsText(options.year), classSectionsText(options.semester), grade, classSectionsText(course.family),
+        `${course.name || courseKey}${credits !== "" ? `(${credits})` : ""}`, `${classroom}(${grade}학년 ${classroom}반)`, grade ? `${grade}학년` : "",
+        `${classroom}반`, classSectionsText(info.number), classSectionsText(info.name)];
+      if (reference) row.push(classSectionsText(info.key));
+      rows.push(row);
+    }
+  }
   const warnings = ["나이스 '조회' 파일 양식을 따랐습니다. 실제 업로드 양식과 다를 수 있으니 확인하세요."];
+  if (classUnitWaiting) warnings.push(`학급 단위 과목: 내년 반이 없는 학생 ${classUnitWaiting}명은 행을 만들지 않았습니다(과목별 반 수만 확정, 학생 배정은 반 배정표를 올린 뒤).`);
   if (missingClass) warnings.push(`내년 반·번호가 없는 학생 ${missingClass}명: 반·번호 칸을 비웠습니다(참고 열의 현 학년-반-번호로 확인). 내년 반 배정표를 올리면 채워집니다.`);
   if (rows.slice(2).some((row) => !row[3])) warnings.push("편제명(교과군)이 빈 행이 있습니다.");
   return { rows, warnings };
@@ -2074,6 +2374,7 @@ function classSectionsRun(request) {
   if (kind === "solveAll") return classSectionsSolveAll(request.input);
   if (kind === "compare") return classSectionsCompare(request.input, request.modes);
   if (kind === "classUnit") return classSectionsClassUnitSplit(request.input);
+  if (kind === "recommendTimes") return classSectionsRecommendTimes(request.input);
   return classSectionsSolve(request.input, request.placement);
 }
 
@@ -2100,7 +2401,8 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,
     classSectionsPartialPerm, classSectionsFillCells, classSectionsAssignTeachers, classSectionsRoomName, classSectionsBuildResult, classSectionsValidate,
     classSectionsValidateAcross, classSectionsMetrics, classSectionsExplain, classSectionsCapacitySuggestion, classSectionsSuggest, classSectionsSolve,
-    classSectionsTeacherSections, classSectionsSolveAll, classSectionsCompare, classSectionsRecommend, classSectionsClassUnitSplit,
+    classSectionsTeacherSections, classSectionsSolveAll, classSectionsMergeFixed, classSectionsSolveAllOrders, classSectionsSolveAllScore,
+    classSectionsSolveAllOnce, classSectionsSlotSupply, classSectionsTeacherShortages, classSectionsRecommendTimes, classSectionsCompare, classSectionsRecommend, classSectionsClassUnitSplit,
     classSectionsFromCombos, classSectionsHardErrors, classSectionsExplainResult, classSectionsSectionsSuggestion, classSectionsAssignRoomNames,
     classSectionsNeisExport, classSectionsNeisRows, classSectionsClassMapFromRows, classSectionsRun];
 }
@@ -2108,5 +2410,5 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { classSectionsSolve, classSectionsSolveAll, classSectionsCompare, classSectionsValidate, classSectionsValidateAcross,
     classSectionsFromCombos, classSectionsClassUnitSplit, classSectionsAssignTeachers, classSectionsNeisRows, classSectionsSignature,
-    classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow, classSectionsNeisExport, classSectionsClassMapFromRows };
+    classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow, classSectionsNeisExport, classSectionsClassMapFromRows, classSectionsRecommendTimes, classSectionsTeacherShortages };
 }

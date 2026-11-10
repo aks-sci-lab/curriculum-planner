@@ -1,5 +1,5 @@
 // 6단계 분반 편성 화면 확인(사용자처럼 클릭): 하네스 전체 실행이 남긴 백업(가상 학생)을 복원 → 6단계 편성·비교·교사·블록 시간·내보내기·새로고침.
-// 사용: node e2e/run.cjs --seed 1 --out /tmp/e2e  →  node e2e/class-sections-ui.cjs /tmp/cs-ui /tmp/e2e/downloads/workspace-backup.json
+// 사용: node e2e/run.cjs --seed 1 --out /tmp/e2e  →  node e2e/class-sections-ui.cjs /tmp/cs-ui /tmp/e2e/downloads/workspace-backup.json.gz(예전 하네스는 .json)
 const path = require("path"), fs = require("fs");
 const ROOT = path.join(__dirname, "..");
 const globalRoot = require("child_process").execSync("npm root -g", { encoding: "utf8" }).trim();
@@ -32,6 +32,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const groups = await page.locator("[data-cs-group]").allInnerTexts();
   console.log("groups:", groups.map((t) => t.replace(/\s+/g, " ")));
   await shot("01-step6-start.png");
+  // 담당 교과 기본값(편제표 교과군): 사회와 문화가 '기타'가 아닌지
+  const deptOf = async (name) => page.getByLabel(`${name} 담당 교과`).evaluate((el) => el.options[el.selectedIndex]?.textContent || "");
+  console.log("dept 사회와 문화:", await deptOf("사회와 문화").catch(() => "(없음)"));
+  // 앞 편성이 없는 그룹에서 먼저 방식 비교 → 이동 수 '–'
+  const fresh = page.locator("[data-cs-group]").filter({ hasText: "2-2 택3" }).first();
+  if (await fresh.count()) {
+    await fresh.click(); await sleep(300);
+    await page.getByRole("button", { name: "방식 비교·추천" }).click();
+    await page.getByText("편성 방식 비교", { exact: true }).waitFor({ timeout: 60000 });
+    await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
+    console.log("fresh compare moved:", (await page.locator('section[aria-label="편성 방식 비교"] tbody td:nth-child(5)').allInnerTexts()).join(","),
+      "|", await page.locator('section[aria-label="편성 방식 비교"] p.cs-note').last().innerText());
+    await page.locator("[data-cs-group]").first().click(); await sleep(300);
+  }
   // 기본 편성
   await page.getByRole("button", { name: "편성 계산" }).click();
   await page.locator("#classSectionsSummary").waitFor({ timeout: 60000 });
@@ -62,12 +76,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(300);
   await page.locator("#classSectionsTeacherDialog").screenshot({ path: path.join(OUT, "04-teachers.png") });
   await page.getByRole("button", { name: "닫기" }).first().click();
-  // 블록 시간 입력
+  // 블록 시간 추천 → 추천안 표 → 한 칸 고치기 → 추천 적용
   await page.getByText("블록별로 다르게 · 블록 시간(요일·교시)").click();
-  const times = ["월1,수2,금3", "화1,목2,금4", "월3,수4,목5", "화3,목4,수5", "월5,화5,목6"];
-  const blockInputs = page.locator("[data-cs-block-times]");
-  for (let i = 0; i < await blockInputs.count(); i++) { await blockInputs.nth(i).fill(times[i] || ""); await blockInputs.nth(i).press("Tab"); }
-  await sleep(300);
+  let t0 = Date.now();
+  await page.getByRole("button", { name: "블록 시간 추천" }).click();
+  await page.locator("#classSectionsTimesProposal").waitFor({ timeout: 60000 });
+  console.log("recommend times ms:", Date.now() - t0, "|", (await page.locator("#classSectionsTimesProposal").innerText()).replace(/\s+/g, " ").slice(0, 300));
+  await page.locator("#classSectionsTimesProposal").screenshot({ path: path.join(OUT, "09-times-proposal.png") });
+  await page.getByRole("button", { name: "추천 적용" }).click(); await sleep(400);
+  console.log("block a times:", await page.getByLabel("a블록 요일·교시").inputValue());
   console.log("stale badge:", await page.locator("#classSectionsStale").count());
   await page.getByRole("button", { name: "편성 계산" }).click();
   await sleep(500);
@@ -84,6 +101,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log(`group ${i}:`, (await groupButtons.nth(i).innerText()).replace(/\s+/g, " "), "|", await page.locator("#classSectionsSummary").innerText());
   }
   await shot("06-other-group.png");
+  // 전 학년 함께 다시 계산(1학기 그룹 3개)
+  await groupButtons.first().click(); await sleep(300);
+  t0 = Date.now();
+  // 계산 중에도 화면이 반응하는지(Worker): 계산을 시작한 직후 다른 입력에 글자를 넣어 본다.
+  await page.getByRole("button", { name: "전 학년 함께 다시 계산" }).click();
+  const typed = Date.now();
+  await page.getByLabel("학생 찾기(현학년-반-번호)").fill("1-2-3").catch(() => {});
+  console.log("typing during solve ms:", Date.now() - typed);
+  await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
+  console.log("solve semester ms:", Date.now() - t0);
+  console.log("solve semester:", await page.locator("#classSectionsStatus").innerText(), "|", await page.locator("#classSectionsSummary").innerText());
+  // 학급 단위로 바꾸면 블록 수 제안
+  const five = page.locator("[data-cs-group]").filter({ hasText: "3-1 택5" }).first();
+  await five.click(); await sleep(300);
+  const firstCourse = await page.locator("[data-cs-mode]").first().getAttribute("data-cs-mode");
+  await page.getByLabel(`${firstCourse} 운영 방식`).selectOption("class"); await sleep(400);
+  console.log("blocks hint:", await page.locator("#classSectionsBlocksHint").innerText().catch(() => "(없음)"), "| blocks =", await page.getByLabel("블록 수").inputValue());
+  await page.locator("#workflowStep8Panel").screenshot({ path: path.join(OUT, "08-class-unit-hint.png") });
+  await page.getByLabel(`${firstCourse} 운영 방식`).selectOption("move"); await sleep(300);
+  await groupButtons.first().click(); await sleep(300);
   // 학생 찾기
   await groupButtons.first().click(); await sleep(300);
   await page.getByLabel("학생 찾기(현학년-반-번호)").fill("1-1-1"); await page.getByLabel("학생 찾기(현학년-반-번호)").press("Enter");
@@ -104,6 +141,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (written) fs.writeFileSync(mapFile, written);
   await page.locator("#classSectionsClassMap").setInputFiles(mapFile); await sleep(800);
   console.log("classmap status:", await page.locator("#classSectionsStatus").innerText());
+  console.log("classes line:", await page.locator("#classSectionsClassesLine").innerText(), "|", await page.locator("#classSectionsClassMapLine").innerText());
+  // 배정표가 있으면 담임반 묶기도 추천 대상
+  await page.getByRole("button", { name: "방식 비교·추천" }).click(); await sleep(300);
+  await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
+  console.log("compare with map:", (await page.locator('section[aria-label="편성 방식 비교"]').innerText()).replace(/\s+/g, " ").slice(0, 160));
   files.push(await save(() => page.getByRole("button", { name: "나이스 편성 엑셀" }).click(), "neis-mapped.xlsx"));
   console.log("downloads:", files.map((f) => `${path.basename(f)} ${fs.statSync(f).size}B`));
   // 새로고침 뒤 결과 유지

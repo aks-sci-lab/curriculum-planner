@@ -1805,6 +1805,10 @@
 #aggregatePanel .aggregate-grade { border-color: #d6deec; }
 #aggregatePanel .aggregate-grade .aggregate-form-wrap { max-height: none; padding: 6px 12px 14px; border: 0; border-radius: 0; overflow-x: auto; overflow-y: visible; }
 .aggregate-form-hint { flex: 1 1 320px; color: #5c6982; font-size: 12px; }
+.aggregate-class-basis { color: #1f4f8f; background: #eef3fb; border: 1px solid #c9d7ee; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
+.aggregate-class-basis.is-warn { color: #8a3b12; background: #fff3e6; border-color: #f0c9a6; }
+.hours-roster-classes { color: #5c6982; font-size: 12px; }
+.hours-roster-classes.is-diff { color: #1f4f8f; font-weight: 600; }
 .aggregate-form { width: 100%; min-width: 900px; table-layout: fixed; border-collapse: collapse; color: #111; font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; font-variant-numeric: tabular-nums; }
 .aggregate-form td { position: relative; padding: 1px 4px; overflow: visible; line-height: 1.25; white-space: nowrap; vertical-align: middle; }
 .aggregate-form td.af-wrap { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
@@ -2286,10 +2290,13 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-block h5 { margin:0 0 8px; font-size:13px; }
     .cs-block h5 span, .cs-block h5 em { color:var(--muted); font-size:11px; font-style:normal; font-weight:400; }
     .cs-block ul { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:6px; }
-    .cs-section { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:12px; }
-    .cs-section strong { min-width:90px; }
-    .cs-section span { color:var(--muted); }
-    .cs-section .cs-size { margin-left:auto; color:var(--ink); font-weight:700; }
+    .cs-section { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:3px 8px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:12px; }
+    .cs-section strong, .cs-section .cs-course, .cs-section .cs-neis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cs-section .cs-course { color:var(--muted); }
+    .cs-section .cs-neis { color:var(--muted); font-size:10px; }
+    .cs-section .cs-size { justify-self:end; color:var(--ink); font-weight:700; white-space:nowrap; }
+    .cs-section .cs-controls { display:inline-flex; align-items:center; justify-self:end; gap:6px; white-space:nowrap; }
+    .cs-section .cs-controls select { max-width:120px; }
     .cs-section.is-over { border-color:#e3a497; background:#fff6f4; }
     .cs-pin { display:inline-flex; align-items:center; gap:3px; color:var(--muted); font-size:11px; }
     .cs-lookup { margin:4px 0; padding-left:18px; font-size:12px; }
@@ -2298,3 +2305,6 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-dialog h3 { margin:16px 0 6px; font-size:14px; }
     .cs-grid { border-collapse:collapse; font-size:11px; }
     .cs-grid th, .cs-grid td { padding:2px 6px; text-align:center; border:1px solid var(--line); }
+    .cs-proposal { margin-top:10px; padding:10px; border:1px dashed #b9c6dc; border-radius:10px; background:#fbfcff; }
+    .cs-proposal h5 { margin:0 0 6px; font-size:12px; }
+    .cs-table tr.is-current th { color:#2852ce; }

@@ -1151,7 +1151,8 @@
         preparation.invalidGroups || !preparation.hasSelections;
       const round = state.currentRound;
       const roundState = typeof roundStatus === "function" ? roundStatus(round) : "draft";
-      // 시수 통계는 내년도·올해·전년도 입학생 편제표가 모두 있어야 계산할 수 있다.
+      // 시수 통계는 내년도·올해·전년도 입학생 편제표로 계산한다. 셋 다 없으면 '편제표 필요',
+      // 일부만 없으면 나머지 학년은 계산되므로 '일부 편제표 없음'.
       let missingCohorts = 0;
       if (typeof annualSourceCohorts === "function" && typeof $ === "function") {
         const schoolYear = Number($("#schoolYear")?.value);
@@ -1164,7 +1165,8 @@
         3: hasResult ? ["done", "가능"] : ["wait", "대기"],
         4: roundState === "confirmed" ? ["done", "확정"] : roundState === "review" ? ["todo", "검토 중"]
           : hasResult ? ["todo", "확정 필요"] : ["wait", "대기"],
-        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts ? ["todo", "편제표 필요"] : ["done", "가능"],
+        7: roundState !== "confirmed" ? ["wait", "대기"] : missingCohorts >= 3 ? ["todo", "편제표 필요"]
+          : missingCohorts ? ["todo", "일부 편제표 없음"] : ["done", "가능"],
         8: !hasResult ? ["wait", "대기"] : roundState === "confirmed" ? ["todo", "편성 가능"] : ["todo", "시안 가능"]
       };
     }
@@ -1348,9 +1350,18 @@
         message.textContent = `${state.currentRound}차 결과가 확정되었습니다. 5단계에서 내년도 교과별 시수 통계를 작성하세요.`;
         action.textContent = "시수 통계로";
         action.dataset.nextStep = "7";
+      } else if (step === 8 && state.students.length) {
+        // 6단계는 자기 화면의 '차수'에서 고른 결과로 편성한다(4단계 문구를 쓰지 않는다).
+        message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 위 '차수'에서 고른 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
+        action.textContent = roundConfirmed ? "4단계 집계 보기" : "집계·개설 확정으로";
+        action.dataset.nextStep = "4";
       } else {
+        // 단계마다 맞는 안내: 기준 미달 안내는 4단계(집계·개설)에서만 한다.
+        const uses = step === 3 ? "확인서는 두 학년 결과를 함께 사용합니다."
+          : step === 4 ? "집계는 두 학년 결과를 함께 사용합니다. 기준 미달은 폐강 확정이 아닙니다."
+            : "두 학년 결과를 함께 사용합니다.";
         message.textContent = state.students.length
-          ? `${state.currentRound}차 학생 ${state.students.length}명 · 확인서와 집계는 두 학년 결과를 함께 사용합니다. 기준 미달은 폐강 확정이 아닙니다.`
+          ? `${state.currentRound}차 학생 ${state.students.length}명 · ${uses}`
           : `${state.currentRound}차 결과가 없습니다. 2단계에서 외부 프로그램 결과 엑셀을 업로드하세요.`;
         action.textContent = state.students.length && step !== 4 ? "집계·개설/폐강 검토" : "결과 업로드로";
         action.dataset.nextStep = state.students.length && step !== 4 ? "4" : "2";
@@ -4134,6 +4145,20 @@
       return `기준 미달 ${risk}과목(${parts.join(" · ")})`;
     }
 
+    // 학급 수 기준 한 줄(화면 전용): 계산은 내년 학급 수(4단계 설정·5단계와 같은 값) 기준이고, 없으면 명단의 반 수.
+    // 지금 반 수와 내년 학급 수가 다르거나 내년 값을 넣지 않았을 때만 보여 준다.
+    function aggregateClassBasisNote(summary) {
+      const grade = Number(summary?.grade);
+      if (!grade) return "";
+      if (summary.classSource !== "planned") {
+        return `<span class="aggregate-class-basis is-warn" title="4단계 집계 설정에서 내년 ${grade + 1}학년 학급 수를 넣으면 그 값으로 계산합니다.">내년 ${grade + 1}학년 학급 수 미입력 · 현 ${grade}학년 명단 ${summary.rosterClasses}반으로 계산</span>`;
+      }
+      if (summary.rosterClasses && summary.rosterClasses !== summary.classes) {
+        return `<span class="aggregate-class-basis" title="학급당 학생수·개설/분반 기준·목표 총 학급수는 내년 학급 수로 계산합니다.">현 ${grade}학년 명단 ${summary.rosterClasses}반 → 내년 ${grade + 1}학년 ${summary.classes}학급 기준</span>`;
+      }
+      return "";
+    }
+
     // 한 학년 집계표: 엑셀 시트와 같은 학교 양식(aggregateSheetModel → aggregateSheetHtml)에 학년 머리줄(위계·학점 요약,
     // 학년 전체 자동 조정·조정 취소)만 붙인다. 학생 수·학급당·개설/분반 기준은 양식 2~3행에 있으므로 따로 요약하지 않는다.
     function aggregateGradeSectionMarkup(report, { closures, round, locked, maxClassSize, attentionOnly, canUndo, prereq = null,
@@ -4149,6 +4174,7 @@
       return `<section class="aggregate-grade aggregate-form-grade" data-aggregate-grade-section="${escapeHtml(grade)}">
         <div class="aggregate-grade-head">
           <span class="aggregate-form-hint">과목명을 누르면 개설·폐강·미정을 정하고, 개설 학급수 칸은 눌러서 바로 고칩니다.</span>
+          ${aggregateClassBasisNote(report.summary)}
           ${typeof courseCheckAggregateNote === "function" ? courseCheckAggregateNote(grade, prereq) : ""}
           <div class="aggregate-grade-actions">
             <button class="button" type="button" data-aggregate-adjust="grade" data-grade="${escapeHtml(grade)}"${lockTitle}>학급수 자동 조정(학년 전체)</button>

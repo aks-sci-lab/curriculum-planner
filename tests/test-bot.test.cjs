@@ -623,3 +623,12 @@ test("test bot: 폐강 학생만 재신청에서 대상 아닌 학생은 실패�
   const info = Core.resultSheets(records).find((sheet) => sheet.name === "요약").rows;
   assert.deepEqual(info.find((row) => row[0] === "대상 아님(건너뜀)"), ["대상 아님(건너뜀)", 2]);
 });
+
+test("test bot: 대상 범위 한 줄(반 번호는 이어지면 1~10으로 줄이고 인원 표시)", () => {
+  const students = Array.from({ length: 12 }, (_, index) => ({ grade: "1", classroom: String(index + 1), number: "1" }));
+  assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "1,2,3,4,5,6,7,8,9,10" }, students), { limited: true, text: "대상: 1~10반 · 10명(전체 12명 중)" });
+  assert.deepEqual(Core.scopeSummary({ scope: "class", classes: "3, 1 2, 7" }), { limited: true, text: "대상: 1~3, 7반" });
+  assert.deepEqual(Core.scopeSummary({ scope: "first", count: 10 }, students), { limited: true, text: "대상: 처음 10명 · 10명(전체 12명 중)" });
+  assert.deepEqual(Core.scopeSummary({ scope: "all" }, students), { limited: false, text: "대상: 전체 · 12명" });
+  assert.deepEqual(Core.scopeSummary({}), { limited: false, text: "대상: 전체" });
+});

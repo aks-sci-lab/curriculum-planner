@@ -437,3 +437,39 @@ test("without a linked file a storage failure still explains itself and successf
   ok.ctx.persistState();
   assert.equal(ok.storage.getItem("course-certificate-studio-saved-at"), null, "startup clean-up saves do not count as user edits");
 });
+
+test("after the switch to backup format 2 the first compare overwrites silently with a sync record and asks once without one; files are written without indentation", async () => {
+  const students = [{ id: "s1", grade: "1" }];
+  // 예전 앱(형식 1)이 들여써서 쓴 파일: workspace.students가 들어 있다.
+  const oldBackup = { type: "curriculum-workspace-backup", backupVersion: 1, createdAt: "2026-11-01T00:00:00.000Z",
+    workspace: { currentRound: "1", rounds: { "1": { students } }, students } };
+  const fileText = JSON.stringify(oldBackup, null, 2);
+  // 지금 앱(형식 2): 같은 자료지만 현재 차수와 같은 students를 빼고 omitted를 적는다.
+  const browserBackup = () => ({ type: "curriculum-workspace-backup", backupVersion: 2, createdAt: new Date().toISOString(),
+    workspace: { currentRound: "1", rounds: { "1": { students } } }, omitted: ["students"] });
+  const begin = async (storage) => {
+    const handle = fakeHandle("학교자료.json");
+    handle.content = fileText;
+    const loaded = load({ handleStore: { handle }, storage, backup: browserBackup });
+    Object.assign(loaded.ctx, { browserSavedAt: Date.now(), browserHasWork: true, confirmAnswer: false });
+    loaded.ctx.window.showSaveFilePicker = () => {};
+    loaded.ctx.window.showOpenFilePicker = () => {};
+    await loaded.ctx.initWorkspaceFile();
+    return { ...loaded, handle };
+  };
+  // ① 이 브라우저가 예전에 그 파일을 썼다는 지문이 있으면: 바뀐 쪽은 브라우저(형식만 바뀜)이므로 묻지 않고 덮어쓴다.
+  const storage = memoryStorage();
+  load({ storage }).ctx.rememberWorkspaceFileSync(JSON.stringify({ ...oldBackup, createdAt: "" }));
+  const synced = await begin(storage);
+  assert.equal(synced.confirms.length, 0);
+  assert.equal(synced.handle.writes, 1);
+  assert.equal(synced.handle.content.includes("\n"), false, "written without indentation");
+  const written = JSON.parse(synced.handle.content);
+  assert.equal(written.backupVersion, 2);
+  assert.deepEqual(written.omitted, ["students"]);
+  // ② 지문이 없으면 한 번 묻고, 거절하면 파일을 그대로 둔다.
+  const unsynced = await begin(memoryStorage());
+  assert.equal(unsynced.confirms.length, 1);
+  assert.equal(unsynced.handle.writes, 0);
+  assert.equal(unsynced.handle.content, fileText);
+});
