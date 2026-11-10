@@ -985,8 +985,6 @@
     .paper-credit-gauge-track.core span, .student-summary-track.core span { background:#6c55c7; }
     .paper-signature { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; margin: 44px 4px 0 0; font-size: 14px; }
     .paper-school { margin: 55px 0 0; font-size: 17px; font-weight: 750; letter-spacing: 1px; }
-    /* 따로 신청(소인수·공동) 안내: '총 n과목' 줄 바로 아래, 점검란(이수 학점 줄)과 같은 크기. */
-    .paper-separate-note { margin: 2px 0 0; font-size: 12px; line-height: 1.5; color: #3d4757; }
     .placeholder {
       display: flex; min-height: 600px; flex-direction: column; align-items: center; justify-content: center;
       padding: 32px; color: var(--muted); text-align: center;
@@ -1300,8 +1298,6 @@
       .print-page .paper-total { margin-top: 6mm; font-size: 12px; line-height: 1.6; }
       .print-page .paper-signature { gap: 2.5mm; margin-top: 9mm; font-size: 12px; }
       .print-page .paper-school { margin-top: 12mm; font-size: 15px; }
-      .print-page .paper-separate-note { margin-top: .5mm; font-size: 10px; line-height: 1.35; }
-      .print-page.paper-dense .paper-separate-note { margin-top: 0; font-size: 9px; line-height: 1.25; }
       /* 15과목 이상: 행 높이를 줄인다. */
       .print-page.paper-compact .paper-title { margin-bottom: 4mm; font-size: 22px; }
       .print-page.paper-compact .certificate-table th, .print-page.paper-compact .certificate-table td { height: 6.4mm; padding: .4mm 2mm; }
@@ -1964,9 +1960,6 @@
 .hours-form .hf-input:focus { border-color: #2852ce; outline: 2px solid rgba(40, 82, 206, .25); outline-offset: 0; }
 .hours-form .hf-input.is-manual { background: #fff3c4; border-style: dashed; }
 .hours-form .hf-input.is-zero { color: #8a93a3; }
-.hours-form .hf-input.is-separate-pending { border: 1px dashed #d9822b; background: #fff4e5; }
-.hours-form .hf-separate-tag { display: inline-block; margin-left: 3px; padding: 0 3px; border-radius: 3px; background: #e8eef9; color: #2f4a7a; font-size: 9px; font-weight: 600; line-height: 13px; white-space: nowrap; vertical-align: middle; }
-.hours-form .hf-separate-tag.is-pending { background: #fde7cc; color: #9a4b00; }
 .hours-form .hf-memo .hf-input, .hours-form td.hf-memo { text-align: left; }
 .hours-form .hf-s .hf-input { height: 28px; font-size: 15px; font-weight: 700; }
 .hours-form td.hf-box { padding: 4px 8px; text-align: left; vertical-align: top; white-space: normal; }

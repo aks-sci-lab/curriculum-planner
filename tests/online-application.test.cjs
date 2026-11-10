@@ -1620,7 +1620,7 @@ test("step 2 subject list shows a two-semester course once per semester, like th
   assert.doesNotMatch(container.innerHTML, /1·2/);
 });
 
-test("result validation does not list separate (소인수·공동) courses as 'missing from the result file'", () => {
+test("result validation drops 소인수·공동 courses silently: no notice, not 'missing', not 'unclassified'", () => {
   const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
   const ctx = vm.createContext({ classifyApplicationRecords: () => [], getApplicationGroupSettings: () => [] });
   vm.runInContext(importer.slice(importer.indexOf("function normalizeResultCourseName("), importer.indexOf("function buildResultImportPreview(")), ctx);
@@ -1633,11 +1633,12 @@ test("result validation does not list separate (소인수·공동) courses as 'm
   const subjects = { "2": [{ subject: "물리학" }, { subject: "경제", separate: true }, { subject: "보건", separate: true }] };
   const result = ctx.analyzeResultCandidate(candidate, { grade: "1", subjects, cohortYear: "2026" });
   const text = [...result.issues.warnings, ...result.issues.info].join("\n");
-  assert.match(text, /소인수·공동교육과정 1과목은 따로 신청하므로 결과에서 뺐습니다: 경제/);
-  assert.doesNotMatch(text, /결과 파일에 없는 과목/, "따로 신청 과목만 없으면 '없는 과목' 줄은 없다");
+  assert.doesNotMatch(text, /소인수|공동|따로 신청|경제|보건/, "소인수·공동은 안내 없이 조용히 뺀다");
+  assert.doesNotMatch(text, /결과 파일에 없는 과목/, "소인수·공동 과목만 없으면 '없는 과목' 줄은 없다");
+  assert.deepEqual(plain(result.data.courses.map((course) => course.name)), ["물리학"]);
 });
 
-// 같은 과목 한 학기만: 편제표 다른 행(3-1 택5 행 + 3-2 택5 행) → sameCourseOnce, 한 행이 1·2학기에 걸치면 대상 아님.
+// 같은 과목 한 학기만(학기제): 같은 과목이 1·2학기에 모두 나오면 편제표 다른 행이든 한 행이 두 학기에 걸치든 sameCourseOnce.
 function sameCourseContext() {
   const contexts = [
     { subject: "융합과학 탐구", division: "학생선택교육과정", detail: "융합", selectionType: "융합선택", row: [3, 3, ""], grade: "3", area: "과학", rowIndex: 5 },
@@ -1654,14 +1655,14 @@ function sameCourseContext() {
   return ctx;
 }
 
-test("same course in two different plan rows is marked once-only; one row spanning both semesters is not", () => {
+test("a course offered in both semesters is once-only, whether from two plan rows or one row spanning both semesters", () => {
   const ctx = sameCourseContext();
   const items = ctx.collectApplicationSubjects({ currentGrade: "2" })["3"];
   const byName = Object.fromEntries(items.map((item) => [item.subject, item]));
   assert.equal(byName["융합과학 탐구"].semester, "1·2");
   assert.equal(byName["융합과학 탐구"].sameCourseOnce, true);
   assert.equal(byName["한 행 두 학기"].semester, "1·2");
-  assert.equal(byName["한 행 두 학기"].sameCourseOnce, undefined, "한 행이 두 학기에 걸친 과목은 대상 아님");
+  assert.equal(byName["한 행 두 학기"].sameCourseOnce, true, "한 행이 두 학기로 나뉘어도 한 학기만(학기제)");
   assert.equal(byName["기하"].sameCourseOnce, undefined);
 });
 
@@ -1675,7 +1676,7 @@ test("results: a student who picked a once-only course in both semesters is foun
   const once = { grade: "2", classroom: "1", number: "2", name: "가상", selections: [course(1, "융합과학 탐구 (1학기)", "1"), course(3, "기하")] };
   assert.deepEqual(plain(ctx.applicationSameCourseTwice(once)), []);
   const single = { grade: "2", classroom: "1", number: "3", name: "가상", selections: [course(4, "한 행 두 학기 (1학기)", "1"), course(5, "한 행 두 학기 (2학기)", "2")] };
-  assert.deepEqual(plain(ctx.applicationSameCourseTwice(single)), [], "한 행 두 학기 과목은 이 규칙에서 빠짐");
+  assert.deepEqual(plain(ctx.applicationSameCourseTwice(single)), [{ name: "한 행 두 학기", semesters: ["1", "2"] }], "한 행이 두 학기로 나뉜 과목도 두 학기 신청이면 찾는다");
   // 웹 결과(online)는 지금 편제표를 다시 읽지 않고 서버 과목 목록의 표시만 본다.
   const online = { grade: "2", selections: [{ ...course(1, "융합과학 탐구 (1학기)", "1"), applicationGroupSource: "online" }, { ...course(2, "융합과학 탐구 (2학기)", "2"), applicationGroupSource: "online" }] };
   assert.deepEqual(plain(ctx.applicationSameCourseTwice(online)), []);

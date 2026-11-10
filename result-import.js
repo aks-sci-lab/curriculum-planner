@@ -158,7 +158,7 @@ function parseResultSheet(sheet, options) {
       merged.students.push({ id: `app-${grade}-${entry.classroom}-${entry.number}-${entry.name}`, ...entry, selections: [], totalCredits: 0 });
     }
     sortResultStudents(merged.students);
-    return { ...base, separatedCourses: merged.separated || [], data: { students: merged.students, courses: merged.courses } };
+    return { ...base, data: { students: merged.students, courses: merged.courses } };
   }
   base.format = "wide";
   let data;
@@ -192,8 +192,8 @@ function countResultSelections(students, courses) {
   return counts;
 }
 
-// 소인수·공동교육과정은 따로 신청하므로(1단계 편제표 학기 칸 메모·편성 영역 '소인수·공동') 결과 파일에 있어도 뺀다.
-// items = 그 학년 신청 과목 목록(collectApplicationSubjects includeExcluded, 따로 신청 과목은 separate: true). 뺀 과목 이름을 돌려준다.
+// 소인수·공동교육과정(1단계 편제표 학기 칸 메모·편성 영역 '소인수·공동')은 신청 과목이 아니므로 결과 파일에 있어도 조용히 뺀다.
+// items = 그 학년 신청 과목 목록(collectApplicationSubjects includeExcluded, 해당 과목은 separate: true). 뺀 과목 이름을 돌려준다.
 function stripSeparateResultCourses(data, items) {
   const separate = new Set((items || []).filter((item) => item.separate).map((item) => normalizeResultCourseName(item.subject)));
   if (!separate.size || !data?.courses?.length) return [];
@@ -222,11 +222,8 @@ function analyzeResultCandidate(candidate, options) {
   const grade = String(options.grade);
   const targetGrade = String(Number(grade) + 1);
   const target = resultTargetLabel(grade);
-  const separated = [...new Set([...(candidate.separatedCourses || []),
-    ...stripSeparateResultCourses(candidate.data, options.subjects?.[targetGrade])])];
-  if (separated.length) {
-    issues.info.push(`소인수·공동교육과정 ${separated.length}과목은 따로 신청하므로 결과에서 뺐습니다: ${resultExampleList(separated)}. 개설 여부와 반 수는 5단계 시수 통계에서 직접 입력하세요.`);
-  }
+  // 소인수·공동교육과정 과목은 신청 과목이 아니므로 결과에 있어도 안내 없이 뺀다(편제표 작업에서만 다룸).
+  stripSeparateResultCourses(candidate.data, options.subjects?.[targetGrade]);
   const plan = options.cohortYear ? `${options.cohortYear}학년도 입학생 편제표(${targetGrade}학년 열)` : `${targetGrade}학년 편제표`;
   const students = candidate.data.students;
   const courses = candidate.data.courses.filter((course) =>
@@ -262,7 +259,7 @@ function analyzeResultCandidate(candidate, options) {
       issues.warnings.push(`${target} 중 ${plan}에 없는 과목 ${unknown.length}개: ${resultExampleList(unknown.map((course) => course.name))}. 과목명이 편제표와 다르면 그룹 분류와 시수 통계 연결이 끊어지니 편제표 또는 파일의 과목명을 맞추세요.`);
       addAction("curriculum", "1단계 편제표 확인");
     }
-    // 따로 신청(소인수·공동) 과목은 결과 파일에 없는 게 정상이므로 '없는 과목'으로 세지 않는다.
+    // 소인수·공동 과목은 신청 과목이 아니므로 '결과 파일에 없는 과목'으로 세지 않는다.
     const missing = curriculum.filter((item) => !item.separate && !fileNames.has(normalizeResultCourseName(item.subject)));
     if (missing.length) issues.info.push(`${plan}의 ${target} 중 결과 파일에 없는 과목 ${missing.length}개: ${resultExampleList(missing.map((item) => item.subject))}.`);
   } else {
