@@ -742,6 +742,86 @@ async function stepPersistence({ page, h, report, dialogs }) {
   });
 }
 
+// 결과 엑셀 경로(같은 과목 두 학기 신청): 저장 단계 뒤 새 차수(3차)에 현2 학생 3명 결과를 올린다(1명은 '심화 영어' 1·2학기 모두).
+// → 검증 미리보기 오류 목록 → '오류 n건 확인 후 결과 반영' → 앱 확인 창 '오류가 있는 결과 반영' → 확인서 점검란 → 4단계 재신청 표.
+async function stepResultTwice({ page, h, report, roster, dialogs }) {
+  return h.step("2-6. 결과 엑셀: 같은 과목 두 학기 신청 → 오류·확인 창·확인서·재신청 표시", async () => {
+    const out = {};
+    const grade = "2";
+    const rng = Core.createRng(SEED * 977 + 3);
+    const students = roster[grade].slice(0, 3);
+    const twicePicks = randomValid(3, rng, { name: "심화 영어", field: "sem31" });
+    // 3-2에서 '심화 영어'가 든 그룹의 첫 선택을 '심화 영어 (2학기)'로 바꾼다(randomValid는 순서대로 그룹별 pick개를 넣음).
+    let at = 0;
+    for (const g of groupsForTarget(3)) { if (g.field === "sem32" && g.members.some((m) => m[2] === "심화 영어")) break; at += g.pick; }
+    twicePicks[at] = "심화 영어 (2학기)";
+    const picks = [twicePicks, randomValid(3, rng), randomValid(3, rng)];
+    out.picks = picks;
+    const round = "3";
+    const file = path.join(OUT, "result-twice-grade2.xlsx");
+    fs.writeFileSync(file, writeXlsx([{ name: "결과", rows: [["차수", "학년", "반", "번호", "성명", "선택과목"], ...students.map((s, i) => [Number(round), Number(grade), Number(s.classroom), Number(s.number), s.name, picks[i].join(", ")])] }]));
+    await gotoStep(page, 2);
+    await selectGradeTab(page, grade);
+    await page.locator("#applicationResultsTab").click();
+    await page.locator("#addApplicationRound").click();
+    await sleep(500);
+    out.addRound = await text(page, "#status");
+    h.check(/3차/.test(out.addRound), "중요", "2단계·결과", "결과 엑셀 점검용 3차를 추가하지 못함", { actual: out.addRound });
+    const before = dialogs.length;
+    await page.locator("#rosterInput").setInputFiles(file);
+    await page.locator("#resultImportPreview:not(.hidden)").waitFor({ timeout: 20000 });
+    await sleep(300);
+    out.errorList = await text(page, ".result-import-issues.is-blocking.is-error");
+    out.button = await text(page, "#confirmResultImport");
+    const twice = students[0];
+    h.check(/같은 과목을 두 학기에 신청한 학생 1명/.test(out.errorList) && out.errorList.includes(`${twice.classroom}-${twice.number}`) && /심화 영어/.test(out.errorList), "중요", "2단계·결과", "두 학기 모두 고른 학생이 있는데 검증 미리보기에 오류 목록이 없음(또는 학생·과목이 다름)", { expected: `같은 과목을 두 학기에 신청한 학생 1명: ${twice.classroom}-${twice.number} … 심화 영어`, actual: out.errorList.slice(0, 400) || (await text(page, "#resultImportPreview")).slice(0, 600) });
+    h.check(/오류 1건 확인 후 결과 반영/.test(out.button) && !(await page.locator("#confirmResultImport").isDisabled()), "중요", "2단계·결과", "결과 반영 단추가 '오류 1건 확인 후 결과 반영'(누를 수 있음)이 아님", { actual: out.button });
+    await h.screenshot(page, "result-twice-preview");
+    await page.locator("#confirmResultImport").click();
+    await waitText(page, "#status", /반영했습니다|명단을 만들었습니다|반영하지 않았|실패|못했/, 20000).catch(() => "");
+    await sleep(500);
+    out.status = await text(page, "#status");
+    out.dialogs = dialogs.slice(before).map((d) => ({ type: d.type, title: d.title, message: String(d.message || "").slice(0, 300) }));
+    h.check(out.dialogs.some((d) => d.type === "appConfirm" && d.title === "오류가 있는 결과 반영"), "중요", "2단계·결과", "오류 결과 반영 때 앱 확인 창 '오류가 있는 결과 반영'이 뜨지 않음", { actual: out.dialogs });
+    h.check(/반영했습니다|명단을 만들었습니다/.test(out.status) && !/반영하지 않았/.test(out.status), "중요", "2단계·결과", "확인 창에서 '반영'을 눌렀는데 결과가 반영되지 않음", { actual: out.status });
+    // 3단계 확인서 점검란
+    await gotoStep(page, 3);
+    const item = (s) => page.locator(`[data-student-id^="app-${grade}-${s.classroom}-${s.number}-"]`).first();
+    out.certificate = {};
+    for (const [i, s] of students.entries()) {
+      if (!(await item(s).count())) { h.issue("중요", "3단계", `결과 엑셀 3차 학생이 확인서 목록에 없음(현 ${grade}학년 ${s.classroom}-${s.number})`, {}); continue; }
+      await item(s).click();
+      await page.locator("#preview table.certificate-table").waitFor({ timeout: 10000 });
+      const preview = await text(page, "#preview");
+      const line = preview.split("\n").find((l) => /같은 과목 두 학기 신청/.test(l)) || "";
+      out.certificate[`${s.classroom}-${s.number}`] = line;
+      if (i === 0) h.check(/같은 과목 두 학기 신청\(심화 영어 1·2학기\) → 재신청 필요/.test(preview), "중요", "3단계", "두 학기 모두 고른 학생 확인서 점검란에 '같은 과목 두 학기 신청 … → 재신청 필요'가 없음", { expected: "같은 과목 두 학기 신청(심화 영어 1·2학기) → 재신청 필요", actual: preview.slice(0, 600) });
+      else h.check(!line, "중요", "3단계", `한 학기만 고른 학생 확인서에 '같은 과목 두 학기 신청'이 보임(${s.classroom}-${s.number})`, { actual: line });
+    }
+    await h.screenshot(page, "result-twice-certificate");
+    // 4단계 재신청 표: 마지막 열 '같은 과목 두 학기 신청'
+    await gotoStep(page, 4);
+    const tab = page.locator(`#aggregateGradeBar [data-aggregate-grade="${grade}"]`);
+    if (await tab.count()) { await tab.click(); await sleep(500); }
+    if (!(await page.locator("#retakeDetails[open]").count())) await page.locator("#retakeDetails summary").click();
+    await sleep(300);
+    out.retakeCount = await text(page, "#retakeSummaryCount");
+    const headers = await page.locator("#retakeContent table thead th").allInnerTexts();
+    const rowsText = await page.locator("#retakeContent table tbody tr").allInnerTexts();
+    out.retakeHeaders = headers;
+    const row = rowsText.find((r) => r.includes(twice.name));
+    out.retakeRow = row || "";
+    h.check(headers[headers.length - 1] === "같은 과목 두 학기 신청", "중요", "4단계·재신청", "재신청 표 마지막 열이 '같은 과목 두 학기 신청'이 아님", { actual: headers });
+    h.check(row && /⚠ 같은 과목 두 학기 신청\(심화 영어 1·2학기\)/.test(row), "중요", "4단계·재신청", "두 학기 모두 고른 학생이 재신청 표에 없거나 표시가 없음", { expected: twice.name, actual: { row, rows: rowsText.slice(0, 5), count: out.retakeCount } });
+    for (const s of students.slice(1)) {
+      const r = rowsText.find((x) => x.includes(s.name));
+      h.check(!r || !/같은 과목 두 학기/.test(r), "중요", "4단계·재신청", `한 학기만 고른 학생이 재신청 표에 '같은 과목 두 학기 신청'으로 나옴(${s.classroom}-${s.number})`, { actual: r });
+    }
+    await h.screenshot(page, "result-twice-retake");
+    return out;
+  });
+}
+
 function classifyConsole(h) {
   const appErrors = h.report.console.filter((c) => c.page !== "bot" && (c.type === "pageerror" || c.type === "error"));
   const pageErrors = appErrors.filter((c) => c.type === "pageerror");
@@ -784,10 +864,13 @@ function termName(targetGrade, name, field) {
   const fields = groupsForTarget(targetGrade).filter((g) => g.members.some((m) => m[2] === name)).map((g) => g.field);
   return new Set(fields.map((f) => f.slice(-1))).size > 1 ? `${name} (${field.slice(-1)}학기)` : name;
 }
-function randomValid(targetGrade, rng) {
+// force = { name, field }: 그 그룹에서 이 과목을 꼭 고른다(같은 과목 한 학기만 점검용).
+function randomValid(targetGrade, rng, force = null) {
   const picks = []; const used = new Set();
   for (const g of groupsForTarget(targetGrade)) {
-    const names = Core.shuffle(g.members.map((m) => m[2]).filter((n) => !used.has(n)), rng).slice(0, g.pick);
+    const pool = Core.shuffle(g.members.map((m) => m[2]).filter((n) => !used.has(n)), rng);
+    const forced = force && force.field === g.field && pool.includes(force.name);
+    const names = forced ? [force.name, ...pool.filter((n) => n !== force.name)].slice(0, g.pick) : pool.slice(0, g.pick);
     names.forEach((n) => used.add(n));
     picks.push(...names.map((n) => termName(targetGrade, n, g.field)));
   }
@@ -829,18 +912,29 @@ async function studentApply(studentPage, h, eventId, student, picks) {
     await studentPage.locator("#cloudStudentCourses:not(.hidden)").waitFor({ timeout: 15000 });
   }
   const warnings = [];
+  const sameCourse = [];
   for (let page = 0; page < 4; page++) {
     for (const name of picks) {
       const box = studentPage.locator(`#cloudStudentChoices input[type=checkbox][value="${name}"]`);
       if (await box.count() && await box.isVisible() && !(await box.isChecked())) await box.check();
     }
     warnings.push((await studentPage.locator("#courseCheckStudentPanel").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 300));
+    // 같은 과목 한 학기만: 다른 학기에 고른 과목과 이름이 같은 칸 → 비활성 + 'span.same-course-note'
+    sameCourse.push(...await studentPage.evaluate(() => {
+      const base = (v) => String(v).replace(/\s*\([12]학기\)/g, "").replace(/\s+/g, " ").trim();
+      const boxes = [...document.querySelectorAll("#cloudStudentChoices input[type=checkbox]")];
+      const checked = boxes.filter((b) => b.checked).map((b) => b.value);
+      return boxes.filter((b) => !b.checked && b.offsetParent !== null).flatMap((b) => {
+        const other = checked.find((v) => v !== b.value && base(v) === base(b.value));
+        return other ? [{ value: b.value, other, disabled: b.disabled, note: b.closest("label")?.querySelector(".same-course-note")?.textContent || "" }] : [];
+      });
+    }));
     if (await studentPage.locator("#cloudStudentNext").isVisible()) { await studentPage.locator("#cloudStudentNext").click(); await sleep(150); continue; }
     break;
   }
   await studentPage.locator("#cloudStudentSave").click();
   const message = await waitText(studentPage, "#cloudStudentMessage", /저장|제출|선택하세요|오류|실패/, 15000);
-  return { message, warnings };
+  return { message, warnings, sameCourse };
 }
 
 async function stepStudentScreen({ page, h, report, roster, downloads }, grade) {
@@ -854,12 +948,24 @@ async function stepStudentScreen({ page, h, report, roster, downloads }, grade) 
     const context = await h.newStudentContext();
     const studentPage = await context.newPage();
     const results = [];
+    const sameCourse = [];
     const t0 = Date.now();
+    let forced = false;
     for (const item of plan) {
       if (item.kind === "skip") { results.push({ seat: `${item.student.classroom}-${item.student.number}`, kind: "skip" }); continue; }
       const targetGrade = Number(grade) + 1;
-      const picks = item.kind === "violate" ? violatingPicks(targetGrade, rng) : randomValid(targetGrade, rng);
+      // 현2 첫 정상 학생은 3-1에서 '심화 영어'를 꼭 고른다 → 3-2 '심화 영어 (2학기)' 칸이 비활성·안내인지 본다.
+      const force = grade === "2" && item.kind === "normal" && !forced ? { name: "심화 영어", field: "sem31" } : null;
+      if (force) forced = true;
+      const picks = item.kind === "violate" ? violatingPicks(targetGrade, rng) : randomValid(targetGrade, rng, force);
       const r = await studentApply(studentPage, h, eventId, item.student, picks);
+      for (const entry of r.sameCourse) {
+        const semester = (String(entry.other).match(/\(([12])학기\)/) || [])[1];
+        sameCourse.push({ seat: `${item.student.classroom}-${item.student.number}`, ...entry });
+        h.check(entry.disabled && new RegExp(`같은 과목은 한 학기만 — ${semester}학기에 신청함`).test(entry.note), "중요", "웹·학생 화면",
+          `같은 과목 다른 학기 칸이 비활성·안내가 아님(현 ${grade}학년 ${item.student.classroom}-${item.student.number} ${entry.value})`, { expected: { disabled: true, note: `같은 과목은 한 학기만 — ${semester}학기에 신청함` }, actual: entry });
+      }
+      if (force) h.check(r.sameCourse.some((e) => /심화 영어 \(2학기\)/.test(e.value)), "중요", "웹·학생 화면", `3-1 '심화 영어 (1학기)'를 골랐는데 3-2 '심화 영어 (2학기)' 칸을 점검하지 못함(칸이 안 보이거나 고른 표시가 없음)`, { actual: { picks, sameCourse: r.sameCourse } });
       const saved = /저장/.test(r.message) && !/선택하세요|실패/.test(r.message);
       h.check(saved, "중요", "웹·학생 화면", `현 ${grade}학년 ${item.student.classroom}-${item.student.number} 학생 화면 저장 실패`, { actual: r.message, picks });
       if (item.kind === "violate") h.check(/위계|경고|선이수/.test(r.message + r.warnings.join(" ")), "중요", "웹·학생 화면", `위계 위반 저장인데 학생 화면에 경고가 없음(현 ${grade}학년 ${item.student.classroom}-${item.student.number})`, { actual: { message: r.message, panel: r.warnings } });
@@ -875,7 +981,10 @@ async function stepStudentScreen({ page, h, report, roster, downloads }, grade) 
     }
     report.data.studentScreen = report.data.studentScreen || {};
     report.data.studentScreen[grade] = results;
-    return { violators, normal: results.filter((r) => r.kind === "normal").length, skipped: results.filter((r) => r.kind === "skip").length };
+    // 서버에도 두 학기 모두 들어간 학생이 없어야 한다(봇·학생 화면 모두).
+    const both = rows.filter((row) => row.submitted_at && Object.values((row.selections || []).reduce((m, n) => { const b = Expected.bare(n); if (b !== n) m[b] = (m[b] || 0) + 1; return m; }, {})).some((c) => c > 1));
+    h.check(!both.length, "중요", "웹·서버", `현 ${grade}학년 서버 신청에 같은 과목 두 학기 모두 고른 학생이 있음`, { actual: both.slice(0, 5).map((r) => ({ seat: `${r.classroom}-${r.number}`, selections: r.selections })) });
+    return { violators, sameCourseChecked: sameCourse.length, sameCourse: sameCourse.slice(0, 5), normal: results.filter((r) => r.kind === "normal").length, skipped: results.filter((r) => r.kind === "skip").length };
   });
 }
 
@@ -1857,6 +1966,7 @@ async function main() {
     await stepHours(ctx);
     await stepClassSections(ctx);
     await stepPersistence(ctx);
+    await stepResultTwice(ctx);
     if (args.explore2) await require(path.resolve(args.explore2))({ page, h, text, sleep, gotoStep, upload, waitText, report, OUT });
   } finally {
     report.data.tabRetries = tabRetries;
