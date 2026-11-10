@@ -8,6 +8,8 @@ const S6 = require("./step6.cjs");
 const { writeXlsx } = require("./xlsx-write.cjs");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 이 환경의 Chromium은 한글 파일 이름을 올리면 선택을 취소한다 → 내려받은 파일도 ASCII 이름으로 저장
+const safeName = (key) => String(key).replace(/택/g, "c").replace(/[^A-Za-z0-9-]/g, "_");
 const compact = (v) => String(v ?? "").replace(/\s+/g, "");
 const bareTerm = (v) => String(v ?? "").replace(/\s*[(（]\s*[12]\s*학기\s*[)）]\s*$/, "");
 const waitIdle = (page) => page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 180000, polling: 200 });
@@ -122,6 +124,15 @@ async function setCell(page, courseName, letter, value) {
   await waitIdle(page); await sleep(400);
 }
 const roomOf = (sections) => { const m = new Map(); for (const x of sections) for (const st of x.students) m.set(`${st}|${x.subject}`, x.room); return m; };
+// 블록이 바뀐 학생(같은 블록 안 분반 번호만 바뀐 것·강의실 이름 바뀜은 셈하지 않음)
+function blockMovedStudents(before, after) {
+  const blockOf = (sections) => { const m = new Map(); for (const x of sections) for (const st of x.students) m.set(`${st}|${bareTerm(x.subject)}`, x.block); return m; };
+  const b = blockOf(before), a = blockOf(after);
+  const moved = new Set();
+  for (const [k, block] of b) if (a.get(k) !== block) moved.add(k.split("|")[0]);
+  for (const k of a.keys()) if (!b.has(k)) moved.add(k.split("|")[0]);
+  return moved;
+}
 function movedStudents(before, after) {
   const b = roomOf(before), a = roomOf(after);
   const moved = new Set();
@@ -144,7 +155,7 @@ function coCounts(sel, course) {
 async function editScenario({ page, h, groupKey, sel, validate, dir }) {
   const out = {};
   await S6.selectGroup(page, groupKey);
-  const exportModel = async (tag) => S6.modelFromExports(await S6.exportGroup(page, dir, `${groupKey.replace(/[:\s]/g, "_")}-${tag}`), { semester: groupKey.split(":")[1] });
+  const exportModel = async (tag) => S6.modelFromExports(await S6.exportGroup(page, dir, `${safeName(groupKey)}-${tag}`), { semester: groupKey.split(":")[1] });
   let table = await readPlacement(page);
   h.check(Boolean(table), "중요", "6단계", `${groupKey}: '직접 고치기' 과목 × 블록 분반 수 표(#classSectionsPlacementTable)가 없음`);
   if (!table) return out;
@@ -171,29 +182,35 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
 
   // 칸 하나 바꾸기: 분반이 있는 블록 → 빈 블록으로 1개 옮김(먼저 늘리고 줄임)
   const before = await exportModel("edit-before");
+  // 블록당 최대를 넘지 않는 빈 블록으로 옮긴다(넘기면 앱이 '분반 n개 > 최대'·교실 부족을 알림 — 따로 확인)
+  const blockRoom = table.foot.map((text) => { const [n, max] = String(text).split("/").map((x) => Number(x.trim())); return max ? max - n : 99; });
   const pick = table.rows.map((row) => {
     const from = row.values.findIndex((v) => v.value > 0);
-    const to = row.values.findIndex((v) => v.value === 0);
+    const to = row.values.findIndex((v, i) => v.value === 0 && blockRoom[i] > 0);
     return { row, from, to };
-  }).find((x) => x.from >= 0 && x.to >= 0 && x.row.sections >= 2) || null;
+  }).find((x) => x.from >= 0 && x.to >= 0 && x.row.sections >= 2) || table.rows.map((row) => ({ row, from: row.values.findIndex((v) => v.value > 0), to: row.values.findIndex((v) => v.value === 0), full: true }))
+    .find((x) => x.from >= 0 && x.to >= 0 && x.row.sections >= 2) || null;
   if (pick) {
     const name = pick.row.name, fromL = table.blocks[pick.from], toL = table.blocks[pick.to];
     await setCell(page, name, toL, 1);
     await setCell(page, name, fromL, pick.row.values[pick.from].value - 1);
     table = await readPlacement(page);
     const row = table.rows.find((x) => x.name === name);
-    const files = await S6.exportGroup(page, dir, `${groupKey.replace(/[:\s]/g, "_")}-edit-cell`);
+    const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-edit-cell`);
     const after = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
     const blockCount = (letter) => after.sections.filter((s) => bareTerm(s.subject) === bareTerm(name) && s.block === letter).length;
     const moved = movedStudents(before.sections, after.sections);
     const courseStudents = new Set([...sel].filter(([, list]) => list.some((x) => x.subject === bareTerm(name))).map(([k]) => k));
     const othersMoved = [...moved].filter((k) => !courseStudents.has(k));
-    out.cell = { course: name, from: fromL, to: toL, table: row?.values.map((v) => v.value), excel: { [fromL]: blockCount(fromL), [toL]: blockCount(toL) }, moved: moved.size, othersMoved: othersMoved.length, groupStudents: sel.size,
+    const othersBlockMoved = [...blockMovedStudents(before.sections, after.sections)].filter((k) => !courseStudents.has(k));
+    out.cell = { course: name, from: fromL, to: toL, table: row?.values.map((v) => v.value), excel: { [fromL]: blockCount(fromL), [toL]: blockCount(toL) }, moved: moved.size, othersMoved: othersMoved.length, othersBlockMoved: othersBlockMoved.length, courseStudents: courseStudents.size, groupStudents: sel.size, overMax: Boolean(pick.full),
       pinNote: table.pinNote.slice(0, 160), status: (await status(page)).slice(0, 200) };
     h.check(row?.values[pick.to].value === 1 && row?.values[pick.from].value === pick.row.values[pick.from].value - 1 && blockCount(toL) === 1 && blockCount(fromL) === pick.row.values[pick.from].value - 1,
       "중요", "6단계", `${groupKey}: 분반 수 표에서 '${name}' ${fromL}→${toL}블록으로 1개 옮겼는데 표·블록표 분반 수가 다름`, { actual: out.cell });
     h.check(/블록 고정 \d+개/.test(table.pinNote), "경미", "6단계", `${groupKey}: 칸을 고친 뒤 표 위 '블록 고정 n개' 안내가 없음`, { actual: table.pinNote });
-    if (othersMoved.length > Math.max(5, sel.size * 0.5)) h.issue("경미", "6단계", `${groupKey}: 분반 수 칸 하나를 바꿨는데 그 과목을 신청하지 않은 학생 ${othersMoved.length}명(그룹 ${sel.size}명)의 분반도 바뀜`, { actual: out.cell });
+    // 다른 과목 학생: 블록이 바뀐 학생(분반 고정 → 블록은 그대로여야 함)과 같은 블록 안 분반만 바뀐 학생을 나눠 본다
+    if (othersBlockMoved.length) h.issue("중요", "6단계", `${groupKey}: 분반 수 칸 하나(${name} ${fromL}→${toL})를 바꿨는데 그 과목을 신청하지 않은 학생 ${othersBlockMoved.length}명의 과목 블록이 바뀜(분반 블록 고정 상태)`, { actual: out.cell });
+    if (othersMoved.length > Math.max(5, sel.size * 0.3)) h.issue("경미", "6단계", `${groupKey}: 분반 수 칸 하나(${name} ${fromL}→${toL})를 바꿨는데 그 과목을 신청하지 않은 학생 ${othersMoved.length}명(그룹 ${sel.size}명)도 같은 블록 안 다른 분반으로 바뀜(이동 최소가 아님)`, { actual: out.cell });
     out.cell.validate = validate(files, await S6.readScreen(page), `${groupKey} (분반 수 칸 고친 뒤)`, { allowShownUnassigned: true });
   } else out.cell = { skipped: "분반 2개 이상이고 빈 블록이 있는 과목 없음" };
 
@@ -250,7 +267,7 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     out.move.status = (await status(page)).slice(0, 160);
     await page.locator("#classSectionsStudentSearch").fill(key); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(400);
     const lookup = await page.locator(".cs-lookup").innerText().catch(() => "");
-    const files = await S6.exportGroup(page, dir, `${groupKey.replace(/[:\s]/g, "_")}-move-after`);
+    const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-move-after`);
     const after = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
     const moved = movedStudents(beforeMove.sections, after.sections);
     const pickedRoom = (picked.label.match(/^.+? (\S+) \d+\/\d+명/) || [])[1];
@@ -264,7 +281,7 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
   if (!out.move.student) h.issue("경미", "6단계", `${groupKey}: 학생 옮기기 창에서 문제 없이 옮길 칸을 찾지 못함(${out.move.tried}명 시도)`, { actual: out.move });
 
   // 배정 결과 엑셀: 내려받기 → 그대로 올리기(바뀐 학생 없음) → 3명 바꿔 올리기 → 확인 창 '바뀐 학생 3명' → 적용 → 다시 내려받아 확인
-  const assignFile = await saveDownload(page, () => page.locator("#classSectionsAssignExport").click(), path.join(dir, `${groupKey.replace(/[:\s]/g, "_")}-assign.xlsx`));
+  const assignFile = await saveDownload(page, () => page.locator("#classSectionsAssignExport").click(), path.join(dir, `${safeName(groupKey)}-assign.xlsx`));
   const sheets = S6.readXlsxAll(assignFile);
   out.assign = { sheets: sheets.map((s) => s.name) };
   h.check(sheets[0]?.name === "배정 결과" && sheets.some((s) => s.name === "과목별 블록") && sheets.some((s) => s.name === "안내"), "중요", "6단계", `${groupKey}: 배정 결과 엑셀 시트('배정 결과'·'과목별 블록'·'안내')가 다름`, { actual: out.assign.sheets });
@@ -306,7 +323,7 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
   }
   out.assign.changes = changes;
   if (changes.length) {
-    const edited = path.join(dir, `${groupKey.replace(/[:\s]/g, "_")}-assign-edited.xlsx`);
+    const edited = path.join(dir, `${safeName(groupKey)}-assign-edited.xlsx`);
     fs.writeFileSync(edited, writeXlsx([{ name: "배정 결과", rows }, { name: "과목별 블록", rows: sheets[1]?.rows || [] }]));
     const beforeImport = await exportModel("import-before");
     const dialogStart = Date.now();
@@ -319,12 +336,12 @@ async function editScenario({ page, h, groupKey, sel, validate, dir }) {
     const wantN = changes.length;
     h.check(new RegExp(`바뀐 학생 ${wantN}명`).test(confirmText || out.assign.status) && changes.every((x) => (confirmText || out.assign.status).includes(x.key) || wantN > 5), "중요", "6단계",
       `${groupKey}: 배정 결과 엑셀에서 ${wantN}명을 바꿔 올렸는데 확인 창에 '바뀐 학생 ${wantN}명'(학생 키)이 없음`, { actual: { confirm: confirmText.slice(0, 200), status: out.assign.status } });
-    const again = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsAssignExport").click(), path.join(dir, `${groupKey.replace(/[:\s]/g, "_")}-assign-after.xlsx`)))[0].rows;
+    const again = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsAssignExport").click(), path.join(dir, `${safeName(groupKey)}-assign-after.xlsx`)))[0].rows;
     const byKey = new Map(again.slice(3).map((r) => [String(r[0]), r]));
     const col = new Map(); for (let c = 2; c < again[0].length; c += 2) col.set(again[0][c], c);
     const wrong = changes.filter((x) => { const r = byKey.get(x.key); const c = col.get(x.course); return !r || r[c] !== x.letter || Number(r[c + 1]) !== x.to; });
     const changedRows = again.slice(3).filter((r) => { const o = rows.find((x) => String(x[0]) === String(r[0])); return o && JSON.stringify(o.slice(2)) !== JSON.stringify(r.slice(2)); }).map((r) => r[0]);
-    const files = await S6.exportGroup(page, dir, `${groupKey.replace(/[:\s]/g, "_")}-import-after`);
+    const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-import-after`);
     const after = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
     const moved = movedStudents(beforeImport.sections, after.sections);
     out.assign.wrong = wrong; out.assign.otherRowsDiffer = changedRows.slice(0, 8); out.assign.moved = moved.size;
@@ -345,10 +362,10 @@ function attendanceInfo(sheet) {
 
 async function attendanceScenario({ page, h, groupKey, dir, classMap, grade }) {
   await S6.selectGroup(page, groupKey);
-  const files = await S6.exportGroup(page, dir, `${groupKey.replace(/[:\s]/g, "_")}-print`);
+  const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-print`);
   const model = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
   const rooms = await readRooms(page);
-  const file = await saveDownload(page, () => page.locator("#classSectionsAttendanceGroup").click(), path.join(dir, `${groupKey.replace(/[:\s]/g, "_")}-attendance.xlsx`));
+  const file = await saveDownload(page, () => page.locator("#classSectionsAttendanceGroup").click(), path.join(dir, `${safeName(groupKey)}-attendance.xlsx`));
   const sheets = S6.readXlsxAll(file);
   const out = { sheets: sheets.length, sections: model.sections.length, bad: [] };
   h.check(sheets.length === model.sections.length, "중요", "6단계", `${groupKey}: 출석부 시트 수 ${sheets.length} ≠ 분반 수 ${model.sections.length}`, { actual: sheets.map((s) => s.name).slice(0, 10) });
@@ -374,7 +391,7 @@ async function attendanceScenario({ page, h, groupKey, dir, classMap, grade }) {
   h.check(!out.bad.length, "중요", "6단계", `${groupKey}: 출석부 시트 ${out.bad.length}개가 명렬표·블록표·화면과 다름(제목·위 3줄·인원·반 번호·날짜 칸)`, { actual: out.bad.slice(0, 5) });
   // 날짜 칸 수 설정
   await page.locator("#classSectionsAttendanceDays").fill("12"); await page.locator("#classSectionsAttendanceDays").press("Tab"); await sleep(500);
-  const s12 = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsAttendanceGroup").click(), path.join(dir, `${groupKey.replace(/[:\s]/g, "_")}-attendance12.xlsx`)));
+  const s12 = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsAttendanceGroup").click(), path.join(dir, `${safeName(groupKey)}-attendance12.xlsx`)));
   out.days12 = s12[0] ? attendanceInfo(s12[0]).dateCols : null;
   h.check(out.days12 === 12, "중요", "6단계", `${groupKey}: 출석부 날짜 칸 수를 12로 바꿨는데 출석부 날짜 칸 ${out.days12}개`, { actual: out.days12 });
   await page.locator("#classSectionsAttendanceDays").fill("17"); await page.locator("#classSectionsAttendanceDays").press("Tab"); await sleep(400);
@@ -392,7 +409,7 @@ async function timetableScenario({ page, h, info, groupKey, dir, fixed }) {
     await S6.selectGroup(page, g.key);
     const rooms = await readRooms(page);
     if (!rooms.sections.length) continue;
-    const files = await S6.exportGroup(page, dir, `${g.key.replace(/[:\s]/g, "_")}-tt`);
+    const files = await S6.exportGroup(page, dir, `${safeName(g.key)}-tt`);
     const model = S6.modelFromExports(files, { semester });
     // 재신청 표시 기대: '재신청·미배정' 시트에서 사유가 '학급 단위 과목(그 반은 이동)'만이 아닌 학생(시간표는 그 사유를 재신청으로 보이지 않음)
     const retakeSheet = files.rosters.find((x) => /^재신청/.test(x.name));
@@ -456,7 +473,7 @@ async function timetableScenario({ page, h, info, groupKey, dir, fixed }) {
   out.cells = { checked: cellsChecked, badStudents: bad.length, fixedLabel: printed.tables[0]?.cells.find((c) => c.slot === fixed[0])?.lines.join("") || "" };
   h.check(!bad.length, "중요", "6단계", `${groupKey}: 학생 시간표 칸이 배정 결과(과목·교실·교사)·고정 시간·재신청 표시와 다름 — 학생 ${bad.length}명`, { actual: bad.slice(0, 4) });
   // 엑셀
-  const tt = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsTimetableExcel").click(), path.join(dir, `${groupKey.replace(/[:\s]/g, "_")}-timetable.xlsx`)));
+  const tt = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsTimetableExcel").click(), path.join(dir, `${safeName(groupKey)}-timetable.xlsx`)));
   const titles = tt.reduce((n, s) => n + s.rows.filter((row) => /이동수업 시간표$/.test(String(row[0] || ""))).length, 0);
   out.excel = { sheets: tt.map((s) => s.name), titles };
   h.check(titles === gotKeys.length, "중요", "6단계", `${groupKey}: 학생 시간표 엑셀 학생 수 ${titles} ≠ 인쇄 학생 수 ${gotKeys.length}`, { actual: out.excel });
