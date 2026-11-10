@@ -360,7 +360,7 @@ function attendanceInfo(sheet) {
     header, dateCols: header.filter((v) => /^월\s+일$/.test(String(v))).length, students: sheet.rows.slice(headerIndex + 1).filter((row) => row.some((v) => v !== "" && v !== null)).map((row) => row.slice(0, 5)) };
 }
 
-async function attendanceScenario({ page, h, groupKey, dir, classMap, grade }) {
+async function attendanceScenario({ page, h, groupKey, dir, classMap, grade, info = [] }) {
   await S6.selectGroup(page, groupKey);
   const files = await S6.exportGroup(page, dir, `${safeName(groupKey)}-print`);
   const model = S6.modelFromExports(files, { semester: groupKey.split(":")[1] });
@@ -395,6 +395,95 @@ async function attendanceScenario({ page, h, groupKey, dir, classMap, grade }) {
   out.days12 = s12[0] ? attendanceInfo(s12[0]).dateCols : null;
   h.check(out.days12 === 12, "중요", "6단계", `${groupKey}: 출석부 날짜 칸 수를 12로 바꿨는데 출석부 날짜 칸 ${out.days12}개`, { actual: out.days12 });
   await page.locator("#classSectionsAttendanceDays").fill("17"); await page.locator("#classSectionsAttendanceDays").press("Tab"); await sleep(400);
+  out.view = await attendanceViewScenario({ page, h, groupKey, dir, info, groupSheets: sheets, rosters: files.rosters, sections: model.sections });
+  return out;
+}
+
+// 출석부 화면 보기(#classSectionsAttendanceView): 화면 표 = 엑셀 시트(인원·이름), 앞/뒤, 학생 찾기 강조, 재신청 안내,
+// 전체 파일 시트 수 = 학기 분반 수 + 1(목록), 학급별 zip 파일 수 = 학기 분반 수, 인쇄 장 수 = 분반 수
+async function attendanceViewScenario({ page, h, groupKey, dir, info, groupSheets, rosters, sections }) {
+  const out = {};
+  const semester = groupKey.split(":")[1];
+  let semesterSections = 0;
+  for (const g of info.filter((x) => x.key.split(":")[1] === semester)) { await S6.selectGroup(page, g.key); semesterSections += (await readRooms(page)).sections.length; }
+  await S6.selectGroup(page, groupKey);
+  out.semesterSections = semesterSections;
+  const view = page.locator("#classSectionsAttendanceView");
+  h.check(await view.count() === 1, "중요", "6단계", `${groupKey}: 이동 출석부 보기(#classSectionsAttendanceView)가 없음`);
+  if (!(await view.count())) return out;
+  if (!(await view.evaluate((el) => el.open))) { await view.locator("summary").click(); await sleep(300); }
+  await page.locator("#classSectionsAttendanceScope").selectOption("group"); await sleep(400);
+  const options = await page.locator("#classSectionsAttendancePick option").evaluateAll((els) => els.map((o) => o.value));
+  out.options = options.length;
+  h.check(options.length === sections.length, "중요", "6단계", `${groupKey}: 출석부 보기 분반 목록 ${options.length}개 ≠ 분반 수 ${sections.length}`, { actual: options.slice(0, 5) });
+  // 재신청 기대: 그룹 '재신청·미배정' 시트(사유가 학급 단위 이동 반만이 아닌 학생)의 빠진 과목
+  const retakeSheet = rosters.find((x) => /^재신청/.test(x.name));
+  const retakeByCourse = new Map();
+  for (const r of retakeSheet ? retakeSheet.rows.slice(2) : []) {
+    if (!/^\d+-\d+-\d+$/.test(String(r[0] || ""))) continue;
+    if (!String(r[3] || "").split(", ").some((x) => x && x !== "학급 단위 과목(그 반은 이동)")) continue;
+    for (const c of String(r[2] || "").split(", ")) retakeByCourse.set(bareTerm(c), (retakeByCourse.get(bareTerm(c)) || 0) + 1);
+  }
+  const bad = [];
+  for (const value of options) {
+    await page.locator("#classSectionsAttendancePick").selectOption(value); await sleep(250);
+    const t = await page.evaluate(() => {
+      const table = document.querySelector("#classSectionsAttendanceTable");
+      const rows = [...(table?.querySelectorAll("tbody tr[data-student]") || [])].map((tr) => [...tr.cells].slice(0, 5).map((c) => c.textContent.trim()));
+      return { sheet: table?.dataset.sheet || "", keys: [...(table?.querySelectorAll("tbody tr[data-student]") || [])].map((tr) => tr.dataset.student), rows,
+        retake: Number(document.querySelector("#classSectionsAttendanceRetake")?.dataset.count || 0), summary: document.querySelector("#classSectionsAttendanceView summary")?.textContent.replace(/\s+/g, " ") || "" };
+    });
+    const excel = groupSheets.find((x) => x.name === t.sheet);
+    const sec = sections.find((x) => x.room === t.sheet);
+    const excelRows = excel ? attendanceInfo(excel).students.map((r) => r.map((v) => String(v ?? ""))) : [];
+    const problems = [];
+    if (!excel) problems.push("같은 이름 엑셀 시트 없음");
+    else if (JSON.stringify(excelRows) !== JSON.stringify(t.rows)) problems.push(`화면 ${t.rows.length}줄 ≠ 엑셀 ${excelRows.length}줄(다른 줄 ${t.rows.filter((r, i) => JSON.stringify(r) !== JSON.stringify(excelRows[i])).length})`);
+    if (sec && JSON.stringify([...t.keys].sort()) !== JSON.stringify([...sec.students].sort())) problems.push(`학생 키 ${t.keys.length} ≠ 명렬표 ${sec.students.length}`);
+    const wantRetake = sec ? retakeByCourse.get(bareTerm(sec.subject)) || 0 : 0;
+    if (t.retake !== wantRetake) problems.push(`재신청 안내 ${t.retake}명 ≠ 기대 ${wantRetake}명`);
+    if (problems.length) bad.push({ sheet: t.sheet, problems });
+  }
+  out.checked = options.length; out.bad = bad.slice(0, 5);
+  h.check(!bad.length, "중요", "6단계", `${groupKey}: 출석부 화면 표가 엑셀 시트·명렬표·재신청과 다름 — 분반 ${bad.length}개`, { actual: bad.slice(0, 5) });
+  // 앞/뒤
+  await page.locator("#classSectionsAttendancePick").selectOption(options[0]); await sleep(250);
+  await page.locator("#classSectionsAttendanceNext").click(); await sleep(300);
+  const second = await page.locator("#classSectionsAttendancePick").inputValue();
+  await page.locator("#classSectionsAttendancePrev").click(); await sleep(300);
+  const back = await page.locator("#classSectionsAttendancePick").inputValue();
+  out.prevNext = { second: second === options[1], back: back === options[0], prevDisabled: await page.locator("#classSectionsAttendancePrev").isDisabled() };
+  h.check(out.prevNext.second && out.prevNext.back && out.prevNext.prevDisabled, "경미", "6단계", `${groupKey}: 출석부 보기 '뒤 ▶'/'◀ 앞' 이동이 분반 목록 순서와 다름`, { actual: out.prevNext });
+  // 학생 찾기 → 그 학생이 있는 분반 출석부·강조
+  const student = sections.find((x) => x.students.length)?.students.slice(-1)[0];
+  if (student) {
+    await page.locator("#classSectionsStudentSearch").fill(student); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(500);
+    const note = await page.locator("#classSectionsAttendanceStudent").innerText().catch(() => "");
+    const found = await page.locator(`#classSectionsAttendanceTable tr.is-found[data-student="${student}"]`).count();
+    const rooms = sections.filter((x) => x.students.includes(student)).map((x) => x.room);
+    out.find = { student, note: note.slice(0, 160), found, rooms };
+    h.check(found === 1 && rooms.every((r) => note.includes(r)), "경미", "6단계", `${groupKey}: 학생 찾기(${student}) → 출석부 보기에서 그 학생 줄 강조·'… 출석부에 있음'(${rooms.join(", ")})이 맞지 않음`, { actual: out.find });
+    await page.locator("#classSectionsStudentSearch").fill(""); await page.locator("#classSectionsStudentSearch").press("Enter"); await sleep(300);
+  }
+  // 전체 파일: '목록' + 분반 시트(학기 전체)
+  const all = S6.readXlsxAll(await saveDownload(page, () => page.locator("#classSectionsAttendanceFile").click(), path.join(dir, `${safeName(groupKey)}-attendance-file.xlsx`)));
+  const listRows = all[0]?.rows.slice(2).filter((r) => Number(r[0])).length || 0;
+  out.file = { sheets: all.length, first: all[0]?.name, listRows };
+  h.check(all[0]?.name === "목록" && all.length === semesterSections + 1 && listRows === semesterSections, "중요", "6단계", `${groupKey}: 출석부 전체 파일 시트 ${all.length}개(목록 ${listRows}줄) ≠ ${semester}학기 분반 ${semesterSections}개 + 목록`, { actual: out.file });
+  // 학급별 zip: 분반마다 파일 하나
+  const zipFile = await saveDownload(page, () => page.locator("#classSectionsAttendanceAll").click(), path.join(dir, `${safeName(groupKey)}-attendance-all.zip`));
+  const names = JSON.parse(require("node:child_process").execFileSync("python3", ["-I", "-c", "import zipfile,sys,json; print(json.dumps(zipfile.ZipFile(sys.argv[1]).namelist(), ensure_ascii=False))", zipFile], { encoding: "utf8" }));
+  out.zip = { files: names.length, sample: names.slice(0, 3) };
+  h.check(names.length === semesterSections && names.every((n) => /\.xlsx$/.test(n)), "중요", "6단계", `${groupKey}: 출석부 학급별 zip 파일 ${names.length}개 ≠ ${semester}학기 분반 ${semesterSections}개`, { actual: out.zip });
+  // 인쇄: 이 분반 1장 · 이 그룹 = 그룹 분반 수 · 학기 전체 = 학기 분반 수
+  const printCount = async (button) => {
+    const before = await page.evaluate(() => window.__prints || 0);
+    await page.locator(button).click(); await sleep(800);
+    return page.evaluate((b) => ({ pages: document.querySelectorAll("#printBatch .cs-att-page").length, printed: (window.__prints || 0) - b }), before);
+  };
+  out.print = { one: await printCount("#classSectionsAttendancePrintOne"), group: await printCount("#classSectionsAttendancePrintGroup"), semester: await printCount("#classSectionsAttendancePrintSemester") };
+  h.check(out.print.one.pages === 1 && out.print.group.pages === sections.length && out.print.semester.pages === semesterSections && out.print.one.printed && out.print.group.printed && out.print.semester.printed, "중요", "6단계",
+    `${groupKey}: 출석부 인쇄 장 수(이 분반 ${out.print.one.pages}·이 그룹 ${out.print.group.pages}·학기 ${out.print.semester.pages}) ≠ (1·${sections.length}·${semesterSections})`, { actual: out.print });
   return out;
 }
 

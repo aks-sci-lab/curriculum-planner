@@ -1374,7 +1374,7 @@ async function stepClassSections({ page, h, report, roster }) {
       result.edit.roomPin = { pin: pinE, after: await X6.pinKept(page, pinE) };
       h.check(!pinE || result.edit.roomPin.after?.kept, "중요", "6단계", `${editGroup.key}: 직접 고른 교실(${pinE?.room} → ${pinE?.value})이 분반 수 칸 고치기·학생 옮기기·배정 결과 엑셀 올리기 뒤 남지 않음`, { actual: result.edit.roomPin });
       result.roomsAfterEdit = await X6.checkRoomsAll({ page, h, info: [editGroup], label: " (직접 고친 뒤)" });
-      result.attendance = await X6.attendanceScenario({ page, h, groupKey: editGroup.key, dir, classMap, grade: editGroup.key[0] });
+      result.attendance = await X6.attendanceScenario({ page, h, groupKey: editGroup.key, dir, classMap, grade: editGroup.key[0], info });
       result.timetable = await X6.timetableScenario({ page, h, info, groupKey: editGroup.key, dir, fixed: SC.FIXED });
       await h.screenshot(page, "step6-edit-print");
     } else h.issue("경미", "6단계", "직접 고치기 시나리오를 돌릴 택n 그룹이 없음", { actual: info.map((g) => g.key) });
