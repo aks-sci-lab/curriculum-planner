@@ -120,6 +120,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log("typing during solve ms:", Date.now() - typed);
   await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 120000 });
   console.log("solve semester ms:", Date.now() - t0);
+  // 함께 계산 직후에는 어느 그룹도 '입력 변경됨'이 아니어야 한다(다른 학년 점유는 서명에서 제외).
+  const staleAfter = [];
+  for (let i = 0; i < await groupButtons.count(); i++) { await groupButtons.nth(i).click(); await sleep(150); staleAfter.push(await page.locator("#classSectionsStale").count()); }
+  console.log("stale after joint solve:", staleAfter.join(","));
+  await groupButtons.first().click(); await sleep(200);
   console.log("solve semester:", await page.locator("#classSectionsStatus").innerText(), "|", await page.locator("#classSectionsSummary").innerText());
   // 학급 단위로 바꾸면 블록 수 제안
   const five = page.locator("[data-cs-group]").filter({ hasText: "3-1 택5" }).first();

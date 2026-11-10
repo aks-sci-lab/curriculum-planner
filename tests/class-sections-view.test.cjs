@@ -213,7 +213,7 @@ test("promotion re-forms classes (now 4 → next year 5): next-year counts, home
   for (const row of unitRows) assert.equal(row[5], `${row[7].replace("반", "")}(2학년 ${row[7]})`);
   // 배정표 없는 학생은 학급 단위 행을 만들지 않고 안내
   const waiting = plain(ctx.classSectionsNeisExport(result, { targetGrade: 2, students: [{ key: group.students[0].key }], classUnit: { byClass: plan.assign, courses: {} } }));
-  assert.ok(waiting.warnings.some((text) => /학생 배정은 반 배정표를 올린 뒤/.test(text)));
+  assert.ok(waiting.warnings.some((text) => /1명분 행은 반 배정표를 올린 뒤 생성/.test(text)));
   assert.deepEqual(plain(ctx.classSectionsRestore({ classMaps: { "1": { "1-1-1": { classroom: "2" } } } })), { classMaps: { "1": { "1-1-1": { classroom: "2" } } } });
 });
 
@@ -295,4 +295,51 @@ test("promotion setting per grade: same classes & '그대로' / same & '아직 �
   const forcedHtml = ctx.classSectionsClassesHtml(group, entry);
   assert.match(forcedHtml, /<option value="same" disabled>그대로 올라감<\/option>/);
   assert.match(forcedHtml, /id="classSectionsPromotionReason"/);
+});
+
+test("6차 화면: 다른 학년 점유로 '입력 변경됨' 안 됨·다른 학년 변경 안내, 키 정규화·배정표 합치기·지우기, 교사 id 중복, 학년별 과목 설정, 시안→확정 머리글, 학급 단위 시트", () => {
+  const ctx = context();
+  // '01'반·'3반' 표기 → 정규화된 키
+  ctx.state.rounds["1"].students.forEach((student) => { student.classroom = `0${student.classroom}`; });
+  ctx.state.rounds["1"].students.push({ id: "x", grade: "1", classroom: "04", number: 11, name: "미신청", selections: [] });
+  const group = ctx.classSectionsSource("1").groups[0];
+  assert.equal(group.students[0].key, "1-1-1");
+  assert.equal(group.gradeStudents.length, 41, "all grade students, including ones without selections");
+  assert.equal(ctx.classSectionsStudentNames("1").get("1-1-1"), "가명11");
+  const entry = ctx.classSectionsEntry("1", group.key);
+  // 다른 학년 결과가 있어도 서명은 같다(occupied 제외)
+  entry.blockTimes.a = "월1,수1";
+  const plainSig = ctx.classSectionsSignature(ctx.classSectionsBuildInput("1", group, entry, { noOccupied: true }));
+  assert.equal(ctx.classSectionsSignature(ctx.classSectionsBuildInput("1", group, entry)), plainSig);
+  // 배정표 합치기: 파일에 있는 학생만 갱신, 나머지 유지, 명단에 없는 키는 따로 셈
+  ctx.CLASS_SECTIONS_VIEW.round = "1";
+  let merged = ctx.classSectionsMergeClassMap({ "1-1-1": { classroom: "02", number: "03" }, "1-9-9": { classroom: "1" } });
+  assert.equal(merged.updated, 1);
+  assert.equal(merged.unmatched, 1);
+  merged = ctx.classSectionsMergeClassMap({ "1-2-1": { classroom: "3" } });
+  assert.match(merged.text, /갱신 1명 · 유지 1명/);
+  assert.deepEqual(plain(ctx.classSectionsClassMap("1")["1-1-1"]), { classroom: "2", number: "3" });
+  // 교사 id 중복은 다시 매김
+  const settings = ctx.classSectionsSettings();
+  settings.teachers.push({ id: "t-물리-1", name: "가" }, { id: "t-물리-1", name: "나" });
+  ctx.classSectionsSettings();
+  assert.deepEqual(plain(settings.teachers.map((teacher) => teacher.id)), ["t-물리-1", "t-물리-1~2"]);
+  assert.match(ctx.CLASS_SECTIONS_VIEW.teacherIdWarning, /바꿨습니다/);
+  // 학년별 과목 설정 + 예전 값 옮기기
+  settings.courseModes = { 지구과학: "class" };
+  assert.equal(ctx.classSectionsCourseConf(settings, "courseModes", "1")["지구과학"], "class");
+  assert.equal(ctx.classSectionsCourseConf(settings, "courseModes", "2")["지구과학"], "class", "old flat value copied to every grade");
+  ctx.classSectionsCourseConf(settings, "courseModes", "2")["지구과학"] = "move";
+  assert.equal(ctx.classSectionsCourseConf(settings, "courseModes", "1")["지구과학"], "class", "grade 2 change stays in grade 2");
+  // 학급 단위 시트
+  const sheet = plain(ctx.classSectionsClassUnitSheet(group, entry, settings));
+  assert.deepEqual(sheet.rows[1], ["내년 반", "과목", "학생 수", "비고"]);
+  assert.equal(sheet.rows.length, 2 + group.classes);
+  // 시안 → 확정: 입력이 같으면 '확정 결과 기준(시안 때 계산 · 입력 같음)'
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  ctx.classSectionsSaveResult(entry, ctx.classSectionsSolve({ ...input, maxSectionsPerBlock: 5 }), input, group, { locked: false });
+  assert.equal(entry.sectionResult.draft, true);
+  assert.equal(ctx.classSectionsResultBasis("1", group, entry, entry.sectionResult), "확정 결과 기준(시안 때 계산 · 입력 같음)");
+  entry.classCounts["화학"] = 4;
+  assert.equal(ctx.classSectionsResultBasis("1", group, entry, entry.sectionResult), "확정 전 시안 · 입력 변경됨");
 });
