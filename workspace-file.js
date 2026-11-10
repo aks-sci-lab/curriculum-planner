@@ -81,7 +81,8 @@ async function workspaceFilePermission(handle, request = false) {
 function workspaceFileText() {
   const backup = buildWorkspaceBackup();
   const comparable = JSON.stringify({ ...backup, createdAt: "" });
-  return { comparable, text: JSON.stringify(backup, null, 2) };
+  // 들여쓰기 없이 쓴다(660명 자료에서 절반 이하). 읽는 쪽은 JSON.parse라 예전 들여쓴 파일도 그대로 읽는다.
+  return { comparable, text: JSON.stringify(backup, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined) };
 }
 
 // 내용 비교용 짧은 지문(FNV-1a). 큰 자료를 localStorage에 두 번 저장하지 않으려고 쓴다.
