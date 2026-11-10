@@ -2423,3 +2423,15 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 .cs-section .cs-room.is-choose select { border-color:#e3a497; background:#fff6f4; }
 .cs-section .cs-room.is-choose input { width:110px; }
 #classSectionsOutputWarnings { margin:4px 0 8px; }
+/* 학생 시간표 1·2학기 한 장(cs-tt-year): 학기마다 격자, 한 장에 1명(기본) 또는 2명 */
+.cs-tt-sem { margin-top:6px; }
+.cs-tt-sem h5 { margin:0 0 3px; font-size:12px; }
+@media print {
+  .print-page.cs-tt-page[data-per="1"] .cs-tt-year .cs-tt-grid td { height:12.5mm; }
+  .print-page.cs-tt-page[data-per="2"] { gap:3mm; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year { padding:4px 6px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid { font-size:8px; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:5.6mm; line-height:1.05; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td small { display:none; }
+  .print-page.cs-tt-page[data-per="2"] .cs-tt-year header h4 { font-size:11px; }
+}
