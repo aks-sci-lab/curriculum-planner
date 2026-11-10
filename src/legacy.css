@@ -2326,3 +2326,6 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 /* 떠 있는 묶기 단추: 고른 학기에 학점 없는 과목이 섞였을 때 경고 */
 .curriculum-selection-actions:has(.curriculum-selection-actions-warn) { flex-wrap: wrap; max-width: min(560px, calc(100vw - 16px)); }
 .curriculum-selection-actions-warn { flex-basis: 100%; order: 9; color: #98500d; font-size: 12px; }
+
+.hours-status { margin: 4px 0 6px; font-size: 13px; }
+.hours-status:empty { display: none; }

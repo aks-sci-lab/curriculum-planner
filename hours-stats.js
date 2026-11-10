@@ -970,7 +970,9 @@ function hoursRecommendationSection(stats) {
       .map((row) => `${hoursDepartmentName(row.id)} ${row.recommended}명`).join(", ") : "";
   const rows = recommendation.rows.map((row) => {
     const diff = row.diff;
-    const diffText = !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 충원` : `${hoursFormat(diff, 1)} 감원`;
+    // 지금 교사 수가 빈칸이면 '+1 충원'(0→1처럼 보임)이 아니라 '빈칸→n'.
+    const diffText = row.current === null || row.current === undefined ? (row.recommended ? `빈칸→${hoursFormat(row.recommended, 1)}` : "")
+      : !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 충원` : `${hoursFormat(diff, 1)} 감원`;
     return `<tr class="${row.locked ? "is-locked" : ""}${diff ? " is-changed" : ""}">
       <th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(row.id))}</th>
       <td>${hoursFormat(row.hours["1"], 1)}</td><td>${hoursFormat(row.hours["2"], 1)}</td>
@@ -1143,11 +1145,24 @@ function renderHoursStatsView() {
   if (headTop) for (const cell of form.rows[3].cells) cell.style.top = `${headTop}px`;
 }
 
+// 증감 줄이 비어 있는 이유: 전년도 교사 수가 없는지, 올해 교사 수가 없는지 바로 말한다.
+function hoursChangeLineMissingText(stats) {
+  const departments = (stats.departments || []).filter((department) => department.id !== "기타");
+  const hasPrevious = departments.some((department) => department.previousTeachers !== null && department.previousTeachers !== undefined);
+  const hasCurrent = departments.some((department) => department.teachers !== null && department.teachers !== undefined);
+  if (!hasPrevious && !hasCurrent) return "전년도·올해 교사 수가 없어 증감 줄을 비워 둡니다.";
+  if (!hasPrevious) return "전년도 교사 수가 없어 증감 줄을 비워 둡니다(아래 표나 '전년도 설정 불러오기'로 넣으세요).";
+  if (!hasCurrent) return "올해 교사 수가 없어 증감 줄을 비워 둡니다(시수표의 교사수 칸에 넣으면 자동으로 씁니다).";
+  return "전년도와 올해 교사 수를 함께 넣은 교과가 없어 증감 줄을 비워 둡니다.";
+}
+
 // 전년도 교과별 교사 수: 메모 '○○학년도 ⇒ …과 n명 증/감'을 자동으로 쓰는 데만 쓴다. '전년도 설정 불러오기'가 채운다.
 function hoursPreviousTeachersSettings(stats) {
   const rows = stats.departments.filter((department) => department.id !== "기타" && (department.items.length || department.teachers > 0 || department.previousTeachers !== null))
     .map((department) => {
-      const delta = department.previousTeachers === null ? null : Math.round(((department.teachers || 0) - department.previousTeachers) * 100) / 100;
+      // 올해 교사 수가 빈칸이면 증감도 비운다(빈칸을 0명으로 보면 '-8'처럼 잘못 보임).
+      const delta = department.previousTeachers === null || department.teachers === null || department.teachers === undefined
+        ? null : Math.round((department.teachers - department.previousTeachers) * 100) / 100;
       return `<tr><th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(department.id))}</th>
         <td><input class="hours-small-input" data-hours-previous-teachers="${department.id}" data-focus-key="previous-teachers-${department.id}" type="number" min="0" max="200" step="0.5" value="${department.previousTeachers ?? ""}" aria-label="${escapeHtml(hoursDepartmentName(department.id))} 전년도 교사 수"></td>
         <td>${department.teachers ?? "-"}</td>
@@ -1157,7 +1172,7 @@ function hoursPreviousTeachersSettings(stats) {
   return `<section class="hours-staff-settings" aria-labelledby="hoursPreviousTeachersTitle">
     <h4 id="hoursPreviousTeachersTitle">전년도(${Number(stats.year) - 1}학년도) 교과별 교사 수</h4>
     <p class="note">시수표 아래 메모의 '◈ ${stats.year}학년도 ⇒ …과 n명 증/감' 줄을 자동으로 씁니다. 메모는 시수표에서 직접 고칠 수 있습니다.</p>
-    <p class="hours-staff-line">${escapeHtml(memo.changeLine || "전년도 교사 수가 없어 증감 줄을 비워 둡니다.")}</p>
+    <p class="hours-staff-line">${escapeHtml(memo.changeLine || hoursChangeLineMissingText(stats))}</p>
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-staff-table">
       <thead><tr><th scope="col">교과</th><th scope="col">전년도 교사 수</th><th scope="col">올해 교사 수</th><th scope="col">증감</th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : ""}
@@ -1238,10 +1253,13 @@ function updateHoursSetting(target) {
 // 5단계 결과 안내: 앱 알림(어느 단계에서도 보임) + 상태 줄. 전역 'status'(window.status로 흡수됨)를 쓰지 않는다.
 function hoursNotify(message, ok = true) {
   if (typeof showAppToast === "function") showAppToast(message, ok ? "success" : "error");
-  const node = typeof document !== "undefined" ? document.getElementById("status") : null;
-  if (!node) return;
-  node.style.color = ok ? "#287956" : "#a44939";
-  node.textContent = message;
+  // 5단계 화면 안 상태 줄(#hoursStatus)과 앱 공통 상태 줄(#status) 모두에 쓴다.
+  for (const id of ["hoursStatus", "status"]) {
+    const node = typeof document !== "undefined" ? document.getElementById(id) : null;
+    if (!node) continue;
+    node.style.color = ok ? "#287956" : "#a44939";
+    node.textContent = message;
+  }
 }
 
 function loadPreviousHoursSettings() {
@@ -1308,7 +1326,7 @@ function applyHoursRecommendation() {
     hoursFinishChange("지금 교사 수가 추천과 같습니다.");
     return;
   }
-  const list = changes.map((row) => `${hoursDepartmentName(row.id)} ${row.current ?? 0}→${row.recommended}`).join(", ");
+  const list = changes.map((row) => `${hoursDepartmentName(row.id)} ${row.current ?? "빈칸"}→${row.recommended}`).join(", ");
   if (!window.confirm(`교과별 교사 수를 추천값으로 바꿀까요? (${list})\n교사 수는 정원·표시과목에 따라 학교가 정하는 값입니다. '되돌리기'로 이전 값으로 돌릴 수 있습니다.`)) return;
   const settings = hoursSettings(stats.year, true);
   hoursRememberUndo(settings, "추천 적용", ["teachers"]);
