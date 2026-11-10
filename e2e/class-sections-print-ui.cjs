@@ -61,6 +61,7 @@ function attendanceInfo(sheet) {
   await page.locator("#workspaceDataMenu summary").click();
   const nav = page.waitForEvent("load", { timeout: 30000 }).catch(() => null);
   await page.locator("#restoreWorkspaceBackup").setInputFiles(BACKUP);
+  await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 10000 }).catch(() => {}); // 백업 복원은 앱 확인 창으로 묻는다
   await nav; await sleep(2500);
   await page.getByRole("button", { name: /6\. 분반 편성/ }).click();
   await page.locator("#workflowStep8Panel").waitFor({ state: "visible" });
@@ -165,7 +166,7 @@ function attendanceInfo(sheet) {
   check(/교실을 고르지 않은 분반 \d+개/.test(await warnBox.innerText().catch(() => "")), "출력물 위 경고 '교실을 고르지 않은 분반 n개'");
   const teacherWarn = await page.locator("#classSectionsOutputWarnings li[data-type=teacher]").innerText().catch(() => "");
   report.checks.teacherWarning = teacherWarn;
-  check(/실제 이름이 없는 교사 \d+명/.test(teacherWarn), "자리 이름 교사 경고(class-sections-teachers.js) 표시", teacherWarn.slice(0, 120));
+  check(/^실제 이름이 없는 교사 \d+명\(/.test(teacherWarn) && !/교사 1명\(실제/.test(teacherWarn) && !/실제 이름이 아닌 교사/.test(teacherWarn), "자리 이름 교사 경고가 문장 그대로(중첩 없음)", teacherWarn.slice(0, 120));
   const firstChoose = choose.first();
   const chooseOptions = await firstChoose.locator("select option").allInnerTexts();
   check(chooseOptions.some((text) => /\(추천\)/.test(text)) && chooseOptions[1]?.includes("(추천)"), "후보 첫 줄에 '(추천)'", chooseOptions.slice(0, 4));
@@ -289,6 +290,23 @@ function attendanceInfo(sheet) {
     title: table.querySelector("tr")?.textContent.trim(),
     header: [...table.querySelectorAll("thead tr:last-child th")].map((th) => th.textContent),
     rows: [...table.querySelectorAll("tbody tr")].map((tr) => ({ key: tr.dataset.student, cells: [...tr.children].map((td) => td.textContent) })) }));
+  // 미제출 학생도 반 명단에(내년 반 배정표 기준): 학년별 반 학생 합 = 하네스 명단(기본 현1 10×34=340, 현2 11×28=308)
+  const perGrade = {};
+  for (const text of hrOptions) {
+    const grade = text.match(/내년 (\d)학년|현 (\d)학년/);
+    const g = grade?.[1] ? String(Number(grade[1]) - 1) : grade?.[2];
+    perGrade[g] = (perGrade[g] || 0) + Number(text.match(/\((\d+)명/)?.[1] || 0);
+  }
+  report.checks.homeroomTotals = perGrade;
+  // 현1·현2 모두 웹 신청 만들 때 올린 명렬이 이 PC에 저장돼 있어(applicationRosterFor) 미제출까지 = 명단. 현2는 배정표 없이 '그대로 올라감'.
+  check(perGrade["1"] === 340, `현1 담임반 학생 합 ${perGrade["1"]} = 명단 340(배정표 기준, 미제출 포함)`, perGrade);
+  await page.getByLabel("담임반 고르기").selectOption({ index: hrOptions.findIndex((text) => /내년 3학년|현 2학년/.test(text)) }); await sleep(600);
+  const grade2Note = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
+  report.checks.grade2Unsubmitted = { total: perGrade["2"], note: grade2Note };
+  check(perGrade["2"] === 308 && /명렬 .*기준/.test(grade2Note), `현2 담임반 학생 합 ${perGrade["2"]} = 명단 308(명렬 기준, 미제출 포함)`, grade2Note.slice(0, 160));
+  await page.getByLabel("담임반 고르기").selectOption({ index: 0 }); await sleep(600);
+  const unsubNote = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
+  check(/미제출 \d+명/.test(unsubNote), "담임반 화면 위 '미제출 n명'", unsubNote);
   const hr1 = await readHr();
   const expected1 = Number(hrOptions[0].match(/\((\d+)명/)?.[1]);
   check(hr1.rows.length === expected1 && /이동수업 현황$/.test(hr1.title), `첫 담임반 표 학생 ${hr1.rows.length} = 목록 ${expected1}명`, { title: hr1.title, header: hr1.header });

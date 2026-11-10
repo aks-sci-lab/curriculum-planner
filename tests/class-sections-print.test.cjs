@@ -552,3 +552,93 @@ test("화면 연결: 담임반 범위(반 고르기·앞뒤·학생 찾기) · �
   assert.equal((printBatch.innerHTML.match(/class="print-page cs-hr-page"/g) || []).length, 4);
   ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
 });
+
+test("교사 이름 경고: 진짜 class-sections-teachers.js와 함께 — 자리 이름 교사 62명 문장이 그대로(중첩 없음)", () => {
+  const ctx = context();
+  vm.runInContext(fs.readFileSync(path.join(root, "class-sections-teachers.js"), "utf8"), ctx);
+  const { group } = solved(ctx);
+  const settings = ctx.classSectionsSettings();
+  settings.teachers.splice(0, settings.teachers.length);
+  for (let n = 1; n <= 62; n += 1) settings.teachers.push({ id: `t-사회-지리-${n}`, name: `사회-지리 ${n}`, department: "사회-지리", unavailable: [] });
+  const real = plain(ctx.classSectionsTeacherNameWarnings());
+  assert.equal(real.length, 1);
+  assert.match(real[0], /^실제 이름이 없는 교사 62명\(/);
+  const teacher = plain(ctx.classSectionsOutputWarnings("1", group)).filter((item) => item.type === "teacher");
+  assert.equal(teacher.length, 1);
+  assert.equal(teacher[0].message, real[0], "sentence shown as is");
+  assert.equal(teacher[0].count, 62);
+  assert.doesNotMatch(teacher[0].message, /교사 1명\(/, "no nesting");
+  assert.doesNotMatch(teacher[0].message, /실제 이름이 아닌 교사/);
+});
+
+test("담임반 현황 명단: 명렬만 / 배정표만 / 둘 다 / 둘 다 없음 — 반 학생 수 합 = 명단, 미제출·성명·내년 반·명렬에 없는 학생, 분반 출석부는 배정 학생만", () => {
+  const ctx = context();
+  const { group } = solved(ctx, { sameClasses: false });
+  const result = () => ctx.classSectionsEntry("1", group.key).sectionResult;
+  const sum = (data) => data.homerooms.reduce((n, item) => n + item.students.length, 0);
+  const view = (pick) => { ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "homeroom"; ctx.CLASS_SECTIONS_PRINT_VIEW.attPick = pick || ""; return ctx.classSectionsPrintButtonsHtml("1", group, result()); };
+  // 명렬: 결과 40명 중 39명(1-4-10은 전입 → 명렬에 없음) + 미제출 3명(반마다 11번, 성명은 명렬에서)
+  const rosterStudents = group.gradeStudents.filter((student) => student.key !== "1-4-10").map((student) => ({ key: student.key, classroom: student.homeroom, number: student.number, name: "" }));
+  for (const c of [1, 2, 3]) rosterStudents.push({ key: `1-${c}-11`, classroom: String(c), number: "11", name: `명렬${c}` });
+  const roster = { students: rosterStudents, uploadedAt: "2026-11-10T03:00:00Z", source: "명렬.xlsx" };
+  // 배정표: 결과 40명 + 미제출 2명(1-1-11, 1-2-11)만
+  const map = {};
+  for (const student of group.gradeStudents) map[student.key] = { classroom: String(((Number(student.homeroom) + Number(student.number)) % 4) + 1), number: student.number };
+  for (const c of [1, 2]) map[`1-${c}-11`] = { classroom: String(c), number: "20" };
+
+  // ① 둘 다 없음: 결과 40명만, '미제출 확인 불가'(명렬 올리기는 import 함수가 있을 때만)
+  let data = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(sum(data), 40);
+  assert.equal(data.unsubmitted["1"], null);
+  assert.match(view(), /미제출 확인 불가 — 현 1학년 명렬·내년 반 배정표가 없어/);
+  assert.doesNotMatch(view(), /classSectionsRosterUpload/);
+  ctx.importApplicationRosterFile = async () => {};
+  assert.match(view(), /id="classSectionsRosterUpload" type="file" accept=".xlsx" data-grade="1"/);
+
+  // ② 명렬만(진급 반 '아직 모름' → 내년 반 미정 = 현재 반 기준): 합 = 명렬 42 + 명렬에 없는 1 = 43, 미제출 3, 성명은 명렬에서
+  ctx.applicationRosterFor = (grade) => (grade === "1" ? roster : null);
+  data = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(sum(data), 43, "명렬 + 명렬에 없는 결과 학생");
+  assert.equal(data.unsubmitted["1"], 3);
+  assert.equal(data.rosterInfo["1"].notInRoster, 1);
+  const s11 = data.homerooms.flatMap((item) => item.students).find((student) => student.key === "1-3-11");
+  assert.equal(s11.name, "명렬3");
+  assert.ok(s11.unsubmitted);
+  assert.ok(data.homerooms.every((item) => item.basis === "none"), "내년 반 미정 → 현재 반");
+  const rosterNote = view(data.homerooms[0].id);
+  assert.match(rosterNote, /data-basis="roster">이 반 학생 \d+명 · 미제출 1명 \(현 1학년 미제출 3명 · 명렬 2026\. 11\. 10\. 기준 · 명렬에 없는 학생 1명/);
+  // '그대로 올라감'이면 명렬의 지금 반 = 내년 반
+  ctx.classSectionsSettings().promotion["1"] = "same";
+  data = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(sum(data), 43);
+  assert.ok(data.homerooms.every((item) => item.basis === "same"));
+  assert.equal(data.homerooms.find((item) => item.room === "3").students.filter((student) => student.unsubmitted).length, 1);
+  ctx.classSectionsSettings().promotion["1"] = "unknown";
+
+  // ③ 배정표만: 합 = 배정표 42, 미제출 2(성명 없음)
+  ctx.applicationRosterFor = () => null;
+  ctx.state.classSections.classMaps = { "1": map };
+  data = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(sum(data), Object.keys(map).length);
+  assert.equal(data.unsubmitted["1"], 2);
+  const room = data.homerooms.find((item) => item.students.some((student) => student.key === "1-2-11"));
+  const sheet = ctx.classSectionsHomeroomStatusSheet(room);
+  assert.match(sheet.rows[1][0].v, /미제출 \d+명 \(내년 반 배정표 기준\)/);
+  const row = sheet.rows.slice(sheet.headerRow).find((cells) => cells[1].v === "1-2-11");
+  assert.equal(row.at(-1).v, "미제출");
+  assert.ok(row.slice(3, -2).every((cell) => cell.v === ""), "블록 칸은 비움");
+  for (const info of room.sections) assert.ok(!info.students.some((student) => student.key === "1-2-11"), "분반 출석부에는 배정된 학생만");
+
+  // ④ 둘 다: 명렬 기준(미제출 3), 내년 반은 배정표(1-3-11은 배정표에 없음 → 내년 반 미정), 성명은 명렬
+  ctx.applicationRosterFor = (grade) => (grade === "1" ? roster : null);
+  data = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(sum(data), 43);
+  assert.equal(data.unsubmitted["1"], 3);
+  const all = data.homerooms.flatMap((item) => item.students.map((student) => ({ ...student, homeroom: item })));
+  assert.equal(all.find((student) => student.key === "1-3-11").homeroom.basis, "none", "명렬에 있고 배정표에 없음 → 내년 반 미정");
+  assert.equal(all.find((student) => student.key === "1-1-11").homeroom.label, "내년 2학년 1반");
+  assert.equal(all.find((student) => student.key === "1-1-11").name, "명렬1");
+  assert.match(ctx.classSectionsHomeroomStatusSheet(all.find((student) => student.key === "1-1-11").homeroom).rows[1][0].v, /명렬 2026\. 11\. 10\. 기준/);
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attPick = "";
+});

@@ -1246,6 +1246,10 @@ var updateRetakeReadiness;
       const setup = applicationSetup(pendingRoster, byId("schoolName").value.trim());
       latestCodes = await rpc("create_course_event", { p_setup: setup }, true);
       latestCodesMeta = { schoolName: setup.schoolName, schoolYear: setup.schoolYear, round: String(setup.round) };
+      // 명렬(현 학년 전체, 미제출 포함)을 이 PC에만 저장한다(담임반 현황·출석부용). 서버로 새로 보내는 것은 없다.
+      if (typeof storeApplicationRoster === "function") {
+        try { storeApplicationRoster(setup.roster, { grade: state.applicationMenuGrade || "1", year: setup.schoolYear, source: `${setup.round}차 웹 신청 생성` }); } catch (error) { console.warn("명렬 로컬 저장 실패", error); }
+      }
       downloadDataWorkbook(latestCodes, "codes", "학생별_신청코드.xlsx");
       byId("cloudTeacherMessage").textContent = `${setup.round}차 신청을 생성했습니다 (${latestCodes.students.length}명). 학생 코드를 반드시 저장하고 개별 전달하세요.`;
       // Keep the successful creation and its codes visible even if refreshing the list fails.

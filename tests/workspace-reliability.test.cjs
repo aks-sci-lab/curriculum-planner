@@ -376,3 +376,26 @@ test("6단계 분반 편성 결과(classSections)는 형식 2 백업·PC 파일 
   delete legacy.workspace.classSections;
   assert.deepEqual(await restoreInto(JSON.stringify(legacy, null, 2)), {}, "예전 백업은 빈 분반 편성으로 시작");
 });
+
+test("backup restore asks with the app confirm dialog: file name, saved time and student count (no names)", async () => {
+  const f = fixture(JSON.stringify(valid({ schoolName: "원본" })));
+  const asked = [];
+  f.context.appConfirm = async (text, options) => { asked.push({ text, options }); return false; };
+  const workspace = valid({ schoolName: "백업" });
+  workspace.currentRound = "1";
+  workspace.students = [{ grade: "1", classroom: "1", number: "1", name: "가상가", selections: [] },
+    { grade: "1", classroom: "1", number: "2", name: "가상나", selections: [] }, { grade: "2", classroom: "1", number: "1", name: "가상다", selections: [] }];
+  const backup = { type: "curriculum-workspace-backup", createdAt: new Date(2026, 10, 10, 14, 32).toISOString(), workspace,
+    groups: { [groupKey]: "[]", [groupKey + "-seeded"]: "[]" } };
+  const before = f.writes();
+  const restored = await f.context.restoreWorkspaceBackup({ name: "교육과정_작업자료_백업_20261110-1432.json", text: async () => JSON.stringify(backup) });
+  assert.equal(restored, false, "취소하면 복원하지 않음");
+  assert.equal(f.writes(), before);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].options.title, "백업 복원");
+  assert.equal(asked[0].options.ok, "복원");
+  assert.match(asked[0].text, /'교육과정_작업자료_백업_20261110-1432\.json'/);
+  assert.match(asked[0].text, /저장 시각: 2026\. 11\. 10\. 14:32/);
+  assert.match(asked[0].text, /학생: 1차 현 1학년 2명 · 현 2학년 1명/);
+  assert.doesNotMatch(asked[0].text, /가상/);
+});

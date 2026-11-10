@@ -241,3 +241,23 @@ test("certificate course names drop the two-semester tag because the group colum
   assert.equal(ctx.certificateCourseName({ applicationSubject: { subject: "과학의 역사와 문화 (2학기)", kind: "융합" } }), "과학의 역사와 문화(융합)");
   assert.equal(ctx.certificateCourseName({ name: "물리학" }), "물리학");
 });
+
+test("separate (소인수·공동) selections left in older imported results are hidden on the certificate with a small note", () => {
+  const ctx = markupContext({ "#schoolYear": "2026", "#round": "1차", "#confirmDate": "", "#schoolName": "학교" });
+  ctx.collectApplicationSubjects = () => ({ "1": [], "2": [], "3": [{ subject: "물리학" }, { subject: "고급 물리학", separate: true }] });
+  vm.runInContext(functionSource(app, "function applicationSeparateNames(", "function aggregateCourseDisplayName("), ctx);
+  const older = { grade: "2", classroom: "1", number: "1", name: "가상", totalCredits: 6,
+    selections: [{ name: "물리학", credits: 3, column: 1 }, { name: "고급 물리학 (1학기)", credits: 3, column: 2 }] };
+  assert.deepEqual(ctx.applicationSelections(older).map((course) => course.name), ["물리학"]);
+  const markup = ctx.certificateMarkup(older, true, []);
+  assert.doesNotMatch(markup, /고급 물리학/);
+  assert.match(markup, /총 1과목\(3학점\)/);
+  assert.match(markup, /<p class="paper-separate-note">소인수·공동교육과정은 따로 신청합니다\.<\/p>/);
+  const plain = ctx.certificateMarkup(student(3), true, []);
+  assert.doesNotMatch(plain, /paper-separate-note/, "숨긴 과목이 없으면 안내도 없음");
+  assert.equal(ctx.applicationSelections(student(3)).length, 3);
+  // '총 n과목' 줄 바로 아래(서명란 위), 점검란 이수 학점 줄과 같은 크기(인쇄 10px, 조밀 9px).
+  assert.match(markup, /확인합니다\.<\/p>\s*<p class="paper-separate-note">[^<]*<\/p>\s*<div class="paper-signature">/);
+  assert.match(css, /\.print-page \.paper-separate-note \{ margin-top: \.5mm; font-size: 10px;/);
+  assert.match(css, /\.print-page\.paper-dense \.paper-separate-note \{ margin-top: 0; font-size: 9px;/);
+});

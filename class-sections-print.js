@@ -233,7 +233,7 @@ function classSectionsHomerooms(infos, roster, extras = {}) {
     }
     const homeroom = homerooms.get(id);
     homeroom.students.push({ key: student.key, number: known ? classSectionsPrintText(student.number) : curNumber, name: student.name || "", cells: {},
-      unit: (extras[student.key]?.unit || []).slice(), retake: (extras[student.key]?.retake || []).slice() });
+      unit: (extras[student.key]?.unit || []).slice(), retake: (extras[student.key]?.retake || []).slice(), unsubmitted: Boolean(student.unsubmitted) });
     homeroomOf.set(student.key, homeroom);
   }
   const groupOrder = new Map();
@@ -257,6 +257,7 @@ function classSectionsHomerooms(infos, roster, extras = {}) {
   const num = (value) => (/^\d+$/.test(String(value)) ? Number(value) : 999);
   const list = [...homerooms.values()];
   for (const homeroom of list) {
+    homeroom.unsubmitted = homeroom.students.filter((student) => student.unsubmitted).length;
     homeroom.students.sort((a, b) => num(a.number) - num(b.number) || a.key.localeCompare(b.key, "ko", { numeric: true }));
     homeroom.columns.sort((a, b) => a.order - b.order || String(a.blockLetter).localeCompare(String(b.blockLetter)));
   }
@@ -270,7 +271,7 @@ function classSectionsHomeroomStatusSheet(homeroom, options = {}) {
   const rows = [[{ v: `${homeroom.label} 이동수업 현황`, s: 1 }]];
   const merges = [`A1:${last}1`];
   const heights = [30];
-  rows.push([{ v: `${homeroom.year}학년도 ${homeroom.semester}학기 · ${homeroom.basis === "none" ? `현 ${homeroom.grade}학년` : `현 ${homeroom.grade}학년 → ${homeroom.targetGrade}학년`} · 학생 ${homeroom.students.length}명`, s: 8 }]);
+  rows.push([{ v: `${homeroom.year}학년도 ${homeroom.semester}학기 · ${homeroom.basis === "none" ? `현 ${homeroom.grade}학년` : `현 ${homeroom.grade}학년 → ${homeroom.targetGrade}학년`} · 학생 ${homeroom.students.length}명${homeroom.unsubmitted ? ` · 미제출 ${homeroom.unsubmitted}명` : ""}${homeroom.rosterBasis ? ` (${homeroom.rosterBasis})` : ""}`, s: 8 }]);
   merges.push(`A2:${last}2`);
   if (homeroom.basis === "none") { rows.push([{ v: "⚠ 내년 반 미정 — 현재 반 기준입니다. 내년 반 배정표를 올리면 내년 반으로 묶습니다.", s: 8 }]); merges.push(`A3:${last}3`); }
   else if (homeroom.basis === "same") { rows.push([{ v: "진급 때 반이 그대로 올라가 지금 반을 내년 반으로 보았습니다(번호는 진급 뒤 확인).", s: 8 }]); merges.push(`A3:${last}3`); }
@@ -286,7 +287,7 @@ function classSectionsHomeroomStatusSheet(homeroom, options = {}) {
         return { v: cell ? `${cell.courseName} ${cell.roomName}\n${[cell.roomLabel, cell.teacher].filter(Boolean).join(" · ")}` : "", s: 4 };
       }),
       { v: student.unit.join(", "), s: 4 },
-      { v: student.retake.map((item) => `${item.courseName}${item.reason ? `(${item.reason})` : ""}`).join(", "), s: student.retake.length ? 9 : 4 }]);
+      { v: [student.unsubmitted ? "미제출" : "", ...student.retake.map((item) => `${item.courseName}${item.reason ? `(${item.reason})` : ""}`)].filter(Boolean).join(", "), s: student.retake.length || student.unsubmitted ? 9 : 4 }]);
     heights[rows.length - 1] = 30;
   }
   return { name: options.sheetName || "이동수업 현황", rows, merges, heights, widths: [5, 11, 9, ...homeroom.columns.map(() => 17), 10, 16], orientation: "landscape", fitToHeight: 1,
@@ -317,10 +318,10 @@ CLASS_SECTIONS_ATTENDANCE_BUNDLES.homeroom = (infos, options) => (options.homero
   sheets: [classSectionsHomeroomStatusSheet(homeroom), ...classSectionsHomeroomAttendanceSheets(homeroom, options)] }));
 CLASS_SECTIONS_ATTENDANCE_BUNDLES.homeroomFile = (infos, options) => {
   const homerooms = options.homerooms || [];
-  const head = ["번호", "시트", "반", "학생", "이동 분반", "기준"];
-  const list = { name: "목록", orientation: "portrait", merges: ["A1:F1"], widths: [6, 14, 20, 8, 10, 20], freeze: "A3", printTitles: "$1:$2",
+  const head = ["번호", "시트", "반", "학생", "미제출", "이동 분반", "기준"];
+  const list = { name: "목록", orientation: "portrait", merges: ["A1:G1"], widths: [6, 14, 20, 8, 8, 10, 20], freeze: "A3", printTitles: "$1:$2",
     rows: [[{ v: `${infos[0]?.year || ""}학년도 ${infos[0]?.semester || ""}학기 담임학급별 이동수업 현황 (반 ${homerooms.length}개)`, s: 1 }], head.map((v) => ({ v, s: 2 })),
-      ...homerooms.map((homeroom, i) => [i + 1, classSectionsHomeroomSheetName(homeroom), homeroom.label, homeroom.students.length, homeroom.sections.length,
+      ...homerooms.map((homeroom, i) => [i + 1, classSectionsHomeroomSheetName(homeroom), homeroom.label, homeroom.students.length, homeroom.unsubmitted || 0, homeroom.sections.length,
         homeroom.basis === "none" ? "현재 반(내년 반 미정)" : homeroom.basis === "same" ? "그대로 올라감" : "내년 반 배정표"].map((v) => ({ v, s: 4 })))] };
   return [{ name: `${infos[0]?.year || ""}_${infos[0]?.semester || ""}학기_담임학급별_이동수업현황_전체.xlsx`,
     sheets: [list, ...homerooms.map((homeroom) => classSectionsHomeroomStatusSheet(homeroom, { sheetName: classSectionsHomeroomSheetName(homeroom) }))] }];
@@ -986,6 +987,10 @@ function classSectionsHomeroomData(round, group) {
     const names = typeof classSectionsStudentNames === "function" ? classSectionsStudentNames(round) : new Map();
     const reasons = typeof CLASS_SECTIONS_UNASSIGNED_REASONS !== "undefined" ? CLASS_SECTIONS_UNASSIGNED_REASONS : {};
     const roster = new Map();
+    const unsubmitted = {}; // 현 학년 → 미제출 수(명렬·배정표가 둘 다 없으면 null = 알 수 없음)
+    const rosterInfo = {}; // 현 학년 → { source: "roster"|"map"|null, uploadedAt, notInRoster }
+    const gradeItems = new Map();
+    const resultKeys = new Set();
     const extras = {};
     const extra = (key) => (extras[key] || (extras[key] = { unit: [], retake: [] }));
     for (const item of source.groups.filter((other) => other.semester === group.semester)) {
@@ -993,12 +998,8 @@ function classSectionsHomeroomData(round, group) {
       const result = entry?.sectionResult;
       if (!result) continue;
       const effective = typeof classSectionsEffectiveClassMap === "function" ? classSectionsEffectiveClassMap(item) : { map: null, basis: "none" };
-      for (const student of item.gradeStudents || item.students) {
-        if (roster.has(student.key)) continue;
-        const next = effective.map?.[student.key];
-        roster.set(student.key, { key: student.key, grade: item.grade, targetGrade: item.targetGrade, classroom: next?.classroom || "", number: next?.number || "",
-          name: names.get(student.key) || "", basis: next?.classroom ? effective.basis : "none" });
-      }
+      if (!gradeItems.has(item.grade)) gradeItems.set(item.grade, { item, effective });
+      for (const student of item.gradeStudents || item.students) resultKeys.add(student.key);
       const courseName = new Map(item.courses.map((course) => [course.key, course.name]));
       for (const miss of [...(result.unassigned || []), ...(result.closedRequests || [])]) {
         if (miss.reason === "class-unit-other-room") continue;
@@ -1015,7 +1016,35 @@ function classSectionsHomeroomData(round, group) {
         }
       }
     }
-    return { list, warnings, homerooms: classSectionsHomerooms(list, [...roster.values()], extras) };
+    // 학년마다 담임반 명단: 명렬(현 학년 전체, 이 PC에 저장) > 내년 반 배정표 > 차수 결과(제출한 학생만).
+    // 결과에 없는 학생 = 미제출. 내년 반: 배정표 반 > '그대로 올라감'이면 지금 반 > 미정. 성명: 결과 > 명렬.
+    for (const [grade, { item, effective }] of gradeItems) {
+      const listed = typeof applicationRosterFor === "function" ? applicationRosterFor(grade) : null;
+      const uploaded = typeof classSectionsClassMap === "function" ? classSectionsClassMap(grade) : null;
+      const same = effective.basis === "same";
+      const rosterName = new Map((listed?.students || []).map((student) => [student.key, student.name || ""]));
+      const keys = new Set([...resultKeys].filter((key) => key.startsWith(`${grade}-`)));
+      const base = listed ? listed.students.map((student) => student.key) : uploaded ? Object.keys(uploaded).filter((key) => key.startsWith(`${grade}-`)) : [];
+      for (const key of base) keys.add(key);
+      let missing = 0;
+      for (const key of [...keys].sort((a, b) => a.localeCompare(b, "ko", { numeric: true }))) {
+        const inResult = resultKeys.has(key);
+        const next = uploaded ? uploaded[key] : same ? { classroom: key.split("-")[1], number: "" } : null;
+        if (!inResult && (listed || uploaded)) missing += 1;
+        roster.set(key, { key, grade, targetGrade: item.targetGrade, classroom: next?.classroom || "", number: next?.number || "", name: names.get(key) || rosterName.get(key) || "",
+          basis: next?.classroom ? (uploaded ? "map" : "same") : "none", unsubmitted: !inResult && Boolean(listed || uploaded) });
+      }
+      unsubmitted[grade] = listed || uploaded ? missing : null;
+      rosterInfo[grade] = { source: listed ? "roster" : uploaded ? "map" : null, uploadedAt: listed?.uploadedAt || "",
+        notInRoster: listed ? [...resultKeys].filter((key) => key.startsWith(`${grade}-`) && !rosterName.has(key)).length : 0 };
+    }
+    const homerooms = classSectionsHomerooms(list, [...roster.values()], extras);
+    for (const homeroom of homerooms) {
+      const info = rosterInfo[homeroom.grade];
+      const date = info?.uploadedAt ? new Date(info.uploadedAt).toLocaleDateString("ko-KR") : "";
+      homeroom.rosterBasis = info?.source === "roster" ? `명렬 ${date} 기준`.replace("  ", " ") : info?.source === "map" ? "내년 반 배정표 기준" : "미제출 확인 불가(명렬 없음)";
+    }
+    return { list, warnings, unsubmitted, rosterInfo, homerooms };
   };
   return typeof cachedByStateRevision === "function" ? cachedByStateRevision("classSectionsHomeroomData", `${round}|${group.semester}|${typeof $ === "function" ? $("#schoolYear")?.value || "" : ""}`, compute) : compute();
 }
@@ -1041,9 +1070,10 @@ function classSectionsHomeroomCurrent(round, group, homerooms) {
 function classSectionsHomeroomViewHtml(round, group) {
   const esc = classSectionsPrintEsc;
   const open = CLASS_SECTIONS_PRINT_VIEW.attOpen !== false;
-  const { homerooms } = classSectionsHomeroomData(round, group);
+  const { homerooms, unsubmitted, rosterInfo } = classSectionsHomeroomData(round, group);
   if (!homerooms.length) return "";
   const { index, homeroom, student } = classSectionsHomeroomCurrent(round, group, homerooms);
+  const gradeUnsub = unsubmitted?.[homeroom.grade];
   const sheet = classSectionsHomeroomStatusSheet(homeroom);
   const options = homerooms.map((item, i) => `<option value="${esc(item.id)}"${i === index ? " selected" : ""}>${esc(`${item.label} (${item.students.length}명, 분반 ${item.sections.length})`)}</option>`).join("");
   const retake = homeroom.students.filter((item) => item.retake.length).length;
@@ -1058,9 +1088,24 @@ function classSectionsHomeroomViewHtml(round, group) {
       <button class="button" id="classSectionsHomeroomPrintGrade" type="button">${esc(homeroom.basis === "none" ? `현 ${homeroom.grade}학년` : `${homeroom.targetGrade}학년`)} 전체 인쇄</button>
     </div>
     ${homeroom.basis === "none" ? '<p class="cs-note is-warn" id="classSectionsHomeroomBasis">내년 반 미정 — 현재 반 기준입니다(내년 반 배정표를 올리거나 진급 반 편성을 ‘그대로 올라감’으로 하면 내년 반으로 묶음).</p>' : ""}
+    ${classSectionsHomeroomRosterNote(homeroom, gradeUnsub, rosterInfo?.[homeroom.grade])}
     ${retake ? `<p class="cs-note is-warn" id="classSectionsHomeroomRetake" data-count="${retake}">이 반 재신청·미배정 학생 ${retake}명(표 맨 오른쪽 칸)</p>` : ""}
     <div class="cs-att-scroll" data-scroll-key="cs-hr">${classSectionsSheetHtml(sheet, { keys: sheet.studentKeys, highlight: student ? [student] : [] }).replace("<table ", '<table id="classSectionsHomeroomTable" ')}</div>
   </details>`;
+}
+
+// 담임반 화면 요약: 이 반 학생·미제출, 근거(명렬 날짜·배정표), 명렬에 없는 학생, 근거가 없으면 '명렬 올리기'.
+function classSectionsHomeroomRosterNote(homeroom, gradeUnsub, info) {
+  const esc = classSectionsPrintEsc;
+  const grade = esc(homeroom.grade);
+  const date = info?.uploadedAt ? new Date(info.uploadedAt).toLocaleDateString("ko-KR") : "";
+  const basis = info?.source === "roster" ? `명렬${date ? ` ${date}` : ""} 기준` : info?.source === "map" ? "내년 반 배정표 기준" : "";
+  const upload = typeof importApplicationRosterFile === "function"
+    ? ` <label class="button">명렬 올리기(이 PC에만 저장)<input id="classSectionsRosterUpload" type="file" accept=".xlsx" data-grade="${grade}" hidden></label>` : "";
+  const unknown = gradeUnsub === null;
+  return `<p class="cs-note${homeroom.unsubmitted || unknown ? " is-warn" : ""}" id="classSectionsHomeroomUnsubmitted" data-count="${homeroom.unsubmitted || 0}" data-basis="${esc(info?.source || "none")}">이 반 학생 ${homeroom.students.length}명 · ${unknown ? "미제출 확인 불가" : `미제출 ${homeroom.unsubmitted || 0}명`}${unknown
+    ? ` — 현 ${grade}학년 명렬·내년 반 배정표가 없어 미제출 학생은 알 수 없습니다(웹 신청 결과에는 제출한 학생만 옵니다). 명렬을 올리면 반 명단에 넣습니다.${upload}`
+    : ` (현 ${grade}학년 미제출 ${gradeUnsub}명 · ${esc(basis)}${info?.notInRoster ? ` · 명렬에 없는 학생 ${info.notInRoster}명(전입 등, 그대로 넣음)` : ""})`}</p>`;
 }
 
 // 담임반 인쇄: one(이 반) / grade(같은 학년 모든 반). 반마다 ① 현황(A4 가로) + ② 그 반 학생 분반 출석부(A4 세로).
@@ -1157,6 +1202,12 @@ function classSectionsPrintHandleChange(event) {
       : `${target.value ? `${label(target.value)} 교실로 바꿨습니다.` : "교실을 자동 추천으로 되돌렸습니다."}${moved.length ? ` 함께 옮긴 분반: ${moved.join(", ")}` : ""}`, clash.length > 0);
   } else if (target.id === "classSectionsAttendanceDays") s.print.attendanceDays = Math.max(1, Math.min(40, Number(target.value) || 17));
   else if (target.id === "classSectionsTimetableClass") { CLASS_SECTIONS_PRINT_VIEW.timetableClass = target.value; return; }
+  else if (target.id === "classSectionsRosterUpload") {
+    const file = target.files?.[0];
+    if (!file || typeof importApplicationRosterFile !== "function") return;
+    return void Promise.resolve(importApplicationRosterFile(file, target.dataset.grade)).then(() => classSectionsAttendanceRerender(),
+      (error) => classSectionsSetStatus(`명렬을 올리지 못했습니다: ${error?.message || error}`, true));
+  }
   else if (target.id === "classSectionsHomeroomPick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsAttendancePick") { CLASS_SECTIONS_PRINT_VIEW.attPick = target.value; return void classSectionsAttendanceRerender(); }
   else if (target.id === "classSectionsAttendanceScope") { CLASS_SECTIONS_PRINT_VIEW.attScope = ["semester", "homeroom"].includes(target.value) ? target.value : "group"; CLASS_SECTIONS_PRINT_VIEW.attPick = ""; return void classSectionsAttendanceRerender(); }
