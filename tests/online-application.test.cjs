@@ -1523,13 +1523,14 @@ test("aggregate sheet splits large groups evenly, six subjects at most per row",
   assert.equal(ctx.aggregateTextLines("세계시민과 지리(일반)", 16.375, 12, true), 2);
 });
 
-test("4단계 집계표 과목명은 괄호를 한 번만: 학기 칸 안이면 학기 꼬리표를 떼고 '(융합)', 학기를 모르면 '(1학기)' 하나만", () => {
+test("4단계 집계표 과목명은 괄호를 한 번만: 두 학기 과목은 '(1학기)' 하나만(학기 구분), 그 밖은 '(융합)' 그대로", () => {
   const ctx = vm.createContext({ curriculumSelectionType: (type) => String(type || "") });
   vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("), ctx);
   vm.runInContext(functionSource("function aggregateCourseDisplayName(", "function currentStudent("), ctx);
   const subject = { subject: "과학의 역사와 문화 (1학기)", type: "융합선택" };
   assert.equal(ctx.applicationCourseLabel(subject), "과학의 역사와 문화 (1학기)(융합)", "예전 표기(괄호 두 번)");
-  assert.equal(ctx.aggregateCourseDisplayName(subject, "1"), "과학의 역사와 문화(융합)");
+  assert.equal(ctx.aggregateCourseDisplayName(subject, "1"), "과학의 역사와 문화 (1학기)", "같은 이름 두 학기 행을 구분");
+  assert.equal(ctx.aggregateCourseDisplayName({ ...subject, subject: "과학의 역사와 문화 (2학기)" }, "2"), "과학의 역사와 문화 (2학기)");
   assert.equal(ctx.aggregateCourseDisplayName(subject, ""), "과학의 역사와 문화 (1학기)");
   assert.equal(ctx.aggregateCourseDisplayName({ subject: "법과 사회", type: "진로선택" }, "2"), "법과 사회(진로)", "꼬리표 없는 과목은 그대로");
   assert.match(functionSource("function aggregateRecords(", "function currentStudent("), /aggregateCourseDisplayName\(applicationSubject, semesterKey\)/,

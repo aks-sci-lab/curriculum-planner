@@ -3796,16 +3796,12 @@
     }
 
     // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
-    // 학기 칸(1학기/2학기 묶음) 안에 놓이면 학기 꼬리표는 떼고 '과학의 역사와 문화(융합)', 학기를 모르는 칸이면
-    // 두 학기 구분이 필요하므로 '(1학기)' 하나만 남긴다.
+    // 두 학기에 나눠 신청받은 과목은 학기를 구분해야 하므로(같은 이름 두 행) '(1학기)' 하나만 남기고 과목 구분(융합 등)은 뺀다.
     function aggregateCourseDisplayName(subject, semesterKey) {
-      const label = applicationCourseLabel(subject);
       const name = String(subject?.subject ?? "");
       const tag = name.match(/\s*[（(]\s*([12])\s*학기\s*[)）]\s*$/);
-      if (!tag) return label;
-      const base = name.slice(0, tag.index).trim();
-      if (semesterKey === "1" || semesterKey === "2") return applicationCourseLabel({ ...subject, subject: base });
-      return `${base} (${tag[1]}학기)`;
+      if (!tag) return applicationCourseLabel(subject);
+      return `${name.slice(0, tag.index).trim()} (${tag[1]}학기)`;
     }
 
     function currentStudent() {
