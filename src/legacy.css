@@ -1948,6 +1948,7 @@
 .hours-form .hf-input { box-sizing: border-box; width: 100%; min-width: 0; height: 22px; margin: 0; padding: 0 2px; border: 1px solid rgba(60, 80, 110, .28); border-radius: 3px; background: rgba(255, 255, 255, .92); color: inherit; font: inherit; text-align: center; -moz-appearance: textfield; appearance: textfield; }
 .hours-form .hf-input::-webkit-outer-spin-button, .hours-form .hf-input::-webkit-inner-spin-button { margin: 0; -webkit-appearance: none; }
 .hours-form .hf-input:hover { border-color: #6b84ad; }
+.hours-form .hf-input::placeholder { color: #a3adbf; font-style: italic; }
 .hours-form .hf-input:focus { border-color: #2852ce; outline: 2px solid rgba(40, 82, 206, .25); outline-offset: 0; }
 .hours-form .hf-input.is-manual { background: #fff3c4; border-style: dashed; }
 .hours-form .hf-input.is-zero { color: #8a93a3; }

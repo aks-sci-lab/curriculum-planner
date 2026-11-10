@@ -302,6 +302,36 @@ test("hours statistics use planned classes and confirmed selections without doub
   assert.ok(overallocated.issues.some((issue) => issue.level === "error" && issue.text.includes("과학 세부 교과")));
 });
 
+
+test("hours statistics count net-increase (순증) small-class and joint courses as one class instead of 0", () => {
+  const entries = [
+    { grade: "2", semester: "1", subject: "경제", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점(순증)" },
+    { grade: "2", semester: "2", subject: "고급 물리학", area: "과학", credit: 3, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/3학점(순증)" },
+    { grade: "2", semester: "2", subject: "공동 과목", area: "과학", credit: 2, kind: "공동", names: 1, nameIndex: 0, note: "공동/2학년/2학기/2학점" },
+    { grade: "2", semester: "1", subject: "윤리와 사상", area: "사회", credit: 3, kind: "소인수", names: 1, nameIndex: 0, note: "소인수/2학년/1학기/3학점" }
+  ];
+  const snapshot = { rows: [] };
+  const layout = { rows: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: () => null },
+    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 11, "3": 11 } } }, roundStatuses: { "1": { status: "confirmed", snapshot } } },
+    $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
+    curriculumCohortLayout: (year) => year === "2026" ? layout : null,
+    curriculumPlanEntries: (value) => ({ entries: value === layout ? entries : [], issues: [] }),
+    applicationRoundNumbers: () => ["1"], roundStatusData: () => ({ students: [{ grade: "1" }] }), isRoundLocked: () => true,
+    buildRoundSnapshot: () => snapshot, roundSnapshotDrift: () => [],
+    normalizeResultCourseName: (name) => String(name).replace(/\s+/g, ""), resultExampleList: (items) => items.join(", "),
+    columnName: (index) => String.fromCharCode(65 + index), escapeHtml: String
+  });
+  vm.runInContext(hoursStats, ctx);
+  const stats = ctx.computeHoursStats("2027");
+  const item = (name) => stats.items.find((entry) => entry.subject === name);
+  assert.equal(item("경제").classes, 1, "소인수 순증");
+  assert.match(item("경제").basis, /소인수 순증/);
+  assert.equal(item("고급 물리학").classes, 1, "공동교육과정 순증은 우리 학교 시수");
+  assert.equal(item("공동 과목"), undefined, "순증이 아닌 공동교육과정은 다른 학교 운영이라 뺀다");
+  assert.equal(item("윤리와 사상").classes, 0, "순증이 아닌 소인수는 결과대로");
+});
 test("hours stats treat a course closed in an earlier round as closed, not as a missing result", () => {
   const entries = [
     { grade: "2", semester: "1", subject: "물리학", area: "과학", credit: 3, kind: "선택", names: 1, nameIndex: 0 },
