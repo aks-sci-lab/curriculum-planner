@@ -360,6 +360,17 @@ test("편제 점검 '해당 위치로': 학점 범위·과목명 항목은 과�
   const target = ctx.planComplianceItemTargets(report, a3);
   assert.deepEqual(plain(target.rows), [data.subjects.find((item) => item.name === "공통국어1").id]);
   assert.deepEqual(plain(ctx.planComplianceItemTargets(report, { id: "a1", note: "" })), { rows: [], footer: true, label: "소계 행" });
+  // 7번(국어·수학·영어 비율)은 소계 행이 아니라 국어·수학·영어 과목 행
+  const kem = ctx.planComplianceItemTargets(report, { id: "a7", note: "국어, 수학, 영어가 지정과목에서 …" });
+  assert.equal(kem.footer, false);
+  assert.match(kem.label, /^국어·수학·영어 과목 \d+행$/);
+  const kemNames = kem.rows.map((id) => data.subjects.find((item) => item.id === id)?.area || "");
+  assert.ok(kemNames.length && kemNames.every((area) => /국어|수학|영어/.test(area)), kemNames.join(","));
+  // '행을(를)' 대신 받침에 맞는 조사
+  assert.equal(ctx.planComplianceObjectParticle("소계 행"), "을");
+  assert.equal(ctx.planComplianceObjectParticle("해당 과목 3행"), "을");
+  assert.equal(ctx.planComplianceObjectParticle("과목 줄"), "을");
+  assert.equal(ctx.planComplianceObjectParticle("해당 위치"), "를");
   const compliance = read("curriculum-compliance.js");
   assert.match(compliance, /function planComplianceFor\(key, \{ fresh = false \} = \{\}\)/);
   assert.match(compliance, /function exportPlanCompliance\(\) \{\n  const result = planComplianceFor\(planComplianceDialogKey, \{ fresh: true \}\);/);
@@ -509,6 +520,12 @@ test("Ctrl+M 기본 동작: 한 학기 → 선택과목군, 같은 학년 두 �
   const grouped = byName(layout, "주제 탐구 독서");
   const one = ctx.curriculumSelectionOptions(layout, { column: columns[2], startRow: b.row, endRow: b.row });
   assert.equal(one.primary, "group");
+  assert.deepEqual(plain(one.empty), [], "그 학기에 학점이 있는 과목만이면 경고 없음");
+  // 2-1 열을 위로 길게 끌어 1학년 공통국어1까지 걸치면 '학점 없는 과목' 경고 목록에 들어간다.
+  const wide = ctx.curriculumSelectionOptions(layout, { column: columns[2], startRow: a.row, endRow: b.row });
+  assert.ok(wide.empty.includes("공통국어1"), plain(wide.empty).join(","));
+  assert.ok(!wide.empty.includes("지구시스템과학"));
+  assert.match(read("curriculum-data-view.js"), /학점 없는 과목 \$\{empty\.length\}개 포함/);
   const pair = ctx.curriculumSelectionOptions(layout, { column: columns[0], endColumn: columns[1], startRow: a.row, endRow: byName(layout, "음악, 미술").rowEnd });
   assert.deepEqual(plain(pair.actions), ["group", "cross"]);
   assert.equal(pair.primary, "group", "세 과목(공통국어1, 음악, 미술)은 둘 다 가능 → 선택과목군");

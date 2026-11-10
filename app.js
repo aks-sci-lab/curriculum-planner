@@ -7222,6 +7222,14 @@
         .filter((line, index, all) => line || (all[index - 1] && all[index + 1])).join("\n");
     }
 
+    // 편제표 제목(첫 몇 줄)·파일 이름의 'YYYY학년도 입학생/신입생'이 올리려는 카드의 입학연도와 다르면 그 연도(같거나 못 찾으면 "").
+    function curriculumTitleYearMismatch(layout, fileName, cohortYear) {
+      const text = (layout?.rows || []).slice(0, 6).flat().map((cell) => String(cell?.v ?? cell?.text ?? cell ?? "")).join(" ");
+      const pattern = /(20\d{2})\s*학년도\s*(?:입학생|신입생|입학)/;
+      const found = text.match(pattern)?.[1] || String(fileName || "").match(pattern)?.[1] || "";
+      return found && found !== String(cohortYear) ? found : "";
+    }
+
     function handleCurriculumPlanWorkbook(file) {
       if (!file) return;
       if (!requireLocalWorkspaceAccess()) return;
@@ -7296,6 +7304,13 @@
             if (plan.length) break;
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
+          // 다른 입학연도 편제표를 이 카드에 올리는 실수를 막는다(제목의 'YYYY학년도 신입생'과 카드 연도 대조).
+          const titleYear = typeof curriculumTitleYearMismatch === "function" ? curriculumTitleYearMismatch(importedLayout, file.name, cohortYear) : "";
+          if (titleYear && !window.confirm(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`)) {
+            status.style.color = "#a44939";
+            status.textContent = `업로드를 취소했습니다. ${titleYear}학년도 입학생 편제표는 ${titleYear}학년도 카드에 올리세요.`;
+            return;
+          }
           // 이미 신청·확정에 쓰는 편제표를 교체하면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 보여 주고 확인을 받는다.
           const impact = typeof curriculumReplaceImpact === "function" ? curriculumReplaceImpact(state.curriculumImportedLayout, importedLayout) : null;
           if (impact && !window.confirm(curriculumReplaceMessage(impact, file.name))) {

@@ -1316,6 +1316,13 @@ test("1단계 원본 교체: 신청·확정에 쓰는 편제표면 바뀌는 과
   assert.equal(ctx.curriculumReplaceImpact(null, after), null);
   ctx.state.rounds = {}; ctx.isRoundLocked = () => false; ctx.getApplicationGroupSettings = () => [];
   assert.equal(ctx.curriculumReplaceImpact(before, after), null);
+  // 제목의 입학연도와 카드 연도가 다르면 그 연도를 알려 준다(같거나 못 찾으면 빈 문자열).
+  const titled = (title) => ({ rows: [["", title, ""], ["구분", "교과(군)"]] });
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("2026학년도 신입생 3개년 교육과정 편제표"), "plan.xlsx", "2025"), "2026");
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("2026학년도 신입생 3개년 교육과정 편제표"), "plan.xlsx", "2026"), "");
+  assert.equal(ctx.curriculumTitleYearMismatch({ rows: [[{ v: "2024 학년도 입학생 교육과정" }]] }, "x.xlsx", "2025"), "2024");
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("교육과정 편제표"), "2027학년도 입학생 편제표.xlsx", "2026"), "2027");
+  assert.equal(ctx.curriculumTitleYearMismatch(titled("교육과정 편제표"), "편제표.xlsx", "2026"), "");
 });
 
 test("1단계 엑셀 내보내기: 원본 엑셀이 이 브라우저에 없으면(백업 복원 뒤) 실패하지 않고 기본 양식으로 저장하고 알린다", async () => {

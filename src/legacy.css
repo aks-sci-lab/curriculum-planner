@@ -358,10 +358,8 @@
     .curriculum-action-buttons { display: flex; gap: 6px; }
     .curriculum-plan-filters { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid #d7deed; background: #f8faff; overflow-x: auto; }
     .curriculum-plan-filters select, .curriculum-plan-filters input { flex: 0 0 auto; min-width: 0; height: 36px; padding: 0 7px; border: 1px solid #d0d9ec; border-radius: 6px; background: #fff; color: #253858; font-size: 13px; }
-    #curriculumFilterGrade { width: 88px; }
-    #curriculumFilterDivision { width: 112px; }
-    #curriculumFilterArea { width: 112px; }
-    #curriculumFilterDetail { width: 112px; }
+    /* 고정 폭(88·112px)이면 '전체 학년'·'전체 교육과정'이 잘렸다 → 글자에 맞추되 너무 길면 줄임. */
+    #curriculumFilterGrade, #curriculumFilterDivision, #curriculumFilterArea, #curriculumFilterDetail { width: auto; max-width: 190px; padding-right: 24px; text-overflow: ellipsis; }
     .curriculum-plan-filters input { flex: 1 1 130px; min-width: 110px; }
     #curriculumFilterCount { flex: 0 0 auto; white-space: nowrap; }
     @media (max-width: 980px) {
@@ -2321,3 +2319,7 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-proposal { margin-top:10px; padding:10px; border:1px dashed #b9c6dc; border-radius:10px; background:#fbfcff; }
     .cs-proposal h5 { margin:0 0 6px; font-size:12px; }
     .cs-table tr.is-current th { color:#2852ce; }
+
+/* 떠 있는 묶기 단추: 고른 학기에 학점 없는 과목이 섞였을 때 경고 */
+.curriculum-selection-actions:has(.curriculum-selection-actions-warn) { flex-wrap: wrap; max-width: min(560px, calc(100vw - 16px)); }
+.curriculum-selection-actions-warn { flex-basis: 100%; order: 9; color: #98500d; font-size: 12px; }

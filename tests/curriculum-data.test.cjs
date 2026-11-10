@@ -252,3 +252,9 @@ test("편제표 열 폭은 엑셀 열 폭을 따르되 한 열 240px를 넘지 �
   assert.ok(widths.includes(240), "80자 폭 열은 240px로 줄어든다");
   assert.ok(widths.every((width) => width <= 240), widths.join(","));
 });
+
+test("1단계 필터 선택 상자는 글자에 맞는 폭(고정 88·112px면 '전체 학년'·'전체 교육과정'이 잘림)", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "legacy.css"), "utf8");
+  assert.doesNotMatch(css, /#curriculumFilterGrade \{ width: 88px; \}/);
+  assert.match(css, /#curriculumFilterGrade, #curriculumFilterDivision, #curriculumFilterArea, #curriculumFilterDetail \{ width: auto; max-width: 190px;/);
+});
