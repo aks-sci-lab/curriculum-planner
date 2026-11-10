@@ -1012,10 +1012,13 @@ function courseCheckCertificateHtml(student, context = courseCheckContext()) {
   const { violations, unknowns } = report.prerequisites;
   // 같은 과목 두 학기 신청은 위계 점검 줄 앞에 붙인다(줄 수가 늘지 않게 · 인쇄 1장 유지).
   const twice = (report.twice || []).map(courseCheckTwiceText).join(", ");
+  const unknownText = unknowns.length ? `이전 학년 이수 확인 필요: ${[...new Set(unknowns.map((issue) => issue.course))].join(", ")}` : "";
+  // 같은 과목 두 학기 신청이 있으면 '이상 없음'을 붙이지 않는다(앞뒤가 맞지 않음).
   const prereqText = violations.length
     ? `확인 필요 — ${violations.map((issue) => `${issue.course}: ${issue.requires} ${issue.reason === "same" ? "같은 학기 선택" : issue.reason === "missing" ? "미이수" : "뒤 학기"}`).join(", ")}`
-    : unknowns.length ? `이상 없음(이전 학년 이수 확인 필요: ${[...new Set(unknowns.map((issue) => issue.course))].join(", ")})` : "이상 없음";
-  const prereq = twice ? `${twice} · ${prereqText}` : prereqText;
+    : twice ? unknownText
+    : unknownText ? `이상 없음(${unknownText})` : "이상 없음";
+  const prereq = twice ? [twice, prereqText].filter(Boolean).join(" · ") : prereqText;
   return `<div class="paper-checks${violations.length || creditNote || twice ? " has-issue" : ""}"><p><b>이수 학점</b> ${esc(`학기별 ${semesters} · ${cumulative}${creditNote}`)}</p><p><b>위계 점검</b> ${esc(prereq)}</p></div>`;
 }
 
