@@ -1413,3 +1413,31 @@ test("앱 확인 대화상자(appConfirm): 브라우저 confirm 대신 #appConfi
   assert.match(app, /await ask\(curriculumReplaceMessage\(impact, file\.name\), \{ title: "원본 교체", ok: "교체" \}\)/);
   assert.match(hoursStats, /await appConfirm\(question, \{ title: "교사 수 추천 적용", ok: "추천 적용" \}\)/);
 });
+
+test("1단계 카드 업로드가 실패·취소되면 원래 보던 카드로 돌아간다(성공하면 그대로), 울산 불러오기 과목 수는 표와 같은 행 기준", () => {
+  const switched = [];
+  const state = { curriculumCohortYear: "2027", curriculumPlanType: "cohort" };
+  const ctx = vm.createContext({ state, switchCurriculumCohort: (year) => { switched.push(["cohort", year]); state.curriculumCohortYear = year; },
+    switchCurriculumAnnualPlan: (year) => { switched.push(["annual", year]); state.curriculumPlanType = "annual"; state.curriculumCohortYear = year; } });
+  vm.runInContext("var curriculumUploadReturn = null;", ctx);
+  vm.runInContext(functionSource(app, "function restoreCurriculumUploadCard(", "function handleCurriculumPlanWorkbook("), ctx);
+  vm.runInContext("curriculumUploadReturn = { year: '2026', type: 'cohort' };", ctx);
+  assert.equal(ctx.restoreCurriculumUploadCard(), true);
+  assert.deepEqual(plain(switched), [["cohort", "2026"]]);
+  assert.equal(ctx.restoreCurriculumUploadCard(), false, "한 번만 되돌린다");
+  vm.runInContext("curriculumUploadReturn = { year: '2026', type: 'annual' };", ctx);
+  ctx.restoreCurriculumUploadCard();
+  assert.deepEqual(plain(switched.at(-1)), ["annual", "2026"]);
+  // 업로드 흐름: 실패·취소 경로마다 되돌리고, 성공하면 기억을 지운다.
+  const handler = functionSource(app, "function handleCurriculumPlanWorkbook(", "function certificateTodayLabel(");
+  assert.match(handler, /\.then\(\(ok\) => \{ if \(ok\) curriculumUploadReturn = null; else restoreCurriculumUploadCard\(\); \}\)/, "xlsb 실패");
+  assert.ok((handler.match(/restoreCurriculumUploadCard\(\)/g) || []).length >= 7, "취소·오류 경로");
+  assert.match(handler, /curriculumUploadReturn = null;\n\s*renderCurriculumStep\(\);/, "성공");
+  assert.match(app, /curriculumUploadReturn = before;\n\s*curriculumPlanInput\.click\(\);/);
+  assert.match(app, /curriculumPlanInput\.addEventListener\("cancel", \(\) => restoreCurriculumUploadCard\(\)\);/);
+  const office = fs.readFileSync(path.join(root, "curriculum-office-format.js"), "utf8");
+  const count = vm.createContext({ planDataSubjects: (data) => data.subjects.filter((item) => !item.fixed) });
+  vm.runInContext(office.slice(office.indexOf("function curriculumOfficeSubjectRowCount("), office.indexOf("async function importCurriculumOfficeProgram(")), count);
+  assert.equal(count.curriculumOfficeSubjectRowCount({ planData: { subjects: [{ name: "가, 나" }, { name: "다" }, { fixed: true }] } }, 3), 2);
+  assert.match(office, /과목 \$\{subjectRows\}개, 선택과목군/);
+});

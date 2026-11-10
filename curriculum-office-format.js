@@ -878,6 +878,12 @@ function askCurriculumOfficeGrade(options, chosen, cohortYear) {
 }
 
 // app.js의 편제표 업로드에서 울산 프로그램 파일을 알아보면 이 함수로 넘긴다.
+// 불러온 편제표의 과목 행 수(1단계 표의 'n개 과목 표시'와 같은 기준). 데이터가 없으면 fallback.
+function curriculumOfficeSubjectRowCount(layout, fallback = 0) {
+  if (typeof planDataSubjects === "function" && layout?.planData) return planDataSubjects(layout.planData).length;
+  return fallback;
+}
+
 async function importCurriculumOfficeProgram(sheets, file, verifyTarget = () => {}) {
   const years = curriculumOfficeProgramYears(sheets);
   const cohortYear = String(state.curriculumCohortYear);
@@ -922,7 +928,9 @@ async function importCurriculumOfficeProgram(sheets, file, verifyTarget = () => 
   renderCurriculumStep();
   persistState();
   const groupCount = data.groups.length;
-  curriculumOfficeStatus(`울산 편제 점검 프로그램 '${option.sheet}'에서 ${cohortYear}학년도 입학생 편제표를 불러왔습니다: 과목 ${planRows.length}개, 선택과목군 ${groupCount}개. 원본 양식이 없으므로 내보내기는 교육청 양식 또는 기본 양식으로 저장됩니다.`, true);
+  // 표 위 'n개 과목 표시'와 같은 기준(과목 행 수)으로 센다(과목명 하나씩 센 planRows는 '가, 나' 행을 둘로 세어 수가 달랐다).
+  const subjectRows = curriculumOfficeSubjectRowCount(layout, planRows.length);
+  curriculumOfficeStatus(`울산 편제 점검 프로그램 '${option.sheet}'에서 ${cohortYear}학년도 입학생 편제표를 불러왔습니다: 과목 ${subjectRows}개, 선택과목군 ${groupCount}개. 원본 양식이 없으므로 내보내기는 교육청 양식 또는 기본 양식으로 저장됩니다.`, true);
   return true;
 }
 

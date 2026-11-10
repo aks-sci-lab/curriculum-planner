@@ -7303,8 +7303,25 @@
       return found && found !== String(cohortYear) ? found : "";
     }
 
+    // 카드의 '업로드'는 먼저 그 카드로 바꾼 뒤 파일을 고른다. 업로드가 실패·취소되면 원래 보던 카드로 되돌린다
+    // (예: 2027 카드에 울산 xlsb를 올리다 실패했는데 선택 카드가 2027로 남던 문제). 성공하면 기억을 지운다.
+    let curriculumUploadReturn = null;
+    function restoreCurriculumUploadCard() {
+      const back = curriculumUploadReturn;
+      curriculumUploadReturn = null;
+      if (!back) return false;
+      if (String(state.curriculumCohortYear) === back.year && state.curriculumPlanType === back.type) return false;
+      // 카드를 바꾸면 상태 줄이 '…불러왔습니다'로 바뀌므로, 실패·취소 안내를 그대로 남긴다.
+      const node = typeof document !== "undefined" ? document.getElementById("status") : null;
+      const kept = node ? { text: node.textContent, color: node.style.color } : null;
+      if (back.type === "annual" && typeof switchCurriculumAnnualPlan === "function") switchCurriculumAnnualPlan(back.year);
+      else if (typeof switchCurriculumCohort === "function") switchCurriculumCohort(back.year);
+      if (node && kept?.text) { node.textContent = kept.text; node.style.color = kept.color; }
+      return true;
+    }
+
     function handleCurriculumPlanWorkbook(file) {
-      if (!file) return;
+      if (!file) { restoreCurriculumUploadCard(); return; }
       if (!requireLocalWorkspaceAccess()) return;
       if (state.curriculumPlanType === "annual") {
         status.style.color = "#a44939";
@@ -7316,10 +7333,13 @@
       status.textContent = "";
       // 울산 편제 점검 프로그램(xlsb)은 curriculum-office-format.js가 읽는다.
       if (/\.xlsb$/i.test(file.name) && typeof importCurriculumOfficeXlsbFile === "function") {
-        importCurriculumOfficeXlsbFile(file).catch((error) => { status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
+        importCurriculumOfficeXlsbFile(file)
+          .then((ok) => { if (ok) curriculumUploadReturn = null; else restoreCurriculumUploadCard(); })
+          .catch((error) => { restoreCurriculumUploadCard(); status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
         return;
       }
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        restoreCurriculumUploadCard();
         status.style.color = "#a44939";
         status.textContent = "편제표는 .xlsx 형식만 지원합니다.";
         return;
@@ -7337,6 +7357,7 @@
       };
       const reader = new FileReader();
       reader.onerror = () => {
+        restoreCurriculumUploadCard();
         status.style.color = "#a44939";
         status.textContent = "편제표 파일을 읽지 못했습니다.";
       };
@@ -7345,7 +7366,8 @@
           const sheets = await parseWorkbook(reader.result, { expandMergedCells: true, includeLayout: true });
           verifyTarget();
           if (typeof isCurriculumOfficeProgram === "function" && isCurriculumOfficeProgram(sheets)) {
-            await importCurriculumOfficeProgram(sheets, file, verifyTarget);
+            if (await importCurriculumOfficeProgram(sheets, file, verifyTarget)) curriculumUploadReturn = null;
+            else restoreCurriculumUploadCard();
             return;
           }
           let plan = [];
@@ -7383,6 +7405,7 @@
           if (titleYear && !(await ask(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`,
             { title: "입학연도 확인", ok: `${cohortYear}학년도로 올리기` }))) {
             status.style.color = "#a44939";
+            restoreCurriculumUploadCard();
             status.textContent = `업로드를 취소했습니다. ${titleYear}학년도 입학생 편제표는 ${titleYear}학년도 카드에 올리세요.`;
             return;
           }
@@ -7390,6 +7413,7 @@
           const impact = typeof curriculumReplaceImpact === "function" ? curriculumReplaceImpact(state.curriculumImportedLayout, importedLayout) : null;
           if (impact && !(await ask(curriculumReplaceMessage(impact, file.name), { title: "원본 교체", ok: "교체" }))) {
             status.style.color = "#5c6982";
+            restoreCurriculumUploadCard();
             status.textContent = "원본 교체를 취소했습니다. 지금 편제표를 그대로 둡니다.";
             return;
           }
@@ -7408,6 +7432,7 @@
           if (typeof recordCurriculumVersion === "function" && !latestCurriculumSavedVersion(versionYear)) {
             recordCurriculumVersion(versionYear, importedLayout, { reason: "편제표 업로드", fileName: file.name, auto: true });
           }
+          curriculumUploadReturn = null;
           renderCurriculumStep();
           persistState();
           status.style.color = plan.length ? "#287956" : "#a44939";
@@ -7418,7 +7443,8 @@
             ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${plan.length}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
-          const message = error instanceof Error ? error.message : "편제표 파일 처리 중 오류가 발생했습니다.";
+          const message = error?.message || "편제표 파일 처리 중 오류가 발생했습니다.";
+          restoreCurriculumUploadCard();
           status.style.color = "#a44939";
           status.textContent = message;
         }
@@ -7454,6 +7480,8 @@
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
+    // 파일 고르기 창을 취소하면(크롬 'cancel') 카드도 원래대로.
+    curriculumPlanInput.addEventListener("cancel", () => restoreCurriculumUploadCard());
     $("#curriculumCohortUploads").addEventListener("click", (event) => {
       const button = event.target.closest("[data-cohort-upload], [data-cohort-view], [data-annual-build], [data-annual-view]");
       if (!button || button.disabled) return;
@@ -7465,8 +7493,12 @@
         switchCurriculumAnnualPlan(button.dataset.annualView);
         return;
       }
+      const before = { year: String(state.curriculumCohortYear), type: state.curriculumPlanType === "annual" ? "annual" : "cohort" };
       switchCurriculumCohort(button.dataset.cohortUpload || button.dataset.cohortView);
-      if (button.dataset.cohortUpload) curriculumPlanInput.click();
+      if (button.dataset.cohortUpload) {
+        curriculumUploadReturn = before;
+        curriculumPlanInput.click();
+      }
     });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
     // Ctrl+Z(맥 ⌘+Z): 1단계 편제표 편집 실행취소. 편제표 칸에 글자를 입력하는 중이면 브라우저 기본(글자 되돌리기)을 그대로 두고,
