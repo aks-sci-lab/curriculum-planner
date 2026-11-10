@@ -821,6 +821,16 @@ function courseClient_() {
       </div>
     </form>
   </dialog>
+  <dialog class="curriculum-subject-dialog round-confirm-dialog" id="roundConfirmDialog" aria-labelledby="roundConfirmTitle" aria-describedby="roundConfirmText">
+    <form method="dialog">
+      <h2 id="roundConfirmTitle">차수 확정</h2>
+      <div class="note" id="roundConfirmText" style="white-space:pre-line"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" type="submit" value="cancel">취소</button>
+        <button class="button button-primary" type="submit" value="ok" id="roundConfirmOk">확정</button>
+      </div>
+    </form>
+  </dialog>
   <dialog class="curriculum-subject-dialog" id="groupHelpDialog" aria-labelledby="groupHelpTitle">
     <form method="dialog">
       <h2 id="groupHelpTitle">선택 그룹 설정 방법</h2>

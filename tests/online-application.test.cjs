@@ -44,6 +44,10 @@ test("closure defaults open eligible courses and leave at-risk courses undecided
   assert.match(markup, /<td class="[^"]*\bis-undecided\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:2"/);
   assert.match(markup, /data-aggregate-course-info="1:2" title="기준 미달: 신청 5명이 개설기준 31\.50명보다 적습니다/);
   assert.doesNotMatch(markup, /<td class="[^"]*\bis-undecided\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:5"/);
+  // 미달이어도 '개설'로 정한 과목은 빨간 '미달' 대신 결정 표시(파란 '미달·개설'), 빨간 글자(is-risk)도 없음.
+  assert.match(markup, /class="af-tag is-decided" data-aggregate-course-info="1:5"[^>]*>미달·개설</);
+  assert.match(markup, /class="af-tag is-risk" data-aggregate-course-info="1:2"[^>]*>미달</);
+  assert.doesNotMatch(markup, /<td class="[^"]*\bis-risk\b[^"]*"[^>]*><button type="button" class="af-course" data-aggregate-course="1:5"/);
   assert.equal(focused(markup).length, 0, "attention marks only in 'attention only' mode");
   // 처리할 것만 보기: 결정이 미정인 기준 미달 과목만 강조되고, 이미 개설/폐강을 정한 과목과 기준을 충족한 과목은 흐리게 남는다.
   // 목표(택1 × 10학급 = 10)와 맞지 않는 그룹의 총 학급수 칸은 연한 주황 + 목표와 차이 + 강조 + 자동 조정 단추.

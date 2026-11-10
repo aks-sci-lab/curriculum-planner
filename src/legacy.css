@@ -1855,6 +1855,7 @@
 .aggregate-form .af-corner-right { right: 2px; }
 .aggregate-form .af-tag, .aggregate-form .af-corner .prereq-badge { padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; background: #fff; font: inherit; font-size: 10px; font-weight: 700; line-height: 1.3; white-space: nowrap; cursor: pointer; }
 .aggregate-form .af-tag.is-risk, .aggregate-form .af-tag.is-undecided { border-color: #f1b7ae; background: #fdecea; color: #a3261c; }
+.aggregate-form .af-tag.is-decided { border-color: #a9c7ee; background: #eef5ff; color: #1f4f96; }
 .aggregate-form .af-tag.is-over { border-color: #f0c28f; background: #fff0e2; color: #98500d; }
 .aggregate-form .af-corner .prereq-badge { margin: 0; border-color: #d4b7ef; background: #f6efff; color: #6a2ca3; }
 /* 총 학급수 칸: 값, 목표, 목표와 다를 때만 '학급수 자동 조정', 조정한 뒤에는 '조정 취소'. */

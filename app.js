@@ -1006,13 +1006,21 @@
       };
     }
 
+    // 백업 파일 이름에 내려받은 날짜·시각(여러 번 받아도 어느 것이 최신인지 보이게): 교육과정_작업자료_백업_20261110-1432.json.gz
+    function workspaceBackupFileName(extension, now = new Date()) {
+      const pad = (value) => String(value).padStart(2, "0");
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+      return `교육과정_작업자료_백업_${stamp}${extension}`;
+    }
+
     async function downloadWorkspaceBackup() {
       try {
         // 들여쓰기 없이 쓰고 gzip으로 묶는다(660명·2차까지 27.6MB → 12.4MB → 압축 약 0.2MB). 불러오기는 .json·.json.gz 모두 읽는다.
         const text = JSON.stringify(buildWorkspaceBackup(), typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined);
         const packed = await workspaceBackupGzip(text);
-        if (packed) downloadTextFile(packed, "교육과정_작업자료_백업.json.gz", "application/gzip");
-        else downloadTextFile(text, "교육과정_작업자료_백업.json", "application/json");
+        const name = (extension) => typeof workspaceBackupFileName === "function" ? workspaceBackupFileName(extension) : `교육과정_작업자료_백업${extension}`;
+        if (packed) downloadTextFile(packed, name(".json.gz"), "application/gzip");
+        else downloadTextFile(text, name(".json"), "application/json");
         markWorkspaceBackup();
         showAppToast("백업 파일을 내려받았습니다. 원본 엑셀도 별도로 보관하세요.");
       } catch (error) {
@@ -4178,7 +4186,7 @@
     }
 
     function aggregatePlanMessage(plan) {
-      if (plan.reason === "too-few") return `${plan.maxClassSize}명 이하로는 최소 ${plan.minimum}학급이 필요해 목표 ${plan.target}와 맞출 수 없음 — 협의회 결정 필요`;
+      if (plan.reason === "too-few") return `${plan.maxClassSize}명 이하로는 최소 ${plan.minimum}학급이 필요해 목표 ${plan.target}학급과 맞출 수 없음 — 협의회 결정 필요`;
       if (plan.reason === "no-courses") return `신청자가 있는 개설 과목이 없어 목표 ${plan.target}학급을 채울 수 없음 — 협의회 결정 필요`;
       if (plan.reason === "no-target") return "택 수를 알 수 없어 목표 학급수가 없음";
       return "";
@@ -4720,7 +4728,8 @@
       const link = document.createElement("a");
       const url = URL.createObjectURL(workbook);
       link.href = url;
-      link.download = `${Number(sourceRound) + 1}차_수강신청_대상자${gradeSuffix ? `_${gradeSuffix}` : ""}(${sourceRound}차_기준).xlsx`;
+      const schoolYearText = String(document.getElementById?.("schoolYear")?.value || "").trim();
+      link.download = `${/^\d{4}$/.test(schoolYearText) ? `${schoolYearText}학년도_` : ""}${Number(sourceRound) + 1}차_수강신청_대상자${gradeSuffix ? `_${gradeSuffix}` : ""}(${sourceRound}차_기준).xlsx`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
@@ -6536,13 +6545,15 @@
         if (role === "head") {
           const undecided = !course.closed && status.decision === "";
           if (undecided) classes.push("is-undecided");
-          if (course.atRisk && !course.closed) classes.push("is-risk");
+          // 미달이어도 '개설'로 정했으면 빨간 경고 대신 결정 표시(인원 칸 모서리 '미달·개설').
+          if (course.atRisk && !course.closed && status.decision !== "open") classes.push("is-risk");
           return `<button type="button" class="af-course" data-aggregate-course="${esc(status.key)}" data-closure-round="${esc(round)}" data-decision="${esc(status.decision)}" data-course-label="${esc(name)}" data-group-label="${esc(info.label)}" data-course-status="${esc(status.lines.join("\n"))}" data-prereq-count="${status.prereqCount}"${locked ? " data-locked" : ""} aria-haspopup="dialog" aria-label="${esc(`${name} — 개설/폐강/미정 결정(지금 ${status.decision === "open" ? "개설" : status.decision === "closed" ? "폐강" : "미정"})`)}">${value}</button>`;
         }
         if (role === "count") {
-          if (course.atRisk && !course.closed) classes.push("is-risk");
-          const tagLabel = course.closed ? "" : course.atRisk ? "미달" : status.decision === "" ? "미정" : "";
-          const tag = tagLabel ? infoButton(tagLabel, course.atRisk ? "is-risk" : "is-undecided", status.lines.join("\n")) : "";
+          const decidedOpen = course.atRisk && !course.closed && status.decision === "open";
+          if (course.atRisk && !course.closed && !decidedOpen) classes.push("is-risk");
+          const tagLabel = course.closed ? "" : decidedOpen ? "미달·개설" : course.atRisk ? "미달" : status.decision === "" ? "미정" : "";
+          const tag = tagLabel ? infoButton(tagLabel, decidedOpen ? "is-decided" : course.atRisk ? "is-risk" : "is-undecided", status.lines.join("\n")) : "";
           const badge = status.prereqCount && typeof courseCheckCourseBadges === "function" ? courseCheckCourseBadges(prereq, status.key, name) : "";
           if (tag) styles.push(`padding-left:${cornerPad(tagLabel)}px`);
           if (badge) styles.push(`padding-right:${cornerPad(`위계 경고 ${status.prereqCount}`)}px`);
@@ -6761,6 +6772,13 @@
       return files;
     }
 
+    // 집계표 엑셀 이름: 학년도·차수가 들어가야 여러 차수 파일을 구분할 수 있다(2026학년도_2차_과목별_수강신청_집계표_현1학년.xlsx).
+    function aggregateDownloadName(grade) {
+      const year = String(document.getElementById?.("schoolYear")?.value || "").trim();
+      const prefix = `${/^\d{4}$/.test(year) ? `${year}학년도_` : ""}${state.currentRound ? `${state.currentRound}차_` : ""}`;
+      return `${prefix}과목별_수강신청_집계표${grade ? `_현${grade}학년` : ""}.xlsx`;
+    }
+
     function downloadAggregate() {
       try {
         aggregateThresholds();
@@ -6773,7 +6791,7 @@
       const url = URL.createObjectURL(workbook);
       link.href = url;
       const grade = typeof activeAggregateGrade === "function" ? activeAggregateGrade() : "";
-      link.download = grade ? `과목별_수강신청_집계표_현${grade}학년.xlsx` : "과목별_수강신청_집계표.xlsx";
+      link.download = aggregateDownloadName(grade);
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }

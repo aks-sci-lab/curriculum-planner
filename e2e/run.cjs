@@ -1171,6 +1171,9 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   await page.locator("#workspaceRound").selectOption("2");
   await sleep(300);
   await page.locator("#roundUnlock").click();
+  await sleep(300);
+  // 확정·해제는 앱 대화상자(#roundConfirmDialog)로 묻는다.
+  if (await page.locator("#roundConfirmDialog[open]").count()) await page.locator("#roundConfirmOk").click();
   await sleep(800);
   out.unlocked = await text(page, "#roundConfirmState");
   // 교사 화면: 학생 선택 과목 변경(2차 신청)
@@ -1219,7 +1222,9 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   await sleep(1500);
   // 재확정
   await gotoStep(page, 4);
-  await page.locator("#roundConfirm").click(); await sleep(800);
+  await page.locator("#roundConfirm").click(); await sleep(300);
+  if (await page.locator("#roundConfirmDialog[open]").count()) await page.locator("#roundConfirmOk").click();
+  await sleep(800);
   out.reconfirmed = await text(page, "#roundConfirmState");
   h.check(/2차 · 확정/.test(out.reconfirmed), "중요", "4단계", "확정 해제 → 재확정이 되지 않음", { actual: out.reconfirmed });
   // 6단계: 재계산 필요 → 바뀐 학생만 다시 계산

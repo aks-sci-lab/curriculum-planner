@@ -816,7 +816,7 @@ test("class-count adjustment meets n × classes, gives extra classes to the full
   assert.equal(impossible.ok, false);
   assert.equal(impossible.counts, null);
   assert.equal(impossible.minimum, 6);
-  assert.match(ctx.aggregatePlanMessage(impossible), /34명 이하로는 최소 6학급이 필요해 목표 5와 맞출 수 없음 — 협의회 결정 필요/);
+  assert.match(ctx.aggregatePlanMessage(impossible), /34명 이하로는 최소 6학급이 필요해 목표 5학급과 맞출 수 없음 — 협의회 결정 필요/);
   // 폐강 과목은 0학급으로 빠지고, 신청자 없는 과목도 0학급이다.
   assert.deepEqual(plan([["a", 50, true], ["b", 40], ["z", 0]], 3).counts, { a: 0, b: 3, z: 0 });
   // 최대 인원은 설정값을 쓴다(40명이면 80명은 2학급).
@@ -885,7 +885,7 @@ test("automatic class adjustment saves manual class counts, skips closed courses
   values["#maxClassSize"] = "10";
   const impossible = ctx.adjustAggregateClassCounts("1");
   assert.deepEqual(plain(impossible.changed), []);
-  assert.match(impossible.problems[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요해 목표 6와 맞출 수 없음/);
+  assert.match(impossible.problems[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요해 목표 6학급과 맞출 수 없음/);
   assert.deepEqual(plain(state.classOverrides), { "1:0": 4, "1:2": 2 });
   locked = true;
   assert.equal(ctx.adjustAggregateClassCounts("1"), null);
@@ -933,6 +933,37 @@ test("confirming a round lists class-plan issues and asks before confirming with
   assert.equal(ctx.isRoundLocked("1"), true);
 });
 
+test("confirming a round uses the app dialog (#roundConfirmDialog) instead of the browser confirm when it exists", () => {
+  const state = { currentRound: "1", students: [{ grade: "2" }], courses: [], classOverrides: {}, semesterAssignments: {}, groupAssignments: {},
+    roundClosures: { "1": {} }, roundStatuses: {} };
+  const report = { summary: { grade: "2", students: 1, classes: 11, classSource: "roster" }, semesters: [] };
+  const parts = {};
+  const part = (key) => (parts[key] ||= { textContent: "", focus() {} });
+  let onClose = null;
+  const dialog = { returnValue: "", opened: false, showModal() { this.opened = true; }, addEventListener: (type, handler) => { onClose = handler; },
+    querySelector: (selector) => part(selector) };
+  let browserConfirm = 0;
+  const ctx = vm.createContext({
+    state, document: { getElementById: (id) => id === "roundConfirmDialog" ? dialog : null }, window: { confirm: () => { browserConfirm += 1; return true; } },
+    aggregateThresholds: () => ({ openingPercent: 90, divisionPercent: 110 }), aggregateRecords: () => ({ reports: [report] }),
+    aggregateClassPlanIssues: () => [], syncActiveRound() {}, persistState() {}, renderAggregate() {}, renderRoundStatus() {}, renderWorkflowLayout() {},
+    status: { style: {}, textContent: "" }
+  });
+  vm.runInContext(roundStatus, ctx);
+  assert.equal(ctx.confirmCurrentRound(), "pending");
+  assert.equal(dialog.opened, true);
+  assert.equal(browserConfirm, 0, "브라우저 기본 확인 창을 쓰지 않는다");
+  assert.match(parts["#roundConfirmText"].textContent, /1차 결과를 확정할까요\?/);
+  assert.equal(parts["#roundConfirmTitle"].textContent, "1차 결과 확정");
+  dialog.returnValue = "cancel";
+  onClose();
+  assert.equal(ctx.isRoundLocked("1"), false, "취소하면 확정하지 않는다");
+  ctx.confirmCurrentRound();
+  dialog.returnValue = "ok";
+  onClose();
+  assert.equal(ctx.isRoundLocked("1"), true);
+});
+
 test("retake targets, the retake download and the aggregate tabs follow the selected current grade", () => {
   const state = {
     rounds: { "1": { courses: [{ column: "a", name: "물리", applicationCurrentGrade: "1" }, { column: "b", name: "기하", applicationCurrentGrade: "2" }],
@@ -962,6 +993,14 @@ test("retake targets, the retake download and the aggregate tabs follow the sele
   vm.runInContext(functionSource(app, "function downloadRetakeList(", "function applicationCohortYear("), download);
   download.downloadRetakeList();
   assert.equal(link.download, "2차_수강신청_대상자_현2학년(1차_기준).xlsx");
+  // 학년도가 있으면 파일 이름 앞에 붙는다.
+  download.document.getElementById = (id) => id === "schoolYear" ? { value: "2026" } : null;
+  download.downloadRetakeList();
+  assert.equal(link.download, "2026학년도_2차_수강신청_대상자_현2학년(1차_기준).xlsx");
+  const names = vm.createContext({ state: { currentRound: "2" }, document: { getElementById: (id) => id === "schoolYear" ? { value: "2026" } : null } });
+  vm.runInContext(functionSource(app, "function aggregateDownloadName(", "function downloadAggregate("), names);
+  assert.equal(names.aggregateDownloadName("1"), "2026학년도_2차_과목별_수강신청_집계표_현1학년.xlsx");
+  assert.equal(names.aggregateDownloadName(""), "2026학년도_2차_과목별_수강신청_집계표.xlsx");
   assert.match(files["xl/workbook.xml"], /name="2차 대상자\(현2학년\)"/);
   assert.doesNotMatch(files["xl/worksheets/sheet1.xml"], />가</, "the other grade is not exported");
   assert.match(files["xl/worksheets/sheet1.xml"], />나</);
