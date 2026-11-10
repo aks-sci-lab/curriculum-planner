@@ -82,9 +82,12 @@ test("서버로 보내는 것은 그대로: 생성 요청 setup 모양 불변, �
   const setupFn = client.slice(client.indexOf("function applicationSetup("), createAt);
   assert.doesNotMatch(setupFn, /applicationRoster|uploadedAt/, "서버로 보내는 setup에 새 값 없음");
   assert.equal((client.match(/storeApplicationRoster\(/g) || []).length, 1, "웹 신청 생성 한 곳에서만 저장(자동 테스트 가상 학생은 저장 안 함)");
-  const local = between("async function readApplicationRosterLocal(", "function downloadTextFile(");
+  const local = between("async function importApplicationRosterFile(", "function downloadTextFile(");
   assert.doesNotMatch(local, /rpc\(|fetch\(|supabase/i, "다시 올리기는 서버 요청 없음");
-  assert.match(html, /<input class="hidden" id="cloudRosterLocalInput" type="file" accept="\.xlsx" aria-label="명렬 다시 올리기\(이 PC에만 저장, 서버 변경 없음\)">/);
+  assert.match(html, /<input class="hidden" id="cloudRosterLocalInput" type="file" accept="\.xlsx" aria-label="명렬 올리기\(이 PC에만 저장 · 담임반 현황 미제출 확인용\)">/);
+  // 로그인 카드(#supabaseTeacherPanel) 밖, 학년 탭 작업 영역 안(로그인 없이 보임)
+  const input = html.indexOf('id="cloudRosterLocalInput"');
+  assert.ok(input > html.indexOf('id="applicationGradeWorkspace"') && input < html.indexOf('id="supabaseTeacherPanel"'), "로그인 없이 보이는 곳");
   assert.match(html, /id="cloudRosterLocalSummary"/);
   assert.match(app, /\$\("#cloudRosterLocalInput"\)\?\.addEventListener\("change"/);
   // 서버 SQL은 바꾸지 않음
@@ -92,4 +95,23 @@ test("서버로 보내는 것은 그대로: 생성 요청 setup 모양 불변, �
   let changed = "";
   try { changed = execSync("git diff --name-only HEAD -- supabase", { cwd: root, encoding: "utf8" }); } catch { changed = ""; }
   assert.equal(changed.trim(), "");
+});
+
+test("importApplicationRosterFile(file, 현학년): 같은 명렬 양식으로 읽어 저장하고 { count, message }, 오류도 message로", async () => {
+  const state = { applicationMenuGrade: "1", applicationRosters: {} };
+  const sheets = [{ name: "명렬", rows: [["학년", "반", "번호", "성명"], ["2", "1", "1", "가명1"], ["2", "1", "2", "가명2"], ["2", "2", "1", "가명3"]] }];
+  const ctx = vm.createContext({ state, console, $: (selector) => (selector === "#schoolYear" ? { value: "2026" } : null), persistStateSoon: () => {},
+    parseWorkbook: async () => sheets });
+  vm.runInContext(between("function parseApplicationRoster(", "async function readApplicationRosterLocal("), ctx);
+  const file = (name) => ({ name, arrayBuffer: async () => new ArrayBuffer(1) });
+  const ok = plain(await ctx.importApplicationRosterFile(file("명렬.xlsx"), "2"));
+  assert.deepEqual(ok, { count: 3, message: "현 2학년 명렬 3명을 이 PC에 저장했습니다(서버 변경 없음)." });
+  assert.equal(ctx.applicationRosterFor("2").students.length, 3);
+  assert.equal(ctx.applicationRosterFor("2").source, "명렬.xlsx(명렬 올리기)");
+  const wrong = plain(await ctx.importApplicationRosterFile(file("명렬.xlsx"), "1"));
+  assert.equal(wrong.count, 0);
+  assert.match(wrong.message, /^명렬을 저장하지 못했습니다: 2학년 수강신청에는 현재 1학년 명렬만/);
+  assert.match((await ctx.importApplicationRosterFile(file("명렬.csv"), "2")).message, /\.xlsx 형식/);
+  assert.match((await ctx.importApplicationRosterFile(null, "2")).message, /명렬 파일을 고르세요/);
+  assert.equal(ctx.applicationRosterFor("1"), null, "실패하면 저장하지 않음");
 });
