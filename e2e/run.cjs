@@ -534,6 +534,8 @@ async function stepRetake({ page, h, report, roster }) {
       await sleep(500);
       const section = page.locator("#cloudEventList > section").filter({ hasText: "2차" }).first();
       await section.getByRole("button", { name: "신청 마감" }).click();
+      // '신청 마감'은 앱 대화상자(#appConfirmDialog)로 묻는다.
+      await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 3000 }).catch(() => {});
       await page.waitForLoadState("networkidle");
       await sleep(800);
       const [state] = await h.mock.adminQuery("select is_open from public.course_events where id=$1", [event.id]);
@@ -1690,6 +1692,7 @@ async function main() {
         const section = page.locator("#cloudEventList section").filter({ hasText: "접수 중" }).first();
         const closeButton = page.locator("#cloudEventList").getByRole("button", { name: "신청 마감" }).first();
         await closeButton.click();
+        await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 3000 }).catch(() => {});
         await page.waitForLoadState("networkidle");
         await sleep(800);
         const id = report.data.events[grade];

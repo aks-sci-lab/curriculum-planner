@@ -289,6 +289,10 @@ test("curriculum management shows three cohort plans and a separate annual whole
   assert.match(markup, /2025.xlsx/);
   assert.match(markup, /3학년 2024 미업로드/);
   assert.match(markup, /data-annual-build="2026" disabled/, "building needs all three cohort plans");
+  // 좁은 카드에서도 읽히게 짧게: '3학년(2024) 편제표 필요'(여러 개면 '2·3학년(2025·2024) …')
+  assert.match(markup, />1·2·3학년\(2026·2025·2024\) 편제표 필요</);
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "legacy.css"), "utf8");
+  assert.match(css, /@media screen and \(min-width: 1360px\) \{[^}]*\}\s*\/\*[^*]*\*\/\s*\.curriculum-cohort-card p \{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;/);
   elements["#schoolYear"].value = "2027";
   ctx.renderCurriculumCohortUploads();
   assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]

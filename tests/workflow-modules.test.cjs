@@ -1288,6 +1288,43 @@ test("4단계: 앞 차수에서 '개설'로 정한 미달 과목은 다음 차�
   assert.deepEqual({ ...ctx.effectiveRoundClosures("1") }, { "2:c7": "open", "2:c8": "closed" }, "1차는 그대로");
 });
 
+test("4단계 이어받기는 학기·그룹까지 같은 과목만: 두 학기 과목의 한 학기 폐강은 다른 학기로 번지지 않고, 같은 이름의 다른 그룹 과목에도 번지지 않는다", () => {
+  // 실제 normalizeResultCourseName처럼 '(n학기)' 꼬리표를 뗀다(시드 10 회귀: 심화 영어 (2학기) 폐강이 (1학기)까지 폐강).
+  const normalize = (name) => String(name).replace(/[（(]\s*[12]\s*학기\s*[)）]/g, "").replace(/\s+/g, "");
+  const english = (column, semester) => ({ column, name: `심화 영어 (${semester}학기)`, applicationCurrentGrade: "2", semesterKey: semester,
+    applicationSubject: { subject: `심화 영어 (${semester}학기)`, semester } });
+  const state = {
+    rounds: {
+      "1": { courses: [english("e1", "1"), english("e2", "2"),
+        { column: "g1", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택1" } },
+        { column: "g2", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택5" } }] },
+      "2": { courses: [english("f1", "1"), english("f2", "2"),
+        { column: "h1", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택1" } },
+        { column: "h2", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택5" } }] }
+    },
+    // 1차: 심화 영어는 2학기만 폐강(1학기는 기준 충족이라 결정 없음), 음악 감상과 비평은 택1 그룹만 폐강
+    roundClosures: { "1": { "2:e2": "closed", "2:g1": "closed" }, "2": {} }
+  };
+  const { ctx } = aggregateHelpers({ globals: { state, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: normalize } });
+  const merged = { ...ctx.effectiveRoundClosures("2") };
+  assert.equal(merged["2:f2"], "closed", "같은 학기(2학기) 과목은 이어받음");
+  assert.equal(Object.hasOwn(merged, "2:f1"), false, "다른 학기(1학기) 과목으로 번지지 않음");
+  assert.equal(merged["2:h1"], "closed", "같은 그룹 과목은 이어받음");
+  assert.equal(Object.hasOwn(merged, "2:h2"), false, "같은 이름이라도 다른 그룹 과목으로 번지지 않음");
+  // 그룹을 알 수 없는 같은 이름 과목이 여럿이면 하나로 정할 수 없으니 이어받지 않는다.
+  for (const round of ["1", "2"]) for (const course of state.rounds[round].courses) delete course.applicationSubject.groupName;
+  state.roundClosures["2"] = {};
+  const ambiguous = { ...ctx.effectiveRoundClosures("2") };
+  assert.equal(Object.hasOwn(ambiguous, "2:h1") || Object.hasOwn(ambiguous, "2:h2"), false);
+  assert.equal(ambiguous["2:f2"], "closed");
+  // 학기 정보가 꼬리표로만 있는 결과 엑셀 과목(semesterKey 없음)도 학기를 구분한다.
+  const tagOnly = { rounds: { "1": { courses: [{ column: "a", name: "심화 영어 (1학기)", applicationCurrentGrade: "2" }, { column: "b", name: "심화 영어 (2학기)", applicationCurrentGrade: "2" }] },
+    "2": { courses: [{ column: "c", name: "심화 영어 (1학기)", applicationCurrentGrade: "2" }, { column: "d", name: "심화 영어 (2학기)", applicationCurrentGrade: "2" }] } },
+    roundClosures: { "1": { "2:b": "closed" }, "2": {} } };
+  const tagged = aggregateHelpers({ globals: { state: tagOnly, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: normalize } }).ctx;
+  assert.deepEqual({ ...tagged.effectiveRoundClosures("2") }, { "2:d": "closed" });
+});
+
 test("1단계 원본 교체: 신청·확정에 쓰는 편제표면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 요약해 묻는다", () => {
   const subject = (name, credits, extra = {}) => ({ name, credits, category: "학생 선택 교육과정", area: "과학", ...extra });
   const layout = (subjects) => ({ planData: { subjects } });
@@ -1311,6 +1348,17 @@ test("1단계 원본 교체: 신청·확정에 쓰는 편제표면 바뀌는 과
   assert.match(message, /확정한 차수: 1차/);
   assert.match(message, /없어지는 과목 1개: 지구과학/);
   assert.match(message, /없어지는 과목이 든 그룹 1개/);
+  // 여러 과목이 한 행에 묶인 행('A, B')은 과목마다 센다: 같은 과목이 양쪽 목록에 동시에 나오지 않고, 개수와 목록이 맞다.
+  ctx.planDataSubjectNames = (name) => String(name).split(/\s*,\s*/).filter(Boolean);
+  const grouped = layout([subject("물리학, 화학, 생명과학", {}), subject("지구과학", { sem22: 3 })]);
+  const split = layout([subject("물리학", {}), subject("화학, 지구과학", { sem22: 3 }), subject("천문학, 생명과학", {})]);
+  const counted = plain(ctx.curriculumReplaceImpact(grouped, split));
+  assert.deepEqual(counted.added, ["천문학"]);
+  assert.deepEqual(counted.removed, []);
+  assert.equal(counted.added.filter((name) => counted.removed.includes(name)).length, 0);
+  const many = plain(ctx.curriculumReplaceImpact(layout([subject("가", {})]), layout(Array.from({ length: 8 }, (_, index) => subject(`과목${index}`, {})))));
+  assert.equal(many.added.length, 8);
+  assert.match(ctx.curriculumReplaceMessage(many, "x.xlsx"), /새로 생기는 과목 8개: 과목0, 과목1, 과목2, 과목3, 과목4, 과목5 외 2개/);
   // 같은 내용이거나 아직 쓰는 곳이 없으면 묻지 않는다
   assert.equal(ctx.curriculumReplaceImpact(before, before), null);
   assert.equal(ctx.curriculumReplaceImpact(null, after), null);
@@ -1340,4 +1388,56 @@ test("1단계 엑셀 내보내기: 원본 엑셀이 이 브라우저에 없으�
   const workbook = fs.readFileSync(path.join(root, "curriculum-workbook.js"), "utf8");
   assert.match(workbook, /blob\.basicFallback\?"원본 엑셀이 이 브라우저에 없어/);
   assert.match(app, /원본 엑셀 없음\(다시 올리면 학교 양식으로 내보냄\)/);
+});
+
+
+test("앱 확인 대화상자(appConfirm): 브라우저 confirm 대신 #appConfirmDialog로 묻고 확인/취소를 Promise로 돌려준다, 대화상자가 없으면 confirm", async () => {
+  const parts = {};
+  const part = (selector) => (parts[selector] ||= { textContent: "", focus() {} });
+  let onClose = null;
+  const dialog = { open: false, returnValue: "", showModal() { this.open = true; }, close() { this.open = false; }, addEventListener: (type, handler) => { onClose = handler; }, querySelector: part };
+  let confirms = 0;
+  const ctx = vm.createContext({ document: { getElementById: (id) => id === "appConfirmDialog" ? dialog : null }, window: { confirm: () => { confirms += 1; return true; } }, Promise });
+  vm.runInContext(functionSource(app, "function appConfirm(", "window.appConfirm = appConfirm;"), ctx);
+  const pending = ctx.appConfirm("교체할까요?", { title: "원본 교체", ok: "교체" });
+  assert.equal(dialog.open, true);
+  assert.equal(parts["#appConfirmTitle"].textContent, "원본 교체");
+  assert.equal(parts["#appConfirmOk"].textContent, "교체");
+  dialog.returnValue = "ok"; onClose();
+  assert.equal(await pending, true);
+  const cancelled = ctx.appConfirm("마감할까요?");
+  dialog.returnValue = "cancel"; onClose();
+  assert.equal(await cancelled, false);
+  assert.equal(confirms, 0, "브라우저 기본 confirm을 쓰지 않는다");
+  // 원본 교체·입학연도 확인·신청 마감·교사 수 추천 적용이 이 대화상자를 쓴다.
+  assert.match(app, /await ask\(curriculumReplaceMessage\(impact, file\.name\), \{ title: "원본 교체", ok: "교체" \}\)/);
+  assert.match(hoursStats, /await appConfirm\(question, \{ title: "교사 수 추천 적용", ok: "추천 적용" \}\)/);
+});
+
+test("1단계 카드 업로드가 실패·취소되면 원래 보던 카드로 돌아간다(성공하면 그대로), 울산 불러오기 과목 수는 표와 같은 행 기준", () => {
+  const switched = [];
+  const state = { curriculumCohortYear: "2027", curriculumPlanType: "cohort" };
+  const ctx = vm.createContext({ state, switchCurriculumCohort: (year) => { switched.push(["cohort", year]); state.curriculumCohortYear = year; },
+    switchCurriculumAnnualPlan: (year) => { switched.push(["annual", year]); state.curriculumPlanType = "annual"; state.curriculumCohortYear = year; } });
+  vm.runInContext("var curriculumUploadReturn = null;", ctx);
+  vm.runInContext(functionSource(app, "function restoreCurriculumUploadCard(", "function handleCurriculumPlanWorkbook("), ctx);
+  vm.runInContext("curriculumUploadReturn = { year: '2026', type: 'cohort' };", ctx);
+  assert.equal(ctx.restoreCurriculumUploadCard(), true);
+  assert.deepEqual(plain(switched), [["cohort", "2026"]]);
+  assert.equal(ctx.restoreCurriculumUploadCard(), false, "한 번만 되돌린다");
+  vm.runInContext("curriculumUploadReturn = { year: '2026', type: 'annual' };", ctx);
+  ctx.restoreCurriculumUploadCard();
+  assert.deepEqual(plain(switched.at(-1)), ["annual", "2026"]);
+  // 업로드 흐름: 실패·취소 경로마다 되돌리고, 성공하면 기억을 지운다.
+  const handler = functionSource(app, "function handleCurriculumPlanWorkbook(", "function certificateTodayLabel(");
+  assert.match(handler, /\.then\(\(ok\) => \{ if \(ok\) curriculumUploadReturn = null; else restoreCurriculumUploadCard\(\); \}\)/, "xlsb 실패");
+  assert.ok((handler.match(/restoreCurriculumUploadCard\(\)/g) || []).length >= 7, "취소·오류 경로");
+  assert.match(handler, /curriculumUploadReturn = null;\n\s*renderCurriculumStep\(\);/, "성공");
+  assert.match(app, /curriculumUploadReturn = before;\n\s*curriculumPlanInput\.click\(\);/);
+  assert.match(app, /curriculumPlanInput\.addEventListener\("cancel", \(\) => restoreCurriculumUploadCard\(\)\);/);
+  const office = fs.readFileSync(path.join(root, "curriculum-office-format.js"), "utf8");
+  const count = vm.createContext({ planDataSubjects: (data) => data.subjects.filter((item) => !item.fixed) });
+  vm.runInContext(office.slice(office.indexOf("function curriculumOfficeSubjectRowCount("), office.indexOf("async function importCurriculumOfficeProgram(")), count);
+  assert.equal(count.curriculumOfficeSubjectRowCount({ planData: { subjects: [{ name: "가, 나" }, { name: "다" }, { fixed: true }] } }, 3), 2);
+  assert.match(office, /과목 \$\{subjectRows\}개, 선택과목군/);
 });

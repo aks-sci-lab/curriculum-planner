@@ -234,6 +234,24 @@
     }
     window.showAppToast = showAppToast;
 
+    // 브라우저 기본 confirm 대신 앱 대화상자(#appConfirmDialog)로 묻는다. Promise<boolean>. 대화상자가 없으면(테스트·옛 화면) confirm.
+    function appConfirm(text, { title = "확인", ok = "확인", cancel = "취소" } = {}) {
+      const dialog = typeof document !== "undefined" ? document.getElementById("appConfirmDialog") : null;
+      if (!dialog || typeof dialog.showModal !== "function") return Promise.resolve(window.confirm(text));
+      if (dialog.open) dialog.close("cancel");
+      dialog.querySelector("#appConfirmTitle").textContent = title;
+      dialog.querySelector("#appConfirmText").textContent = text;
+      dialog.querySelector("#appConfirmOk").textContent = ok;
+      dialog.querySelector("#appConfirmCancel").textContent = cancel;
+      dialog.returnValue = "";
+      return new Promise((resolve) => {
+        dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+        dialog.showModal();
+        dialog.querySelector("#appConfirmCancel")?.focus();
+      });
+    }
+    window.appConfirm = appConfirm;
+
     // 편제표·결과 업로드·집계·통계는 브라우저 안에서만 처리하므로 로그인 없이 사용한다.
     // 교사 로그인은 서버에 자료를 만드는 웹 수강신청 기능에서만 요구한다.
     function requireLocalWorkspaceAccess() {
@@ -4125,27 +4143,69 @@
         const earlier = rounds.filter((item) => Number(item) < Number(round)).sort((a, b) => Number(b) - Number(a));
         const data = state.rounds?.[round];
         if (earlier.length && data?.courses?.length) {
+          // 같은 과목 = 같은 현 학년 + 같은 학기 + 같은 그룹 + 같은 과목명. normalizeResultCourseName은 '(2학기)' 꼬리표를 떼므로
+          // 학기는 따로 맞춘다(두 학기 과목의 한 학기만 폐강해도 다른 학기로 번지지 않게). 키가 겹쳐 하나로 정할 수 없으면 이어받지 않는다.
           const normalize = (name) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name || "").replace(/\s+/g, "");
-          const courseName = (course) => course.subjectName || course.applicationSubject?.subject || course.name;
+          const courseName = (course) => course.applicationSubject?.subject || course.subjectName || course.name;
+          const semesterTag = (text) => String(text || "").match(/[（(]\s*([12])\s*학기\s*[)）]/)?.[1] || "";
+          const semesterOf = (course, roundData) => {
+            const listed = String(course.applicationSubject?.semester ?? "");
+            if (/^[12]$/.test(listed)) return listed;
+            const tag = semesterTag(course.applicationSubject?.subject) || semesterTag(course.name);
+            if (tag) return tag;
+            const forced = roundData?.semesterAssignments?.[String(course.column)];
+            if (forced === "1" || forced === "2") return forced;
+            if (course.semesterKey === "1" || course.semesterKey === "2") return course.semesterKey;
+            return listed.includes("·") ? "1·2" : "";
+          };
+          const groupOf = (course, roundData) => {
+            const label = course.applicationSubject?.groupName ||
+              (typeof parseAssignedGroupLabel === "function" ? parseAssignedGroupLabel(roundData?.groupAssignments?.[String(course.column)] || "").category : "");
+            return String(label || "").replace(/\s+/g, "");
+          };
+          const identity = (course, grade, roundData) => `${grade}|${semesterOf(course, roundData)}|${normalize(courseName(course))}`;
+          // 같은 학년·학기·이름 과목이 여럿이면(다른 그룹) 그룹까지 같아야 하고, 그래도 여럿이면 이어받지 않는다.
+          const index = (roundData) => {
+            const map = new Map();
+            for (const course of roundData.courses) {
+              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
+              for (const grade of grades) {
+                const id = identity(course, grade, roundData);
+                if (!map.has(id)) map.set(id, []);
+                map.get(id).push({ course, grade, group: groupOf(course, roundData) });
+              }
+            }
+            return map;
+          };
+          const pick = (list, group) => {
+            if (list.length === 1) return list[0];
+            const same = group ? list.filter((item) => item.group === group) : [];
+            return same.length === 1 ? same[0] : null;
+          };
+          const currentIndex = index(data);
           for (const prev of earlier) {
             const prevData = state.rounds?.[prev];
             if (!prevData?.courses?.length) continue;
-            const byName = new Map();
+            const prevIndex = index(prevData);
+            const decided = new Map();
             for (const [key, verdict] of Object.entries(state.roundClosures?.[prev] || {})) {
               if (verdict !== "open" && verdict !== "closed") continue;
               const separator = key.indexOf(":");
-              const grade = key.slice(0, separator);
-              const course = prevData.courses.find((item) => String(item.column) === key.slice(separator + 1) &&
-                (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === grade));
-              if (course) byName.set(`${grade}:${normalize(courseName(course))}`, verdict);
+              decided.set(key, { grade: key.slice(0, separator), column: key.slice(separator + 1), verdict });
             }
-            for (const course of data.courses) {
-              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
-              for (const grade of grades) {
-                const key = `${grade}:${course.column}`;
-                const verdict = byName.get(`${grade}:${normalize(courseName(course))}`);
-                if (!verdict || Object.hasOwn(merged, key)) continue;
-                merged[key] = verdict;
+            for (const [id, list] of currentIndex) {
+              const before = prevIndex.get(id) || [];
+              for (const item of list) {
+                const key = `${item.grade}:${item.course.column}`;
+                if (Object.hasOwn(merged, key)) continue;
+                // 지금 차수에서도 같은 키 과목이 여럿이면 그룹으로 하나를 고를 수 있을 때만.
+                if (list.length > 1 && !(item.group && list.filter((other) => other.group === item.group).length === 1)) continue;
+                const match = pick(before, item.group);
+                if (!match) continue;
+                if (item.group && match.group && item.group !== match.group) continue;
+                const decision = decided.get(`${match.grade}:${match.course.column}`);
+                if (!decision) continue;
+                merged[key] = decision.verdict;
                 inherited.set(key, prev);
               }
             }
@@ -4807,7 +4867,7 @@
       const annualCard = `<article class="curriculum-cohort-card curriculum-annual-card${annualActive ? " is-active" : ""}">
         <h4>${annualYear}학년도 전학년 편제표</h4>
         <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("annual", annualYear, built) : ""}
-        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => `${source.grade}학년(${source.year})`).join("·")} 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
+        <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => source.grade).join("·")}학년(${missing.map((source) => source.year).join("·")}) 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
         <div><button class="button${built && !stale ? "" : " button-primary"}" type="button" data-annual-build="${annualYear}"${missing.length ? " disabled" : ""} aria-label="${annualYear}학년도 전학년 편제표 ${built ? "다시 만들기" : "만들기"}">${built ? "다시 만들기" : "만들기"}</button>
         <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
       </article>`;
@@ -7193,11 +7253,24 @@
       if (!before.length) return null;
       const key = (name) => typeof planDataNameKey === "function" ? planDataNameKey(name) : String(name || "").replace(/\s+/g, "");
       const signature = (item) => JSON.stringify([item.credits || {}, item.cross || null, item.category || "", item.area || ""]);
-      const map = (list) => new Map(list.map((item) => [key(item.name), item]));
+      // 과목 키 단위로 비교한다: 'A, B' 한 행은 A·B 두 과목, 같은 과목이 여러 행이면 행 모양을 모아 한 과목으로(개수와 목록이 맞게).
+      const names = (item) => typeof planDataSubjectNames === "function" ? planDataSubjectNames(item.name) : String(item.name || "").split(/\s*,\s*/);
+      const map = (list) => {
+        const result = new Map();
+        for (const item of list) for (const name of names(item)) {
+          const id = key(name);
+          if (!id) continue;
+          const entry = result.get(id) || { name: String(name).trim(), signatures: [] };
+          entry.signatures.push(signature(item));
+          result.set(id, entry);
+        }
+        for (const entry of result.values()) entry.signature = entry.signatures.sort().join("|");
+        return result;
+      };
       const oldMap = map(before), newMap = map(subjectsOf(newLayout));
-      const added = [...newMap.keys()].filter((name) => !oldMap.has(name)).map((name) => newMap.get(name).name.trim());
-      const removed = [...oldMap.keys()].filter((name) => !newMap.has(name)).map((name) => oldMap.get(name).name.trim());
-      const changed = [...newMap.keys()].filter((name) => oldMap.has(name) && signature(oldMap.get(name)) !== signature(newMap.get(name))).length;
+      const added = [...newMap.keys()].filter((name) => !oldMap.has(name)).map((name) => newMap.get(name).name);
+      const removed = [...oldMap.keys()].filter((name) => !newMap.has(name)).map((name) => oldMap.get(name).name);
+      const changed = [...newMap.keys()].filter((name) => oldMap.has(name) && oldMap.get(name).signature !== newMap.get(name).signature).length;
       const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : [];
       const locked = rounds.filter((round) => typeof isRoundLocked === "function" && isRoundLocked(round));
       const withResults = rounds.filter((round) => state.rounds?.[round]?.students?.length);
@@ -7230,8 +7303,25 @@
       return found && found !== String(cohortYear) ? found : "";
     }
 
+    // 카드의 '업로드'는 먼저 그 카드로 바꾼 뒤 파일을 고른다. 업로드가 실패·취소되면 원래 보던 카드로 되돌린다
+    // (예: 2027 카드에 울산 xlsb를 올리다 실패했는데 선택 카드가 2027로 남던 문제). 성공하면 기억을 지운다.
+    let curriculumUploadReturn = null;
+    function restoreCurriculumUploadCard() {
+      const back = curriculumUploadReturn;
+      curriculumUploadReturn = null;
+      if (!back) return false;
+      if (String(state.curriculumCohortYear) === back.year && state.curriculumPlanType === back.type) return false;
+      // 카드를 바꾸면 상태 줄이 '…불러왔습니다'로 바뀌므로, 실패·취소 안내를 그대로 남긴다.
+      const node = typeof document !== "undefined" ? document.getElementById("status") : null;
+      const kept = node ? { text: node.textContent, color: node.style.color } : null;
+      if (back.type === "annual" && typeof switchCurriculumAnnualPlan === "function") switchCurriculumAnnualPlan(back.year);
+      else if (typeof switchCurriculumCohort === "function") switchCurriculumCohort(back.year);
+      if (node && kept?.text) { node.textContent = kept.text; node.style.color = kept.color; }
+      return true;
+    }
+
     function handleCurriculumPlanWorkbook(file) {
-      if (!file) return;
+      if (!file) { restoreCurriculumUploadCard(); return; }
       if (!requireLocalWorkspaceAccess()) return;
       if (state.curriculumPlanType === "annual") {
         status.style.color = "#a44939";
@@ -7243,10 +7333,13 @@
       status.textContent = "";
       // 울산 편제 점검 프로그램(xlsb)은 curriculum-office-format.js가 읽는다.
       if (/\.xlsb$/i.test(file.name) && typeof importCurriculumOfficeXlsbFile === "function") {
-        importCurriculumOfficeXlsbFile(file).catch((error) => { status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
+        importCurriculumOfficeXlsbFile(file)
+          .then((ok) => { if (ok) curriculumUploadReturn = null; else restoreCurriculumUploadCard(); })
+          .catch((error) => { restoreCurriculumUploadCard(); status.style.color = "#a44939"; status.textContent = error?.message || String(error); });
         return;
       }
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        restoreCurriculumUploadCard();
         status.style.color = "#a44939";
         status.textContent = "편제표는 .xlsx 형식만 지원합니다.";
         return;
@@ -7264,6 +7357,7 @@
       };
       const reader = new FileReader();
       reader.onerror = () => {
+        restoreCurriculumUploadCard();
         status.style.color = "#a44939";
         status.textContent = "편제표 파일을 읽지 못했습니다.";
       };
@@ -7272,7 +7366,8 @@
           const sheets = await parseWorkbook(reader.result, { expandMergedCells: true, includeLayout: true });
           verifyTarget();
           if (typeof isCurriculumOfficeProgram === "function" && isCurriculumOfficeProgram(sheets)) {
-            await importCurriculumOfficeProgram(sheets, file, verifyTarget);
+            if (await importCurriculumOfficeProgram(sheets, file, verifyTarget)) curriculumUploadReturn = null;
+            else restoreCurriculumUploadCard();
             return;
           }
           let plan = [];
@@ -7306,15 +7401,19 @@
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
           // 다른 입학연도 편제표를 이 카드에 올리는 실수를 막는다(제목의 'YYYY학년도 신입생'과 카드 연도 대조).
           const titleYear = typeof curriculumTitleYearMismatch === "function" ? curriculumTitleYearMismatch(importedLayout, file.name, cohortYear) : "";
-          if (titleYear && !window.confirm(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`)) {
+          const ask = (text, options) => typeof appConfirm === "function" ? appConfirm(text, options) : Promise.resolve(window.confirm(text));
+          if (titleYear && !(await ask(`'${file.name}'의 제목은 ${titleYear}학년도 입학생 편제표인데 ${cohortYear}학년도 입학생 카드에 올리려고 합니다.\n\n그대로 ${cohortYear}학년도 입학생 편제표로 올릴까요? (취소하면 올리지 않습니다. ${titleYear}학년도 카드의 '업로드'를 쓰세요.)`,
+            { title: "입학연도 확인", ok: `${cohortYear}학년도로 올리기` }))) {
             status.style.color = "#a44939";
+            restoreCurriculumUploadCard();
             status.textContent = `업로드를 취소했습니다. ${titleYear}학년도 입학생 편제표는 ${titleYear}학년도 카드에 올리세요.`;
             return;
           }
           // 이미 신청·확정에 쓰는 편제표를 교체하면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 보여 주고 확인을 받는다.
           const impact = typeof curriculumReplaceImpact === "function" ? curriculumReplaceImpact(state.curriculumImportedLayout, importedLayout) : null;
-          if (impact && !window.confirm(curriculumReplaceMessage(impact, file.name))) {
+          if (impact && !(await ask(curriculumReplaceMessage(impact, file.name), { title: "원본 교체", ok: "교체" }))) {
             status.style.color = "#5c6982";
+            restoreCurriculumUploadCard();
             status.textContent = "원본 교체를 취소했습니다. 지금 편제표를 그대로 둡니다.";
             return;
           }
@@ -7333,6 +7432,7 @@
           if (typeof recordCurriculumVersion === "function" && !latestCurriculumSavedVersion(versionYear)) {
             recordCurriculumVersion(versionYear, importedLayout, { reason: "편제표 업로드", fileName: file.name, auto: true });
           }
+          curriculumUploadReturn = null;
           renderCurriculumStep();
           persistState();
           status.style.color = plan.length ? "#287956" : "#a44939";
@@ -7343,7 +7443,8 @@
             ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${plan.length}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
-          const message = error instanceof Error ? error.message : "편제표 파일 처리 중 오류가 발생했습니다.";
+          const message = error?.message || "편제표 파일 처리 중 오류가 발생했습니다.";
+          restoreCurriculumUploadCard();
           status.style.color = "#a44939";
           status.textContent = message;
         }
@@ -7379,6 +7480,8 @@
 
     rosterInput.addEventListener("change", (event) => { handleWorkbook(event.target.files[0]); event.target.value = ""; });
     curriculumPlanInput.addEventListener("change", (event) => { handleCurriculumPlanWorkbook(event.target.files[0]); event.target.value = ""; });
+    // 파일 고르기 창을 취소하면(크롬 'cancel') 카드도 원래대로.
+    curriculumPlanInput.addEventListener("cancel", () => restoreCurriculumUploadCard());
     $("#curriculumCohortUploads").addEventListener("click", (event) => {
       const button = event.target.closest("[data-cohort-upload], [data-cohort-view], [data-annual-build], [data-annual-view]");
       if (!button || button.disabled) return;
@@ -7390,8 +7493,12 @@
         switchCurriculumAnnualPlan(button.dataset.annualView);
         return;
       }
+      const before = { year: String(state.curriculumCohortYear), type: state.curriculumPlanType === "annual" ? "annual" : "cohort" };
       switchCurriculumCohort(button.dataset.cohortUpload || button.dataset.cohortView);
-      if (button.dataset.cohortUpload) curriculumPlanInput.click();
+      if (button.dataset.cohortUpload) {
+        curriculumUploadReturn = before;
+        curriculumPlanInput.click();
+      }
     });
     $("#undoCurriculumEdit").addEventListener("click", undoCurriculumEdit);
     // Ctrl+Z(맥 ⌘+Z): 1단계 편제표 편집 실행취소. 편제표 칸에 글자를 입력하는 중이면 브라우저 기본(글자 되돌리기)을 그대로 두고,

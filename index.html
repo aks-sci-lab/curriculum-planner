@@ -468,6 +468,7 @@
             <button class="button button-primary" id="downloadHoursStats" type="button">시수 통계 엑셀 다운로드</button>
           </div>
         </div>
+        <p class="hours-status" id="hoursStatus" role="status" aria-live="polite"></p>
         <div id="hoursStatsContent"></div>
       </section>
       <section class="workflow-step-panel hidden" id="workflowStep8Panel" aria-labelledby="classSectionsTitle">
@@ -818,6 +819,16 @@ function courseClient_() {
       <div class="curriculum-version-dialog-actions">
         <button class="button" type="button" data-open-dialog="courseCheckDialog">위계·학점 점검 설정</button>
         <button class="button button-primary" type="submit" formnovalidate>닫기</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="curriculum-subject-dialog app-confirm-dialog" id="appConfirmDialog" aria-labelledby="appConfirmTitle" aria-describedby="appConfirmText">
+    <form method="dialog">
+      <h2 id="appConfirmTitle">확인</h2>
+      <div class="note" id="appConfirmText" style="white-space:pre-line"></div>
+      <div class="curriculum-version-dialog-actions">
+        <button class="button" type="submit" value="cancel" id="appConfirmCancel">취소</button>
+        <button class="button button-primary" type="submit" value="ok" id="appConfirmOk">확인</button>
       </div>
     </form>
   </dialog>

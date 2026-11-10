@@ -369,8 +369,11 @@ function buildAnnualCurriculumDataLayout(cohorts, schoolYear) {
       }
       const field = content.find((item) => item !== "note");
       const lastIndex = (test) => { for (let index = slots.length - 1; index >= 0; index--) if (test(slots[index])) return index; return -1; };
+      // 같은 편성 영역 안에서는 같은 교과(군) 행 무리 뒤가 먼저다(교과(군) 이수학점·필수이수학점 칸을 annualJoinAreaRuns가 한 칸으로 합치게).
+      // 예: 2025 입학생 학교 지정 '독서와 작문' 2-2가 예술·교양 사이 별도 '국어' 칸으로 가 국어 이수학점이 12와 4로 나뉘던 문제.
+      if (after < 0 && field && area) after = lastIndex((slot) => sameDivision(slot) && slot.area === area && slot.fields.has(field));
+      if (after < 0 && area) after = lastIndex((slot) => sameDivision(slot) && slot.area === area);
       if (after < 0 && field) after = lastIndex((slot) => sameDivision(slot) && slot.fields.has(field));
-      if (after < 0) after = lastIndex((slot) => sameDivision(slot) && slot.area === area);
       if (after < 0) after = lastIndex((slot) => sameDivision(slot));
       // 이웃 행: 끼워 넣는 자리 바로 위(없으면 아래)의 Y 과목 행. 새 행은 이 행의 칸 모양을 쓴다.
       const position = after < 0 ? slots.length : after + 1;

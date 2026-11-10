@@ -273,6 +273,8 @@ test("a slower earlier curriculum upload cannot replace the newer uploaded plan"
     storeCurriculumArchive: async () => "archive",
     recordCurriculumUndo() {},
   });
+  vm.runInContext("var curriculumUploadReturn = null;", f.context);
+  vm.runInContext(source("restoreCurriculumUploadCard"), f.context);
   vm.runInContext(source("handleCurriculumPlanWorkbook"), f.context);
   f.context.handleCurriculumPlanWorkbook({ name: "이전.xlsx" });
   f.context.handleCurriculumPlanWorkbook({ name: "최신.xlsx" });
