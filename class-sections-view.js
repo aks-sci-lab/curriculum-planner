@@ -35,6 +35,9 @@ function classSectionsSettings() {
   for (const key of ["rooms", "courseModes", "courseDepartments", "courseRooms"]) if (!classSectionsPlain(settings[key])) settings[key] = {};
   if (!(Number(settings.spreadWarn) > 0)) settings.spreadWarn = 4;
   if (typeof settings.useHoursTeachers !== "boolean") settings.useHoursTeachers = true;
+  if (typeof settings.gridDays !== "string" || !settings.gridDays.trim()) settings.gridDays = "월,화,수,목,금";
+  if (!(Number(settings.gridPeriods) > 0)) settings.gridPeriods = 7;
+  if (!classSectionsPlain(settings.reserve)) settings.reserve = {};
   return settings;
 }
 
@@ -382,7 +385,9 @@ async function classSectionsSolveSemesterCurrent() {
       if (!result.explain?.feasible) problems += 1;
       classSectionsSaveResult(classSectionsEntry(round, groups[index].key, true), result, inputs[index], groups[index], source);
     });
-    classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}.`, problems > 0);
+    const orderText = (all.orders || []).length > 1 ? ` · 순서 ${all.orders.length}가지 비교 → ‘${all.chosenOrder}’` : "";
+    const shortText = (all.shortages || []).length ? ` · 교사 부족 ${all.shortages.length}곳(예: ${all.shortages[0].message})` : "";
+    classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}${orderText}${shortText}.`, problems > 0 || Boolean(shortText));
   } catch (error) {
     classSectionsSetStatus(`함께 계산 실패: ${error?.message || error}`, true);
   } finally {
@@ -392,6 +397,106 @@ async function classSectionsSolveSemesterCurrent() {
   }
 }
 
+// ---- 블록 시간 추천 ----
+// 블록마다 교과별 분반 수: 저장된 편성 결과가 있으면 그 블록의 분반, 없으면 과목 분반을 블록에 고르게 나눈 추정.
+function classSectionsBlockDemand(round, group, entry, settings) {
+  const source = classSectionsSource(round);
+  const base = classSectionsGroupSettings(source, group, entry);
+  const letters = Array.from({ length: base.blocks }, (_, index) => "abcdefghij"[index]);
+  const departmentOf = (key) => settings.courseDepartments[key] || group.courses.find((course) => course.key === key)?.department || "";
+  const result = entry.sectionResult;
+  const demand = Object.fromEntries(letters.map((letter) => [letter, {}]));
+  if (result?.blocks?.length === letters.length) {
+    for (const block of result.blocks) for (const id of block.sectionIds) {
+      const section = result.sections.find((item) => item.id === id);
+      const dept = section ? departmentOf(section.courseKey) : "";
+      if (dept && demand[block.id]) demand[block.id][dept] = (demand[block.id][dept] || 0) + 1;
+    }
+  } else {
+    let turn = 0;
+    for (const course of group.courses) {
+      if (settings.courseModes[course.key] === "class") continue;
+      const count = entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount;
+      const dept = departmentOf(course.key);
+      for (let k = 0; k < count; k += 1) {
+        const letter = letters[(turn + k) % letters.length];
+        if (dept) demand[letter][dept] = (demand[letter][dept] || 0) + 1;
+      }
+      turn += count;
+    }
+  }
+  const hours = Math.max(...group.courses.map((course) => Number(course.credits) || 0), 0) || 3;
+  return letters.map((letter) => ({ id: letter, hours, departments: demand[letter] }));
+}
+
+async function classSectionsRecommendTimesCurrent() {
+  const context = classSectionsCurrent();
+  if (!context?.group || CLASS_SECTIONS_VIEW.running) return;
+  const { round, source, group } = context;
+  const settings = classSectionsSettings();
+  const groups = source.groups.filter((item) => item.semester === group.semester);
+  const teachers = classSectionsTeacherList(settings);
+  const sample = classSectionsBuildInput(round, group, context.entry, { noOccupied: true });
+  const spec = {
+    days: settings.gridDays.split(","), periods: settings.gridPeriods, seed: Number(context.entry.seed) || 1, reserve: { ...settings.reserve },
+    teachers, departmentTeachers: sample.departmentTeachers, fixedSlots: sample.fixedSlots,
+    groups: groups.map((item) => ({ groupId: item.key, label: item.label, grade: item.targetGrade, blocks: classSectionsBlockDemand(round, item, classSectionsEntry(round, item.key, true), settings) }))
+  };
+  CLASS_SECTIONS_VIEW.running = true;
+  classSectionsSetStatus(`${group.semester}학기 블록 ${spec.groups.reduce((sum, item) => sum + item.blocks.length, 0)}개의 시간을 추천하는 중…`);
+  renderClassSections();
+  try {
+    const result = await classSectionsRunSolver({ kind: "recommendTimes", input: spec });
+    CLASS_SECTIONS_VIEW.timesProposal = { round, semester: group.semester, result, edits: {},
+      labels: Object.fromEntries(groups.map((item) => [item.key, item.label])) };
+    classSectionsSetStatus(`블록 시간 추천 완료${result.shortages.length ? ` · 교사 부족 ${result.shortages.length}곳` : " · 교사 부족 없음"}. 칸을 고친 뒤 ‘추천 적용’을 누르세요.`, result.shortages.length > 0);
+  } catch (error) {
+    classSectionsSetStatus(`블록 시간 추천 실패: ${error?.message || error}`, true);
+  } finally {
+    CLASS_SECTIONS_VIEW.running = false;
+    renderClassSections();
+  }
+}
+
+function classSectionsTimesProposalHtml(round, source, group) {
+  const proposal = CLASS_SECTIONS_VIEW.timesProposal;
+  if (!proposal || proposal.round !== round || proposal.semester !== group.semester) return "";
+  const esc = classSectionsEsc;
+  const rows = proposal.result.groups.flatMap((item) => item.blocks.map((block) => {
+    const key = `${item.groupId}|${block.id}`;
+    const value = proposal.edits[key] ?? classSectionsTimesText(block.times);
+    return `<tr${item.groupId === group.key ? ' class="is-current"' : ""}><th scope="row">${esc(proposal.labels[item.groupId] || item.groupId)}</th><td>${esc(block.id)}블록</td>
+      <td><input class="cs-text cs-wide" type="text" value="${esc(value)}" data-cs-proposal="${esc(key)}" data-focus-key="cs-proposal-${esc(key)}" aria-label="${esc(proposal.labels[item.groupId] || item.groupId)} ${esc(block.id)}블록 추천 시간"></td></tr>`;
+  })).join("");
+  const free = Object.entries(proposal.result.free || {}).map(([grade, count]) => `${grade}학년 남는 칸 ${count}개`).join(" · ");
+  const shortages = proposal.result.shortages.slice(0, 12).map((item) => `<li>${esc(item.message)}</li>`).join("");
+  const issues = proposal.result.issues.slice(0, 12).map((item) => `<li>${esc(item.message)}</li>`).join("");
+  return `<div class="cs-proposal" id="classSectionsTimesProposal" aria-label="블록 시간 추천안">
+    <h5>블록 시간 추천안 <span class="cs-note">${esc(free)} (학교 지정·학급 단위 과목용)</span></h5>
+    ${shortages ? `<ul class="cs-list is-error">${shortages}</ul>` : '<p class="cs-note">학년 간 같은 시각 같은 교과 분반 합이 교사 수를 넘는 곳이 없습니다.</p>'}
+    ${issues ? `<ul class="cs-list">${issues}</ul>` : ""}
+    <table class="cs-table"><thead><tr><th>그룹</th><th>블록</th><th>추천 시간(고칠 수 있음)</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="cs-actions"><button class="button button-primary" id="classSectionsApplyTimes" type="button">추천 적용</button>
+      <button class="button" id="classSectionsDiscardTimes" type="button">추천 닫기</button></div></div>`;
+}
+
+function classSectionsApplyTimes() {
+  const proposal = CLASS_SECTIONS_VIEW.timesProposal;
+  if (!proposal) return;
+  let count = 0;
+  for (const item of proposal.result.groups) {
+    const entry = classSectionsEntry(proposal.round, item.groupId, true);
+    for (const block of item.blocks) {
+      const key = `${item.groupId}|${block.id}`;
+      entry.blockTimes[block.id] = proposal.edits[key] ?? classSectionsTimesText(block.times);
+      count += 1;
+    }
+  }
+  CLASS_SECTIONS_VIEW.timesProposal = null;
+  classSectionsSetStatus(`블록 ${count}개에 시간을 넣었습니다. ‘전 학년 함께 다시 계산’으로 교사 배정을 다시 하세요.`);
+  classSectionsChanged();
+}
+
 function classSectionsSaveResult(entry, result, input, group, source) {
   entry.sectionResult = classSectionsCompactResult(result, input, !source.locked);
   entry.inputStudents = Object.fromEntries(group.students.map((student) => [student.key, student.courses.slice()]));
@@ -399,7 +504,7 @@ function classSectionsSaveResult(entry, result, input, group, source) {
 
 function classSectionsSetStatus(text, error = false) {
   CLASS_SECTIONS_VIEW.status = { text, error };
-  const box = document.getElementById("classSectionsStatus");
+  const box = typeof document !== "undefined" ? document.getElementById("classSectionsStatus") : null;
   if (box) { box.textContent = text; box.dataset.state = error ? "error" : "ok"; }
 }
 
@@ -505,10 +610,13 @@ function renderClassSectionsView() {
         <label>편성 방식 <select data-cs-field="mode" data-focus-key="cs-mode" aria-label="편성 방식">${modeOptions}</select></label>
         <span class="cs-note${limit && sum > limit ? " is-warn" : ""}">분반 합 ${sum}개${limit ? ` / 블록 ${base.blocks}개 × ${base.maxSectionsPerBlock}개 = ${limit}개` : ""}</span>
       </div>
-      <details class="cs-advanced"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length ? " open" : ""}>
+      <details class="cs-advanced"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length || CLASS_SECTIONS_VIEW.timesProposal ? " open" : ""}>
         <summary>블록별로 다르게 · 블록 시간(요일·교시)</summary>
         <p class="cs-note">블록 시간을 넣으면 교사 불가 시간·다른 학년 블록과의 겹침을 점검합니다. 블록 시수 = 과목 학점.</p>
         <table class="cs-table"><thead><tr><th>블록</th><th>최대 분반</th><th>요일·교시</th></tr></thead><tbody>${blockRows}</tbody></table>
+        <div class="cs-actions"><button class="button" id="classSectionsRecommendTimes" type="button" title="이 학기 모든 학년 그룹의 블록에 요일·교시를 추천합니다(고정 시간·교사 불가 시간·학년 간 교사 수 고려)"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>블록 시간 추천</button>
+          <span class="cs-note">한 주 ${esc(settings.gridDays)} × ${settings.gridPeriods}교시 격자(교사·시간 설정에서 바꿈). 전체 시간표가 아니라 블록 칸만 정합니다.</span></div>
+        ${classSectionsTimesProposalHtml(round, source, group)}
       </details>
       <div class="cs-scroll" data-scroll-key="cs-courses"><table class="cs-table">
         <thead><tr><th>과목</th><th>신청</th><th>4단계 분반</th><th>6단계 분반</th><th>분반별 정원</th><th>운영</th><th>담당 교과</th><th>특별실</th></tr></thead>
@@ -670,7 +778,12 @@ function renderClassSectionsTeachers() {
       <label>특별실 수 <input class="cs-text cs-wide" type="text" id="classSectionsRooms" value="${esc(Object.entries(settings.rooms).map(([key, value]) => `${key}=${value}`).join(", "))}" placeholder="과학실=3, 컴퓨터실=1" data-focus-key="cs-rooms" aria-label="특별실 수(이름=수)"></label>
       <label>분반 인원 차이 경고 <input class="cs-num" type="number" min="1" max="20" id="classSectionsSpreadWarn" value="${settings.spreadWarn}" data-focus-key="cs-spread" aria-label="분반 인원 차이 경고 기준(명)">명 초과</label>
       <label><input type="checkbox" id="classSectionsUseHours"${settings.useHoursTeachers ? " checked" : ""}> 교사 명단이 없으면 5단계 교과별 교사 수로 블록 제한</label>
-    </div></section>`;
+    </div></section>
+    <section><h3>블록 시간 추천 격자</h3><div class="cs-fields">
+      <label>요일 <input class="cs-text" type="text" id="classSectionsGridDays" value="${esc(settings.gridDays)}" data-focus-key="cs-grid-days" aria-label="시간 격자 요일(쉼표로 구분)"></label>
+      <label>하루 교시 수 <input class="cs-num" type="number" min="1" max="12" id="classSectionsGridPeriods" value="${settings.gridPeriods}" data-focus-key="cs-grid-periods" aria-label="하루 교시 수"></label>
+      ${["2", "3"].map((grade) => `<label>${grade}학년 공통 과목용 남길 시간 <input class="cs-num" type="number" min="0" max="60" data-cs-reserve="${grade}" value="${esc(settings.reserve[grade] ?? "")}" data-focus-key="cs-reserve-${grade}" aria-label="${grade}학년 공통 과목용 남길 시간(주당)"></label>`).join("")}
+    </div><p class="cs-note">고정 시간(창체·진로 등)은 블록에 쓰지 않습니다. 남길 시간은 학교 지정·학급 단위 과목 수업용으로 비워 둘 주당 시간입니다.</p></section>`;
 }
 
 // ---- 이벤트 ----
@@ -717,6 +830,9 @@ function classSectionsHandleClick(event) {
   if (target.id === "classSectionsCompare") return void classSectionsSolveCurrent("compare");
   if (target.id === "classSectionsPartial") return void classSectionsSolveCurrent("partial");
   if (target.id === "classSectionsSolveSemester") return void classSectionsSolveSemesterCurrent();
+  if (target.id === "classSectionsRecommendTimes") return void classSectionsRecommendTimesCurrent();
+  if (target.id === "classSectionsApplyTimes") return classSectionsApplyTimes();
+  if (target.id === "classSectionsDiscardTimes") { CLASS_SECTIONS_VIEW.timesProposal = null; return renderClassSections(); }
   if (target.dataset.csUseMode) {
     const context = classSectionsCurrent();
     const compare = CLASS_SECTIONS_VIEW.compare;
@@ -764,6 +880,12 @@ function classSectionsHandleChange(event) {
   else if (data.csUnitRoom !== undefined) { if (!classSectionsPlain(entry.classUnit.assign)) entry.classUnit.assign = {}; entry.classUnit.assign[data.csUnitRoom] = target.value; }
   else if (target.id === "classSectionsStudentSearch") { CLASS_SECTIONS_VIEW.search = target.value; return renderClassSections(); }
   else if (target.id === "classSectionsClassMap") return void classSectionsReadClassMap(target.files?.[0]);
+  else if (data.csProposal !== undefined) {
+    // 추천안 칸 고치기: 적용 전까지 화면 메모리에만 둔다.
+    const proposal = CLASS_SECTIONS_VIEW.timesProposal;
+    if (proposal) proposal.edits[data.csProposal] = target.value.trim();
+    return;
+  }
   else return;
   classSectionsChanged();
 }
@@ -814,6 +936,9 @@ function classSectionsHandleTeacherEvent(event) {
       settings.rooms = Object.fromEntries(target.value.split(/[,\n]+/).map((item) => item.split("=").map((part) => part.trim())).filter(([key, value]) => key && Number(value) >= 0).map(([key, value]) => [key, Number(value) || 0]));
     } else if (target.id === "classSectionsSpreadWarn") settings.spreadWarn = Math.max(1, Number(target.value) || 4);
     else if (target.id === "classSectionsUseHours") settings.useHoursTeachers = target.checked;
+    else if (target.id === "classSectionsGridDays") settings.gridDays = target.value.split(/[,\s]+/).filter((day) => /^[월화수목금토]$/.test(day)).join(",") || "월,화,수,목,금";
+    else if (target.id === "classSectionsGridPeriods") settings.gridPeriods = Math.max(1, Math.min(12, Number(target.value) || 7));
+    else if (data.csReserve) { if (target.value === "") delete settings.reserve[data.csReserve]; else settings.reserve[data.csReserve] = Math.max(0, Number(target.value) || 0); }
     else return;
   }
   if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();

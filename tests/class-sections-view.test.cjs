@@ -141,3 +141,29 @@ test("solving every group of a semester together: inputs skip saved occupancy, v
   assert.match(view, /id="classSectionsSolveSemester"[\s\S]*?>전 학년 함께 다시 계산</);
   assert.match(view, /kind: "solveAll"/);
 });
+
+test("block time recommendation input: department demand per block (estimate before solving, real blocks after), apply writes block times", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key);
+  const settings = ctx.classSectionsSettings();
+  assert.equal(settings.gridDays, "월,화,수,목,금");
+  assert.equal(settings.gridPeriods, 7);
+  const estimate = plain(ctx.classSectionsBlockDemand("1", group, entry, settings));
+  assert.deepEqual(estimate.map((block) => block.id), ["a", "b"]);
+  assert.equal(estimate[0].hours, 3);
+  const total = (blocks) => blocks.reduce((sum, block) => sum + Object.values(block.departments).reduce((a, b) => a + b, 0), 0);
+  assert.equal(total(estimate), 2 + 3 + 2, "every section counted once");
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  ctx.classSectionsSaveResult(entry, ctx.classSectionsSolve({ ...input, maxSectionsPerBlock: 5 }), input, group, { locked: true });
+  const real = plain(ctx.classSectionsBlockDemand("1", group, entry, settings));
+  assert.equal(total(real), 7);
+  const recommended = ctx.classSectionsRecommendTimes({ days: ["월", "화", "수", "목", "금"], periods: 7, seed: 1, groups: [{ groupId: group.key, label: group.label, grade: "2", blocks: real }] });
+  ctx.CLASS_SECTIONS_VIEW.timesProposal = { round: "1", semester: "1", result: recommended, edits: { [`${group.key}|b`]: "화1,목1,금1" }, labels: {} };
+  ctx.renderClassSections = () => {};
+  ctx.persistStateSoon = () => {};
+  ctx.classSectionsApplyTimes();
+  assert.equal(entry.blockTimes.b, "화1,목1,금1", "edited cell wins");
+  assert.equal(entry.blockTimes.a.split(",").length, 3);
+  assert.equal(ctx.CLASS_SECTIONS_VIEW.timesProposal, null);
+});

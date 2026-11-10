@@ -487,3 +487,131 @@ test("performance: a 338-student choose-3 group (blocks of 11) and a 308-student
   assert.deepEqual(errors(r31.issues), []);
   assert.ok(t31 < 15000, `3-1 took ${t31}ms`);
 });
+
+test("teacher assignment: swap search (augmenting path) never does worse than plain greedy and fixes some cases", () => {
+  const ctx = context();
+  const random = rng(77);
+  let better = 0;
+  for (let trial = 0; trial < 60; trial += 1) {
+    const teachers = Array.from({ length: 4 }, (_, i) => ({ id: `T${i}`, name: `T${i}`, departments: ["A", "B", "C"].filter(() => random() < 0.5) }));
+    const sections = Array.from({ length: 9 }, (_, i) => ({ id: `s${i}`, courseKey: "x", courseName: "x", department: ["A", "B", "C"][Math.floor(random() * 3)],
+      credits: 3, blockKey: `g:${"abc"[Math.floor(random() * 3)]}`, times: [] }));
+    const count = (depth) => Object.keys(ctx.classSectionsAssignTeachers({ teachers, sections, depth }).teacherOf).length;
+    const plainCount = count(0);
+    const swapped = count(3);
+    assert.ok(swapped >= plainCount, `trial ${trial}`);
+    if (swapped > plainCount) better += 1;
+    // 결과는 늘 유효: 같은 블록에 한 교사 두 분반 없음, 자격 있음
+    const result = ctx.classSectionsAssignTeachers({ teachers, sections, depth: 3 });
+    const seen = new Set();
+    for (const [sectionId, teacherId] of Object.entries(result.teacherOf)) {
+      const section = sections.find((item) => item.id === sectionId);
+      assert.ok(teachers.find((teacher) => teacher.id === teacherId).departments.includes(section.department));
+      const key = `${teacherId}|${section.blockKey}`;
+      assert.ok(!seen.has(key));
+      seen.add(key);
+    }
+  }
+  assert.ok(better > 0, "the swap search helps in at least one random case");
+});
+
+test("solveAll tries several group orders, keeps results reproducible, and explains teacher shortages by subject and time", () => {
+  const ctx = context();
+  const make = (grade, seed, choose, students) => {
+    const input = synthetic({ courses: SCIENCE, choose, students, capacity: 30, sizeFor: 27, seed, grade });
+    input.groupId = `1:${grade}:g`; input.label = `${grade + 1}학년 1학기`;
+    input.blocks = Array.from({ length: choose }, (_, i) => ({ id: "abc"[i], times: [["월1", "수2"], ["화3", "목4"], ["금1", "금2"]][i] }));
+    return input;
+  };
+  const g2 = make(1, 41, 2, 100);
+  const g3 = make(2, 42, 3, 60);
+  const teachers = [];
+  for (const [dept, n] of [["물리", 3], ["화학", 3], ["생명", 3], ["지구", 2]]) for (let k = 1; k <= n; k += 1) teachers.push({ id: `${dept}${k}`, name: `${dept}${k}`, departments: [dept] });
+  teachers[0].unavailable = [{ day: "월", period: 1, reason: "육아시간" }];
+  const spec = { groups: [g2, g3], teachers, fixedSlots: [{ label: "창체", times: ["금6", "금7"], teacherIds: teachers.map((t) => t.id) }], seed: 5 };
+  const noTime = (value) => JSON.parse(JSON.stringify(value, (key, item) => (key === "elapsedMs" ? undefined : item)));
+  const first = noTime(ctx.classSectionsSolveAll(spec));
+  const second = noTime(ctx.classSectionsSolveAll(spec));
+  assert.deepEqual(first, second, "same seed → same result");
+  assert.ok(first.orders.length >= 2, "several orders tried");
+  assert.equal(first.groups.map((group) => group.groupId).join(), "1:1:g,1:2:g", "results come back in input order");
+  const best = first.orders.find((order) => order.label === first.chosenOrder);
+  for (const order of first.orders) {
+    const [a, b, c] = order.score;
+    assert.ok(best.score[0] < a || (best.score[0] === a && (best.score[1] < b || (best.score[1] === b && best.score[2] <= c))), "chosen order is the best");
+  }
+  // 교사를 줄이면 '어느 교과가 어느 시간에 몇 명 모자람'
+  const few = { ...spec, teachers: teachers.filter((teacher) => teacher.departments[0] !== "지구" || teacher.id === "지구1") };
+  const short = plain(ctx.classSectionsSolveAll(few));
+  const shortage = short.shortages.find((item) => item.department === "지구");
+  if (short.issues.some((issue) => issue.type === "teacher-missing")) {
+    assert.ok(shortage, JSON.stringify(short.issues.slice(0, 3)));
+    assert.match(shortage.message, /^지구: .요일 \d교시 분반 \d+개\(.+\) > 가능한 교사 1명 → \d+명 모자람$/);
+  }
+});
+
+test("block time recommendation: no clash within a grade, fixed slots kept free, spread over days, teacher limits across grades", () => {
+  const ctx = context();
+  const teachers = [];
+  for (let k = 1; k <= 4; k += 1) teachers.push({ id: `p${k}`, departments: ["물리"], unavailable: k === 1 ? [{ day: "월", period: 1 }] : [] });
+  for (let k = 1; k <= 3; k += 1) teachers.push({ id: `c${k}`, departments: ["화학"] });
+  const spec = {
+    days: ["월", "화", "수", "목", "금"], periods: 7, seed: 3, teachers, reserve: { "2": 10, "3": 6 },
+    fixedSlots: [{ label: "창체·진로", times: ["금6", "금7"], teacherIds: teachers.map((t) => t.id) }],
+    groups: [
+      { groupId: "g2", label: "2학년 1학기 택3", grade: "2", blocks: "abc".split("").map((id) => ({ id, hours: 3, departments: { 물리: 2, 화학: 2 } })) },
+      { groupId: "g3", label: "3학년 1학기 택5", grade: "3", blocks: "abcde".split("").map((id) => ({ id, hours: 3, departments: { 물리: 2, 화학: 1 } })) }
+    ]
+  };
+  const result = plain(ctx.classSectionsRecommendTimes(spec));
+  assert.deepEqual(result, (() => { const again = plain(ctx.classSectionsRecommendTimes(spec)); return { ...again, elapsedMs: result.elapsedMs }; })(), "reproducible");
+  assert.deepEqual(result.shortages, []);
+  assert.deepEqual(result.issues.filter((issue) => issue.severity === "error"), []);
+  const demand = new Map();
+  for (const group of result.groups) {
+    const grade = spec.groups.find((item) => item.groupId === group.groupId).grade;
+    const used = new Set();
+    for (const block of group.blocks) {
+      assert.equal(block.times.length, 3);
+      assert.equal(new Set(block.times.map((time) => time.day)).size, 3, "a block meets on three different days");
+      for (const time of block.times) {
+        const slot = `${time.day}:${time.period}`;
+        assert.ok(!["금:6", "금:7"].includes(slot), "fixed creative slots stay free");
+        assert.ok(!used.has(slot), `${grade}학년 ${slot} clash`);
+        used.add(slot);
+        const departments = spec.groups.find((item) => item.groupId === group.groupId).blocks.find((item) => item.id === block.id).departments;
+        for (const [dept, n] of Object.entries(departments)) demand.set(`${dept}|${slot}`, (demand.get(`${dept}|${slot}`) || 0) + n);
+      }
+    }
+  }
+  for (const [key, count] of demand) {
+    const [dept, slot] = key.split("|");
+    const limit = dept === "물리" ? (slot === "월:1" ? 3 : 4) : 3;
+    assert.ok(count <= limit, `${key} ${count} > ${limit}`);
+  }
+  assert.equal(result.free["2"], 33 - 9);
+  // 교사가 모자라면 시각·교과별로 설명
+  const tight = plain(ctx.classSectionsRecommendTimes({ ...spec, teachers: teachers.filter((t) => t.id !== "c2" && t.id !== "c3") }));
+  assert.ok(tight.shortages.length > 0);
+  assert.match(tight.shortages[0].message, /^화학: .요일 \d교시 분반 \d개 > 가능한 교사 1명 → \d명 모자람$/);
+});
+
+test("regression: synthetic real-size groups keep their section totals and block sizes at 35 (32·33·52·53-type checks)", () => {
+  const ctx = context();
+  const cases = [
+    { subjects: EIGHT.map((course) => course.name), choose: 3, students: 338, comboCount: 30, seed: 5, total: 33 },
+    { subjects: ["확률과 통계", "법과 사회", "윤리와 사상", "국제 관계의 이해", "역학과 에너지", "화학 반응의 세계", "생물의 유전"], choose: 3, students: 338, comboCount: 18, seed: 6, total: 32 },
+    { subjects: "ABCDEFGHIJKLMNOP".split("").map((letter) => `과목${letter}`), choose: 5, students: 308, comboCount: 127, seed: 9, total: 52 },
+    { subjects: "ABCDEFGHIJKLMNO".split("").map((letter) => `교과${letter}`), choose: 5, students: 308, comboCount: 108, seed: 10, total: 53 }
+  ];
+  for (const item of cases) {
+    const input = ctx.classSectionsFromCombos(comboSynthetic({ ...item, capacity: 35, maxSectionsPerBlock: 11 }));
+    const total = input.courses.reduce((sum, course) => sum + course.sections, 0);
+    assert.equal(total, item.total, "synthetic section total (35명 기준)");
+    const result = plain(ctx.classSectionsSolve(input));
+    assert.equal(result.unassigned.length, 0, `${item.seed}: ${result.explain.summary}`);
+    assert.equal(result.metrics.blockSections.reduce((sum, value) => sum + value, 0), total);
+    assert.ok(result.metrics.blockSections.every((value) => value <= 11));
+    assert.equal(result.explain.feasible, true);
+  }
+});
