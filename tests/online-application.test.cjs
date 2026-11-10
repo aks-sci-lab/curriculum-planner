@@ -1690,6 +1690,52 @@ test("results: a student who picked a once-only course in both semesters is foun
   assert.equal(ctx.applicationSameCourseTwice(merged.students[0]).length, 1);
 });
 
+// 학기제: 편제표 한 행에 학기 칸 3·3(운영학점 6)으로 적힌 묶음 밖 과목을 학기로 나눠 신청하면 그 줄의 학점은 학기 칸 값(3).
+test("a one-row two-semester course carries per-semester credits; split lines and merged results use the semester cell value", () => {
+  const ctx = sameCourseContext();
+  vm.runInContext(functionSource("function applicationSeparateNames(", "function aggregateCourseDisplayName("), ctx);
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("), ctx);
+  const subjects = ctx.collectApplicationSubjects({ includeExcluded: true, currentGrade: "2" });
+  const byName = Object.fromEntries(subjects["3"].map((item) => [item.subject, item]));
+  assert.equal(byName["한 행 두 학기"].credit, 6, "행 학점(운영학점)은 그대로 둔다");
+  assert.deepEqual(plain(byName["한 행 두 학기"].semesterCredits), { "1": 3, "2": 3 });
+  assert.equal(byName["한 행 두 학기"].onceCredit, 3);
+  assert.equal(byName["기하"].credit, 3, "학기 하나인 과목은 그대로");
+  assert.equal(byName["기하"].onceCredit, undefined);
+  const merged = ctx.mergeApplications([
+    { grade: "2", classroom: "1", number: "1", name: "가상", selections: ["한 행 두 학기 (1학기)", "기하"] },
+    { grade: "2", classroom: "1", number: "2", name: "가상둘", selections: ["한 행 두 학기"] }
+  ], subjects);
+  assert.deepEqual(plain(merged.errors), []);
+  const first = merged.students.find((student) => student.number === "1");
+  const picked = Object.fromEntries(first.selections.map((course) => [course.name, course]));
+  assert.equal(picked["한 행 두 학기 (1학기)"].credits, 3, "학기로 나눈 줄 = 학기 칸 학점");
+  assert.equal(picked["한 행 두 학기 (1학기)"].applicationSubject.credit, 3);
+  assert.equal(picked["기하"].credits, 3);
+  assert.equal(first.totalCredits, 6);
+  const second = merged.students.find((student) => student.number === "2");
+  assert.equal(second.selections[0].credits, 3, "학기 없이 고른 경우도 학기 칸 값이 같으면 그 값(한 학기만 듣는다)");
+});
+
+test("choice-block (택n) semesters keep the row credit; only free semesters take the semester cell value", () => {
+  const ctx = sameCourseContext();
+  ctx.curriculumChoiceBlocks = () => [{ startRow: 12, endRow: 12, grade: "3", semester: "1", credit: 4 }];
+  vm.runInContext(functionSource("function mergeApplications(", "function downloadApplicationForm("), ctx);
+  const subjects = ctx.collectApplicationSubjects({ includeExcluded: true, currentGrade: "2" });
+  const item = subjects["3"].find((entry) => entry.subject === "한 행 두 학기");
+  assert.deepEqual(plain(item.semesterCredits), { "2": 3 }, "묶음 학기는 학기 칸 학점을 쓰지 않는다");
+  assert.equal(item.onceCredit, undefined);
+  const merged = ctx.mergeApplications([{ grade: "2", classroom: "1", number: "1", name: "가상", selections: ["한 행 두 학기 (1학기)", "한 행 두 학기 (2학기)"] }], subjects);
+  const picked = Object.fromEntries(merged.students[0].selections.map((course) => [course.name, course.credits]));
+  assert.deepEqual(plain(picked), { "한 행 두 학기 (1학기)": 6, "한 행 두 학기 (2학기)": 3 });
+});
+
+test("selection groups and the step-2 list split two-semester courses with the semester credit", () => {
+  const groups = fs.readFileSync(path.join(__dirname, "..", "course-groups.js"), "utf8");
+  assert.match(groups, /credit: semesters\.length > 1 \? \(course\.semesterCredits\?\.\[semester\] \|\| course\.credit\) : course\.credit/);
+  assert.match(frontend, /subject: `\$\{item\.subject\} \(\$\{key\}학기\)`, credit: item\.semesterCredits\?\.\[key\] \|\| item\.credit/);
+});
+
 test("result validation shows a red (non-blocking) error for same course in two semesters and asks with the app dialog before importing", async () => {
   const importer = fs.readFileSync(path.join(__dirname, "..", "result-import.js"), "utf8");
   const ctx = vm.createContext({ classifyApplicationRecords: () => [], getApplicationGroupSettings: () => [],
