@@ -1235,13 +1235,21 @@ function updateHoursSetting(target) {
   return true;
 }
 
+// 5단계 결과 안내: 앱 알림(어느 단계에서도 보임) + 상태 줄. 전역 'status'(window.status로 흡수됨)를 쓰지 않는다.
+function hoursNotify(message, ok = true) {
+  if (typeof showAppToast === "function") showAppToast(message, ok ? "success" : "error");
+  const node = typeof document !== "undefined" ? document.getElementById("status") : null;
+  if (!node) return;
+  node.style.color = ok ? "#287956" : "#a44939";
+  node.textContent = message;
+}
+
 function loadPreviousHoursSettings() {
   const year = hoursTargetYear();
   const previousYear = String(Number(year) - 1);
   const previous = state.hoursStats?.[previousYear];
   if (!hoursPlainObject(previous)) {
-    status.style.color = "#a44939";
-    status.textContent = `${previousYear}학년도 시수 통계 자료가 없습니다. 교사 수와 전년도 평균은 직접 입력하세요.`;
+    hoursNotify(`${previousYear}학년도 시수 통계 자료가 없습니다. 교사 수와 전년도 평균은 직접 입력하세요.`, false);
     return;
   }
   const settings = hoursSettings(year, true);
@@ -1271,10 +1279,9 @@ function loadPreviousHoursSettings() {
   persistState();
   renderHoursStats();
   renderWorkspaceContext();
-  status.style.color = "#287956";
-  status.textContent = Object.keys(source.lastAverages).length
+  hoursNotify(Object.keys(source.lastAverages).length
     ? `${previousYear}학년도 교사 수·담당 교과와 평균 시수(전년도 값)를 불러왔습니다.`
-    : `${previousYear}학년도 교사 수·담당 교과를 불러왔습니다. 전년도 평균은 그 해 엑셀을 내려받은 기록이 없어 직접 입력하세요.`;
+    : `${previousYear}학년도 교사 수·담당 교과를 불러왔습니다. 전년도 평균은 그 해 엑셀을 내려받은 기록이 없어 직접 입력하세요.`, true);
 }
 
 // '추천 적용'·'공통 시수 자동 배분' 직전 값을 한 단계 기억해 '되돌리기'로 돌린다.
@@ -1286,16 +1293,14 @@ function hoursFinishChange(message) {
   persistState();
   renderHoursStats();
   renderWorkspaceContext();
-  status.style.color = "#287956";
-  status.textContent = message;
+  hoursNotify(message, true);
 }
 
 function applyHoursRecommendation() {
   const stats = computeHoursStats();
   const recommendation = stats.recommendation;
   if (!recommendation?.ok) {
-    status.style.color = "#a44939";
-    status.textContent = recommendation?.reason || "교사 수 추천을 계산하지 못했습니다.";
+    hoursNotify(recommendation?.reason || "교사 수 추천을 계산하지 못했습니다.", false);
     return;
   }
   const changes = recommendation.rows.filter((row) => !row.locked && row.recommended !== row.current);
@@ -1320,8 +1325,7 @@ function autoAllocateHoursCommon(group) {
     members.map((member) => ({ id: member.id, hours: member.hours, teachers: member.teachers || 0 })),
     common.items.map((item) => ({ subject: item.subject, semester: item.semester, credit: item.credit, classes: item.classes })));
   if (!result.ok) {
-    status.style.color = "#a44939";
-    status.textContent = `${group} 공통 시수 자동 배분: ${result.reason}`;
+    hoursNotify(`${group} 공통 시수 자동 배분: ${result.reason}`, false);
     return;
   }
   const settings = hoursSettings(stats.year, true);
@@ -1952,8 +1956,7 @@ function downloadHoursStats() {
   try {
     stats = computeHoursStats();
   } catch (error) {
-    status.style.color = "#a44939";
-    status.textContent = error.message;
+    hoursNotify(error.message, false);
     return;
   }
   if (!stats.items.length) return;
@@ -1971,8 +1974,7 @@ function downloadHoursStats() {
   persistState();
   const sheets = buildHoursWorkbookSheets(stats);
   downloadBlob(createWorkbookBlob(sheets, { stylesXml: sheets.stylesXml }), `${stats.year}학년도_교과별_시수통계.xlsx`);
-  status.style.color = "#287956";
-  status.textContent = `${stats.year}학년도 교과별 시수 통계를 내려받았습니다. 교과별 평균은 다음 해 '전년도 평균'으로 불러올 수 있습니다.`;
+  hoursNotify(`${stats.year}학년도 교과별 시수 통계를 내려받았습니다. 교과별 평균은 다음 해 '전년도 평균'으로 불러올 수 있습니다.`, true);
 }
 
 function initHoursStats() {

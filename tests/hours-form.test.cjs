@@ -307,3 +307,20 @@ test("createWorkbookBlob: 틀 고정 D5는 위 4행·왼쪽 3열, 세로 인쇄�
   assert.match(files["xl/worksheets/sheet2.xml"], /orientation="landscape" fitToWidth="1" fitToHeight="0"/);
   assert.equal(ctx.createWorkbookBlob([{ name: "x", rows: [] }])["xl/styles.xml"], "REPORT");
 });
+
+test("5단계 '전년도 설정 불러오기' 등 결과 안내는 앱 알림·상태 줄로 보인다(선언 안 된 status → window.status로 사라지지 않게)", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "hours-stats.js"), "utf8");
+  assert.doesNotMatch(source, /(^|[^.\w])status\.(style|textContent)/m, "hours-stats.js는 전역 status를 쓰지 않는다");
+  const toasts = [];
+  const node = { style: {}, textContent: "" };
+  const ctx = vm.createContext({
+    state: { hoursStats: {} }, document: { getElementById: (id) => id === "status" ? node : null },
+    showAppToast: (message, kind) => toasts.push([message, kind]), hoursTargetYear: () => "2027", hoursPlainObject: (value) => !!value && typeof value === "object"
+  });
+  vm.runInContext(source.slice(source.indexOf("function hoursNotify("), source.indexOf("// '추천 적용'")), ctx);
+  ctx.loadPreviousHoursSettings();
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0][0], /2026학년도 시수 통계 자료가 없습니다/);
+  assert.equal(toasts[0][1], "error");
+  assert.equal(node.textContent, toasts[0][0]);
+});

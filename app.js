@@ -4125,27 +4125,69 @@
         const earlier = rounds.filter((item) => Number(item) < Number(round)).sort((a, b) => Number(b) - Number(a));
         const data = state.rounds?.[round];
         if (earlier.length && data?.courses?.length) {
+          // 같은 과목 = 같은 현 학년 + 같은 학기 + 같은 그룹 + 같은 과목명. normalizeResultCourseName은 '(2학기)' 꼬리표를 떼므로
+          // 학기는 따로 맞춘다(두 학기 과목의 한 학기만 폐강해도 다른 학기로 번지지 않게). 키가 겹쳐 하나로 정할 수 없으면 이어받지 않는다.
           const normalize = (name) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name || "").replace(/\s+/g, "");
-          const courseName = (course) => course.subjectName || course.applicationSubject?.subject || course.name;
+          const courseName = (course) => course.applicationSubject?.subject || course.subjectName || course.name;
+          const semesterTag = (text) => String(text || "").match(/[（(]\s*([12])\s*학기\s*[)）]/)?.[1] || "";
+          const semesterOf = (course, roundData) => {
+            const listed = String(course.applicationSubject?.semester ?? "");
+            if (/^[12]$/.test(listed)) return listed;
+            const tag = semesterTag(course.applicationSubject?.subject) || semesterTag(course.name);
+            if (tag) return tag;
+            const forced = roundData?.semesterAssignments?.[String(course.column)];
+            if (forced === "1" || forced === "2") return forced;
+            if (course.semesterKey === "1" || course.semesterKey === "2") return course.semesterKey;
+            return listed.includes("·") ? "1·2" : "";
+          };
+          const groupOf = (course, roundData) => {
+            const label = course.applicationSubject?.groupName ||
+              (typeof parseAssignedGroupLabel === "function" ? parseAssignedGroupLabel(roundData?.groupAssignments?.[String(course.column)] || "").category : "");
+            return String(label || "").replace(/\s+/g, "");
+          };
+          const identity = (course, grade, roundData) => `${grade}|${semesterOf(course, roundData)}|${normalize(courseName(course))}`;
+          // 같은 학년·학기·이름 과목이 여럿이면(다른 그룹) 그룹까지 같아야 하고, 그래도 여럿이면 이어받지 않는다.
+          const index = (roundData) => {
+            const map = new Map();
+            for (const course of roundData.courses) {
+              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
+              for (const grade of grades) {
+                const id = identity(course, grade, roundData);
+                if (!map.has(id)) map.set(id, []);
+                map.get(id).push({ course, grade, group: groupOf(course, roundData) });
+              }
+            }
+            return map;
+          };
+          const pick = (list, group) => {
+            if (list.length === 1) return list[0];
+            const same = group ? list.filter((item) => item.group === group) : [];
+            return same.length === 1 ? same[0] : null;
+          };
+          const currentIndex = index(data);
           for (const prev of earlier) {
             const prevData = state.rounds?.[prev];
             if (!prevData?.courses?.length) continue;
-            const byName = new Map();
+            const prevIndex = index(prevData);
+            const decided = new Map();
             for (const [key, verdict] of Object.entries(state.roundClosures?.[prev] || {})) {
               if (verdict !== "open" && verdict !== "closed") continue;
               const separator = key.indexOf(":");
-              const grade = key.slice(0, separator);
-              const course = prevData.courses.find((item) => String(item.column) === key.slice(separator + 1) &&
-                (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === grade));
-              if (course) byName.set(`${grade}:${normalize(courseName(course))}`, verdict);
+              decided.set(key, { grade: key.slice(0, separator), column: key.slice(separator + 1), verdict });
             }
-            for (const course of data.courses) {
-              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
-              for (const grade of grades) {
-                const key = `${grade}:${course.column}`;
-                const verdict = byName.get(`${grade}:${normalize(courseName(course))}`);
-                if (!verdict || Object.hasOwn(merged, key)) continue;
-                merged[key] = verdict;
+            for (const [id, list] of currentIndex) {
+              const before = prevIndex.get(id) || [];
+              for (const item of list) {
+                const key = `${item.grade}:${item.course.column}`;
+                if (Object.hasOwn(merged, key)) continue;
+                // 지금 차수에서도 같은 키 과목이 여럿이면 그룹으로 하나를 고를 수 있을 때만.
+                if (list.length > 1 && !(item.group && list.filter((other) => other.group === item.group).length === 1)) continue;
+                const match = pick(before, item.group);
+                if (!match) continue;
+                if (item.group && match.group && item.group !== match.group) continue;
+                const decision = decided.get(`${match.grade}:${match.course.column}`);
+                if (!decision) continue;
+                merged[key] = decision.verdict;
                 inherited.set(key, prev);
               }
             }
