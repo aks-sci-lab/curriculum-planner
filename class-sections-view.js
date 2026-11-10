@@ -435,7 +435,7 @@ function classSectionsCompactResult(result, input, draft) {
     version: result.version, signature: classSectionsSignature(input), createdAt: new Date().toISOString(), draft: Boolean(draft),
     mode: result.mode, seed: result.seed, blocks: result.blocks, sections: result.sections, assign: result.assign, unassigned: result.unassigned,
     metrics: result.metrics, explain: result.explain, teacherOf: result.teacherOf || {}, placement: result.placement,
-    issues: (result.issues || []).slice(0, 200), elapsedMs: result.elapsedMs, roomRenames: result.roomRenames || []
+    issues: (result.issues || []).slice(0, 200), elapsedMs: result.elapsedMs, roomRenames: result.roomRenames || [], closedRequests: result.closedRequests || []
   };
 }
 
@@ -917,6 +917,30 @@ function classSectionsOtherChangedHtml(round, group, result) {
   return `<p class="cs-note is-warn" id="classSectionsOtherChanged">다른 학년 편성(${classSectionsEsc(newer.map((item) => item.label).join(", "))})이 이 결과보다 나중에 바뀌어 학년 간 교사 겹침을 다시 확인해야 합니다. ‘전 학년 함께 다시 계산’을 권합니다.</p>`;
 }
 
+var CLASS_SECTIONS_UNASSIGNED_REASONS = { capacity: "정원 부족", "no-block": "같은 블록 과목", closed: "폐강", "too-many": "블록 수 초과", "class-unit-other-room": "학급 단위 과목(그 반은 이동)" };
+
+// 내보내기 '확인 필요'·'재신청·미배정' 시트: 택n보다 적은 과목 행만 들어가는 학생(미배정·폐강 재신청·이동 반의 학급 단위 과목).
+// 반환 rows는 [현 학년-반-번호, 빠진 과목, 사유] 목록, 첫 줄은 안내 문장.
+function classSectionsRetakeRows(result, choice, names = new Map()) {
+  const byStudent = new Map();
+  for (const item of [...(result.unassigned || []), ...(result.closedRequests || [])]) {
+    if (!byStudent.has(item.studentKey)) byStudent.set(item.studentKey, { courses: [], reasons: new Set() });
+    const entry = byStudent.get(item.studentKey);
+    const course = classSectionsDisplayName(item.courseKey);
+    if (!entry.courses.includes(course)) entry.courses.push(course);
+    entry.reasons.add(CLASS_SECTIONS_UNASSIGNED_REASONS[item.reason] || item.reason);
+  }
+  if (!byStudent.size) return null;
+  const reasons = [...new Set([...byStudent.values()].flatMap((entry) => [...entry.reasons]))];
+  const keys = [...byStudent.keys()].sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+  return {
+    count: keys.length,
+    note: `재신청이 필요한 학생 ${keys.length}명(${reasons.join(", ")}) — 이 학생들은 택${choice}보다 적은 과목 행만 들어 있습니다.`,
+    header: ["현 학년-반-번호", "성명", "빠진 과목", "사유"],
+    rows: keys.map((key) => { const entry = byStudent.get(key); return [key, names.get(key) || "", entry.courses.join(", "), [...entry.reasons].join(", ")]; })
+  };
+}
+
 function classSectionsResultHtml(round, group, entry, result, settings) {
   const esc = classSectionsEsc;
   const explain = result.explain || {};
@@ -950,7 +974,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
     }).join("");
     return `<div class="cs-block"><h5>${esc(block.letter)}블록 <span>${block.sectionIds.length}개${block.maxSections ? ` / 최대 ${block.maxSections}` : ""}</span>${block.times?.length ? ` <em>${esc(classSectionsTimesText(block.times))}</em>` : ""}</h5><ul>${cards}</ul></div>`;
   }).join("");
-  const unassigned = result.unassigned.slice(0, 200).map((item) => `<tr><td>${esc(item.studentKey)}</td><td>${esc(item.courseKey)}</td><td>${esc({ capacity: "정원 부족", "no-block": "같은 블록 과목", closed: "폐강", "too-many": "블록 수 초과", "class-unit-other-room": "학급 단위 과목(그 반은 이동)" }[item.reason] || item.reason)}</td></tr>`).join("");
+  const unassigned = result.unassigned.slice(0, 200).map((item) => `<tr><td>${esc(item.studentKey)}</td><td>${esc(item.courseKey)}</td><td>${esc(CLASS_SECTIONS_UNASSIGNED_REASONS[item.reason] || item.reason)}</td></tr>`).join("");
   const query = CLASS_SECTIONS_VIEW.search.trim();
   let lookup = "";
   if (query) {
@@ -1096,7 +1120,13 @@ function classSectionsChanged(rerender = true) {
   if (rerender) renderClassSections();
 }
 
-function classSectionsApplySuggestion(index) {
+// 확인 창: 앱 대화상자(appConfirm, #appConfirmDialog)가 있으면 그것, 없으면(테스트·옛 화면) 브라우저 confirm.
+function classSectionsConfirm(text, options) {
+  if (typeof appConfirm === "function") return appConfirm(text, options);
+  return Promise.resolve(typeof window === "undefined" || typeof window.confirm !== "function" || window.confirm(text));
+}
+
+async function classSectionsApplySuggestion(index) {
   const context = classSectionsCurrent();
   const item = context?.entry?.sectionResult?.explain?.suggestions?.[index];
   if (!item) return;
@@ -1123,15 +1153,13 @@ function classSectionsApplySuggestion(index) {
     entry.blocks = item.blocks;
   } else if (item.type === "class-unit") {
     // 희망과 다른 학생이 생기면 미리 묻는다(제안 문구에도 n명(%)을 보임).
-    if (item.mismatched > 0 && typeof window !== "undefined" && typeof window.confirm === "function"
-      && !window.confirm(`${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 바꾸면 희망과 다른 학생이 ${item.estimated ? "약 " : ""}${item.mismatched}명(${item.total ? Math.round(item.mismatched / item.total * 100) : 0}%) 생깁니다${item.retake ? `(그중 이동 반이라 그 과목을 못 들어 재신청이 필요한 학생 ${item.estimated ? "약 " : ""}${item.retake}명)` : ""}. 적용할까요?`)) return;
+    if (item.mismatched > 0 && !(await classSectionsConfirm(`${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 바꾸면 희망과 다른 학생이 ${item.estimated ? "약 " : ""}${item.mismatched}명(${item.total ? Math.round(item.mismatched / item.total * 100) : 0}%) 생깁니다${item.retake ? `(그중 이동 반이라 그 과목을 못 들어 재신청이 필요한 학생 ${item.estimated ? "약 " : ""}${item.retake}명)` : ""}. 적용할까요?`, { title: "학급 단위로 바꾸기", ok: "적용" }))) return;
     // 블록 수는 제안을 확인할 때와 같은 규칙(모든 반이 학급 단위면 택n−1, 이동 반이 남으면 택n)을 따른다.
     const modes = classSectionsCourseConf(classSectionsSettings(), "courseModes", context.group.grade);
     for (const key of item.courseKeys || [item.courseKey]) modes[key] = "class";
   } else if (item.type === "class-unit-rooms") {
     // 이동 반까지 그 과목 학급 단위로: 학급 수 = 내년 학급 수, 손으로 '이동'으로 둔 반 지정은 지운다.
-    if (item.mismatched > 0 && typeof window !== "undefined" && typeof window.confirm === "function"
-      && !window.confirm(`이동 반까지 ${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 하면 그 반에서 이 과목을 고르지 않은 학생 ${item.mismatched}명이 희망과 다르게 됩니다(재신청이 필요한 학생 ${item.retake || 0}명은 없어짐). 적용할까요?`)) return;
+    if (item.mismatched > 0 && !(await classSectionsConfirm(`이동 반까지 ${typeof classSectionsJosa === "function" ? classSectionsJosa(item.courseName, "을/를") : item.courseName} 학급 단위로 하면 그 반에서 이 과목을 고르지 않은 학생 ${item.mismatched}명이 희망과 다르게 됩니다(재신청이 필요한 학생 ${item.retake || 0}명은 없어짐). 적용할까요?`, { title: "학급 단위로 바꾸기", ok: "적용" }))) return;
     entry.classCounts[item.courseKey] = item.sections;
     if (classSectionsPlain(entry.classUnit.assign)) for (const [room, key] of Object.entries(entry.classUnit.assign)) if (!key) delete entry.classUnit.assign[room];
   } else if (item.type === "recommend-times") {
@@ -1174,11 +1202,13 @@ function classSectionsHandleClick(event) {
   if (target.id === "classSectionsClassMapTemplate") return classSectionsExport("classMapTemplate");
   if (target.id === "classSectionsClassMapClear") {
     const context = classSectionsCurrent();
-    if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm(`현 ${context.group.grade}학년 내년 반 배정표를 지울까요?`)) return;
-    const maps = classSectionsStore().classMaps;
-    if (classSectionsPlain(maps)) delete maps[String(context.group.grade)];
-    classSectionsSetStatus(`현 ${context.group.grade}학년 내년 반 배정표를 지웠습니다.`);
-    return classSectionsChanged();
+    return void classSectionsConfirm(`현 ${context.group.grade}학년 내년 반 배정표를 지울까요?`, { title: "내년 반 배정표 지우기", ok: "지우기" }).then((ok) => {
+      if (!ok) return;
+      const maps = classSectionsStore().classMaps;
+      if (classSectionsPlain(maps)) delete maps[String(context.group.grade)];
+      classSectionsSetStatus(`현 ${context.group.grade}학년 내년 반 배정표를 지웠습니다.`);
+      classSectionsChanged();
+    });
   }
   if (target.id === "classSectionsClassUnitReset") {
     const context = classSectionsCurrent();
@@ -1423,7 +1453,10 @@ function classSectionsExport(kind) {
     });
     // '학급 단위 과목' 시트는 맨 뒤(분반 시트는 앞에 분반마다 하나). 내년 반을 알면 반별 학생 명렬 시트도 붙인다.
     const unitRosters = unitSheet ? classSectionsClassUnitRosterSheets(group, entry, settingsForUnits, names) : [];
-    const all = [...sheets, ...(unitSheet ? [unitSheet] : []), ...unitRosters];
+    const retake = classSectionsRetakeRows(result, group.choice, names);
+    const retakeSheet = retake ? [{ name: "재신청·미배정", orientation: "portrait", widths: [16, 10, 30, 28], freeze: "A3",
+      rows: [[retake.note], retake.header, ...retake.rows] }] : [];
+    const all = [...retakeSheet, ...sheets, ...(unitSheet ? [unitSheet] : []), ...unitRosters];
     return downloadBlob(createWorkbookBlob(all.length ? all : [{ name: "분반 없음", rows: [["이 그룹에는 이동 분반이 없습니다."]] }]), `${base}_분반명렬표.xlsx`);
   }
   if (kind === "neis") {
@@ -1439,6 +1472,7 @@ function classSectionsExport(kind) {
     const classUnit = unitCourses.length ? { byClass: classSectionsClassUnitPlan(group, entry, settings).assign,
       courses: Object.fromEntries(unitCourses.map((course) => [course.key, { name: course.name, ...courses[course.key] }])) } : null;
     const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students, classUnit });
+    const retake = classSectionsRetakeRows(result, group.choice, names);
     // 같은 그룹에서 학생별 과목 수(이동 + 학급 단위)가 택n을 넘으면(이중 배정) 알린다.
     if (classUnit) {
       const perStudent = new Map();
@@ -1449,9 +1483,10 @@ function classSectionsExport(kind) {
     if (result.roomRenames?.length) warnings.push(`강의실 이름이 바뀐 분반 ${result.roomRenames.length}개(번호 없던 과목이 한 블록에 2개가 됨 등): ${result.roomRenames.map((item) => `${item.from} → ${item.to}`).join(", ")}. 이미 나이스에 올렸으면 바뀐 이름을 확인하세요.`);
     if (effective.basis === "same") warnings.push("진급 때 반이 그대로 올라감으로 설정해 반은 지금 반으로 넣고 번호는 비웠습니다(진급 때 번호를 다시 매길 수 있음). 내년 반 배정표를 올리면 반·번호를 채웁니다.");
     const sheets = [{ name: "수강학생 편성", rows, widths: [8, 6, 6, 18, 22, 18, 12, 6, 6, 10, 16], merges: ["A1:F1", "G1:J1"], freeze: "A3" },
-      { name: "확인 필요", orientation: "portrait", widths: [100], rows: [["확인 필요"], ...warnings.map((text) => [text]),
+      { name: "확인 필요", orientation: "portrait", widths: retake ? [16, 10, 30, 44] : [100], rows: [["확인 필요"],
+        ...(retake ? [[retake.note], retake.header, ...retake.rows, [""]] : []), ...warnings.map((text) => [text]),
         ["개설강의실 번호: 어느 블록에서든 그 과목 분반이 2개 이상이면 모든 분반에 번호, 교사가 배정돼 있으면 같은 교사는 같은 번호(사용자 나이스 파일에서 추정)."]] }];
-    classSectionsSetStatus(warnings.join(" "));
+    classSectionsSetStatus([...(retake ? [retake.note] : []), ...warnings].join(" "));
     return downloadBlob(createWorkbookBlob(sheets), `${base}_나이스_수강학생편성.xlsx`);
   }
 }

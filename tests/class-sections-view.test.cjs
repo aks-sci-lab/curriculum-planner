@@ -445,3 +445,41 @@ test("공통 교과(과학-공통)에 교사가 없으면 같은 교과군 세�
   ctx.classSectionsCommonDepartmentFallback([{ department: "과학-공통" }], [], counts);
   assert.equal(counts["과학-공통"], 5);
 });
+
+test("[11차] 재신청이 남은 결과 내보내기: 나이스 '확인 필요'·명렬표 '재신청·미배정' 시트 맨 위에 학생 목록, 확인 창은 앱 대화상자", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key);
+  ctx.CLASS_SECTIONS_VIEW.round = "1";
+  ctx.CLASS_SECTIONS_VIEW.group = group.key;
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  const result = ctx.classSectionsSolve(input);
+  // 한 학생은 이동 반이라 학급 단위 과목을 못 들음, 한 학생은 폐강 과목 재신청 대상
+  const [first, second] = Object.keys(result.assign);
+  result.assign[first] = result.assign[first].slice(0, 1);
+  result.unassigned.push({ studentKey: first, courseKey: "지구과학 (1학기)", reason: "class-unit-other-room" });
+  result.closedRequests = [{ studentKey: second, courseKey: "물리학", reason: "closed" }];
+  ctx.classSectionsSaveResult(entry, result, input, group, { locked: true });
+  const captured = [];
+  ctx.createWorkbookBlob = (sheets) => sheets;
+  ctx.downloadBlob = (sheets, name) => captured.push({ sheets: plain(sheets), name });
+  ctx.classSectionsSetStatus = () => {};
+  ctx.classSectionsExport("neis");
+  const check = captured[0].sheets.find((sheet) => sheet.name === "확인 필요");
+  assert.match(check.rows[1][0], /^재신청이 필요한 학생 2명\(학급 단위 과목\(그 반은 이동\), 폐강\) — 이 학생들은 택2보다 적은 과목 행만 들어 있습니다\.$/);
+  assert.deepEqual(check.rows[2], ["현 학년-반-번호", "성명", "빠진 과목", "사유"]);
+  const listed = check.rows.slice(3, 5);
+  assert.deepEqual(listed.map((row) => row[0]).sort(), [first, second].sort());
+  assert.ok(listed.some((row) => row[2] === "지구과학" && row[3] === "학급 단위 과목(그 반은 이동)"), JSON.stringify(listed));
+  assert.ok(listed.some((row) => row[2] === "물리학" && row[3] === "폐강"));
+  ctx.classSectionsExport("rosters");
+  const roster = captured[1].sheets[0];
+  assert.equal(roster.name, "재신청·미배정");
+  assert.equal(roster.rows.length, 4);
+  // 제안 적용 확인 창: 브라우저 confirm 대신 appConfirm
+  const source = fs.readFileSync(path.join(__dirname, "..", "class-sections-view.js"), "utf8");
+  const apply = source.slice(source.indexOf("async function classSectionsApplySuggestion("), source.indexOf("function classSectionsHandleClick("));
+  assert.doesNotMatch(apply, /window\.confirm\(/);
+  assert.match(apply, /await classSectionsConfirm\(/);
+  assert.match(source, /if \(typeof appConfirm === "function"\) return appConfirm\(text, options\);/);
+});
