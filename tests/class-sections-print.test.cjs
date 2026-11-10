@@ -552,3 +552,21 @@ test("화면 연결: 담임반 범위(반 고르기·앞뒤·학생 찾기) · �
   assert.equal((printBatch.innerHTML.match(/class="print-page cs-hr-page"/g) || []).length, 4);
   ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
 });
+
+test("교사 이름 경고: 진짜 class-sections-teachers.js와 함께 — 자리 이름 교사 62명 문장이 그대로(중첩 없음)", () => {
+  const ctx = context();
+  vm.runInContext(fs.readFileSync(path.join(root, "class-sections-teachers.js"), "utf8"), ctx);
+  const { group } = solved(ctx);
+  const settings = ctx.classSectionsSettings();
+  settings.teachers.splice(0, settings.teachers.length);
+  for (let n = 1; n <= 62; n += 1) settings.teachers.push({ id: `t-사회-지리-${n}`, name: `사회-지리 ${n}`, department: "사회-지리", unavailable: [] });
+  const real = plain(ctx.classSectionsTeacherNameWarnings());
+  assert.equal(real.length, 1);
+  assert.match(real[0], /^실제 이름이 없는 교사 62명\(/);
+  const teacher = plain(ctx.classSectionsOutputWarnings("1", group)).filter((item) => item.type === "teacher");
+  assert.equal(teacher.length, 1);
+  assert.equal(teacher[0].message, real[0], "sentence shown as is");
+  assert.equal(teacher[0].count, 62);
+  assert.doesNotMatch(teacher[0].message, /교사 1명\(/, "no nesting");
+  assert.doesNotMatch(teacher[0].message, /실제 이름이 아닌 교사/);
+});

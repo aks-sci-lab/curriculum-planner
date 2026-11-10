@@ -165,7 +165,7 @@ function attendanceInfo(sheet) {
   check(/교실을 고르지 않은 분반 \d+개/.test(await warnBox.innerText().catch(() => "")), "출력물 위 경고 '교실을 고르지 않은 분반 n개'");
   const teacherWarn = await page.locator("#classSectionsOutputWarnings li[data-type=teacher]").innerText().catch(() => "");
   report.checks.teacherWarning = teacherWarn;
-  check(/실제 이름이 없는 교사 \d+명/.test(teacherWarn), "자리 이름 교사 경고(class-sections-teachers.js) 표시", teacherWarn.slice(0, 120));
+  check(/^실제 이름이 없는 교사 \d+명\(/.test(teacherWarn) && !/교사 1명\(실제/.test(teacherWarn) && !/실제 이름이 아닌 교사/.test(teacherWarn), "자리 이름 교사 경고가 문장 그대로(중첩 없음)", teacherWarn.slice(0, 120));
   const firstChoose = choose.first();
   const chooseOptions = await firstChoose.locator("select option").allInnerTexts();
   check(chooseOptions.some((text) => /\(추천\)/.test(text)) && chooseOptions[1]?.includes("(추천)"), "후보 첫 줄에 '(추천)'", chooseOptions.slice(0, 4));
