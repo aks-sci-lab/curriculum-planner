@@ -383,7 +383,7 @@ test("화면 연결: 출석부 보기(이 그룹/학기 전체, 앞·뒤, 학생
     assert.match(html, new RegExp(`id="${id}"`), id);
   }
   assert.match(html, />출석부 전체 파일</);
-  assert.match(html, />출석부 학급별 파일\(zip\)</);
+  assert.match(html, />출석부 분반별 파일\(zip\)</);
   const { list } = ctx.classSectionsAttendanceInfos("1", group, "group");
   assert.equal((html.match(/<option value="1:1:2-1 택2\|/g) || []).length, list.length, "분반 목록 = 분반 수");
   // 학생 찾기: 그 학생이 있는 분반으로, 표에서 강조.
@@ -406,4 +406,85 @@ test("화면 연결: 출석부 보기(이 그룹/학기 전체, 앞·뒤, 학생
   assert.equal((printBatch.innerHTML.match(/class="print-page cs-att-page"/g) || []).length, list.length);
   ctx.classSectionsAttendancePrint("one");
   assert.equal((printBatch.innerHTML.match(/class="print-page cs-att-page"/g) || []).length, 1);
+});
+
+test("담임학급별: 내년 반 기준(모르면 현재 반 + 경고), 반 학생 수 = 명단, 칸 = 배정 결과, 분반 출석부는 그 반 학생만, 반 수 = 파일 수", () => {
+  const base = { year: "2027", semester: "1", grade: "1", targetGrade: "2", groupCategory: "2-1 택2", basis: "map", roomLabel: "2학년 1반", teacherName: "김교사" };
+  const infos = [
+    { ...base, groupKey: "g1", sectionId: "물#1", blockId: "a", blockLetter: "a", times: ["월:1"], courseName: "물리학", roomName: "a물리학",
+      students: [{ key: "1-1-1", classroom: "3", number: "2", name: "가명A" }, { key: "1-2-5", classroom: "1", number: "1", name: "가명B" }] },
+    { ...base, groupKey: "g1", sectionId: "화#1", blockId: "b", blockLetter: "b", times: ["화:1"], courseName: "화학", roomName: "b화학",
+      students: [{ key: "1-1-1", classroom: "3", number: "2", name: "가명A" }] },
+    { ...base, grade: "2", targetGrade: "3", groupKey: "g2", sectionId: "경#1", blockId: "a", blockLetter: "a", times: ["월:1"], courseName: "경제", roomName: "a경제", basis: "none",
+      students: [{ key: "2-4-7", classroom: "", number: "", name: "가명C" }] }];
+  const roster = [
+    { key: "1-1-1", grade: "1", targetGrade: "2", classroom: "3", number: "2", name: "가명A", basis: "map" },
+    { key: "1-2-5", grade: "1", targetGrade: "2", classroom: "1", number: "1", name: "가명B", basis: "map" },
+    { key: "1-2-9", grade: "1", targetGrade: "2", classroom: "3", number: "1", name: "가명D", basis: "map" },
+    { key: "2-4-7", grade: "2", targetGrade: "3", classroom: "", number: "", name: "가명C", basis: "none" }];
+  const extras = { "1-2-9": { unit: ["정보"], retake: [{ courseName: "화학", reason: "정원 부족" }] } };
+  const homerooms = pr.classSectionsHomerooms(infos, roster, extras);
+  assert.deepEqual(homerooms.map((item) => [item.label, item.students.length]), [["내년 2학년 1반", 1], ["내년 2학년 3반", 2], ["현 2학년 4반", 1]]);
+  const three = homerooms[1];
+  assert.deepEqual(three.students.map((item) => item.key), ["1-2-9", "1-1-1"], "sorted by next-year number");
+  assert.deepEqual(three.columns.map((col) => col.blockLetter), ["a", "b"]);
+  assert.deepEqual(plain(three.students[1].cells["g1|a"]), { courseName: "물리학", roomName: "a물리학", roomLabel: "2학년 1반", teacher: "김교사" });
+  const sheet = pr.classSectionsHomeroomStatusSheet(three);
+  assert.equal(sheet.rows[0][0].v, "내년 2학년 3반 이동수업 현황");
+  assert.equal(sheet.orientation, "landscape");
+  const header = sheet.rows[sheet.headerRow - 1].map((cell) => cell.v);
+  assert.deepEqual(header, ["번호", "현 학년-반-번호", "성명", "2-1 택2 a블록\n월1", "2-1 택2 b블록\n화1", "학급 단위", "재신청·미배정"]);
+  assert.equal(sheet.rows.length - sheet.headerRow, three.students.length, "반 학생 수 = 명단");
+  const d = sheet.rows[sheet.headerRow].map((cell) => cell.v);
+  assert.deepEqual(d, [1, "1-2-9", "가명D", "", "", "정보", "화학(정원 부족)"]);
+  assert.equal(sheet.rows[sheet.headerRow + 1][3].v, "물리학 a물리학\n2학년 1반 · 김교사");
+  // 현재 반 기준 경고
+  const now = pr.classSectionsHomeroomStatusSheet(homerooms[2]);
+  assert.match(now.rows[2][0].v, /내년 반 미정 — 현재 반 기준/);
+  // ② 그 반 학생만 추린 분반 출석부
+  const att = pr.classSectionsHomeroomAttendanceSheets(three);
+  assert.deepEqual(att.map((item) => [item.name, item.studentCount]), [["a물리학", 1], ["b화학", 1]]);
+  assert.match(att[0].rows[4][0].v, /내년 2학년 3반 학생만 1\/2명/);
+  // 저장: 담임학급별 파일 = 반마다 파일(①+②), 전체 파일 = 목록 + 반마다 ①
+  const files = pr.classSectionsAttendanceBundles(infos, "homeroom", { homerooms });
+  assert.equal(files.length, homerooms.length, "반 수 = 파일 수");
+  assert.deepEqual(files[1].sheets.map((item) => item.name), ["이동수업 현황", "a물리학", "b화학"]);
+  assert.equal(files[1].name, "2027_1학기_담임학급_내년2학년3반_출석부.xlsx");
+  const [all] = pr.classSectionsAttendanceBundles(infos, "homeroomFile", { homerooms });
+  assert.deepEqual(all.sheets.map((item) => item.name), ["목록", "2-1반", "2-3반", "현2-4반"]);
+  assert.equal(all.sheets[0].rows.length - 2, homerooms.length);
+});
+
+test("화면 연결: 담임반 범위(반 고르기·앞뒤·학생 찾기) · 칸 = 배정 결과 · 저장 단추 · 인쇄(반마다 가로 현황 + 그 반 분반 출석부)", () => {
+  const ctx = context();
+  const { group, result } = solved(ctx);
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "homeroom";
+  const html = ctx.classSectionsPrintButtonsHtml("1", group, result);
+  for (const id of ["classSectionsHomeroomPick", "classSectionsHomeroomTable", "classSectionsHomeroomPrintOne", "classSectionsHomeroomPrintGrade", "classSectionsAttendanceHomeroom", "classSectionsAttendanceHomeroomFile"]) {
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  }
+  const { homerooms } = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(homerooms.length, 4, "내년 2학년 4반(그대로 올라감)");
+  assert.equal(homerooms.reduce((n, item) => n + item.students.length, 0), group.gradeStudents.length, "모든 학생이 한 반에");
+  // 칸 = 배정 결과
+  const byId = new Map(result.sections.map((section) => [section.id, section]));
+  for (const homeroom of homerooms) for (const student of homeroom.students) {
+    const want = (result.assign[student.key] || []).map((id) => byId.get(id).roomName).sort();
+    const got = Object.values(student.cells).map((cell) => cell.roomName).sort();
+    assert.deepEqual(plain(got), plain(want), student.key);
+  }
+  // 학생 찾기 → 그 학생의 반, 강조
+  ctx.CLASS_SECTIONS_VIEW.search = "1-3-4";
+  assert.match(ctx.classSectionsPrintButtonsHtml("1", group, result), /<tr data-student="1-3-4" class="is-found">/);
+  ctx.CLASS_SECTIONS_VIEW.search = "";
+  // 인쇄: 이 반 = 현황 1장 + 그 반 분반 출석부, 학년 전체 = 4개 반
+  const printBatch = { innerHTML: "" };
+  ctx.document = { getElementById: (id) => (id === "printBatch" ? printBatch : null) };
+  ctx.classSectionsSetStatus = () => {};
+  ctx.classSectionsHomeroomPrint("one");
+  assert.equal((printBatch.innerHTML.match(/class="print-page cs-hr-page"/g) || []).length, 1);
+  assert.equal((printBatch.innerHTML.match(/class="print-page cs-att-page"/g) || []).length, homerooms[0].sections.length);
+  ctx.classSectionsHomeroomPrint("grade");
+  assert.equal((printBatch.innerHTML.match(/class="print-page cs-hr-page"/g) || []).length, 4);
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
 });

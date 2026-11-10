@@ -177,10 +177,10 @@ function attendanceInfo(sheet) {
   const teacherFiles = unzipNames(teacherZip.file);
   report.checks.teacherZip = { name: teacherZip.appName, files: teacherFiles.length, sample: teacherFiles.slice(0, 5) };
   check(teacherFiles.length > 0 && teacherFiles.every((name) => /^\d{4}_[12]학기_출석부_.+\.xlsx$/.test(name)), "교사별 zip: 교사마다 xlsx", report.checks.teacherZip);
-  const allZip = await save(() => page.getByRole("button", { name: "출석부 학급별 파일(zip)" }).click(), "attendance-all.zip");
+  const allZip = await save(() => page.getByRole("button", { name: "출석부 분반별 파일(zip)" }).click(), "attendance-all.zip");
   const allFiles = unzipNames(allZip.file);
   report.checks.allZip = { name: allZip.appName, files: allFiles.length, sample: allFiles.slice(0, 5) };
-  check(allFiles.length >= cardInfo.length && allFiles.every((name) => /^\d{4}_[12]학기_.+\(.+\)_.+_.+\.xlsx$/.test(name)), "학급별 파일 zip: 분반마다 '2027_1학기_과목(강의실)_교실_교사.xlsx'", report.checks.allZip);
+  check(allFiles.length >= cardInfo.length && allFiles.every((name) => /^\d{4}_[12]학기_.+\(.+\)_.+_.+\.xlsx$/.test(name)), "분반별 파일 zip: 분반마다 '2027_1학기_과목(강의실)_교실_교사.xlsx'", report.checks.allZip);
   // zip 안 파일도 열리는지(첫 파일)
   unzipTo(allZip.file, path.join(OUT, "downloads", "all"));
   const firstInner = readXlsxAll(path.join(OUT, "downloads", "all", allFiles[0]));
@@ -229,6 +229,71 @@ function attendanceInfo(sheet) {
   await page.getByRole("button", { name: "이 분반 인쇄" }).click(); await sleep(500);
   const onePdf = await page.pdf({ format: "A4", preferCSSPageSize: true });
   check((onePdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length === 1, "이 분반 인쇄: PDF 1쪽");
+
+  // ⑤-3 담임학급별: 화면 '담임반별' 범위·앞뒤, 칸 = 분반 배정(전체 파일 시트와 대조), 저장 2종, 인쇄(현황 A4 가로)
+  console.log("▶ 담임학급별 출석부");
+  await page.getByLabel("출석부 보기 범위").selectOption("homeroom"); await sleep(700);
+  const hrTable = page.locator("#classSectionsHomeroomTable");
+  check(await hrTable.count() === 1, "담임반별 범위: 이동수업 현황 표");
+  const hrOptions = await page.getByLabel("담임반 고르기").locator("option").allInnerTexts();
+  report.checks.homerooms = hrOptions.slice(0, 4);
+  const readHr = () => hrTable.evaluate((table) => ({
+    title: table.querySelector("tr")?.textContent.trim(),
+    header: [...table.querySelectorAll("thead tr:last-child th")].map((th) => th.textContent),
+    rows: [...table.querySelectorAll("tbody tr")].map((tr) => ({ key: tr.dataset.student, cells: [...tr.children].map((td) => td.textContent) })) }));
+  const hr1 = await readHr();
+  const expected1 = Number(hrOptions[0].match(/\((\d+)명/)?.[1]);
+  check(hr1.rows.length === expected1 && /이동수업 현황$/.test(hr1.title), `첫 담임반 표 학생 ${hr1.rows.length} = 목록 ${expected1}명`, { title: hr1.title, header: hr1.header });
+  // 칸 = 분반 배정: 칸의 강의실 이름 시트(전체 파일)에 그 학생이 있다.
+  const fullByName = new Map(fullSheets.slice(1).map((sheet) => [sheet.name, sheet]));
+  const fullKeyOf = (sheet) => sheet.rows.slice(sheet.rows.findIndex((row) => row[0] === "순서") + 1).map((row) => row[4]);
+  let checkedCells = 0; const badCells = [];
+  for (const row of hr1.rows.slice(0, 8)) {
+    const name = row.cells[2];
+    for (const text of row.cells.slice(3, hr1.header.length - 2)) {
+      if (!text) continue;
+      const roomName = text.split("\n")[0].trim().split(/\s+/).at(-1);
+      const sheet = fullByName.get(roomName) || [...fullByName.values()].find((item) => item.name.endsWith(` ${roomName}`));
+      checkedCells += 1;
+      if (!sheet || !fullKeyOf(sheet).includes(name)) badCells.push({ key: row.key, roomName });
+    }
+  }
+  check(checkedCells > 0 && !badCells.length, `담임반 칸 ${checkedCells}개 = 분반 출석부 명단`, badCells.slice(0, 3));
+  await shot("09-homeroom-view.png", page.locator("#classSectionsAttendanceView"));
+  await page.getByRole("button", { name: "다음 담임반" }).click(); await sleep(600);
+  const hr2 = await readHr();
+  check(hr2.title !== hr1.title, "뒤 ▶: 다음 담임반", { a: hr1.title, b: hr2.title });
+  await page.getByRole("button", { name: "앞 담임반" }).click(); await sleep(600);
+  check((await readHr()).title === hr1.title, "◀ 앞: 처음 담임반");
+  // 저장: 담임학급별 파일(zip) = 반마다 파일(현황 + 그 반 분반 출석부), 담임학급 전체 파일 = 목록 + 반마다 현황
+  const hrZip = await save(() => page.getByRole("button", { name: "담임학급별 파일(zip)" }).click(), "attendance-homeroom.zip");
+  const hrFiles = unzipNames(hrZip.file);
+  report.checks.homeroomZip = { name: hrZip.appName, files: hrFiles.length, sample: hrFiles.slice(0, 3) };
+  check(hrFiles.length === hrOptions.length && hrFiles.every((name) => /_담임학급_.+_출석부\.xlsx$/.test(name)), `담임학급별 zip: 반 ${hrOptions.length}개 = 파일 ${hrFiles.length}개`, report.checks.homeroomZip);
+  unzipTo(hrZip.file, path.join(OUT, "downloads", "homeroom"));
+  const firstHrFile = readXlsxAll(path.join(OUT, "downloads", "homeroom", hrFiles[0]));
+  const statusRows = firstHrFile[0].rows.slice(firstHrFile[0].rows.findIndex((row) => row[0] === "번호") + 1).filter((row) => row.some(Boolean));
+  check(firstHrFile[0].name === "이동수업 현황" && firstHrFile.slice(1).every((sheet) => /학생만 \d+\/\d+명/.test(sheet.rows[4]?.[0] || "")),
+    "반 파일: '이동수업 현황' + 그 반 학생만 추린 분반 출석부", firstHrFile.map((sheet) => sheet.name).slice(0, 4));
+  const firstOptionCount = Number(hrOptions[0].match(/\((\d+)명/)?.[1]);
+  check(statusRows.length === firstOptionCount, `반 파일 현황 학생 ${statusRows.length} = ${firstOptionCount}명`);
+  const hrAll = await save(() => page.getByRole("button", { name: "담임학급 전체 파일" }).click(), "attendance-homeroom-all.xlsx");
+  const hrAllSheets = readXlsxAll(hrAll.file);
+  check(hrAllSheets[0].name === "목록" && hrAllSheets.length === hrOptions.length + 1, `담임학급 전체 파일: 목록 + 반 ${hrOptions.length}개 시트`, { sheets: hrAllSheets.length, name: hrAll.appName });
+  // 인쇄: 이 반 → 현황 1장(A4 가로) + 그 반 분반 출석부, 학년 전체 → 반마다
+  await page.getByRole("button", { name: "이 반 인쇄" }).click(); await sleep(800);
+  const hrPrint = await page.evaluate(() => ({ hr: document.querySelectorAll("#printBatch .cs-hr-page").length, att: document.querySelectorAll("#printBatch .cs-att-page").length }));
+  const hrPdf = await page.pdf({ path: path.join(OUT, "10-homeroom-print.pdf"), format: "A4", preferCSSPageSize: true });
+  const hrPdfText = hrPdf.toString("latin1");
+  const hrPages = (hrPdfText.match(/\/Type\s*\/Page[^s]/g) || []).length;
+  const boxes = [...hrPdfText.matchAll(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/g)].map((m) => Number(m[1]) > Number(m[2]) ? "가로" : "세로");
+  report.checks.homeroomPrint = { ...hrPrint, pdfPages: hrPages, boxes: boxes.slice(0, 4) };
+  check(hrPrint.hr === 1 && hrPages === 1 + hrPrint.att && boxes.includes("가로") && boxes.includes("세로"), `이 반 인쇄: 현황 1장(가로) + 분반 출석부 ${hrPrint.att}장(세로) = PDF ${hrPages}쪽`, report.checks.homeroomPrint);
+  await page.getByRole("button", { name: /학년 전체 인쇄$/ }).click(); await sleep(1200);
+  const gradePrint = await page.evaluate(() => document.querySelectorAll("#printBatch .cs-hr-page").length);
+  const sameGrade = hrOptions.filter((text) => text.split(" ").slice(0, 2).join(" ") === hrOptions[0].split(" ").slice(0, 2).join(" ")).length;
+  check(gradePrint === sameGrade, `학년 전체 인쇄: 반 ${sameGrade}개 = 현황 ${gradePrint}장`);
+  await page.getByLabel("출석부 보기 범위").selectOption("group"); await sleep(500);
 
   // ⑥ 학생 시간표: 학생 찾기 → 미리 보기, 반별 인쇄, 엑셀
   console.log("▶ 학생 시간표");

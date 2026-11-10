@@ -2407,3 +2407,14 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   .print-page.cs-att-page .cs-att-table td[data-kind="title"] { height:10mm; font-size:15px; }
   .print-page.cs-att-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
 }
+/* 담임학급별 '이동수업 현황'(class-sections-print.js classSectionsHomeroomStatusSheet): 칸 안 줄바꿈, 인쇄는 A4 가로 */
+.cs-att-table td, .cs-att-table th { white-space:pre-line; }
+#classSectionsHomeroomTable td, #classSectionsHomeroomTable th { height:auto; min-height:28px; line-height:1.25; padding:2px 4px; }
+@page cs-landscape { size: A4 landscape; margin: 10mm 12mm; }
+@media print {
+  .print-page.cs-hr-page { page: cs-landscape; width:auto; padding:0; }
+  .print-page.cs-hr-page .cs-att-table { width:100%; font-size:7.5px; }
+  .print-page.cs-hr-page .cs-att-table td, .print-page.cs-hr-page .cs-att-table th { height:auto; padding:.25mm .8mm; line-height:1.1; border-color:#444; }
+  .print-page.cs-hr-page .cs-att-table td[data-kind="title"] { height:7mm; font-size:13px; }
+  .print-page.cs-hr-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
+}
