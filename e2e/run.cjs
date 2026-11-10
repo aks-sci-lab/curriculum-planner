@@ -999,7 +999,9 @@ async function stepClassSections({ page, h, report, roster }) {
       {
         // 다른 그룹(교사 부족 원인 그룹)의 오류가 이 그룹에 붙었는지: 오류 문장 속 그룹 표시가 이 그룹이 아닌 경우
         const label = g.key.split(":")[2];
-        const others = [...summary.matchAll(/\((현\d → \d학년 \d학기 · ([^ )]+ ?[^ )]*)[^)]*)\)/g)].map((m) => m[1]).filter((t) => !t.includes(label));
+        // 오류 부분만 본다(다른 그룹은 '참고: 같은 시간 다른 그룹 — …' 정보로 붙는 것이 정상)
+        const errorPart = (summary.match(/오류 \d+건:[\s\S]*?(?=참고:|$)/) || [""])[0];
+        const others = [...errorPart.matchAll(/\((현\d → \d학년 \d학기 · ([^ )]+ ?[^ )]*)[^)]*)\)/g)].map((m) => m[1]).filter((t) => !t.includes(label));
         if (others.length) h.issue("중요", "6단계", `${g.key}: 다른 그룹(${others[0]})의 오류가 이 그룹 결과에 붙음`, { actual: summary.slice(0, 300) });
       }
     }
@@ -1040,10 +1042,10 @@ async function stepClassSections({ page, h, report, roster }) {
       const m = cm.line.match(/(\d+)\/(\d+)명/);
       const submittedCount = Number(m?.[2]);
       h.check(m && m[1] === m[2] && (new RegExp(`${roster[grade].length}명 읽음`).test(cm.status) || new RegExp(`갱신 ${submittedCount}명`).test(cm.status)), "중요", "6단계", `현 ${grade}학년 내년 반 배정표를 올렸는데 반영 인원이 맞지 않음(앞자리 0 '01' 표기 학생 포함)`, { expected: `그룹 학생 ${submittedCount}명 전부`, actual: cm });
-      const missing = Number((cm.status.match(/명단에 없는 학생 (\d+)명/) || [])[1] || 0);
+      const missing = Number((cm.status.match(/(?:명단|이 차수 결과)에 없는 학생 (\d+)명/) || [])[1] || 0);
       const unsubmitted = roster[grade].length - submittedCount;
-      if (missing && missing === unsubmitted) h.issue("경미", "6단계", `현 ${grade}학년 배정표 읽기: 미제출 학생 ${missing}명을 '명단에 없는 학생(반·번호 표기 확인)'으로 안내(표기 오류처럼 보임)`, { actual: cm.status });
-      else h.check(!missing, "중요", "6단계", `현 ${grade}학년 배정표 읽기: 명단에 없는 학생 ${missing}명(미제출 ${unsubmitted}명과 다름)`, { actual: cm.status });
+      if (missing && missing === unsubmitted && /명단에 없는 학생/.test(cm.status)) h.issue("경미", "6단계", `현 ${grade}학년 배정표 읽기: 미제출 학생 ${missing}명을 '명단에 없는 학생(반·번호 표기 확인)'으로 안내(표기 오류처럼 보임)`, { actual: cm.status });
+      else if (missing !== unsubmitted) h.issue("중요", "6단계", `현 ${grade}학년 배정표 읽기: 결과에 없는 학생 ${missing}명(미제출 ${unsubmitted}명과 다름)`, { actual: cm.status });
       h.check(!scr.homeroomWarn, "경미", "6단계", "내년 반 배정표를 올린 뒤에도 '담임반 묶기: 지금 반 기준' 경고가 남음", { actual: cm });
       if (grade !== "1") continue;
       await page.locator("#classSectionsCompare").click();
