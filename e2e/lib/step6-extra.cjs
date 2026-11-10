@@ -795,14 +795,30 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   const pickedSections = Number((screen.pick.match(/분반 (\d+)\)/) || [])[1]);
   out.screen = { options: options.length, ...screen };
   h.check(options.length === list.length && screen.rows === pickedN, "중요", "6단계", `출석부 보기 '담임반별': 담임반 ${options.length}개(파일 ${list.length}개)·표 학생 ${screen.rows}명(목록 ${pickedN}명)`, { actual: out.screen });
+  // 인쇄(7fed274~): 현황은 반당 1장이 아닐 수 있음(학생이 많으면 '1/2'·'2/2'), 상태 줄 '담임반 n개(현황 a쪽 + 분반 출석부 b장)'.
   const printCount = async (button) => {
     const before = await page.evaluate(() => window.__prints || 0);
     await page.locator(button).click(); await sleep(800);
-    return page.evaluate((b) => ({ hr: document.querySelectorAll("#printBatch .cs-hr-page").length, att: document.querySelectorAll("#printBatch .cs-att-page").length, printed: (window.__prints || 0) - b }), before);
+    const r = await page.evaluate((b) => {
+      const pages = [...document.querySelectorAll("#printBatch .cs-hr-page")];
+      const by = new Map();
+      for (const el of pages) { const id = el.dataset.homeroom; if (!by.has(id)) by.set(id, []); by.get(id).push(el.dataset.page || ""); }
+      const badLabels = [...by].filter(([, labels]) => labels.some((l, i) => l !== `${i + 1}/${labels.length}`)).map(([id, labels]) => `${id}: ${labels.join(",")}`);
+      return { hr: pages.length, homerooms: by.size, perHomeroom: Object.fromEntries([...by].map(([id, l]) => [id, l.length])), multi: [...by.values()].filter((l) => l.length > 1).length, badLabels, att: document.querySelectorAll("#printBatch .cs-att-page").length, printed: (window.__prints || 0) - b,
+        status: (document.getElementById("classSectionsStatus")?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 200) };
+    }, before);
+    const m = r.status.match(/담임반 (\d+)개\(현황 (\d+)쪽 \+ 분반 출석부 (\d+)장\)/);
+    r.statusOk = Boolean(m) && Number(m[1]) === r.homerooms && Number(m[2]) === r.hr && Number(m[3]) === r.att;
+    r.maxPages = Math.max(0, ...Object.values(r.perHomeroom || {}));
+    return r;
   };
   out.print = { one: await printCount("#classSectionsHomeroomPrintOne"), grade: await printCount("#classSectionsHomeroomPrintGrade") };
-  h.check(out.print.one.hr === 1 && out.print.one.att === pickedSections && out.print.grade.hr === nextClasses && out.print.one.printed && out.print.grade.printed, "중요", "6단계",
-    `담임반 인쇄: 이 반 현황 ${out.print.one.hr}장·분반 출석부 ${out.print.one.att}장(기대 1·${pickedSections}), 학년 전체 현황 ${out.print.grade.hr}장(기대 ${nextClasses})`, { actual: out.print });
+  const { one, grade } = out.print;
+  h.check(one.homerooms === 1 && one.hr >= 1 && one.att === pickedSections && grade.homerooms === nextClasses && grade.hr >= nextClasses && !one.badLabels.length && !grade.badLabels.length && one.printed && grade.printed, "중요", "6단계",
+    `담임반 인쇄: 이 반 현황 ${one.hr}쪽(반 ${one.homerooms})·분반 출석부 ${one.att}장(기대 ${pickedSections}), 학년 전체 현황 반 ${grade.homerooms}개(기대 ${nextClasses})·${grade.hr}쪽, 쪽 표시 오류 ${one.badLabels.length + grade.badLabels.length}`, { actual: out.print });
+  // 사용자 결정: 담임반 현황은 반당 최대 두 장
+  h.check(one.maxPages <= 2 && grade.maxPages <= 2, "중요", "6단계", `담임반 현황이 반당 두 쪽을 넘음(이 반 ${one.maxPages}쪽, 학년 전체 최대 ${grade.maxPages}쪽)`, { actual: { one: one.perHomeroom, grade: grade.perHomeroom, status: grade.status } });
+  h.check(one.statusOk && grade.statusOk, "중요", "6단계", "담임반 인쇄 상태 줄 '담임반 n개(현황 a쪽 + 분반 출석부 b장)'이 인쇄된 장 수와 다름", { actual: { one: one.status, grade: grade.status, counts: out.print } });
   // 담임반 화면 요약(#classSectionsHomeroomUnsubmitted): 현1 = 배정표 기준 미제출 n명, 현2 = '미제출 확인 불가'
   out.unsubNote = {};
   for (const g of [...gradeCount.keys()]) {
