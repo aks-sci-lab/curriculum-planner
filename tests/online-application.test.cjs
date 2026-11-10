@@ -1575,3 +1575,25 @@ test("4단계 집계표 과목명은 괄호를 한 번만: 두 학기 과목은 
   assert.match(functionSource("function aggregateRecords(", "function currentStudent("), /aggregateCourseDisplayName\(applicationSubject, semesterKey\)/,
     "화면·엑셀 집계표(aggregateSheetModel)가 함께 쓰는 displayName");
 });
+
+test("aggregate skips separate (소인수·공동) course columns left in older results, by name too", () => {
+  const ctx=vm.createContext({
+    collectApplicationSubjects:()=>({"1":[],"2":[{subject:"물리학",semester:"1"},{subject:"고급 물리학",semester:"1",separate:true}],"3":[]}),
+    getApplicationGroupSettings:()=>[], UNASSIGNED_GROUP:"미분류"
+  });
+  vm.runInContext(functionSource("function applicationSeparateNames(", "function aggregateCourseDisplayName("),ctx);
+  // 예전 결과: 과목 열에 applicationSubject가 없고 이름만 있다.
+  assert.equal(ctx.isApplicationSeparateCourse({name:"고급 물리학(진로)"},"1"),true);
+  assert.equal(ctx.isApplicationSeparateCourse({name:"물리학"},"1"),false);
+  assert.equal(ctx.isApplicationSeparateCourse({name:"고급 물리학"},"2"),false,"현 2학년(3학년 과목)에는 없는 과목");
+  assert.equal(ctx.isApplicationSeparateCourse({name:"고급 물리학",applicationGroupSource:"online"},"1"),false,"웹 결과는 편제표를 다시 읽지 않음");
+  vm.runInContext(functionSource("function parseCourseGroup(", "function courseIndexByColumn("),ctx);
+  vm.runInContext(functionSource("function aggregateRecords(", "function currentStudent("),ctx);
+  vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("),ctx);
+  ctx.curriculumSelectionType=(value)=>String(value||"");
+  const courses=[{column:1,name:"물리학",credits:3,semesterKey:"1"},{column:2,name:"고급 물리학",credits:3,semesterKey:"1"}];
+  const students=[1,2,3].map((number)=>({grade:"1",classroom:"1",number:String(number),name:`가상${number}`,selections:courses.slice(),totalCredits:6}));
+  const aggregate=ctx.aggregateRecords(students,courses,90,110);
+  const names=aggregate.reports.flatMap((report)=>report.semesters.flatMap((semester)=>semester.groups.flatMap((group)=>group.courses.map((course)=>course.name))));
+  assert.deepEqual(plain(names),["물리학"]);
+});

@@ -3702,7 +3702,7 @@
         for (const course of gradeCourses) {
           const applicationSubject = course.applicationSubject || aggregateApplicationSubject(course, grade, applicationSubjects);
           // 소인수·공동교육과정은 따로 신청하므로(예전에 취합한 결과에 남아 있어도) 집계·개설·6단계 입력에서 뺀다.
-          if (applicationSubject?.separate) continue;
+          if (applicationSubject?.separate || (typeof isApplicationSeparateCourse === "function" && isApplicationSeparateCourse(course, grade))) continue;
           const applicationSemester = applicationSubject?.semester || "";
           const applicationGroup = applicationGroupForCourse(course, grade, groupSettings, applicationSemester);
           const forcedSemester = semesterAssignments[String(course.column)];
@@ -3800,6 +3800,47 @@
       return semesterMatches.length === 1 ? semesterMatches[0] : matches.length === 1 ? matches[0] : null;
     }
 
+    // 소인수·공동교육과정(따로 신청) 과목: 학생이 고른 과목에서 빼는 곳은 이 두 함수 하나로 모은다.
+    // 새로 취합한 결과에서는 이미 빠지지만, 예전에 취합해 저장한 결과에 남은 선택도 확인서·학생 목록·위계/이수학점 점검·4단계에서 숨긴다.
+    // 판별 기준은 1단계 편제표(curriculumSeparateApplicationRows → collectApplicationSubjects의 separate 표시).
+    function applicationSeparateNames(currentGrade) {
+      const grade = String(currentGrade ?? "");
+      if (!["1", "2"].includes(grade) || typeof collectApplicationSubjects !== "function") return null;
+      const schoolYear = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+      const compute = () => {
+        let subjects = null;
+        try { subjects = collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }); } catch { subjects = null; }
+        const names = new Set((subjects?.[String(Number(grade) + 1)] || []).filter((item) => item.separate)
+          .map((item) => applicationSeparateKey(item.subject)));
+        return names.size ? names : null;
+      };
+      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("applicationSeparateNames", `${grade}|${schoolYear}`, compute) : compute();
+    }
+
+    function applicationSeparateKey(name) {
+      if (typeof normalizeResultCourseName === "function") return normalizeResultCourseName(name);
+      return String(name ?? "").replace(/\s*\([123]학년\)/g, "").replace(/\s*\([12]학기\)/g, "")
+        .replace(/\s*\((?:공통|일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
+    }
+
+    // 과목(결과의 과목 열 또는 학생 선택 하나)이 따로 신청 과목인가. 4단계 집계와 applicationSelections가 함께 쓴다.
+    // 웹 신청 결과(online)는 서버에 올린 과목 목록 기준이라 지금 편제표를 다시 읽지 않는다(따로 신청 과목은 처음부터 없음).
+    function isApplicationSeparateCourse(course, currentGrade, names) {
+      if (course?.applicationSubject?.separate) return true;
+      if (!course || course.applicationGroupSource === "online") return false;
+      const list = names === undefined ? applicationSeparateNames(currentGrade) : names;
+      return Boolean(list?.has(applicationSeparateKey(course.name)));
+    }
+
+    // 학생이 고른 과목 중 따로 신청 과목을 뺀 목록(뺄 것이 없으면 원래 배열 그대로).
+    function applicationSelections(student) {
+      const selections = Array.isArray(student?.selections) ? student.selections : [];
+      if (!selections.length) return selections;
+      const names = applicationSeparateNames(student.grade);
+      const separate = (course) => isApplicationSeparateCourse(course, student.grade, names);
+      return selections.some(separate) ? selections.filter((course) => !separate(course)) : selections;
+    }
+
     // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
     // 두 학기에 나눠 신청받은 과목은 학기를 구분해야 하므로(같은 이름 두 행) '(1학기)' 하나만 남기고 과목 구분(융합 등)은 뺀다.
     function aggregateCourseDisplayName(subject, semesterKey) {
@@ -3878,7 +3919,7 @@
           item.querySelector(".student-name").append(" ", flag);
         }
         item.querySelector(".student-meta").textContent = studentGradeLabel(student);
-        item.querySelector(".student-courses").textContent = `${student.selections.length}과목`;
+        item.querySelector(".student-courses").textContent = `${(typeof applicationSelections === "function" ? applicationSelections(student) : student.selections).length}과목`;
         fragment.appendChild(item);
       }
       list.replaceChildren(fragment);
@@ -3902,7 +3943,7 @@
       const compact = (name) => (typeof normalizeRomanNumerals === "function" ? normalizeRomanNumerals(String(name ?? "")) : String(name ?? ""))
         .replace(/\s*\([12]학기\)/g, "").replace(/\s*\((?:일반|진로|융합)(?:선택)?\)$/, "").replace(/\s+/g, "");
       const groups = [];
-      (student.selections || []).forEach((course, order) => {
+      (typeof applicationSelections === "function" ? applicationSelections(student) : student.selections || []).forEach((course, order) => {
         const groupName = courseGroupLabel(course, student.grade, groupSettings);
         const info = typeof applicationGroupForCourse === "function" ? applicationGroupForCourse(course, student.grade, groupSettings) : null;
         const semester = String(info?.semester || (typeof resolveSemesterKey === "function" ? resolveSemesterKey(course) : "") || "");
@@ -3933,20 +3974,24 @@
 
     function certificateMarkup(student, printMode = false, groupSettings = certificateGroupSettings()) {
       const groups = certificateGroupedSelections(student, groupSettings);
+      // 따로 신청(소인수·공동) 과목은 확인서에 싣지 않고 아래에 작은 글씨로 한 줄만 알린다(점검란은 원래 학생 객체로 계산).
+      const selections = typeof applicationSelections === "function" ? applicationSelections(student) : student.selections;
+      const hiddenSeparate = (student.selections || []).length - selections.length;
+      const totalCredits = hiddenSeparate ? selections.reduce((sum, course) => sum + (Number(course.credits) || 0), 0) : student.totalCredits;
       const body = groups.length
         ? groups.map((group) => group.courses.map((course, index) => `
             <tr>${index === 0 ? `<td class="group-cell" rowspan="${group.courses.length}">${escapeHtml(group.name)}</td>` : ""}
               <td class="course-cell">${escapeHtml(certificateCourseName(course))}</td><td class="credit-cell">${course.credits || "—"}</td></tr>`).join("")).join("")
         : '<tr><td colspan="3" style="height:56px;text-align:center">신청 과목이 없습니다.</td></tr>';
-      const coreCredits = student.selections.reduce((sum, course) =>
+      const coreCredits = selections.reduce((sum, course) =>
         sum + (isCoreCourse(course) ? Number(course.credits) || 0 : 0), 0);
-      const corePercent = student.totalCredits ? Math.round(coreCredits / student.totalCredits * 100) : 0;
-      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${student.totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
-        <div class="paper-credit-gauge-label"><strong>신청 학점 ${student.totalCredits}학점</strong><span title="이번에 신청한 ${student.totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
+      const corePercent = totalCredits ? Math.round(coreCredits / totalCredits * 100) : 0;
+      const gauge = !printMode ? `<div class="paper-credit-gauge" aria-label="총 ${totalCredits}학점 중 국어·영어·수학 ${coreCredits}학점, ${corePercent}%">
+        <div class="paper-credit-gauge-label"><strong>신청 학점 ${totalCredits}학점</strong><span title="이번에 신청한 ${totalCredits}학점 가운데 국어·영어·수학 과목 학점의 비율입니다(3년 누계 기준 점검은 아래 점검란).">신청 학점 중 국·영·수 ${coreCredits}학점 · ${corePercent}%</span></div>
         <span class="paper-credit-gauge-track core"><span style="width:${corePercent}%"></span></span>
       </div>` : "";
       // 과목이 많은 학생은 인쇄용 행 높이를 더 줄여 한 장에 담는다(학교명·서명 줄이 다음 장으로 넘어가지 않게).
-      const density = student.selections.length >= 22 ? " paper-dense" : student.selections.length >= 15 ? " paper-compact" : "";
+      const density = selections.length >= 22 ? " paper-dense" : selections.length >= 15 ? " paper-compact" : "";
       return `<article class="${printMode ? "print-page" : "preview-paper"}${density}">
         <div class="paper">
           <h2 class="paper-title">학생 수강 신청 확인서</h2>
@@ -3959,12 +4004,13 @@
           ${typeof courseCheckCertificateHtml === "function" ? courseCheckCertificateHtml(student) : ""}
           ${gauge}
           <div class="paper-closing">
-          <p class="paper-total">총 ${student.selections.length}과목(${student.totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
+          <p class="paper-total">총 ${selections.length}과목(${totalCredits}학점)을 위와 같이 수강 신청하였음을 확인합니다.</p>
           <div class="paper-signature">
             <div>${escapeHtml(String($("#confirmDate").value || "").trim() || "　　　년　　월　　일")}</div>
             <div>학생: ${escapeHtml(student.name)}&nbsp;&nbsp;&nbsp; (인)</div>
             <div>학부모:　　　　　　　　　(인)</div>
           </div>
+          ${hiddenSeparate ? '<p class="paper-separate-note">소인수·공동교육과정은 따로 신청합니다.</p>' : ""}
           <p class="paper-school">${escapeHtml(String($("#schoolName").value || "").trim() || "　　　　　　　　　　")}&nbsp; 귀하</p>
           </div>
         </div>
@@ -3986,7 +4032,9 @@
       }
       preview.className = "preview-paper";
       preview.innerHTML = certificateMarkup(student);
-      $("#previewSubheading").textContent = `${studentGradeLabel(student)} · ${Number(student.grade) + 1}학년 과목 ${student.selections.length}개 · ${student.totalCredits}학점`;
+      const shown = typeof applicationSelections === "function" ? applicationSelections(student) : student.selections;
+      const shownCredits = shown === student.selections ? student.totalCredits : shown.reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
+      $("#previewSubheading").textContent = `${studentGradeLabel(student)} · ${Number(student.grade) + 1}학년 과목 ${shown.length}개 · ${shownCredits}학점`;
       $("#printSelected").disabled = false;
       syncPrintAllButton();
     }
