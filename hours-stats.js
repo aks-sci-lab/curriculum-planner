@@ -206,6 +206,15 @@ function hoursGradeLabel(info) {
     : `${head} · ${current} 결과 없음)`;
 }
 
+// 내년도 G학년 카드의 '현 G−1학년 명단 n반' 안내(근거 차수 명단의 반 수). 1학년(신입생)·결과 없음이면 null.
+function hoursRosterClasses(info) {
+  if (info?.grade === "1" || !info?.source || typeof roundStatusData !== "function") return null;
+  const currentGrade = String(Number(info.grade) - 1);
+  const students = roundStatusData(info.source.round)?.students || [];
+  const count = new Set(students.filter((student) => String(student.grade) === currentGrade).map((student) => String(student.classroom))).size;
+  return count || null;
+}
+
 function hoursItemKey(item) {
   return `${item.grade}|${item.semester}|${normalizeResultCourseName(item.subject)}`;
 }
@@ -991,6 +1000,13 @@ function renderHoursStatsView() {
     return `<article class="hours-grade-card${info.hasLayout ? "" : " is-missing"}">
       <h4>내년도 ${info.grade}학년</h4>
       <label class="hours-classes">학급 수 <input id="hoursClasses${info.grade}" data-hours-classes="${info.grade}" data-focus-key="classes-${info.grade}" type="number" min="0" max="99" step="1" value="${info.classes ?? ""}" placeholder="입력"></label>
+      ${(() => {
+        // 지금 반 수와 내년 학급 수가 다를 수 있다(예: 현 1학년 10반 → 내년 2학년 11학급). 계산은 위에 넣은 내년 학급 수로 한다.
+        const roster = hoursRosterClasses(info);
+        if (!roster) return "";
+        const differs = info.classes > 0 && info.classes !== roster;
+        return `<p class="hours-roster-classes${differs ? " is-diff" : ""}">현 ${Number(info.grade) - 1}학년 명단 ${roster}반${differs ? ` → 내년 ${info.grade}학년 ${info.classes}학급으로 계산` : ""}</p>`;
+      })()}
       <p class="hours-plan-file">${info.cohortYear}학년도 입학생 편제표 · ${info.hasLayout ? escapeHtml(info.fileName || "불러옴") : `<button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">미업로드 · 1단계에서 업로드</button>`}</p>
       ${sourceSelect}
     </article>`;

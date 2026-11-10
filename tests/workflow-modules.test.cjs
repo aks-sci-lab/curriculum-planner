@@ -599,7 +599,7 @@ test("plan and result names match across Roman numerals and spacing", () => {
   assert.equal(bare.normalizeResultCourseName("미적분 2"), "미적분2", "works without the app helper too");
 });
 
-test("the statistics badge waits for the three cohort plans even after the round is confirmed", () => {
+test("the statistics badge says which cohort plans are missing: some (partial) or all (needed)", () => {
   const cohorts = { "2027": { plan: [{}] }, "2026": { plan: [{}] } };
   const ctx = vm.createContext({
     state: { curriculumImportedLayout: {}, curriculumPlan: [{}], students: [{ id: "s" }], currentRound: "1" },
@@ -609,9 +609,11 @@ test("the statistics badge waits for the three cohort plans even after the round
     $: () => ({ value: "2026" })
   });
   vm.runInContext(functionSource(app, "function workflowStepStates(", "function renderWorkflowStepStates("), ctx);
-  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "2025 입학생 편제표가 없다");
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "일부 편제표 없음"], "2025 입학생 편제표만 없으면 나머지 학년은 계산된다");
   cohorts["2025"] = { plan: [{}] };
   assert.deepEqual(plain(ctx.workflowStepStates())[7], ["done", "가능"]);
+  for (const year of Object.keys(cohorts)) delete cohorts[year];
+  assert.deepEqual(plain(ctx.workflowStepStates())[7], ["todo", "편제표 필요"], "셋 다 없을 때만 '편제표 필요'");
 });
 
 test("bulk certificate printing reads the group settings once instead of once per course", () => {
@@ -1076,4 +1078,53 @@ test("long help text and settings live in dialogs, leaving a one-line summary an
   assert.match(settings, /<b>2학년<\/b> 10학급 \(현1 1차 확정\)/);
   assert.match(settings, /<b>3학년<\/b> 11학급 \(현2 결과 없음\)/);
   assert.match(settings, /창체 2시간[\s\S]*data-open-dialog="hoursSettingsDialog"[^>]*>시수 설정</);
+});
+
+test("the shared guidance banner says the shortfall note only on step 4 and gives step 6 its own text", () => {
+  const elements = {};
+  const el = (id) => (elements[id] ||= { textContent: "", dataset: {}, innerHTML: "", value: "", disabled: false });
+  el("#schoolYear").value = "2026";
+  const ctx = vm.createContext({
+    $: el, document: { getElementById: () => null },
+    state: { workflowStep: 3, currentRound: "2", students: [{ grade: "1" }, { grade: "2" }], applicationMenuGrade: "1",
+      curriculumPlanType: "cohort", curriculumCohortYear: "2026", curriculumImportedLayout: {}, curriculumPlan: [{}] },
+    renderBackupStatus() {}, renderWorkflowStepStates() {}, applicationCohortYear: () => "2026",
+    applicationRoundNumbers: () => ["1", "2"], isRoundLocked: () => ctx.locked
+  });
+  ctx.locked = false;
+  const start = app.indexOf("    function renderWorkspaceContext(");
+  vm.runInContext(app.slice(start, app.indexOf("\n    function applicationRoundNumbers(", start)), ctx);
+  const banner = (step) => { ctx.state.workflowStep = step; ctx.renderWorkspaceContext(); return el("#workflowReadinessMessage").textContent; };
+  assert.match(banner(4), /기준 미달은 폐강 확정이 아닙니다/);
+  assert.doesNotMatch(banner(3), /기준 미달/);
+  assert.match(banner(3), /확인서는 두 학년 결과를 함께 사용합니다/);
+  const six = banner(8);
+  assert.doesNotMatch(six, /기준 미달/);
+  assert.match(six, /6단계는 4단계에서 정한 개설 과목·분반 수로/);
+  assert.equal(el("#workflowNextAction").textContent, "집계·개설 확정으로", "확정 전이면 확정하러 가기");
+  ctx.locked = true;
+  banner(8);
+  assert.equal(el("#workflowNextAction").textContent, "4단계 집계 보기");
+  assert.doesNotMatch(banner(6), /기준 미달/);
+});
+
+test("지금 반 수와 내년 학급 수가 다르면 4단계·5단계 화면에 어느 값으로 계산하는지 보인다", () => {
+  const { ctx } = aggregateHelpers();
+  assert.equal(ctx.aggregateClassBasisNote({ grade: "1", classes: 11, rosterClasses: 10, classSource: "planned" }).replace(/<[^>]+>/g, ""),
+    "현 1학년 명단 10반 → 내년 2학년 11학급 기준");
+  assert.equal(ctx.aggregateClassBasisNote({ grade: "1", classes: 11, rosterClasses: 11, classSource: "planned" }), "", "같으면 표시하지 않음");
+  assert.match(ctx.aggregateClassBasisNote({ grade: "2", classes: 10, rosterClasses: 10, classSource: "roster" }), /내년 3학년 학급 수 미입력 · 현 2학년 명단 10반으로 계산/);
+  // 계산은 내년 학급 수 기준(학급당·개설기준). 현 1학년 300명 10반 → 내년 11학급.
+  const rows = vm.createContext({ collectApplicationSubjects: () => [], state: {} });
+  vm.runInContext(functionSource(app, "function aggregateRecords(", "function currentStudent("), rows);
+  const students = Array.from({ length: 300 }, (_, index) => ({ grade: "1", classroom: String(index % 10 + 1) }));
+  const summary = rows.aggregateRecords(students, [], 90, 110, {}, {}, {}, { "2": 11 }).reports[0].summary;
+  assert.equal(summary.classes, 11);
+  assert.equal(summary.rosterClasses, 10);
+  assert.ok(Math.abs(summary.averageClassSize - 300 / 11) < 1e-9);
+  // 5단계 카드: 근거 차수 명단의 반 수
+  const hours = vm.createContext({ roundStatusData: () => ({ students }) });
+  vm.runInContext(hoursStats.slice(hoursStats.indexOf("function hoursRosterClasses("), hoursStats.indexOf("function hoursItemKey(")), hours);
+  assert.equal(hours.hoursRosterClasses({ grade: "2", source: { round: "2" } }), 10);
+  assert.equal(hours.hoursRosterClasses({ grade: "1", source: null }), null);
 });
