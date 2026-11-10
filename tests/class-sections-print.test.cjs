@@ -570,3 +570,35 @@ test("교사 이름 경고: 진짜 class-sections-teachers.js와 함께 — 자�
   assert.doesNotMatch(teacher[0].message, /교사 1명\(/, "no nesting");
   assert.doesNotMatch(teacher[0].message, /실제 이름이 아닌 교사/);
 });
+
+test("담임반 현황: 미제출 학생(결과에 없고 내년 반 배정표에만 있음)도 반 명단에 — 반 학생 수 합 = 명단, '미제출' 표시, 분반 출석부는 배정 학생만", () => {
+  const ctx = context();
+  const { group } = solved(ctx, { sameClasses: false });
+  // 내년 반 배정표: 신청 결과 40명 + 미제출 3명(반마다 11번)
+  const map = {};
+  for (const student of group.gradeStudents) map[student.key] = { classroom: String(((Number(student.homeroom) + Number(student.number)) % 4) + 1), number: student.number };
+  for (const c of [1, 2, 3]) map[`1-${c}-11`] = { classroom: String(c), number: "20" };
+  ctx.state.classSections.classMaps = { "1": map };
+  const data = ctx.classSectionsHomeroomData("1", group);
+  const total = data.homerooms.reduce((n, item) => n + item.students.length, 0);
+  assert.equal(total, Object.keys(map).length, "반 학생 수 합 = 명단(배정표) 학생 수");
+  assert.equal(data.unsubmitted["1"], 3);
+  assert.equal(data.homerooms.reduce((n, item) => n + item.unsubmitted, 0), 3);
+  const room = data.homerooms.find((item) => item.students.some((student) => student.key === "1-2-11"));
+  const sheet = ctx.classSectionsHomeroomStatusSheet(room);
+  assert.match(sheet.rows[1][0].v, /미제출 \d+명/);
+  const row = sheet.rows.slice(sheet.headerRow).find((cells) => cells[1].v === "1-2-11");
+  assert.equal(row.at(-1).v, "미제출");
+  assert.ok(row.slice(3, -2).every((cell) => cell.v === ""), "블록 칸은 비움");
+  for (const info of room.sections) assert.ok(!info.students.some((student) => student.key === "1-2-11"), "분반 출석부에는 배정된 학생만");
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "homeroom";
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attPick = room.id;
+  assert.match(ctx.classSectionsPrintButtonsHtml("1", group, ctx.classSectionsEntry("1", group.key).sectionResult), /id="classSectionsHomeroomUnsubmitted" data-count="1">이 반 학생 \d+명 · 미제출 1명 \(현 1학년 미제출 3명/);
+  // 배정표가 없으면 미제출은 알 수 없다고 안내
+  ctx.state.classSections.classMaps = {};
+  const none = ctx.classSectionsHomeroomData("1", group);
+  assert.equal(none.unsubmitted["1"], null);
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attPick = "";
+  assert.match(ctx.classSectionsPrintButtonsHtml("1", group, ctx.classSectionsEntry("1", group.key).sectionResult), /내년 반 배정표가 없어 미제출 학생은 알 수 없습니다/);
+  ctx.CLASS_SECTIONS_PRINT_VIEW.attScope = "group";
+});

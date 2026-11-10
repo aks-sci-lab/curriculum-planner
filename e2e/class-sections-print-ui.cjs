@@ -289,6 +289,23 @@ function attendanceInfo(sheet) {
     title: table.querySelector("tr")?.textContent.trim(),
     header: [...table.querySelectorAll("thead tr:last-child th")].map((th) => th.textContent),
     rows: [...table.querySelectorAll("tbody tr")].map((tr) => ({ key: tr.dataset.student, cells: [...tr.children].map((td) => td.textContent) })) }));
+  // 미제출 학생도 반 명단에(내년 반 배정표 기준): 학년별 반 학생 합 = 하네스 명단(기본 현1 10×34=340, 현2 11×28=308)
+  const perGrade = {};
+  for (const text of hrOptions) {
+    const grade = text.match(/내년 (\d)학년|현 (\d)학년/);
+    const g = grade?.[1] ? String(Number(grade[1]) - 1) : grade?.[2];
+    perGrade[g] = (perGrade[g] || 0) + Number(text.match(/\((\d+)명/)?.[1] || 0);
+  }
+  report.checks.homeroomTotals = perGrade;
+  // 현1은 내년 반 배정표(340명)가 있어 미제출까지 = 명단. 현2는 '그대로 올라감'·배정표 없음 → 웹 결과(제출 학생)만 알 수 있어 '알 수 없음' 안내.
+  check(perGrade["1"] === 340, `현1 담임반 학생 합 ${perGrade["1"]} = 명단 340(배정표 기준, 미제출 포함)`, perGrade);
+  await page.getByLabel("담임반 고르기").selectOption({ index: hrOptions.findIndex((text) => /내년 3학년|현 2학년/.test(text)) }); await sleep(600);
+  const grade2Note = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
+  report.checks.grade2Unsubmitted = { total: perGrade["2"], note: grade2Note };
+  check(perGrade["2"] === 308 || /배정표가 없어 미제출 학생은 알 수 없습니다/.test(grade2Note), `현2 담임반 학생 합 ${perGrade["2"]}: 308이거나 '배정표가 없어 미제출은 알 수 없음' 안내`, grade2Note.slice(0, 120));
+  await page.getByLabel("담임반 고르기").selectOption({ index: 0 }); await sleep(600);
+  const unsubNote = await page.locator("#classSectionsHomeroomUnsubmitted").innerText().catch(() => "");
+  check(/미제출 \d+명/.test(unsubNote), "담임반 화면 위 '미제출 n명'", unsubNote);
   const hr1 = await readHr();
   const expected1 = Number(hrOptions[0].match(/\((\d+)명/)?.[1]);
   check(hr1.rows.length === expected1 && /이동수업 현황$/.test(hr1.title), `첫 담임반 표 학생 ${hr1.rows.length} = 목록 ${expected1}명`, { title: hr1.title, header: hr1.header });
