@@ -442,6 +442,17 @@ test("application mode toggles the matching workflow tab and persists without de
   assert.equal(selectedTab, "groups");
   assert.equal(state.students, results);
   assert.equal(persisted, 1);
+  // 결과가 있으면 방식·안내 상자를 저절로 펼치지 않는다. 결과가 없으면(처음) 한 번 펼쳐 방식 선택이 보이게 한다.
+  const settingsBox = { open: false };
+  elements.set("#applicationModeSettings", settingsBox);
+  ctx.renderApplicationMode();
+  assert.equal(settingsBox.open, false);
+  state.students = [];
+  ctx.renderApplicationMode();
+  assert.equal(settingsBox.open, true);
+  settingsBox.open = false;
+  ctx.renderApplicationMode();
+  assert.equal(settingsBox.open, false, "사용자가 접으면 다시 펴지 않는다");
 });
 
 function resultImportContext(extra = {}) {

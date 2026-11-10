@@ -1157,6 +1157,13 @@
         : "<b>2</b> 웹 수강신청 관리";
       const activeTab = document.querySelector("#applicationWorkspaceTabs [aria-selected='true']");
       if (activeTab?.classList.contains("hidden")) openApplicationWorkspaceTab("groups");
+      // 아직 결과가 하나도 없으면(처음 준비할 때) 방식 선택(웹/외부)이 접힌 안내 속에 숨지 않게 한 번 펼친다. 접으면 다시 펴지 않는다.
+      const settings = $("#applicationModeSettings");
+      const hasResults = (state.students || []).length > 0 || Object.values(state.rounds || {}).some((round) => round?.students?.length);
+      if (settings && !hasResults && !renderApplicationMode.autoOpened) {
+        renderApplicationMode.autoOpened = true;
+        settings.open = true;
+      }
     }
 
     function selectApplicationMode(mode) {

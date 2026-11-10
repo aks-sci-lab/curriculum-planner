@@ -1391,7 +1391,8 @@ async function main() {
 
     await h.step("2-1. 웹 수강신청 방식·그룹 확인", async () => {
       await gotoStep(page, 2);
-      await page.locator("#workflowStep2Panel summary").first().click();
+      // 결과가 없을 때는 방식·안내 상자가 이미 펼쳐져 있다(펼쳐져 있으면 누르지 않음).
+      if (!(await page.locator("#applicationModeWeb").isVisible())) await page.locator("#workflowStep2Panel summary").first().click();
       await page.locator("#applicationModeWeb").click();
       const result = {};
       for (const grade of ["1", "2"]) {

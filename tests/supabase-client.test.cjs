@@ -1761,3 +1761,16 @@ test("a grade re-render requested while a teacher action runs (startup restore a
   assert.equal(f.renderedGrade,"2","drawn for the restored grade once the action ends");
   assert.equal(f.elements.applicationGrade2Tab["aria-selected"],"true");
 });
+
+test("'신청 마감'은 한 번 묻고(통합 신청이면 두 학년 모두 마감됨을 알림), 취소하면 서버에 요청하지 않는다", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "supabase-client.js"), "utf8");
+  const start = source.indexOf("  function closeEventQuestion(");
+  const ctx = vm.createContext({});
+  vm.runInContext(source.slice(start, source.indexOf("  function renderGradeEvents(", start)), ctx);
+  assert.match(ctx.closeEventQuestion({ round: 2, subjects: { "2": ["a"] } }), /^2차 수강신청을 마감할까요\?\n\n마감하면 학생이 더 이상 신청·수정할 수 없습니다/);
+  assert.match(ctx.closeEventQuestion({ round: 1, subjects: { "2": ["a"], "3": ["b"] } }), /두 학년 모두 마감됩니다/);
+  // 마감(열려 있을 때)만 묻고, 묻는 줄이 서버 요청보다 앞에 있다.
+  const handler = source.slice(source.indexOf('button(event.is_open ? "신청 마감" : "다시 열기"'), source.indexOf('button("신청 결과 저장"'));
+  assert.ok(handler.indexOf("if (event.is_open && !window.confirm(closeEventQuestion(event))) return;") > 0);
+  assert.ok(handler.indexOf("window.confirm") < handler.indexOf('rpc("manage_course_event"'));
+});
