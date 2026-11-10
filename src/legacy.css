@@ -2418,3 +2418,8 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   .print-page.cs-hr-page .cs-att-table td[data-kind="title"] { height:7mm; font-size:13px; }
   .print-page.cs-hr-page .cs-att-table tr { break-inside:avoid; page-break-inside:avoid; }
 }
+/* 교실 선택 필요(학년 교실 부족 → 교사가 고름) */
+.cs-section .cs-room.is-choose { color:#a44939; font-weight:700; flex-wrap:wrap; }
+.cs-section .cs-room.is-choose select { border-color:#e3a497; background:#fff6f4; }
+.cs-section .cs-room.is-choose input { width:110px; }
+#classSectionsOutputWarnings { margin:4px 0 8px; }

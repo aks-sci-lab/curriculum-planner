@@ -509,11 +509,62 @@ function classSectionsRoomCardHtml(round, group, section) {
   if (!plan) return "";
   const entry = typeof classSectionsEntry === "function" ? classSectionsEntry(round, group.key, false) : null;
   const pinned = entry?.sectionResult?.roomPins?.[section.id] || "";
-  const clash = (plan.issues || []).some((issue) => issue.severity === "error" && ((issue.groupId === group.key && (issue.sectionId === section.id || (issue.sectionIds || []).includes(section.id))) || (issue.otherGroupId === group.key && issue.otherSectionId === section.id)));
-  const usable = plan.rooms.filter((item) => item.kind !== "class" || item.grade === group.targetGrade);
+  const clash = (plan.issues || []).some((issue) => issue.severity === "error" && issue.type !== "room-short" && ((issue.groupId === group.key && (issue.sectionId === section.id || (issue.sectionIds || []).includes(section.id))) || (issue.otherGroupId === group.key && issue.otherSectionId === section.id)));
+  const choices = plan.choices?.[group.key]?.[section.id];
+  // 학년 교실이 모자라 교실을 못 정한 분반: 교사가 고른다(후보 = 그 시간에 비어 있는 다른 교실 → 다른 학년 교실 → 특별실, 첫 후보 '추천').
+  if (!roomId && choices) {
+    const kindLabel = { extra: "다른 교실", "other-grade": "다른 학년 교실", special: "특별실", class: "학년 교실" };
+    const options = choices.map((item) => `<option value="${esc(item.id)}">${esc(`${item.label}${item.recommended ? " (추천)" : ""} · ${kindLabel[item.kind] || item.kind}`)}</option>`).join("");
+    return `<span class="cs-room is-choose" data-room-id="" data-choose="${choices.length}" title="${esc(reason || "")}">교실 선택 필요 <select data-cs-room-pick="${esc(section.id)}" data-focus-key="cs-room-pick-${esc(section.id)}" aria-label="${esc(section.roomName)} 교실">
+      <option value="">고르세요 (${choices.length ? `후보 ${choices.length}개` : "빈 교실 없음"})</option>${options}</select>
+      <input class="cs-text" type="text" placeholder="새 교실 이름" data-cs-room-new="${esc(section.id)}" data-focus-key="cs-room-new-${esc(section.id)}" aria-label="${esc(section.roomName)} 새 교실 이름(다른 교실 목록에 추가)"></span>`;
+  }
+  const usable = plan.rooms.filter((item) => item.kind !== "class" || item.grade === group.targetGrade || item.id === pinned);
   const options = usable.map((item) => `<option value="${esc(item.id)}"${pinned === item.id ? " selected" : ""}>${esc(item.label)}</option>`).join("");
   return `<span class="cs-room${clash ? " is-clash" : ""}" data-room-id="${esc(roomId)}" title="${esc(reason || "")}">교실 <select data-cs-room-pick="${esc(section.id)}" data-focus-key="cs-room-pick-${esc(section.id)}" aria-label="${esc(section.roomName)} 교실">
     <option value="">${pinned ? "자동으로 되돌리기" : room ? `자동(${esc(room.label)})` : "자동(미정)"}</option>${options}</select></span>`;
+}
+
+// 내보내기·인쇄 전에 보일 경고: 교실을 고르지 않은 분반(같은 학기 모든 그룹), 자리 이름 교사(6단계 세션 classSectionsTeacherNameWarnings).
+function classSectionsOutputWarnings(round, group) {
+  const out = [];
+  const plan = classSectionsRoomPlan(round, group.semester);
+  if (plan) {
+    let total = 0;
+    let mine = 0;
+    for (const item of plan.groups) for (const section of item.sections) {
+      if (plan.assign?.[item.groupId]?.[section.id]) continue;
+      total += 1;
+      if (item.groupId === group.key) mine += 1;
+    }
+    if (total) out.push({ type: "room", count: total, message: `교실을 고르지 않은 분반 ${total}개${mine !== total ? `(이 그룹 ${mine}개)` : ""} — 분반 카드에서 교실을 고르세요(출석부·시간표에는 '미정'으로 나옵니다).` });
+  }
+  if (typeof classSectionsTeacherNameWarnings === "function") {
+    let list = [];
+    try { list = classSectionsTeacherNameWarnings() || []; } catch { list = []; }
+    if (!Array.isArray(list)) list = list.teachers || [];
+    const names = list.map((item) => (typeof item === "string" ? item : item?.name || item?.alias || item?.label || "")).filter(Boolean);
+    if (list.length) out.push({ type: "teacher", count: list.length, message: `실제 이름이 아닌 교사 ${list.length}명(${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}) — 교사 명단을 올리거나 이름을 고치세요.` });
+  }
+  return out;
+}
+
+function classSectionsOutputWarningsHtml(round, group) {
+  const list = classSectionsOutputWarnings(round, group);
+  if (!list.length) return "";
+  return `<ul class="cs-list is-error" id="classSectionsOutputWarnings" data-count="${list.length}">${list.map((item) => `<li data-type="${item.type}">${classSectionsPrintEsc(item.message)}</li>`).join("")}</ul>`;
+}
+
+// 내보내기·인쇄 상태 줄 끝에 경고를 붙인다(막지는 않음).
+function classSectionsWarnAfterOutput() {
+  if (CLASS_SECTIONS_PRINT_VIEW.busy) return void setTimeout(classSectionsWarnAfterOutput, 100); // zip 만드는 중이면 끝난 뒤
+  const context = classSectionsCurrent();
+  if (!context?.group) return;
+  const list = classSectionsOutputWarnings(context.round, context.group);
+  if (!list.length) return;
+  const box = typeof document !== "undefined" ? document.getElementById("classSectionsStatus") : null;
+  const before = box?.textContent || CLASS_SECTIONS_VIEW.status?.text || "";
+  classSectionsSetStatus(`${before ? `${before} ` : ""}⚠ ${list.map((item) => item.message).join(" ")}`, true);
 }
 
 // 블록 아래 교실 배정 요약: 이 그룹 관련 오류·확인, 내년 반을 모를 때 안내.
@@ -553,6 +604,7 @@ function classSectionsPrintButtonsHtml(round, group, result) {
   }
   return `<section class="cs-print" aria-label="출력물">
     <h5>출력물 <span class="cs-note">출석부·학생 시간표 (성명은 내려받을 때 차수 자료에서 채움, 저장하지 않음)</span></h5>
+    ${classSectionsOutputWarningsHtml(round, group)}
     <div class="cs-actions">
       <span class="cs-note">출석부 저장(${esc(group.semester)}학기):</span>
       <button class="button" id="classSectionsAttendanceFile" type="button" title="${esc(group.semester)}학기 모든 그룹·분반을 한 엑셀에(맨 앞 '목록' 시트 + 분반마다 시트)">출석부 전체 파일</button>
@@ -1017,7 +1069,16 @@ function classSectionsRoomSettingsEvent(event) {
 function classSectionsPrintHandleChange(event) {
   const target = event.target;
   const s = classSectionsPrintSettings();
-  if (target.dataset?.csRoomPick !== undefined) {
+  if (target.dataset?.csRoomNew !== undefined) {
+    const name = target.value.trim();
+    const result = classSectionsCurrent()?.entry?.sectionResult;
+    if (!name || !result) return;
+    const extras = classSectionsSplitNames(s.extraRooms);
+    if (!extras.includes(name)) s.extraRooms = [...extras, name].join(", ");
+    if (!result.roomPins || typeof result.roomPins !== "object") result.roomPins = {};
+    result.roomPins[target.dataset.csRoomNew] = name;
+    classSectionsSetStatus(`'${name}' 교실을 다른 교실 목록에 넣고 ${target.dataset.csRoomNew.split("#")[0]} 분반에 배정했습니다.`);
+  } else if (target.dataset?.csRoomPick !== undefined) {
     const context = classSectionsCurrent();
     const result = context?.entry?.sectionResult;
     if (!result) return;
@@ -1046,6 +1107,10 @@ function classSectionsPrintHandleChange(event) {
 function classSectionsPrintHandleClick(event) {
   const button = event.target.closest?.("button");
   if (!button) return;
+  // 6단계 화면의 블록표·명렬표·나이스 내보내기(class-sections-view.js가 먼저 처리)와 이 파일의 출력물 단추: 끝나면 경고를 상태 줄에 붙인다.
+  if (/^classSections(ExportBlocks|ExportRosters|ExportNeis|Attendance(File|All|Teacher|Group|Homeroom|HomeroomFile|PrintOne|PrintGroup|PrintSemester)|Homeroom(PrintOne|PrintGrade)|Timetable(Print|Excel))$/.test(button.id)) {
+    setTimeout(classSectionsWarnAfterOutput, 0);
+  }
   if (button.id === "classSectionsAttendanceGroup") return void classSectionsAttendanceExport("group");
   if (button.id === "classSectionsAttendanceTeacher") return void classSectionsAttendanceExport("teacher");
   if (button.id === "classSectionsAttendanceAll") return void classSectionsAttendanceExport("sections");

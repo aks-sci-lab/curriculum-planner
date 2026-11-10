@@ -111,11 +111,26 @@ test("교실 배정: 기본은 수강생이 가장 많은 내년 반 교실, 특
   const short = cs.classSectionsAssignRooms({ rooms, groups });
   const shortage = short.issues.find((issue) => issue.type === "room-short");
   assert.ok(shortage, "room shortage reported");
-  assert.match(shortage.message, /교실이 모자라 분반 2개.*분반 6개 > 2학년 교실 3개/);
-  // 다른 교실(다목적실·세미나실)을 더하면 해결.
-  const more = cs.classSectionsAssignRooms({ rooms: cs.classSectionsRoomList({ classrooms: { "2": ["2-1", "2-2", "2-3"], "3": ["3-1", "3-2"] }, special: { 과학실: ["과학실1"] }, extra: ["다목적실", "세미나실"] }), groups });
-  assert.ok(!more.issues.some((issue) => issue.type === "room-short"));
-  assert.ok(Object.values(more.assign.g2).includes("다목적실"));
+  assert.match(shortage.message, /교실 2개가 모자랍니다 — 아래에서 교실을 고르세요.*분반 6개 > 2학년 교실 3개/);
+  // 다른 교실(다목적실·세미나실)이 있어도 자동으로 넣지 않는다(사용자 결정: 교사가 고름) → '교실 선택 필요' + 후보.
+  const moreRooms = cs.classSectionsRoomList({ classrooms: { "2": ["2-1", "2-2", "2-3"], "3": ["3-1", "3-2"] }, special: { 과학실: ["과학실1"] }, extra: ["다목적실", "세미나실"] });
+  const more = cs.classSectionsAssignRooms({ rooms: moreRooms, groups });
+  assert.ok(!Object.values(more.assign.g2).some((id) => ["다목적실", "세미나실"].includes(id)), "no automatic extra room");
+  const unplaced = groups[0].sections.filter((section) => !more.assign.g2[section.id]).map((section) => section.id);
+  assert.equal(unplaced.length, 2);
+  const lists = unplaced.map((id) => plain(more.choices.g2[id]));
+  // 후보 순서(결정적): 다른 교실 → 다른 학년 교실(같은 시간 3학년 블록이 쓰는 3-x 제외) → 특별실(같은 시간 사용 중이면 제외)
+  assert.deepEqual(lists[0].map((item) => item.id), ["다목적실", "세미나실", "3-1"]);
+  assert.deepEqual(lists[0].map((item) => item.kind), ["extra", "extra", "other-grade"]);
+  assert.deepEqual(lists.map((list) => list.find((item) => item.recommended).id), ["다목적실", "세미나실"], "different recommendation per section");
+  assert.deepEqual(plain(cs.classSectionsAssignRooms({ rooms: moreRooms, groups: JSON.parse(JSON.stringify(groups)) }).choices), plain(more.choices), "deterministic");
+  assert.match(more.reasons.g2[unplaced[0]], /교실 선택 필요/);
+  // 추천대로 고르면(roomPins) 겹침 0, 교실 선택 필요 없음
+  groups[0].pins = Object.fromEntries(unplaced.map((id, i) => [id, lists[i].find((item) => item.recommended).id]));
+  const picked = cs.classSectionsAssignRooms({ rooms: moreRooms, groups });
+  assert.ok(!picked.issues.some((issue) => ["room-short", "room-double", "room-cross"].includes(issue.type)), JSON.stringify(picked.issues.map((issue) => issue.type)));
+  assert.deepEqual(plain(picked.choices), {});
+  groups[0].pins = {};
 });
 
 test("교실 배정: 블록 시간이 없으면 다른 학년 특별실 겹침은 안내만, 학년 교실은 학년별", () => {
