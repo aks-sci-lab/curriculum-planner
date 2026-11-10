@@ -218,7 +218,12 @@ function hoursGradeLabel(info) {
   const current = `현 ${Number(info.grade) - 1}학년`;
   return info.source
     ? `${head} · ${current} ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"})`
-    : `${head} · ${current} 결과 없음)`;
+    : info.sourceFailed ? `${head} · ${current} · 4단계 기준 설정 오류)` : `${head} · ${current} 결과 없음)`;
+}
+
+// 결과는 있는데 4단계 기준 비율이 잘못돼 읽지 못한 학년: 누르면 4단계 '기준 설정'을 연다.
+function hoursThresholdLink(info, label) {
+  return `<button class="button button-quiet is-missing" type="button" data-hours-thresholds="${info.grade}" title="4단계 '기준 설정'의 개설·분반 기준(%)을 고치면 다시 계산합니다">${escapeHtml(label)}</button>`;
 }
 
 // 내년도 G학년 카드의 '현 G−1학년 명단 n반' 안내(근거 차수 명단의 반 수). 1학년(신입생)·결과 없음이면 null.
@@ -502,6 +507,7 @@ function computeHoursStats(year = hoursTargetYear()) {
     if (needsResults && grade !== "1") {
       const failed = { source: new Set(), closed: new Set() };
       info.source = hoursSourceResult(currentGrade, settings, failed);
+      info.sourceFailed = !info.source && failed.source.size > 0;
       for (const [rounds, what] of [[failed.source, "수강신청 결과"], [failed.closed, "폐강 정보"]]) {
         if (rounds.size && !issues.some((issue) => issue.thresholdRounds === [...rounds].join(",") && issue.text.includes(what))) issues.push(hoursThresholdIssue(rounds, what));
       }
@@ -866,7 +872,8 @@ function hoursSettingsSummary(stats) {
     const plan = info.hasLayout ? ""
       : ` <button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">${info.cohortYear} 편제표 미업로드 · 1단계에서 업로드</button>`;
     const source = info.grade === "1" ? ""
-      : info.source ? ` (현${Number(info.grade) - 1} ${info.source.round}차${info.source.confirmed ? " 확정" : " 임시"})` : ` (현${Number(info.grade) - 1} 결과 없음)`;
+      : info.source ? ` (현${Number(info.grade) - 1} ${info.source.round}차${info.source.confirmed ? " 확정" : " 임시"})`
+        : info.sourceFailed ? ` ${hoursThresholdLink(info, `현${Number(info.grade) - 1} · 4단계 기준 설정 오류`)}` : ` (현${Number(info.grade) - 1} 결과 없음)`;
     return `<span class="hours-summary-item"><b>${info.grade}학년</b> ${classes}${source}${plan}</span>`;
   }).join("");
   return `<p class="hours-summary-line hours-settings-summary">
@@ -1017,7 +1024,8 @@ function renderHoursStatsView() {
         <option value="">자동 (최근 확정 차수)</option>
         ${rounds.map((round) => `<option value="${round}"${settings.sourceRounds[info.grade] === round ? " selected" : ""}>${round}차 · ${escapeHtml(roundStatusLabel(round))}</option>`).join("")}
       </select></label>
-      <span class="hours-source-state">${info.source ? `현 ${Number(info.grade) - 1}학년 ${info.source.round}차 ${info.source.confirmed ? "확정 결과" : "미확정 결과(임시)"}` : `현 ${Number(info.grade) - 1}학년 결과 없음`}</span>`;
+      <span class="hours-source-state">${info.source ? `현 ${Number(info.grade) - 1}학년 ${info.source.round}차 ${info.source.confirmed ? "확정 결과" : "미확정 결과(임시)"}`
+        : info.sourceFailed ? hoursThresholdLink(info, `현 ${Number(info.grade) - 1}학년 · 4단계 기준 설정 오류`) : `현 ${Number(info.grade) - 1}학년 결과 없음`}</span>`;
     return `<article class="hours-grade-card${info.hasLayout ? "" : " is-missing"}">
       <h4>내년도 ${info.grade}학년</h4>
       <label class="hours-classes">학급 수 <input id="hoursClasses${info.grade}" data-hours-classes="${info.grade}" data-focus-key="classes-${info.grade}" type="number" min="0" max="99" step="1" value="${info.classes ?? ""}" placeholder="입력"></label>
@@ -1364,7 +1372,7 @@ function hoursColumnLetter(index) {
 function hoursFormGradeHead(info) {
   if (info.grade === "1") return `1학년 (${info.cohortYear} 입학 · 신입생)`;
   const current = `현 ${Number(info.grade) - 1}학년`;
-  return `${info.grade}학년 (${info.cohortYear} 입학 · ${current}${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : " 결과 없음"})`;
+  return `${info.grade}학년 (${info.cohortYear} 입학 · ${current}${info.source ? ` ${info.source.round}차 ${info.source.confirmed ? "확정" : "미확정"}` : info.sourceFailed ? " · 4단계 기준 설정 오류" : " 결과 없음"})`;
 }
 
 function hoursStaffName(department) {
@@ -1951,6 +1959,13 @@ function initHoursStats() {
     else renderWorkspaceContext();
   };
   const openCohort = (event) => {
+    const thresholds = event.target.closest("[data-hours-thresholds]");
+    if (thresholds) {
+      thresholds.closest("dialog")?.close?.();
+      switchWorkflowStep("4");
+      document.getElementById("openAggregateSettings")?.click();
+      return;
+    }
     const cohort = event.target.closest("[data-hours-cohort]");
     if (!cohort) return;
     cohort.closest("dialog")?.close?.();

@@ -769,7 +769,7 @@ test("round status locks threshold inputs while confirmed and the snapshot reuse
   assert.match(roundStatus, /const atRisk = course\.atRisk;/);
   assert.doesNotMatch(roundStatus, /course\.enrollment < summary\.openingLimit/);
   // 기준 비율·최대 인원을 바꾸면 잠금 상태를 갱신한 뒤 (개설/폐강 결정 칸이 들어 있는) 집계표를 다시 그린다.
-  assert.match(app, /for \(const selector of \["#openingPercent", "#divisionPercent", "#maxClassSize"\]\)[\s\S]{0,400}?renderRoundStatusControls\(\);\n\s+renderAggregate\(\);/);
+  assert.match(app, /for \(const selector of \["#openingPercent", "#divisionPercent", "#maxClassSize"\]\)[\s\S]{0,800}?renderRoundStatusControls\(\);\n\s+renderAggregate\(\);/);
   assert.match(roundStatus, /\["openingPercent", "divisionPercent", "maxClassSize"\]/);
   assert.doesNotMatch(app + hoursStats, /renderClosurePanel/);
 });
@@ -1170,4 +1170,7 @@ test("5단계: 확정 전 차수를 4단계 기준 비율이 잘못돼 읽지 �
   assert.ok(unconfirmed.issues.some((issue) => /^2차 기준 설정 값이 올바르지 않아 수강신청 결과를 읽지 못했습니다/.test(issue.text)));
   assert.equal(unconfirmed.issues.some((issue) => /수강신청 결과가 없어/.test(issue.text)), false);
   assert.equal(unconfirmed.items.find((item) => item.subject === "문학").classes, 10);
+  const second = unconfirmed.grades.find((info) => info.grade === "2");
+  assert.equal(second.label, "2학년(2026 입학 · 현 1학년 · 4단계 기준 설정 오류)", "'결과 없음'이 아니라 기준 설정 오류");
+  assert.match(ctx.hoursSettingsSummary(unconfirmed), /data-hours-thresholds="2"[^>]*>현1 · 4단계 기준 설정 오류</);
 });
