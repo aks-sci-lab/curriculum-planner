@@ -1479,6 +1479,29 @@ test("1단계 업로드 상태 문구의 과목 수는 표 위 'n개 과목 표�
   assert.match(fs.readFileSync(path.join(root, "curriculum-data-view.js"), "utf8"), /visibleItems\.filter\(\(item\) => !item\.fixed\)\.length\}개 과목 표시/, "표 쪽 기준(고정 행 뺀 과목 행)");
 });
 
+test("wide result: an untagged two-semester column listed once takes the semester of its neighbouring columns (before the per-student estimate)", () => {
+  const groups = [
+    { grade: "3", semester: "1", name: "3-1 택2", count: 2, courses: ["물리", "화학", "기후"] },
+    { grade: "3", semester: "2", name: "3-2 택2", count: 2, courses: ["생명", "지구", "기후"] }
+  ];
+  const ctx = vm.createContext({ getApplicationGroupSettings: () => groups, parseSemesterFromCourseName: (name) => String(name).match(/([12])학기/)?.[1] || "" });
+  vm.runInContext(functionSource(app, "function applicationGroupForCourse(", "function courseGroupLabel("), ctx);
+  const run = (order, picks) => {
+    const courses = order.map((name, index) => ({ column: index + 5, name, semesterKey: "", credits: 3 }));
+    const students = picks.map((list, index) => ({ grade: "2", classroom: "1", number: String(index + 1), selections: list.map((name) => ({ ...courses.find((c) => c.name === name) })) }));
+    const data = { courses, students };
+    const warnings = ctx.classifyApplicationRecords(data);
+    return { data, warnings, names: students.map((student) => student.selections.map((selection) => selection.name)) };
+  };
+  // 기후 열이 2학기 과목(생명·지구) 사이 → 2학기. 학생별 추정이면 1학기(1학기 1과목뿐)였을 학생도 열 위치를 따른다.
+  let result = run(["물리", "화학", "생명", "기후", "지구"], [["물리", "기후", "생명", "지구"], ["물리", "화학", "생명", "기후"]]);
+  assert.deepEqual(plain(result.names.map((list) => list.find((name) => name.startsWith("기후")))), ["기후 (2학기)", "기후 (2학기)"]);
+  assert.deepEqual(plain(result.warnings.undecidedSemester), []);
+  // 학기 경계(왼쪽 1학기·오른쪽 2학기)면 열 위치로 못 정하니 학생별 추정.
+  result = run(["물리", "화학", "기후", "생명", "지구"], [["물리", "기후", "생명", "지구"], ["물리", "화학", "생명", "기후"]]);
+  assert.deepEqual(plain(result.names.map((list) => list.find((name) => name.startsWith("기후")))), ["기후 (1학기)", "기후 (2학기)"]);
+});
+
 // 사용자 화면 '3학년 미분류' 재현: 결과 파일에 학기 꼬리표 없이 '심화 영어'(3-1 택5·3-2 택5에 모두)가 적힌 경우.
 test("untagged two-semester course in a result file is split per student so 4단계 has no '미분류' and per-semester counts are right", () => {
   const { choiceGroups } = require(path.join(__dirname, "..", "e2e", "lib", "plan-fixture.cjs"));
@@ -1491,7 +1514,7 @@ test("untagged two-semester course in a result file is split per student so 4단
   vm.runInContext(functionSource(app, "function applicationGroupForCourse(", "function courseGroupLabel("), ctx);
   vm.runInContext(functionSource(app, "function aggregateRecords(", "function currentStudent("), ctx);
   const names = [...new Set(groups.flatMap((group) => group.courses))];
-  const courses = names.map((name, column) => ({ column, name, semesterKey: "", credits: 3 }));
+  const courses = names.map((name, column) => ({ column: `app${column}`, name, semesterKey: "", credits: 3 })); // 목록형 결과(열 위치 없음)
   const pick = (list) => list.map((name) => ({ ...courses.find((course) => course.name === name) }));
   const first = groups.find((group) => group.semester === "1" && group.count === 5).courses.filter((name) => name !== "심화 영어");
   const second = groups.find((group) => group.semester === "2" && group.count === 5).courses.filter((name) => name !== "심화 영어");

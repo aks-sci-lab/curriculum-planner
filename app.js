@@ -2113,6 +2113,34 @@
         }
       }
       if (!twoSemester.size) return { undecided, split: 0 };
+      // 열 위치(사용자 규칙): 가로형 결과표(열 번호가 숫자)에서 한 번만 나온 두 학기 과목은 왼쪽·오른쪽 이웃 과목 열의 학기를 따른다
+      // (예: '융합과학 탐구(2학기)' 바로 오른쪽, 2학기 과목들 사이 → 2학기). 양쪽이 다르면(학기 경계) 정하지 않고 학생별 추정으로.
+      const ordered = data.courses.filter((course) => typeof course.column === "number").sort((a, b) => a.column - b.column);
+      const semesterOfColumn = (course, grade) => {
+        const own = String(course.semesterKey || parseSemesterFromCourseName(course.name) || "");
+        if (own === "1" || own === "2") return own;
+        if (twoSemester.has(course)) return "";
+        const group = applicationGroupForCourse(course, grade, groups);
+        return group && ["1", "2"].includes(String(group.semester)) ? String(group.semester) : "";
+      };
+      const positionSemester = new Map();
+      for (const [course, byGrade] of twoSemester) {
+        const index = ordered.indexOf(course);
+        if (index < 0) continue;
+        for (const grade of byGrade.keys()) {
+          const near = (step) => {
+            for (let at = index + step; at >= 0 && at < ordered.length; at += step) {
+              const value = semesterOfColumn(ordered[at], grade);
+              if (value) return value;
+              if (!twoSemester.has(ordered[at])) return "";
+            }
+            return "";
+          };
+          const left = near(-1), right = near(1);
+          const semester = left && right ? (left === right ? left : "") : left || right;
+          if (semester) positionSemester.set(`${course.column}|${grade}`, semester);
+        }
+      }
       const sameGroup = (a, b) => a && b && a.name === b.name && String(a.semester) === String(b.semester);
       const variants = new Map();
       const variantFor = (base, semester) => {
@@ -2153,7 +2181,9 @@
         }
         const options = [];
         const total = 2 ** Math.min(picked.length, 10);
+        const fixed = picked.map((selection) => positionSemester.get(`${selection.column}|${grade}`) || "");
         for (let mask = 0; mask < total; mask++) {
+          if (fixed.some((semester, index) => semester && semester !== ((mask >> index) & 1 ? "2" : "1"))) continue;
           const counts = new Map([...groupsOfStudent].map(([id, entry]) => [id, entry.have]));
           const semesters = picked.map((selection, index) => {
             const semester = (mask >> index) & 1 ? "2" : "1";
