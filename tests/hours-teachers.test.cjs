@@ -176,38 +176,96 @@ test("전년도 대비 증감 순위: 많이 늘어난 순, 과학·사회는 �
   assert.equal(plain(ctx.hoursYearChange([dep("국어", "국어", 16, null, 8, null)])).hasPrevious, false);
 });
 
-test("공통 시수 자동 배분: 반 단위로 나눠 세부 교과 1인당 시수를 맞춘다", () => {
+const SCIENCE = [
+  { id: "과학-물리", hours: { 1: 28, 2: 12 }, teachers: 3 },
+  { id: "과학-화학", hours: { 1: 36, 2: 20 }, teachers: 3 },
+  { id: "과학-생명", hours: { 1: 36, 2: 16 }, teachers: 3 },
+  { id: "과학-지구", hours: { 1: 16, 2: 0 }, teachers: 2 },
+  { id: "과학-공통 교사 없음", hours: { 1: 0, 2: 0 }, teachers: 0 }
+];
+
+test("공통 과목 나누기: 통합과학은 반마다 물리·화학·생명·지구 1시간씩(반 수만큼), 반마다 교사 4명", () => {
   const ctx = pureContext();
-  const members = [
-    { id: "과학-물리", hours: { 1: 28, 2: 12 }, teachers: 3 },
-    { id: "과학-화학", hours: { 1: 36, 2: 20 }, teachers: 3 },
-    { id: "과학-생명", hours: { 1: 36, 2: 16 }, teachers: 3 },
-    { id: "과학-지구", hours: { 1: 16, 2: 0 }, teachers: 2 },
-    { id: "과학-공통 교사 없음", hours: { 1: 0, 2: 0 }, teachers: 0 }
-  ];
+  for (const classes of [10, 11, 9]) {
+    const result = plain(ctx.hoursBalanceCommonAllocation(SCIENCE, [{ subject: "통합과학1", semester: "1", credit: 4, classes, grade: "1" }]));
+    assert.equal(result.ok, true);
+    for (const id of ["과학-물리", "과학-화학", "과학-생명", "과학-지구"]) assert.equal(result.allocations[id]["1"], classes, `${classes}반 ${id}`);
+    assert.deepEqual(result.allocations["과학-공통 교사 없음"], { 1: 0, 2: 0 });
+    const entry = result.plan.find((item) => item.subject === "통합과학1");
+    assert.equal(entry.mode, "equal");
+    assert.equal(Object.keys(entry.byClass).length, classes);
+    assert.ok(Object.values(entry.byClass).every((byDepartment) => Object.keys(byDepartment).length === 4 && Object.values(byDepartment).every((hours) => hours === 1)), "반마다 교사 4명 × 1시간");
+    assert.equal(result.notes["과학-물리"]["1"], `통과${classes}`);
+  }
+  // 학점이 4가 아니면 고르게 나누고 나머지는 1인당 시수가 낮은 교과부터 1시간씩.
+  // 5학점: 1시간씩 나눈 뒤(물리 38/3≈12.7 · 지구 26/2=13 · 화학·생명 46/3≈15.3) 남는 1시간은 물리.
+  let result = plain(ctx.hoursBalanceCommonAllocation(SCIENCE, [{ subject: "통합과학1", semester: "1", credit: 5, classes: 10 }]));
+  assert.deepEqual(result.plan[0].byClass["1"], { "과학-물리": 2, "과학-화학": 1, "과학-생명": 1, "과학-지구": 1 });
+  // 3학점: 지구 8 → 물리 9.3 → 화학 12(생명과 같으면 앞 교과).
+  result = plain(ctx.hoursBalanceCommonAllocation(SCIENCE, [{ subject: "통합과학1", semester: "1", credit: 3, classes: 10 }]));
+  assert.deepEqual(result.plan[0].byClass["1"], { "과학-물리": 1, "과학-화학": 1, "과학-지구": 1 });
+  assert.equal(ctx.hoursBalanceCommonAllocation(SCIENCE.map((member) => ({ ...member, teachers: 0 })), [{ subject: "통합과학1", semester: "1", credit: 4, classes: 10 }]).ok, false);
+});
+
+test("공통 과목 나누기: 통합과학 고정 뒤 과학탐구실험은 반 단위 균형, 설정으로 방식·교과별 시간을 바꿈", () => {
+  const ctx = pureContext();
   const items = [
-    { subject: "통합과학1", semester: "1", credit: 4, classes: 10 },
-    { subject: "과학탐구실험1", semester: "1", credit: 1, classes: 10 },
-    { subject: "통합과학2", semester: "2", credit: 4, classes: 10 },
-    { subject: "융합과학 탐구", semester: "2", credit: 4, classes: 7 }
+    { subject: "통합과학1", semester: "1", credit: 4, classes: 10, grade: "1" },
+    { subject: "과학탐구실험1", semester: "1", credit: 1, classes: 10, grade: "1" },
+    { subject: "통합과학2", semester: "2", credit: 4, classes: 10, grade: "1" },
+    { subject: "융합과학 탐구", semester: "2", credit: 4, classes: 7, grade: "2" }
   ];
-  const result = plain(ctx.hoursBalanceCommonAllocation(members, items));
-  assert.equal(result.ok, true);
+  let result = plain(ctx.hoursBalanceCommonAllocation(SCIENCE, items));
   const sum = (semester) => Object.values(result.allocations).reduce((acc, value) => acc + value[semester], 0);
   assert.equal(sum("1"), 50, "1학기 공통 시수 전부(40 + 10)");
   assert.equal(sum("2"), 68);
-  assert.deepEqual(result.allocations["과학-공통 교사 없음"], { 1: 0, 2: 0 });
-  for (const semester of ["1", "2"]) {
-    const loads = members.filter((member) => member.teachers > 0)
-      .map((member) => (member.hours[semester] + result.allocations[member.id][semester]) / member.teachers);
-    assert.ok(Math.max(...loads) - Math.min(...loads) <= 4 / 2 + 1e-9, `${semester}학기 1인당 시수 차이는 한 반(4시간) 이내: ${loads}`);
-    for (const member of members) assert.equal(result.allocations[member.id][semester] % 1, 0);
-  }
-  // 배분 메모는 원래 양식처럼 줄인 과목명 + 시수('통과8 · 과탐실2').
-  assert.match(result.notes["과학-지구"]["1"], /^(통과|과탐실)\d+( · (통과|과탐실)\d+)?$/);
+  const lab = result.plan.find((item) => item.subject === "과학탐구실험1");
+  assert.equal(lab.mode, "class");
+  assert.ok(Object.values(lab.byClass).every((byDepartment) => Object.keys(byDepartment).length === 1), "과탐실은 반 하나를 한 교과가");
+  // 통합과학을 먼저 고정한 뒤 과탐실을 나누므로, 과탐실은 통합과학까지 더한 1인당 시수가 가장 낮은 교과(지구: 16 + 10 = 26/2 = 13)부터.
+  assert.ok(result.allocations["과학-지구"]["1"] > 10, "지구가 과탐실 반을 먼저 받음");
+  for (const member of SCIENCE) assert.equal(result.allocations[member.id]["1"] % 1, 0);
   const hours = (note) => [...note.matchAll(/\d+/g)].reduce((acc, match) => acc + Number(match[0]), 0);
-  for (const member of members) assert.equal(hours(result.notes[member.id]["1"] || ""), result.allocations[member.id]["1"]);
-  assert.equal(ctx.hoursBalanceCommonAllocation(members.map((member) => ({ ...member, teachers: 0 })), items).ok, false);
+  for (const member of SCIENCE) assert.equal(hours(result.notes[member.id]["1"] || ""), result.allocations[member.id]["1"]);
+  assert.match(result.notes["과학-지구"]["1"], /^통과10 · 과탐실\d+$/);
+  // 과탐실을 '시간 분배'로: 반마다 1시간을 한 교과에(1학점이라 반 단위와 같지만 반마다 같은 교과).
+  result = plain(ctx.hoursBalanceCommonAllocation(SCIENCE, items, { modes: { "과학탐구실험1": "time" } }));
+  const timed = result.plan.find((item) => item.subject === "과학탐구실험1");
+  assert.equal(timed.mode, "time");
+  assert.equal(new Set(Object.values(timed.byClass).map((value) => JSON.stringify(value))).size, 1);
+  // 통합사회: 시간 균형 분배가 기본, 교과별 시간을 설정하면 그대로(합 = 학점 × 반 수).
+  const social = [
+    { id: "사회-한국사", hours: { 1: 40, 2: 40 }, teachers: 3 }, { id: "사회-지리", hours: { 1: 20, 2: 20 }, teachers: 2 },
+    { id: "사회-일사", hours: { 1: 30, 2: 30 }, teachers: 3 }, { id: "사회-윤리", hours: { 1: 30, 2: 30 }, teachers: 3 }
+  ];
+  const integrated = [{ subject: "통합사회1", semester: "1", credit: 4, classes: 10, grade: "1" }];
+  result = plain(ctx.hoursBalanceCommonAllocation(social, integrated));
+  assert.equal(result.plan[0].mode, "time");
+  assert.equal(Object.values(result.allocations).reduce((acc, value) => acc + value["1"], 0), 40, "분배 합 = 학점 × 반 수");
+  assert.equal(Object.values(result.plan[0].byClass["1"]).reduce((acc, value) => acc + value, 0), 4);
+  result = plain(ctx.hoursBalanceCommonAllocation(social, integrated, { shares: { "통합사회1": { "사회-지리": 1, "사회-일사": 2, "사회-윤리": 1 } } }));
+  assert.deepEqual(result.plan[0].byClass["7"], { "사회-지리": 1, "사회-일사": 2, "사회-윤리": 1 });
+  assert.deepEqual([result.allocations["사회-지리"]["1"], result.allocations["사회-일사"]["1"], result.allocations["사회-윤리"]["1"], result.allocations["사회-한국사"]["1"]], [10, 20, 10, 0]);
+  // 합이 학점과 다른 설정은 쓰지 않는다(자동 나눔).
+  result = plain(ctx.hoursBalanceCommonAllocation(social, integrated, { shares: { "통합사회1": { "사회-지리": 3 } } }));
+  assert.equal(result.plan[0].mode, "time");
+});
+
+test("hoursCommonClassAssignment(학년, 학기): { 과목: { 반: { 교과 id: 주당 시간 } } } — 6단계·시간표용", () => {
+  const settings = { "2027": { classCounts: { "1": 10, "2": 0, "3": 0 }, creativeHours: 2, teachers: { "국어": 2, "과학-물리": 1, "과학-화학": 1, "진로": 1 } } };
+  const ctx = statsContext(settings, plan);
+  ctx.setTimeout = setTimeout;
+  const assignment = plain(ctx.hoursCommonClassAssignment("1", "1", "2027"));
+  assert.deepEqual(Object.keys(assignment), ["통합과학1"]);
+  assert.equal(Object.keys(assignment["통합과학1"]).length, 10);
+  assert.deepEqual(assignment["통합과학1"]["3"], { "과학-물리": 2, "과학-화학": 2 }, "교사 있는 교과(물리·화학)에 4시간을 똑같이");
+  assert.deepEqual(plain(ctx.hoursCommonClassAssignment("1", "2", "2027")), { "통합과학2": plain(ctx.hoursCommonClassAssignment("1", "2", "2027"))["통합과학2"] });
+  assert.equal(ctx.hoursCommonClassAssignment("2", "1", "2027")["통합과학1"], undefined, "다른 학년 과목은 없음");
+  // 시수 설정 팝업에 과목별 방식·교과별 시간 칸.
+  const html = ctx.hoursCommonSettings(ctx.computeHoursStats("2027"));
+  assert.match(html, /data-hours-common-mode="통합과학1"/);
+  assert.match(html, /교과별 같은 시간 \(기본\)/);
+  assert.match(html, /data-hours-common-share="통합과학1" data-hours-common-member="과학-물리"/);
 });
 
 test("교원 구성: 총 교사 수 직접 입력, 비교과는 교과 평균에서 빼고 맡은 수업은 따로", () => {
