@@ -4,7 +4,7 @@
 // 저장: state.classSections = { settings: {교사·고정 시간·특별실·기준}, "<차수>": { "<현학년>:<학기>:<그룹>": 그룹 설정 + sectionResult } }
 // 개인정보: 저장하는 학생 키는 '현학년-반-번호'뿐이다. 성명은 명렬표·나이스 내보내기 때 차수 자료에서 읽어 파일에만 쓴다.
 
-var CLASS_SECTIONS_VIEW = { round: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1 };
+var CLASS_SECTIONS_VIEW = { round: "", roundDefault: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1 };
 var CLASS_SECTIONS_DAY_NAMES = ["월", "화", "수", "목", "금"];
 var CLASS_SECTIONS_PERIODS = 7;
 var CLASS_SECTIONS_MODE_OPTIONS = [["move", "완전 이동"], ["homeroom", "같은 담임반끼리 묶기 우선"], ["balance", "분반 인원 균형"]];
@@ -134,6 +134,9 @@ function classSectionsRoundChoices() {
 
 function classSectionsDefaultRound() {
   const rounds = classSectionsRoundChoices();
+  // 5단계와 같은 규칙(round-status.js courseOpeningRound: 최근 확정 → 4단계에서 보는 차수 → 최근 결과).
+  const shared = typeof courseOpeningRound === "function" ? courseOpeningRound("") : "";
+  if (shared && rounds.includes(shared)) return shared;
   const locked = rounds.slice().reverse().find((round) => typeof isRoundLocked === "function" && isRoundLocked(round));
   return locked || (rounds.includes(String(state.currentRound)) ? String(state.currentRound) : rounds.at(-1) || "");
 }
@@ -895,7 +898,13 @@ function classSectionsSetStatus(text, error = false, scope = null) {
 function classSectionsCurrent() {
   const rounds = classSectionsRoundChoices();
   if (!rounds.length) return null;
-  if (!rounds.includes(CLASS_SECTIONS_VIEW.round)) CLASS_SECTIONS_VIEW.round = classSectionsDefaultRound();
+  // 차수는 5단계와 같은 기본값(courseOpeningRound)을 따른다. 교사가 고른 차수는 기본값이 더 뒤 차수로 바뀔 때(새 차수 확정 등)까지 유지한다
+  // (확정을 잠시 해제해 고치는 동안에는 고른 차수 그대로).
+  const fallback = classSectionsDefaultRound();
+  if (!rounds.includes(CLASS_SECTIONS_VIEW.round) || !CLASS_SECTIONS_VIEW.roundDefault || Number(fallback) > Number(CLASS_SECTIONS_VIEW.roundDefault)) {
+    CLASS_SECTIONS_VIEW.round = fallback;
+    CLASS_SECTIONS_VIEW.roundDefault = fallback;
+  }
   const round = CLASS_SECTIONS_VIEW.round;
   const source = classSectionsSource(round);
   if (!source.groups.length) return { round, source, group: null, entry: null };
@@ -1720,6 +1729,7 @@ function initClassSections() {
   content.addEventListener("change", classSectionsHandleChange);
   document.getElementById("classSectionsRound")?.addEventListener("change", (event) => {
     CLASS_SECTIONS_VIEW.round = event.target.value;
+    CLASS_SECTIONS_VIEW.roundDefault = classSectionsDefaultRound();
     CLASS_SECTIONS_VIEW.compare = null;
     renderClassSections();
   });

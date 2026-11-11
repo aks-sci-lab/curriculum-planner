@@ -169,7 +169,8 @@ function hoursDefaultDepartment(subject, area = "") {
 function hoursRoundSnapshot(round, failed = null) {
   if (isRoundLocked(round) && state.roundStatuses?.[round]?.snapshot) return state.roundStatuses[round].snapshot;
   try {
-    return buildRoundSnapshot(round);
+    // 과목 개설 결정의 한 출처(round-status.js): 확정 스냅샷, 아니면 지금 4단계 기준 스냅샷(캐시).
+    return typeof courseOpeningSnapshot === "function" ? courseOpeningSnapshot(round) : buildRoundSnapshot(round);
   } catch (error) {
     failed?.add(String(round));
     return null;
@@ -186,8 +187,10 @@ function hoursSourceResult(currentGrade, settings, failed = null) {
   const rounds = applicationRoundNumbers().slice().reverse();
   const hasGrade = (round) => roundStatusData(round)?.students?.some((student) => String(student.grade) === currentGrade);
   const pinned = String(settings.sourceRounds?.[String(Number(currentGrade) + 1)] || "");
+  // 읽을 차수는 6단계와 같은 규칙(courseOpeningRound: 최근 확정 → 4단계에서 보는 차수 → 최근 결과). 시수 설정에서 고정한 차수가 있으면 그것.
   const round = pinned && rounds.includes(pinned) && (hasGrade(pinned) || state.roundStatuses?.[pinned]?.snapshot)
     ? pinned
+    : typeof courseOpeningRound === "function" ? courseOpeningRound(currentGrade)
     : rounds.find((item) => isRoundLocked(item) &&
         state.roundStatuses[item]?.snapshot?.rows?.some((row) => row.grade === currentGrade)) ||
       rounds.find(hasGrade);
@@ -195,7 +198,8 @@ function hoursSourceResult(currentGrade, settings, failed = null) {
   const snapshot = hoursRoundSnapshot(round, failed?.source);
   const rows = (snapshot?.rows || []).filter((row) => row.grade === currentGrade);
   if (!rows.length) return null;
-  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
+  const stale = typeof roundSnapshotStale === "function" ? roundSnapshotStale(round).filter((item) => item.grade === currentGrade) : [];
+  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, stale, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
 }
 
 // 근거 차수보다 앞 차수에서 폐강한 과목(정규화 이름 → { round, semesters }). 2차 재신청 결과에는 1차에 폐강한 과목이
@@ -885,6 +889,8 @@ function computeHoursStats(year = hoursTargetYear()) {
         // 결과는 있는데 기준 설정 때문에 읽지 못한 경우: '결과가 없다'고 하지 않는다(위 확인 항목으로 알림).
       } else if (!info.source) {
         issues.push({ level: "error", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
+      } else if (info.source.confirmed && info.source.stale?.length && typeof roundSnapshotStaleText === "function") {
+        issues.push({ level: "warning", text: `${grade}학년 선택과목: ${info.source.round}차 확정 스냅샷이 지금 4단계 집계와 다릅니다(${roundSnapshotStaleText(info.source.stale)}). 시수는 확정 스냅샷 값입니다. 4단계에서 확정을 해제하고 다시 확정하면 맞춰집니다.`, action: "4" });
       } else if (info.source.confirmed && typeof roundSnapshotDrift === "function") {
         // 확정 뒤 학급 수·기준 비율이 바뀌면 선택과목은 확정 시점 값, 지정 과목은 현재 학급 수로 계산돼 서로 어긋난다.
         const drift = roundSnapshotDrift(info.source.round);
@@ -931,11 +937,28 @@ function computeHoursStats(year = hoursTargetYear()) {
       } else {
         const candidates = resultIndex.get(normalizeResultCourseName(entry.subject)) || [];
         const exact = candidates.filter((row) => row.semester === entry.semester);
-        const semesterless = !exact.length && candidates.length === 1 && !candidates[0].semester;
+        // 편제표 두 학기에 모두 편성된 과목(같은 과목은 한 학기만): 4단계 집계의 학기 그대로만 쓴다.
+        // 다른 학기에만 개설됐으면 이 학기는 0(정상), 학기 미정으로 남은 결과는 어느 학기에도 넣지 않고 4단계에서 학기를 정하게 한다.
+        const twoSemester = entries.filter((other) => other.kind !== "지정" &&
+          normalizeResultCourseName(other.subject) === normalizeResultCourseName(entry.subject)).map((other) => other.semester);
+        const plannedBoth = twoSemester.includes("1") && twoSemester.includes("2");
+        const semesterless = !exact.length && candidates.length === 1 && !candidates[0].semester && !plannedBoth;
         // 학기 표시가 없는 결과 한 칸이 편제표의 두 학기와 모두 맞으면 이중 계산하지 않고 앞 학기에만 반영한다.
         const alreadyUsed = semesterless && usedResults.has(candidates[0]);
         const matched = exact.length ? exact : semesterless && !alreadyUsed ? candidates : [];
-        if (alreadyUsed) {
+        const otherOnly = plannedBoth && !exact.length && candidates.some((row) => row.semester && row.semester !== entry.semester);
+        const undecidedRows = plannedBoth && !exact.length ? candidates.filter((row) => !row.semester) : [];
+        if (otherOnly || undecidedRows.length) {
+          item.autoClasses = 0;
+          undecidedRows.forEach((row) => usedResults.add(row));
+          const opened = [...new Set(candidates.filter((row) => row.semester).map((row) => row.semester))].sort();
+          item.basis = otherOnly
+            ? `두 학기 편성 · 현 ${currentGrade}학년 ${info.source.round}차${info.source.confirmed ? " 확정" : " 미확정"} 결과 ${opened.join("·")}학기만 개설`
+            : "두 학기 편성 · 4단계 학기 미정";
+          if (undecidedRows.length && entry.semester === "1") {
+            issues.push({ level: "warning", action: "4", text: `${grade}학년 ${entry.subject}: 편제표 1·2학기에 모두 편성됐는데 현 ${currentGrade}학년 ${info.source.round}차 결과에 학기 미정 신청 ${undecidedRows.reduce((sum, row) => sum + (Number(row.enrollment) || 0), 0)}명이 있어 개설반에 넣지 않았습니다. 4단계 과목 메뉴 '개설 학기 바꾸기'에서 학기를 정하세요.` });
+          }
+        } else if (alreadyUsed) {
           item.autoClasses = 0;
           item.basis = "학기 표시 없는 결과 · 앞 학기에만 반영";
           issues.push({ level: "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 신청 결과에 학기 표시가 없어 앞 학기에만 반영했습니다. 이 학기에도 개설하면 상세 표에서 개설반을 입력하세요.` });
@@ -964,7 +987,9 @@ function computeHoursStats(year = hoursTargetYear()) {
       const override = hoursNumber(settings.classOverrides[item.key], { integer: true, max: 99 });
       item.classes = override ?? item.autoClasses;
       item.manual = override !== null;
-      if (item.manual) item.basis = `직접 입력 (자동 ${item.autoClasses})`;
+      // 직접 입력이 우선이지만, 4단계(신청 결과) 값과 다르면 칸에 표시한다(학교 지정 과목은 학급 수 기준이라 표시하지 않음).
+      item.differs = item.manual && item.kind !== "지정" && grade !== "1" && Boolean(info.source) && item.classes !== item.autoClasses;
+      if (item.manual) item.basis = item.differs ? `직접 입력 ${item.classes}반 · 4단계 ${item.autoClasses}반과 다름(${item.basis})` : `직접 입력 (자동 ${item.autoClasses})`;
       const departmentOverride = settings.departmentOverrides[normalizeResultCourseName(item.subject)];
       item.defaultDepartment = hoursDefaultDepartment(item.subject, item.area);
       item.department = HOURS_DEPARTMENTS.some((department) => department.id === departmentOverride) || hoursNonTeachingId(departmentOverride)
@@ -1507,7 +1532,7 @@ function renderHoursStatsView() {
   const detailOpen = content.querySelector('details[data-hours-details="detail"]')?.open ?? stats.items.some((item) => item.department === "기타");
   const detailRows = !detailOpen ? "" : stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) ||
     hoursDepartmentOrder(a.department) - hoursDepartmentOrder(b.department) ||
-    a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}">
+    a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}${item.differs ? " is-differ" : ""}">
       <td>${item.grade}</td><td>${item.cohortYear}</td><td>${item.currentGrade ? `현 ${item.currentGrade}` : "신입"}</td><td>${item.semester}</td><th scope="row" class="closure-subject">${escapeHtml(item.subject)}</th>
       <td>${item.kind}</td>
       <td><select data-hours-department="${escapeHtml(normalizeResultCourseName(item.subject))}" data-default-department="${item.defaultDepartment}" data-focus-key="dept-${escapeHtml(item.key)}" aria-label="${escapeHtml(item.subject)} 담당 교과">${departmentOptions(item.department)}</select></td>
@@ -2010,7 +2035,7 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
             put(row, column + 1, { v: item.credit, k: "cell" });
             put(row, column + 2, {
               v: item.classes, k: item.kind !== "지정" && item.grade !== "1" ? "cellRed" : "cell", item,
-              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
+              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.differs ? " is-differ" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
                 attrs: { "data-hours-item-classes": item.key, "data-hours-auto": item.autoClasses, "data-focus-key": `item-${item.key}`, min: 0, max: 99, step: 1,
                   "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반` } }
             });

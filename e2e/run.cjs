@@ -11,6 +11,7 @@ const Expected = require("./lib/expected.cjs");
 const { buildNeis } = require("./lib/neis-fixture.cjs");
 const { GROUPS } = require("./lib/plan-fixture.cjs");
 const Timetable = require("./lib/timetable-checks.cjs");
+const { twoSemesterScenario } = require("./lib/two-semester-scenario.cjs");
 const S6 = require("./lib/step6.cjs");
 const SC = require("./lib/step6-scenario.cjs");
 const X6 = require("./lib/step6-extra.cjs");
@@ -755,6 +756,20 @@ async function stepPersistence({ page, h, report, dialogs }) {
     result.restored = await snapshot(page);
     h.check(JSON.stringify(result.restored) === JSON.stringify(result.before), "치명", "저장", "백업 복원 뒤 화면 자료가 원래와 다름", { expected: result.before, actual: result.restored });
     return result;
+  });
+}
+
+// 두 학기 편성 과목 한 열(가로형 결과, 학기 경계 열) → 미리보기 '개설 학기 선택' → 4단계 그 학기 구역에만 → 확정 → 5단계 개설반 = 6단계 분반 수 = 4단계
+// → 확정 해제 · 4단계 과목 메뉴 '개설 학기 바꾸기' → 다시 확정 → 세 단계가 따라감(e2e/lib/two-semester-scenario.cjs, 화면 글자로 대조).
+async function stepTwoSemesterPick({ page, h, OUT }) {
+  return h.step("2-7. 두 학기 편성 과목 개설 학기 선택 → 4·5·6단계 일치", async () => {
+    const results = [];
+    const check = (ok, what, detail = "") => {
+      results.push({ ok: Boolean(ok), what });
+      h.check(Boolean(ok), "중요", "단계 일치", what, { actual: String(detail).slice(0, 600) });
+    };
+    await twoSemesterScenario(page, { OUT, check, log: () => {} });
+    return { passed: results.filter((item) => item.ok).length, total: results.length, failed: results.filter((item) => !item.ok).map((item) => item.what) };
   });
 }
 
@@ -1999,6 +2014,7 @@ async function main() {
     await stepClassSections(ctx);
     await stepPersistence(ctx);
     await stepResultTwice(ctx);
+    await stepTwoSemesterPick({ ...ctx, OUT });
     if (args.explore2) await require(path.resolve(args.explore2))({ page, h, text, sleep, gotoStep, upload, waitText, report, OUT });
   } finally {
     report.data.tabRetries = tabRetries;

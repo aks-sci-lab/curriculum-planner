@@ -82,6 +82,83 @@ function buildRoundSnapshot(round) {
   };
 }
 
+// ---- 과목 개설 결정의 한 출처 ----
+// 과목 개설 결정(현학년·학기·그룹·과목 → 개설 여부·학급 수·인원)은 4단계 집계(aggregateRecords)를 차수 스냅샷 모양으로 만든 행 하나에서 읽는다.
+// 확정된 차수는 확정 스냅샷, 아니면 지금 4단계 기준으로 만든 스냅샷(buildRoundSnapshot). 5단계 개설반 자동 값·6단계 분반 수가 모두 이것을 쓴다.
+// 읽을 차수(courseOpeningRound): 가장 최근에 확정된 차수(그 학년 행이 있는) → 지금 4단계에서 보는 차수(결과 있음) → 결과가 있는 가장 최근 차수.
+function courseOpeningRound(currentGrade = "") {
+  const rounds = (typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : Object.keys(state.rounds || {})).map(String);
+  const grade = String(currentGrade || "");
+  const hasData = (round) => {
+    const students = roundStatusData(round)?.students || [];
+    return grade ? students.some((student) => String(student.grade) === grade) : students.length > 0;
+  };
+  const locked = rounds.slice().reverse().find((round) => isRoundLocked(round) &&
+    state.roundStatuses?.[round]?.snapshot?.rows?.some((row) => !grade || String(row.grade) === grade));
+  if (locked) return locked;
+  if (rounds.includes(String(state.currentRound)) && hasData(String(state.currentRound))) return String(state.currentRound);
+  return rounds.slice().reverse().find(hasData) || "";
+}
+
+function courseOpeningSnapshot(round) {
+  round = String(round || "");
+  if (!round) return null;
+  if (isRoundLocked(round) && state.roundStatuses?.[round]?.snapshot) return state.roundStatuses[round].snapshot;
+  const compute = () => buildRoundSnapshot(round);
+  if (typeof cachedByStateRevision !== "function") return compute();
+  let thresholds = "";
+  try { const value = aggregateThresholds(); thresholds = `${value.openingPercent}|${value.divisionPercent}`; } catch { thresholds = "x"; }
+  const bases = typeof nextYearClassBases === "function" ? JSON.stringify(nextYearClassBases()) : "";
+  const year = typeof $ === "function" ? $("#schoolYear")?.value || "" : "";
+  // 예외(기준 비율 오류)는 캐시하지 않고 그대로 던진다.
+  return cachedByStateRevision("courseOpeningSnapshot", `${round}|${thresholds}|${bases}|${year}`, compute);
+}
+
+function courseOpeningRowKey(row) {
+  const name = typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(row.name) : String(row.name || "").replace(/\s+/g, "");
+  return `${row.grade}|${row.semester || ""}|${row.group || ""}|${name}`;
+}
+
+// 확정 스냅샷이 지금 자료로 다시 만든 집계와 다른 과목(확정 뒤 그룹 설정·편제표·결과 분류 규칙이 바뀐 경우).
+// 5·6단계는 확정 스냅샷을 쓰므로 4단계 화면과 어긋난다 → 4단계·5단계에 알리고 '확정 해제 후 다시 확정'을 권한다.
+function roundSnapshotStale(round) {
+  round = String(round || "");
+  const snapshot = isRoundLocked(round) ? state.roundStatuses?.[round]?.snapshot : null;
+  if (!snapshot?.rows) return [];
+  const compute = () => {
+    let live = null;
+    try { live = buildRoundSnapshot(round); } catch { return []; }
+    if (!live) return [];
+    const index = (rows) => {
+      const map = new Map();
+      for (const row of rows) {
+        const key = courseOpeningRowKey(row);
+        const entry = map.get(key) || { grade: String(row.grade), semester: String(row.semester || ""), name: row.displayName || row.name, classCount: 0, enrollment: 0 };
+        entry.classCount += Number(row.classCount) || 0;
+        entry.enrollment += Number(row.enrollment) || 0;
+        map.set(key, entry);
+      }
+      return map;
+    };
+    const before = index(snapshot.rows), after = index(live.rows);
+    const differences = [];
+    for (const key of new Set([...before.keys(), ...after.keys()])) {
+      const a = before.get(key), b = after.get(key);
+      if (a && b && a.classCount === b.classCount && a.enrollment === b.enrollment) continue;
+      const base = a || b;
+      differences.push({ grade: base.grade, semester: base.semester, name: String(base.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, "").trim(),
+        confirmed: a ? a.classCount : null, current: b ? b.classCount : null });
+    }
+    return differences;
+  };
+  return typeof cachedByStateRevision === "function" ? cachedByStateRevision("roundSnapshotStale", round, compute) : compute();
+}
+
+function roundSnapshotStaleText(differences, limit = 4) {
+  const label = (item) => `${Number(item.grade) + 1}학년 ${item.semester ? `${item.semester}학기` : "학기 미정"} ${item.name} ${item.confirmed ?? "없음"}→${item.current ?? "없음"}`;
+  return differences.slice(0, limit).map(label).join(", ") + (differences.length > limit ? ` 외 ${differences.length - limit}개` : "");
+}
+
 function roundSnapshotDrift(round) {
   const snapshot = state.roundStatuses?.[String(round)]?.snapshot;
   if (!snapshot) return [];
