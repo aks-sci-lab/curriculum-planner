@@ -534,6 +534,11 @@ test("공통 과목 교사: 5단계 배분 메모(통과·융과 …)가 정한 
   const assignment = { "통합과학1": { "1": "과학-물리", "2": "과학-화학", "3": "과학-생명", "4": "과학-지구" }, "융합과학 탐구 (2학기)": { "1": "과학-생명" } };
   assert.deepEqual(plain(ctx.classSectionsCommonMemoDepartments(["융합과학 탐구", "통합과학1", "기후변화와 환경생태"], notes, "2", assignment)),
     { "융합과학 탐구": ["과학-생명"], "통합과학1": ["과학-물리", "과학-화학", "과학-생명", "과학-지구"], "기후변화와 환경생태": ["과학-화학"] }, "배분에 없는 과목은 메모");
+  // 새 계약: 반마다 { 교과: 주당 시간 }(통합과학 4시간 = 물·화·생·지 1시간씩), 0시간 교과는 뺌
+  const hoursShape = { "통합과학1": { "1": { "과학-물리": 1, "과학-화학": 1, "과학-생명": 1, "과학-지구": 1 }, "2": { "과학-물리": 1, "과학-화학": 1, "과학-생명": 1, "과학-지구": 1 } },
+    "융합과학 탐구": { "1": { "과학-생명": 3, "과학-화학": 0 } } };
+  assert.deepEqual(plain(ctx.classSectionsCommonMemoDepartments(["융합과학 탐구", "통합과학1"], null, "2", hoursShape)),
+    { "융합과학 탐구": ["과학-생명"], "통합과학1": ["과학-물리", "과학-화학", "과학-생명", "과학-지구"] });
   ctx.hoursCommonClassAssignment = (grade, semester) => (grade === "2" && semester === "2" ? assignment : null);
   ctx.hoursSettings = () => ({ teachers: {}, allocationNotes: notes });
   assert.deepEqual(plain(ctx.classSectionsCommonMemo("2", "2").assignment), assignment);

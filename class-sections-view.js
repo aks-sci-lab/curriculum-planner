@@ -315,7 +315,9 @@ function classSectionsCommonMemoDepartments(courseNames, notes, semester, assign
   if (assignment && typeof assignment === "object") {
     for (const name of courseNames) {
       const key = Object.keys(assignment).find((item) => plainName(item) === plainName(name));
-      const departments = key ? [...new Set(Object.values(assignment[key] || {}).map(String).filter(Boolean))] : [];
+      // 반마다 값: 교과 id(예전 계약) 또는 { 교과 id: 주당 시간 }(통합과학 4시간 = 물·화·생·지 1시간씩). 시간이 있는 교과만.
+      const departments = key ? [...new Set(Object.values(assignment[key] || {}).flatMap((value) => (value && typeof value === "object"
+        ? Object.entries(value).filter(([, hours]) => Number(hours) > 0).map(([department]) => department) : [value])).map((value) => String(value ?? "")).filter(Boolean))] : [];
       if (departments.length) out[name] = departments;
     }
   }
