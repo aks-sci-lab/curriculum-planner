@@ -163,7 +163,7 @@ function parseResultSheet(sheet, options) {
   base.format = "wide";
   let data;
   try {
-    data = createRecords(rows);
+    data = createRecords(rows, { merges: sheet?.layout?.mergedRanges || sheet?.mergedRanges || [], sheetName: sheet?.name || "" });
   } catch (error) {
     return { ...base, error: error instanceof Error ? error.message : "결과표 형식을 읽지 못했습니다." };
   }
@@ -276,13 +276,18 @@ function analyzeResultCandidate(candidate, options) {
     }
   }
   let unclassified = [];
-  // 두 학기 편성 과목이 결과에 한 번만 나오면 '한 학기만 개설': 교사가 학기를 고른다(지금 규칙 추정값·근거와 함께).
   let semesterPicks = [];
-  try {
-    if (typeof twoSemesterPickCandidates === "function") semesterPicks = twoSemesterPickCandidates(candidate.data, grade, groups);
-  } catch { semesterPicks = []; }
+  let semesterNotes = [];
   try {
     unclassified = classifyApplicationRecords(candidate.data);
+    // 두 학기 편성 과목이 결과에 한 번만 나오면 '한 학기만 개설': 교사가 학기를 고른다(차수마다, 추천값·근거와 함께).
+    // 머리글 표시·같은 이름 두 열(위치)로 정한 과목은 묻지 않고 근거만 보여 준다.
+    if (typeof twoSemesterPickCandidates === "function") semesterPicks = twoSemesterPickCandidates(unclassified.twoSemesterCourses, grade);
+    if (typeof twoSemesterDecidedNotes === "function") {
+      const onceNames = new Set((options.subjects?.[targetGrade] || []).filter((item) => item.sameCourseOnce)
+        .map((item) => (typeof courseSemesterPickKey === "function" ? courseSemesterPickKey(item.subject) : item.subject)));
+      semesterNotes = twoSemesterDecidedNotes(candidate.data.courses, grade, onceNames);
+    }
     // 학기 표시 없는 두 학기 과목을 학생마다 'X (n학기)'로 나눴으면 과목 목록이 바뀌었으니 다시 읽는다.
     courses = candidate.data.courses.filter((course) => !course.applicationCurrentGrade || course.applicationCurrentGrade === grade);
   } catch (error) {
@@ -362,7 +367,7 @@ function analyzeResultCandidate(candidate, options) {
     after: after.get(key)?.count || 0
   }));
   return {
-    ...candidate, issues, comparison, unclassified, semesterPicks, courseCheckHtml: courseChecks?.html || "",
+    ...candidate, issues, comparison, unclassified, semesterPicks, semesterNotes, courseCheckHtml: courseChecks?.html || "",
     summary: { students: students.length, previousStudents: previousStudents.length, classes, courses: courses.length }
   };
 }
@@ -433,7 +438,7 @@ function renderResultImportPreview() {
       ${sheetPicker}
     </div>
     ${summary}
-    ${!blocked && typeof twoSemesterPickMarkup === "function" ? twoSemesterPickMarkup(candidate.semesterPicks, preview.grade) : ""}
+    ${!blocked && typeof twoSemesterPickMarkup === "function" ? twoSemesterPickMarkup(candidate.semesterPicks, preview.grade, candidate.semesterNotes) : ""}
     ${list(candidate.issues.blocking, "is-blocking", "반영할 수 없는 오류")}
     ${list(candidate.issues.errors || [], "is-blocking is-error", "오류 · 확인 후 반영할 수 있음")}
     ${list(candidate.issues.warnings, "is-warning", "확인이 필요한 경고")}
@@ -455,16 +460,17 @@ async function confirmResultImport() {
   const candidate = preview.candidates[preview.selected];
   // 개설 학기를 고르지 않은 두 학기 편성 과목: 추정한 학기로 반영할지 묻고, 그 학기를 저장해 다시 검증한 뒤 반영한다.
   const unpicked = (candidate?.issues?.blocking?.length ? [] : candidate?.semesterPicks || []).filter((item) => !item.pick && item.estimate);
+  // 고른 값은 차수마다 따로 저장한다(재신청 차수 파일은 동시 개설 과목도 한 학기분만 나올 수 있음).
   if (unpicked.length && typeof setCourseSemesterPick === "function") {
     const target = Number(preview.grade) + 1;
     const text = `개설 학기를 고르지 않은 두 학기 편성 과목 ${unpicked.length}개:\n` +
-      unpicked.map((item) => `· ${item.name} → ${target}학년 ${item.estimate}학기(추정 · ${item.basis})`).join("\n") +
-      `\n\n추정한 학기로 그 과목을 신청한 학생 전부를 옮겨 반영할까요? 4단계 과목 메뉴 '개설 학기 바꾸기'에서 나중에 바꿀 수 있습니다.`;
+      unpicked.map((item) => `· ${item.name} → ${target}학년 ${item.estimate}학기(추천 · ${item.basis})`).join("\n") +
+      `\n\n추천한 학기로 그 과목을 신청한 학생 전부를 넣어 반영할까요? 4단계 과목 메뉴 '개설 학기 바꾸기'에서 나중에 바꿀 수 있습니다.`;
     const ok = typeof appConfirm === "function"
-      ? await appConfirm(text, { title: "개설 학기 확인", ok: "추정한 학기로 반영", cancel: "돌아가서 고르기" })
+      ? await appConfirm(text, { title: "개설 학기 확인", ok: "추천한 학기로 반영", cancel: "돌아가서 고르기" })
       : window.confirm(text);
     if (!ok || resultImportPending !== preview) return;
-    for (const item of unpicked) setCourseSemesterPick(preview.grade, item.name, item.estimate);
+    for (const item of unpicked) setCourseSemesterPick(preview.grade, item.name, item.estimate, undefined, preview.round);
     revalidateResultImport();
     if (!resultImportPending || resultImportPending === preview) return;
     return confirmResultImport();
@@ -557,7 +563,7 @@ function initResultImport() {
   container.addEventListener("change", (event) => {
     const pick = event.target.closest?.("[data-semester-pick]");
     if (pick && resultImportPending && typeof setCourseSemesterPick === "function") {
-      setCourseSemesterPick(resultImportPending.grade, pick.dataset.semesterPickName || pick.dataset.semesterPick, pick.value);
+      setCourseSemesterPick(resultImportPending.grade, pick.dataset.semesterPickName || pick.dataset.semesterPick, pick.value, undefined, resultImportPending.round);
       revalidateResultImport();
       const name = pick.dataset.semesterPickName || "";
       status.style.color = "#596780";

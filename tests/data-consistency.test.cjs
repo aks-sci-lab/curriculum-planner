@@ -128,24 +128,29 @@ test("개설 학기를 고르면 4단계·5단계·6단계 모두 그 학기 하
   assert.ok(chosen.every((student) => student.selections.filter((selection) => env.ctx.courseSemesterPickKey(selection.name) === env.ctx.courseSemesterPickKey(COURSE)).every((selection) => selection.semesterKey === "2")));
 });
 
-test("고르지 않으면 지금 규칙(학기 경계 → 학생별 추정)으로 두 학기에 나뉘어도 단계마다 학기별 값이 같다", () => {
+test("고르지 않아도(추천값) 한 번만 나온 과목은 학생별로 섞지 않고 한 학기로 — 단계마다 같은 값", () => {
   const env = context();
-  load(env);
+  const fixture = load(env);
   const result = stages(env);
-  assertSame(result, "학생별");
+  assertSame(result, "추천값");
   const courseKey = env.ctx.normalizeResultCourseName(COURSE);
-  assert.ok(result.four.get(`1|${courseKey}`) > 0 && result.four.get(`2|${courseKey}`) > 0, "두 학기로 나뉨(추정 그대로)");
+  assert.equal(result.four.get(`1|${courseKey}`) || 0, 0, "1학기 없음(섞지 않음)");
+  assert.ok(result.four.get(`2|${courseKey}`) > 0, "추천 = 학생별 추정 다수(2학기)");
+  const same = env.state.courses.filter((course) => env.ctx.courseSemesterPickKey(course.name) === env.ctx.courseSemesterPickKey(COURSE));
+  assert.equal(same.length, 1);
+  assert.equal(same[0].semesterSource, "recommend");
+  assert.equal(env.state.students.filter((student) => student.selections.some((selection) => selection.column === same[0].column)).length, fixture.firstCount + fixture.secondCount);
 });
 
 test("4단계 '개설 학기 바꾸기'(applyTwoSemesterPick) 뒤에도 세 단계가 같고, 나뉜 열이 하나로 모인다", () => {
   const env = context();
-  const fixture = load(env); // 처음엔 학생별로 두 학기에 나뉨
+  const fixture = load(env, { pick: "2" });
   const { ctx, state } = env;
   const data = plain({ courses: state.courses, students: state.students });
   const key = ctx.courseSemesterPickKey(COURSE);
   const moved = ctx.applyTwoSemesterPick(data, "2", key, "1", { credits: 3 });
   assert.equal(moved.students, fixture.firstCount + fixture.secondCount);
-  assert.equal(moved.removed.length, 1, "2학기 열을 1학기 열로 합침");
+  assert.equal(moved.removed.length, 0, "한 열 그대로 학기만 바뀜");
   ctx.setCourseSemesterPick("2", COURSE, "1", "2026");
   ctx.classifyApplicationRecords(data);
   state.students = data.students; state.courses = data.courses; ctx.bump();
@@ -164,34 +169,108 @@ test("4단계 '개설 학기 바꾸기'(applyTwoSemesterPick) 뒤에도 세 단�
   assert.equal(data.courses.filter((course) => ctx.courseSemesterPickKey(course.name) === key).length, 1);
 });
 
-test("결과를 다시 취합해도 저장된 개설 학기가 유지된다(splitUntaggedTwoSemesterCourses가 courseSemesterPickFor를 읽음)", () => {
+test("고른 값은 차수마다: 결과를 다시 취합해도 이 차수 고른 학기가 유지되고, 다른 차수에는 쓰지 않는다", () => {
   const env = context();
-  env.ctx.setCourseSemesterPick("2", COURSE, "1", "2026");
+  const { ctx, state } = env;
+  ctx.setCourseSemesterPick("2", COURSE, "1", "2026", "1");
   const fixture = twoSemesterWideRows({});
-  const data = env.ctx.createRecords(fixture.rows);
-  const split = env.ctx.splitUntaggedTwoSemesterCourses(data, env.groups);
-  const entry = split.courses.find((item) => item.key === env.ctx.courseSemesterPickKey(COURSE));
-  assert.equal(entry.pick, "1");
-  assert.deepEqual(plain(entry.counts), { "1": fixture.firstCount + fixture.secondCount, "2": 0, "": 0 });
-  // 추정값(저장된 선택 없이): 학기 경계 열이라 학생별, 다수 2학기.
-  const candidates = env.ctx.twoSemesterPickCandidates(env.ctx.createRecords(fixture.rows), "2", env.groups);
+  const classify = () => { const data = ctx.createRecords(fixture.rows); return ctx.classifyApplicationRecords(data); };
+  let entry = classify().twoSemesterCourses.find((item) => item.key === ctx.courseSemesterPickKey(COURSE));
+  assert.deepEqual([entry.once, entry.pick, entry.semester], [true, "1", "1"]);
+  // 미리보기 목록: 추천(저장된 선택 없이) = 학기 경계 열이라 학생별 추정 다수 2학기, 고른 값 1학기.
+  const candidates = ctx.twoSemesterPickCandidates(classify().twoSemesterCourses, "2");
   assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].estimate, "2");
-  assert.equal(candidates[0].pick, "1");
-  assert.match(candidates[0].basis, new RegExp(`학기 경계 열 · 학생별 추정 1학기 ${fixture.firstCount}명 · 2학기 ${fixture.secondCount}명`));
-  assert.equal(candidates[0].mixed, true);
+  assert.deepEqual([candidates[0].estimate, candidates[0].pick, candidates[0].choosers], ["2", "1", fixture.firstCount + fixture.secondCount]);
+  assert.equal(candidates[0].basis, `학생별 추정 1학기 ${fixture.firstCount}명 · 2학기 ${fixture.secondCount}명`);
+  state.currentRound = "2"; state.rounds["2"] = null;
+  entry = classify().twoSemesterCourses.find((item) => item.key === ctx.courseSemesterPickKey(COURSE));
+  assert.equal(entry.pick, "", "2차에는 1차 고른 값을 자동으로 쓰지 않음");
 });
 
-test("개설 학기 추정 근거: 이웃 열 학기 · 학생별 다수 · 근거 없음", () => {
+test("추천 근거: 이웃 열 학기 · 학생별 다수 · 앞 차수 폐강 학기 / 한 학기만 개설", () => {
   const { ctx } = context();
-  assert.deepEqual(plain(ctx.courseSemesterPickEstimate({ position: "2", counts: { "1": 0, "2": 40, "": 0 } })), { semester: "2", basis: "이웃 열 2학기", mixed: false });
+  assert.deepEqual(plain(ctx.courseSemesterPickEstimate({ position: "2", counts: { "1": 0, "2": 40, "": 0 } })), { semester: "2", basis: "이웃 열 2학기" });
   assert.equal(ctx.courseSemesterPickEstimate({ position: "", counts: { "1": 5, "2": 3, "": 1 } }).semester, "1");
   assert.equal(ctx.courseSemesterPickEstimate({ position: "", counts: { "1": 0, "2": 0, "": 4 } }).semester, "");
+  const key = ctx.courseSemesterPickKey(COURSE);
+  const row = (semester, decision, classCount) => ({ grade: "2", semester, name: COURSE, decision, classCount });
+  assert.deepEqual(plain(ctx.courseSemesterRecommendFromRows([row("1", "open", 6), row("2", "closed", 0)], "2", key, "1")), { semester: "2", basis: "앞 차수(1차) 2학기 폐강" });
+  assert.deepEqual(plain(ctx.courseSemesterRecommendFromRows([row("1", "open", 6)], "2", key, "1")), { semester: "1", basis: "앞 차수(1차) 1학기만 개설" });
+  assert.equal(ctx.courseSemesterRecommendFromRows([row("1", "open", 6), row("2", "open", 3)], "2", key, "1"), null, "두 학기 모두 개설이면 추천 없음");
 });
 
-test("저장 형식: 학년도·현학년·과목 키 → '1'|'2'만 남기고 정리", () => {
+test("2차 재신청 파일에 한 열만 나오면 앞 차수(1차) 4단계에서 폐강한 학기를 추천한다", () => {
+  const env = context();
+  const { ctx, state } = env;
+  // 1차: 2학기로 고른 결과 → 4단계에서 2학기 심화 영어를 폐강으로 확정.
+  load(env, { pick: "2" });
+  const second = state.courses.find((course) => ctx.courseSemesterPickKey(course.name) === ctx.courseSemesterPickKey(COURSE));
+  state.roundClosures["1"] = { [`2:${second.column}`]: "closed" };
+  ctx.bump();
+  const snapshot = ctx.buildRoundSnapshot("1");
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {} }, "2": null };
+  state.roundStatuses = { "1": { status: "confirmed", snapshot } };
+  state.currentRound = "2"; state.students = []; state.courses = [];
+  ctx.bump();
+  assert.deepEqual(plain(ctx.courseSemesterPreviousRecommendation("2", COURSE)), { semester: "2", basis: "앞 차수(1차) 2학기 폐강" });
+  // 2차 재신청 파일(심화 영어 한 열): 학생별 추정보다 앞 차수 폐강 학기(2학기)를 먼저 추천한다.
+  const rows = twoSemesterWideRows({ seed: 3 }).rows;
+  const data = ctx.createRecords(rows);
+  const entry = ctx.classifyApplicationRecords(data).twoSemesterCourses.find((item) => item.once);
+  assert.deepEqual(plain(entry.recommend), { semester: "2", basis: "앞 차수(1차) 2학기 폐강" });
+  assert.equal(entry.pick, "");
+});
+
+test("머리글 학기·그룹 표시('3-2 택5' 병합 머리글·시트 이름)가 있으면 묻지 않고 그 학기, 같은 이름 두 열은 '위치로 정함' 근거", () => {
   const { ctx } = context();
-  assert.deepEqual(plain(ctx.courseSemesterPicksRestore({ "2026": { "2": { 심화영어: "2", 기하: "3" }, "3": { a: "1" } }, x: {}, "2027": [] })), { "2026": { "2": { 심화영어: "2" } } });
+  const fixture = twoSemesterWideRows({});
+  const at = fixture.rows[1].indexOf(COURSE);
+  const letter = (index) => String.fromCharCode(65 + index);
+  // 과목 이름 줄 위에 그룹 머리글 줄: 심화 영어 ~ 3-2 택5 과목들 위에 '3-2 택5' 병합.
+  const groupRow = fixture.rows[1].map(() => "");
+  groupRow[4] = "3-1 택5"; groupRow[at] = "3-2 택5";
+  const rows = [fixture.rows[0], groupRow, ...fixture.rows.slice(1)];
+  const merges = [`${letter(4)}2:${letter(at - 1)}2`, `${letter(at)}2:${letter(at + 10)}2`];
+  let data = ctx.createRecords(rows, { merges });
+  const course = data.courses.find((item) => item.name === COURSE);
+  assert.deepEqual([course.semesterKey, course.semesterSource, course.semesterHint], ["2", "header", "3-2 택5"]);
+  let result = ctx.classifyApplicationRecords(data);
+  assert.deepEqual(plain(ctx.twoSemesterPickCandidates(result.twoSemesterCourses, "2")), [], "표시로 정해지면 묻지 않음");
+  assert.deepEqual(plain(ctx.twoSemesterDecidedNotes(data.courses, "2", new Set([ctx.courseSemesterPickKey(COURSE)]))), [{ name: COURSE, semester: "2", basis: "머리글 표시 '3-2 택5' → 2학기" }]);
+  // 학년이 다르면(현 2학년 결과에 '2-2' 표시) 쓰지 않는다.
+  groupRow[at] = "2-2 택3";
+  data = ctx.createRecords([fixture.rows[0], groupRow, ...fixture.rows.slice(1)], { merges });
+  assert.equal(data.courses.find((item) => item.name === COURSE).semesterKey, "");
+  // 시트 이름 '3학년 2학기'
+  data = ctx.createRecords(fixture.rows, { sheetName: "3학년 2학기 결과" });
+  assert.deepEqual([data.courses.find((item) => item.name === COURSE).semesterKey, data.courses.find((item) => item.name === COURSE).semesterSource], ["2", "sheet"]);
+  // 같은 이름 두 열(동시 개설): 왼쪽 1학기 · 오른쪽 2학기 + 근거.
+  const twice = fixture.rows.map((row, index) => index === 1 ? [...row, COURSE] : index === 2 ? [...row, 3] : index > 2 ? [...row, ""] : row);
+  data = ctx.createRecords(twice);
+  assert.deepEqual(plain(ctx.twoSemesterDecidedNotes(data.courses, "2", new Set([ctx.courseSemesterPickKey(COURSE)])).map((note) => note.basis)),
+    ["위치로 정함: 왼쪽 열 → 1학기", "위치로 정함: 오른쪽 열 → 2학기"]);
+  result = ctx.classifyApplicationRecords(data);
+  assert.deepEqual(plain(ctx.twoSemesterPickCandidates(result.twoSemesterCourses, "2")), []);
+});
+
+test("웹 신청 결과(online, 'X (n학기)')도 4단계 = 5단계 = 6단계", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  // 웹 결과처럼: 과목이 서버 목록(online) · 현 학년 지정 · 이름에 학기 꼬리표.
+  for (const course of state.courses) { course.applicationGroupSource = "online"; course.applicationCurrentGrade = "2"; }
+  for (const student of state.students) for (const selection of student.selections) Object.assign(selection, state.courses.find((course) => course.column === selection.column));
+  ctx.bump();
+  const result = stages(env);
+  assertSame(result, "웹 결과");
+  assert.ok(result.five.get(`2|${ctx.normalizeResultCourseName(COURSE)}`) > 0);
+});
+
+test("저장 형식: 학년도·현학년·차수·과목 키 → '1'|'2'만 남기고 정리, 예전 키는 1차로", () => {
+  const { ctx } = context();
+  assert.deepEqual(plain(ctx.courseSemesterPicksRestore({ "2026": { "2": { "2": { 심화영어: "2", 기하: "3" } }, "3": { "1": { a: "1" } } }, x: {}, "2027": [] })), { "2026": { "2": { "2": { 심화영어: "2" } } } });
+  // 차수 없는 예전 키·다른 구현의 twoSemesterPicks → 1차
+  assert.deepEqual(plain(ctx.courseSemesterPicksRestore({ "2026": { "2": { 심화영어: "1" } } }, { "2026": { "1": { 기후: "2" } } })), { "2026": { "2": { "1": { 심화영어: "1" } }, "1": { "1": { 기후: "2" } } } });
   assert.deepEqual(plain(ctx.courseSemesterPicksRestore(null)), {});
 });
 
@@ -274,12 +353,13 @@ test("5단계 직접 입력 개설반은 우선하되 4단계 값과 다르면 �
 test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기화에 연결, 스크립트는 result-import.js 뒤", () => {
   assert.match(app, /courseSemesterPicks: \{\},/, "state 기본값");
   assert.match(between(app, "function workspacePayload(", "function workspaceBackupCompact("), /courseSemesterPicks: state\.courseSemesterPicks,/);
-  assert.match(app, /state\.courseSemesterPicks = typeof courseSemesterPicksRestore === "function" \? courseSemesterPicksRestore\(saved\.courseSemesterPicks\)/);
+  assert.match(app, /state\.courseSemesterPicks = typeof courseSemesterPicksRestore === "function" \? courseSemesterPicksRestore\(saved\.courseSemesterPicks, saved\.twoSemesterPicks\)/, "다른 구현의 예전 값도 옮김");
+  assert.doesNotMatch(app, /switchTwoSemesterCourse|data-two-semester-once|state\.twoSemesterPicks =/, "겹치던 다른 구현은 없음");
   assert.match(between(app, "function resetWorkspace(", "state.groupAssignments = {};"), /state\.courseSemesterPicks = \{\};/, "전체 초기화 때 지움");
   const html = read("index.html");
   const at = (file) => html.indexOf(`src="${file}?`);
   assert.ok(at("course-semester-picks.js") > at("result-import.js") && at("result-import.js") > 0);
   // 4단계 메뉴·미리보기 연결
   assert.match(app, /data-opening-semester/);
-  assert.match(read("result-import.js"), /twoSemesterPickMarkup\(candidate\.semesterPicks, preview\.grade\)/);
+  assert.match(read("result-import.js"), /twoSemesterPickMarkup\(candidate\.semesterPicks, preview\.grade, candidate\.semesterNotes\)/);
 });

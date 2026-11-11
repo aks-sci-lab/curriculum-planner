@@ -37,15 +37,31 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
     const boxText = await pickBox.innerText();
     console.log("개설 학기 선택:", boxText.replace(/\s+/g, " "));
     check(boxText.includes(COURSE), `개설 학기 선택에 ${COURSE}가 있음`, boxText);
-    check(/근거|이웃|학생|추정/.test(boxText), "추정 근거를 함께 보여 줌", boxText);
-    await page.getByRole("radio", { name: new RegExp(`${COURSE}.*2학기`) }).check(); await sleep(600);
+    // 추천 = 앞 차수 4단계 결과(그 학년 결과가 있는 가장 가까운 확정·집계 차수)가 먼저, 없으면 이웃 열·학생별 추정.
+    check(/추천 [12]학기 · 아직 고르지 않음/.test(boxText) && /추천 근거: (앞 차수\(\d+차\) [12]학기(만 개설| 폐강)|학생별 추정 1학기 \d+명 · 2학기 \d+명)/.test(boxText), "추천값과 추천 근거를 함께 보여 줌", boxText);
   }
-  if (DIAGNOSE) {
-    // 반영하기 전 고르지 않음 확인 창은 따로 본다(클릭 확인 2부).
-  }
+  // 고르지 않고 '결과 반영' → '개설 학기 확인' 창 → '돌아가서 고르기'(반영 안 함)
+  await page.locator("#confirmResultImport").click(); await sleep(500);
+  const askTitle = await text("#appConfirmDialog[open] #appConfirmTitle");
+  const askText = await text("#appConfirmDialog[open] #appConfirmText");
+  check(askTitle === "개설 학기 확인" && new RegExp(`${COURSE} → 3학년 [12]학기\\(추천 · `).test(askText), "학기를 고르지 않고 반영하면 '개설 학기 확인' 창이 묻는다", `${askTitle} | ${askText}`);
+  await shot("01b-ask.png");
+  if (await page.locator("#appConfirmDialog[open] #appConfirmCancel").count()) await page.locator("#appConfirmDialog[open] #appConfirmCancel").click();
+  await sleep(500);
+  check(await page.locator("#resultImportPreview:not(.hidden) #resultSemesterPicks").count() === 1 && !/반영했습니다/.test(await text("#status")), "'돌아가서 고르기'면 반영하지 않고 미리보기에 남음", await text("#status"));
+  // 고르기: 1학기 → 2학기(바꿀 때마다 저장하고 다시 검증)
+  await page.getByRole("radio", { name: `${COURSE} 1학기` }).check(); await sleep(700);
+  await page.getByRole("radio", { name: `${COURSE} 2학기` }).check(); await sleep(700);
+  const picked = await text("#resultSemesterPicks");
+  check(/고름/.test(picked) && await page.getByRole("radio", { name: `${COURSE} 2학기` }).isChecked(), "고른 학기가 표시됨(고름)", picked);
+  // 섞지 않음: 과목별 신청 인원 표에 심화 영어는 2학기 한 줄, 신청 학생 전부.
+  await page.locator("#resultImportPreview details.result-import-compare summary").click().catch(() => {});
+  await sleep(200);
+  const compareRows = (await page.locator("#resultImportPreview .result-import-table tbody tr").allInnerTexts()).map((row) => row.replace(/\s+/g, " ").trim()).filter((row) => row.startsWith(COURSE));
+  check(compareRows.length === 1 && /2학기/.test(compareRows[0]) && compareRows[0].includes(String(fixture.firstCount + fixture.secondCount)), `한 번만 나온 과목은 학생별로 섞지 않고 2학기 한 줄(${fixture.firstCount + fixture.secondCount}명)`, JSON.stringify(compareRows));
   await page.locator("#confirmResultImport").click(); await sleep(500);
   const confirmText = await appOk();
-  if (confirmText) console.log("반영 확인 창:", confirmText.replace(/\s+/g, " ").slice(0, 200));
+  check(!/개설 학기 확인/.test(confirmText), "고른 뒤에는 '개설 학기 확인' 창 없이 반영", confirmText);
   await sleep(1200);
   console.log("반영:", await text("#status"));
 
@@ -154,6 +170,46 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
   if (moved[0]?.closed) await decide("개설");
   console.log("3차 다시 확정:", await confirmRound());
   await compare("1", "B");
+
+  // 다음 차수에 같은 파일(한 열): 앞 차수(지금 확정한 차수) 4단계 결과로 추천 — 1학기만 개설 ------------------------
+  const addRoundAndUpload = async (uploadFile) => {
+    await gotoStep(2, "#workflowStep2Panel");
+    await page.locator("#applicationGrade2Tab").click(); await sleep(300);
+    await page.locator("#applicationResultsTab").click();
+    await page.locator("#addApplicationRound").click(); await sleep(500);
+    const added = await text("#status");
+    await page.locator("#rosterInput").setInputFiles(uploadFile);
+    await page.locator("#resultImportPreview:not(.hidden)").waitFor({ timeout: 30000 });
+    await sleep(300);
+    return added;
+  };
+  const added = await addRoundAndUpload(file);
+  const previousRound = added.match(/(\d+)차를 추가/)?.[1] ? String(Number(added.match(/(\d+)차를 추가/)[1]) - 1) : "";
+  const nextBox = await text("#resultSemesterPicks");
+  console.log("다음 차수 개설 학기 선택:", nextBox.replace(/\s+/g, " "));
+  check(new RegExp(`추천 1학기 · 아직 고르지 않음`).test(nextBox) && nextBox.includes(`앞 차수(${previousRound}차) 1학기만 개설`), `다음 차수 파일에 한 열만 나오면 앞 차수(${previousRound}차) 4단계 결과를 추천(앞 차수 고른 값을 그대로 쓰지 않음)`, nextBox);
+  await shot("07-next-round.png");
+  await page.locator("#cancelResultImport").click(); await sleep(300);
+
+  // 머리글 '3-2 택5'(병합 머리글)가 있는 파일: 묻지 않고 2학기 + 근거 ------------------------------------
+  const at = fixture.rows[1].indexOf(COURSE);
+  const groupRow = fixture.rows[1].map(() => "");
+  groupRow[4] = "3-1 택5"; groupRow[at] = "3-2 택5";
+  const letter = (index) => String.fromCharCode(65 + index);
+  const headerFile = path.join(OUT, "result-two-semester-header.xlsx");
+  fs.writeFileSync(headerFile, writeXlsx([{ name: "결과", rows: [fixture.rows[0], groupRow, ...fixture.rows.slice(1)], merges: [`${letter(4)}2:${letter(at - 1)}2`, `${letter(at)}2:${letter(at + 10)}2`] }]));
+  await page.locator("#rosterInput").setInputFiles(headerFile);
+  await page.locator("#resultImportPreview:not(.hidden)").waitFor({ timeout: 30000 });
+  await sleep(300);
+  const headerBox = await text("#resultSemesterPicks");
+  console.log("머리글 표시 파일:", headerBox.replace(/\s+/g, " "));
+  check(!(await page.locator(`#resultSemesterPicks input[data-semester-pick]`).count()) && headerBox.includes(`머리글 표시 '3-2 택5' → 2학기`), "머리글 학기·그룹 표시가 있으면 묻지 않고 근거만 보여 줌", headerBox);
+  await shot("08-header.png");
+  await page.locator("#confirmResultImport").click(); await sleep(500);
+  const headerAsk = await text("#appConfirmDialog[open] #appConfirmTitle");
+  check(headerAsk !== "개설 학기 확인", "머리글 표시 파일은 반영할 때도 '개설 학기 확인' 창 없음", headerAsk);
+  if (headerAsk) await page.locator("#appConfirmDialog[open] #appConfirmCancel").click();
+  else await sleep(800);
   return { fixture };
 }
 
