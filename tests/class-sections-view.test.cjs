@@ -512,3 +512,123 @@ test("교실 고정(roomPins)은 결과를 새로 만들어도 같은 분반 id�
   const source = fs.readFileSync(path.join(__dirname, "..", "class-sections-view.js"), "utf8") + fs.readFileSync(path.join(__dirname, "..", "class-sections-edit.js"), "utf8");
   assert.equal((source.match(/entry\.sectionResult = classSectionsCompactResult/g) || []).length, 1, "새 결과를 만드는 곳은 classSectionsSaveResult 하나");
 });
+
+// ---- 시간표 시제품 준비(공통 교과 교사·학급 단위 그룹·시간표 미리 점검) ----
+test("공통 과목 교사: 5단계 배분 메모(통과·융과 …)가 정한 세부 교과 교사의 담당 과목에 넣고, 메모에 없는 과목만 교과군 전체", () => {
+  const ctx = context();
+  ctx.hoursShortSubject = (name) => ({ "융합과학 탐구": "융과", "통합과학1": "통과", "기후변화와 환경생태": "기환" })[name] || name.slice(0, 2);
+  const notes = { "과학-물리": { "2": "통과8 · 과탐실2" }, "과학-화학": { "2": "융과4 · 기환2" }, "과학-생명": { "1": "융과4" } };
+  assert.deepEqual(plain(ctx.classSectionsCommonMemoDepartments(["융합과학 탐구", "통합과학1", "기후변화와 환경생태"], notes, "2")),
+    { "융합과학 탐구": ["과학-화학"], "통합과학1": ["과학-물리"], "기후변화와 환경생태": ["과학-화학"] });
+  const make = () => [{ id: "p", departments: ["과학-물리"], courses: [] }, { id: "c", departments: ["과학-화학"], courses: [] }, { id: "b", departments: ["과학-생명"], courses: [] }];
+  const courses = [{ name: "융합과학 탐구", department: "과학-공통" }, { name: "통합과학1", department: "과학-공통" }];
+  const teachers = make();
+  ctx.classSectionsCommonDepartmentFallback(courses, teachers, null, { notes, semester: "2" });
+  assert.deepEqual(teachers.map((teacher) => [teacher.id, teacher.courses.join(","), teacher.departments.includes("과학-공통")]),
+    [["p", "통합과학1", false], ["c", "융합과학 탐구", false], ["b", "", false]], "메모대로: 생명 교사는 2학기 공통 과목을 안 맡음");
+  // 메모에 없는 과목이 하나라도 있으면 그 과목 때문에 교과군 전체(예전 방식)도 함께
+  const partial = make();
+  ctx.classSectionsCommonDepartmentFallback([...courses, { name: "과학의 역사", department: "과학-공통" }], partial, null, { notes, semester: "2" });
+  assert.ok(partial.every((teacher) => teacher.departments.includes("과학-공통")));
+  // 5단계 반별 배분(hoursCommonClassAssignment → { 과목: { 반: 교과 } })이 있으면 그것이 먼저(통합과학은 전공별로 같은 수)
+  const assignment = { "통합과학1": { "1": "과학-물리", "2": "과학-화학", "3": "과학-생명", "4": "과학-지구" }, "융합과학 탐구 (2학기)": { "1": "과학-생명" } };
+  assert.deepEqual(plain(ctx.classSectionsCommonMemoDepartments(["융합과학 탐구", "통합과학1", "기후변화와 환경생태"], notes, "2", assignment)),
+    { "융합과학 탐구": ["과학-생명"], "통합과학1": ["과학-물리", "과학-화학", "과학-생명", "과학-지구"], "기후변화와 환경생태": ["과학-화학"] }, "배분에 없는 과목은 메모");
+  // 새 계약: 반마다 { 교과: 주당 시간 }(통합과학 4시간 = 물·화·생·지 1시간씩), 0시간 교과는 뺌
+  const hoursShape = { "통합과학1": { "1": { "과학-물리": 1, "과학-화학": 1, "과학-생명": 1, "과학-지구": 1 }, "2": { "과학-물리": 1, "과학-화학": 1, "과학-생명": 1, "과학-지구": 1 } },
+    "융합과학 탐구": { "1": { "과학-생명": 3, "과학-화학": 0 } } };
+  assert.deepEqual(plain(ctx.classSectionsCommonMemoDepartments(["융합과학 탐구", "통합과학1"], null, "2", hoursShape)),
+    { "융합과학 탐구": ["과학-생명"], "통합과학1": ["과학-물리", "과학-화학", "과학-생명", "과학-지구"] });
+  ctx.hoursCommonClassAssignment = (grade, semester) => (grade === "2" && semester === "2" ? assignment : null);
+  ctx.hoursSettings = () => ({ teachers: {}, allocationNotes: notes });
+  assert.deepEqual(plain(ctx.classSectionsCommonMemo("2", "2").assignment), assignment);
+  assert.equal(ctx.classSectionsCommonMemo("2", "3").assignment, null);
+  const assigned = make();
+  ctx.classSectionsCommonDepartmentFallback(courses, assigned, null, ctx.classSectionsCommonMemo("2", "2"));
+  assert.deepEqual(assigned.map((teacher) => teacher.courses.slice().sort().join(",")), ["통합과학1", "통합과학1", ["융합과학 탐구", "통합과학1"].sort().join(",")]);
+  delete ctx.hoursCommonClassAssignment;
+  // 시수표 교사 수만 있으면 메모가 정한 세부 교과 수 합
+  const counts = { "과학-물리": 2, "과학-화학": 3, "과학-생명": 4 };
+  ctx.classSectionsCommonDepartmentFallback(courses, [], counts, { notes, semester: "2" });
+  assert.equal(counts["과학-공통"], 5);
+});
+
+test("[버그] 학기·전 학년 함께 계산: 교사 명단을 그룹마다 합쳐 넘긴다(첫 그룹 명단만 쓰면 다른 그룹 공통 과목 분반 교사가 빔)", async () => {
+  const ctx = context();
+  const a = [{ id: "t1", departments: ["과학-물리"], courses: [] }, { id: "t2", departments: ["사회-일사"], courses: [] }];
+  const b = [{ id: "t1", departments: ["과학-물리", "과학-공통"], courses: ["통합과학1"] }, { id: "t2", departments: ["사회-일사", "사회-공통"], courses: ["사회문제 탐구"] }, { id: "t3", departments: ["정보"], courses: [] }];
+  const joint = plain(ctx.classSectionsJointTeachers([{ teachers: a, departmentTeachers: { "과학-물리": 2 } }, { teachers: b, departmentTeachers: { "과학-물리": 3, "과학-공통": 5 } }]));
+  assert.deepEqual(joint.teachers.map((teacher) => [teacher.id, teacher.departments.join(","), teacher.courses.join(",")]),
+    [["t1", "과학-물리,과학-공통", "통합과학1"], ["t2", "사회-일사,사회-공통", "사회문제 탐구"], ["t3", "정보", ""]]);
+  assert.deepEqual(joint.departmentTeachers, { "과학-물리": 3, "과학-공통": 5 });
+  // 화면 단추 경로: 첫 그룹이 공통 과목 없는 그룹이어도 합친 명단이 계산기로 간다
+  const group = ctx.classSectionsSource("1").groups[0];
+  const second = { ...group, key: "1:1:2-1 택1", label: "두 번째 그룹" };
+  const source = { ...ctx.classSectionsSource("1"), groups: [group, second] };
+  ctx.classSectionsCurrent = () => ({ round: "1", source, group, entry: ctx.classSectionsEntry("1", group.key, true) });
+  ctx.classSectionsBuildInput = (round, item) => ({ groupId: `1:${item.key}`, teachers: item.key === group.key ? a : b, seed: 1 });
+  ctx.renderClassSections = () => {};
+  let sent = null;
+  ctx.classSectionsRunSolver = async (request) => { sent = request; throw new Error("stop"); };
+  await ctx.classSectionsSolveSemesterCurrent();
+  assert.equal(sent.kind, "solveAll");
+  assert.deepEqual(plain(sent.input.teachers).map((teacher) => teacher.courses.join(",")), ["통합과학1", "사회문제 탐구", ""]);
+});
+
+test("학급 단위로만 운영되는 그룹: 블록 시간 없음('반 수업'), 다른 그룹 겹침·블록 시간 추천에서 뺌, 일부 반만 학급 단위면 그대로", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key, true);
+  const settings = ctx.classSectionsSettings();
+  entry.blockTimes.a = "월2,화3,수3,금1";
+  assert.equal(ctx.classSectionsClassUnitOnly(group, entry, settings), false);
+  assert.deepEqual(plain(ctx.classSectionsBuildInput("1", group, entry).blocks[0].times.length), 4, "이동 분반이 있으면 블록 시간 그대로");
+  const modes = ctx.classSectionsCourseConf(settings, "courseModes", group.grade);
+  modes["물리학"] = "class";
+  assert.equal(ctx.classSectionsClassUnitOnly(group, entry, settings), false, "일부 과목만 학급 단위 → 블록 시간 필요");
+  for (const course of group.courses) modes[course.key] = "class";
+  assert.equal(ctx.classSectionsClassUnitOnly(group, entry, settings), true);
+  const input = plain(ctx.classSectionsBuildInput("1", group, entry));
+  assert.ok(input.blocks.every((block) => block.times.length === 0), "반 수업 그룹은 블록 시간 없음(저장된 칸 값은 무시)");
+  // 폐강·0반 과목은 판단에서 뺀다
+  modes["지구과학"] = "move";
+  entry.classCounts["지구과학"] = 0;
+  assert.equal(ctx.classSectionsClassUnitOnly(group, entry, settings), true);
+  assert.equal(ctx.CLASS_SECTIONS_CLASS_UNIT_TIME, "반 수업(시간표에서 배치)");
+  assert.match(view, /id="classSectionsClassUnitOnly"/);
+  assert.match(view, /!classSectionsClassUnitOnly\(item, classSectionsEntry\(round, item\.key, false\), settings\)\)/, "블록 시간 추천에서 뺌");
+});
+
+test("시간표 미리 점검: 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간, 반 수업 시수 ÷ 교사 수가 넘으면 경고(최소 교사 수)", () => {
+  const ctx = context();
+  // 예: 3학년 주 35교시 − 블록 20(택5 블록 5개 × 4) − 고정 2 = 13칸, 정보 인공지능 기초 7반 × 4시간 = 28시간, 교사 2명 → 14 > 13 → 최소 3명
+  const check = plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 2, blockHours: 20, label: "3학년 1학기",
+    lessons: [{ department: "정보", label: "인공지능 기초 7반 × 4시간", hours: 28 }, { department: "제2외국어", label: "일본어 4반 × 2시간", hours: 8 }],
+    teachers: { 정보: 2, 제2외국어: 1 } }));
+  assert.equal(check.free, 13);
+  assert.equal(check.issues.length, 1);
+  assert.deepEqual([check.issues[0].department, check.issues[0].need], ["정보", 3]);
+  assert.match(check.issues[0].message, /3학년 1학기 정보: 반 수업 인공지능 기초 7반 × 4시간 28시간 ÷ 교사 2명 = 14시간이 블록 밖 빈 칸 13칸보다 많습니다 → 최소 3명 필요/);
+  assert.equal(plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 2, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: { 정보: 3 } })).issues.length, 0);
+  // 교사 수를 모르면 점검하지 않음(행만), 명단에 0명이면 경고
+  const unknown = plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 0, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: null }));
+  assert.deepEqual([unknown.issues.length, unknown.teachersKnown, unknown.rows[0].need], [0, false, 2]);
+  assert.match(plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 0, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: { 정보: 0 } })).issues[0].message, /맡을 교사가 명단에 없습니다 → 최소 2명/);
+  // 앱: 저장할 때 그 학년·학기 점검을 결과에 붙이고 상태 줄에 알림(학급 단위 그룹 + 교사 명단)
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key, true);
+  const settings = ctx.classSectionsSettings();
+  settings.gridDays = "월,화,수,목,금"; settings.gridPeriods = 3; // 15교시
+  for (const course of group.courses) ctx.classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] = "class";
+  for (const course of group.courses) ctx.classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] = "과학-물리";
+  settings.teachers.push({ id: "t1", name: "김물리", department: "과학-물리" });
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  ctx.classSectionsSaveResult(entry, ctx.classSectionsSolve(input), input, group, ctx.classSectionsSource("1"));
+  const saved = plain(entry.sectionResult.timetableCheck);
+  assert.equal(saved.blockHours, 0, "반 수업 그룹은 블록 시수 0");
+  assert.equal(saved.free, 15);
+  assert.equal(saved.rows[0].hours, group.courses.reduce((sum, course) => sum + course.classCount * course.credits, 0));
+  assert.equal(saved.issues.length, 1, `반 수업 ${saved.rows[0].hours}시간 ÷ 1명 > 15칸`);
+  assert.match(ctx.CLASS_SECTIONS_VIEW.statusTail, /시간표 미리 점검 경고 1건/);
+  assert.match(ctx.classSectionsTimetableCheckHtml(entry.sectionResult), /id="classSectionsTimetableCheck" data-count="1"/);
+});

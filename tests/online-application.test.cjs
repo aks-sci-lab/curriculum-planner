@@ -1562,15 +1562,13 @@ test("aggregate sheet splits large groups evenly, six subjects at most per row",
   assert.equal(ctx.aggregateTextLines("세계시민과 지리(일반)", 16.375, 12, true), 2);
 });
 
-test("4단계 집계표 과목명은 괄호를 한 번만: 두 학기 과목은 '(1학기)' 하나만(학기 구분), 그 밖은 '(융합)' 그대로", () => {
+test("4단계 집계표 과목명: 학기별 구역 안이라 두 학기 과목도 '(n학기)' 없이 과목명(분류)만", () => {
   const ctx = vm.createContext({ curriculumSelectionType: (type) => String(type || "") });
   vm.runInContext(functionSource("function applicationCourseLabel(", "function renderApplicationSubjects("), ctx);
   vm.runInContext(functionSource("function aggregateCourseDisplayName(", "function currentStudent("), ctx);
   const subject = { subject: "과학의 역사와 문화 (1학기)", type: "융합선택" };
-  assert.equal(ctx.applicationCourseLabel(subject), "과학의 역사와 문화 (1학기)(융합)", "예전 표기(괄호 두 번)");
-  assert.equal(ctx.aggregateCourseDisplayName(subject, "1"), "과학의 역사와 문화 (1학기)", "같은 이름 두 학기 행을 구분");
-  assert.equal(ctx.aggregateCourseDisplayName({ ...subject, subject: "과학의 역사와 문화 (2학기)" }, "2"), "과학의 역사와 문화 (2학기)");
-  assert.equal(ctx.aggregateCourseDisplayName(subject, ""), "과학의 역사와 문화 (1학기)");
+  assert.equal(ctx.aggregateCourseDisplayName(subject, "1"), "과학의 역사와 문화(융합)");
+  assert.equal(ctx.aggregateCourseDisplayName({ ...subject, subject: "과학의 역사와 문화 (2학기)" }, "2"), "과학의 역사와 문화(융합)");
   assert.equal(ctx.aggregateCourseDisplayName({ subject: "법과 사회", type: "진로선택" }, "2"), "법과 사회(진로)", "꼬리표 없는 과목은 그대로");
   assert.match(functionSource("function aggregateRecords(", "function currentStudent("), /aggregateCourseDisplayName\(applicationSubject, semesterKey\)/,
     "화면·엑셀 집계표(aggregateSheetModel)가 함께 쓰는 displayName");
@@ -1715,6 +1713,15 @@ test("a one-row two-semester course carries per-semester credits; split lines an
   assert.equal(first.totalCredits, 6);
   const second = merged.students.find((student) => student.number === "2");
   assert.equal(second.selections[0].credits, 3, "학기 없이 고른 경우도 학기 칸 값이 같으면 그 값(한 학기만 듣는다)");
+  // 목록형 결과: 한 줄에 꼬리표 없는 두 학기 과목이 두 번 나오면 왼쪽(앞) 것이 1학기, 오른쪽(뒤) 것이 2학기.
+  const ordered = ctx.mergeApplications([{ grade: "2", classroom: "1", number: "4", name: "가상넷", selections: ["한 행 두 학기", "기하", "한 행 두 학기"] }], subjects);
+  assert.deepEqual(plain(ordered.errors), []);
+  assert.deepEqual(plain(ordered.students[0].selections.map((course) => [course.name, course.semesterKey])),
+    [["한 행 두 학기 (1학기)", "1"], ["기하", "1"], ["한 행 두 학기 (2학기)", "2"]]);
+  // 두 학기 과목을 아무도 고르지 않으면 학기 없는 0명 과목(4단계 '미분류')을 남기지 않는다.
+  const nobody = ctx.mergeApplications([{ grade: "2", classroom: "1", number: "3", name: "가상셋", selections: ["기하"] }], subjects);
+  assert.ok(!nobody.courses.some((course) => /^한 행 두 학기/.test(course.name)), plain(nobody.courses.map((course) => course.name)).join(","));
+  assert.ok(!nobody.courses.some((course) => course.name === "융합과학 탐구"));
 });
 
 test("choice-block (택n) semesters keep the row credit; only free semesters take the semester cell value", () => {

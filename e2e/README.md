@@ -20,6 +20,8 @@ node e2e/run.cjs --seed 1 --out /tmp/e2e-seed1
 - **6단계 예전 자리**(`stepTimetable`, `lib/timetable-checks.cjs`): 메뉴가 '보류'면 건너뜀. 들어오면 `STEP6` 단추 이름과 화면 읽기(adapter)만 맞추면 미배정·블록 충돌·정원·교사 불가/중복·나이스 내보내기(열 구성·학생·과목당 한 줄·최종 선택과 일치)를 검사. `node e2e/selftest.cjs`로 순수 함수 점검.
 - 환경 주의: 이 Chromium은 한글 파일 이름을 고르면 선택이 취소되고(파일 입력에 안 들어감), 내려받기 이름이 'download'로 와서 하네스가 영문 이름·내용으로 구분한다(앱 문제 아님).
 
+- **두 학기 편성 과목 개설 학기·단계 간 일치**(2-7, `lib/two-semester-scenario.cjs`·`lib/two-semester-fixture.cjs`): 저장 단계 뒤 새 차수에 현2 가로형 결과(심화 영어 한 열, 학기 경계) → 미리보기 '개설 학기 선택'(고르지 않고 반영 → '개설 학기 확인' 창 → 돌아가서 고르기) 2학기 → 섞지 않고 한 줄 → 4단계 그 학기 구역에만 → 확정 → 5단계 시수표 칸 = 6단계 분반 수 = 4단계 → 확정 해제·과목 메뉴 '개설 학기 바꾸기' 1학기 → 다시 확정 → 따라감 → 다음 차수에 같은 파일(앞 차수 결과로 추천) → 머리글 '3-2 택5' 병합 파일(묻지 않음). 단독 실행: `node e2e/two-semester-consistency-ui.cjs <폴더> <백업.json.gz> [--diagnose]`.
+
 ## 구성
 - `lib/mock-supabase.cjs` — `supabase/*.sql` 체인 + `proposed/01·02`(앱이 쓰는 학생 잠금 RPC)를 PGlite에 올리고 Playwright `context.route`로 RPC·REST(`course_events` 목록)·auth(구글 PKCE 흉내: authorize → `?code=` 되돌림 → token)를 처리. 실시간 websocket은 닫음(앱은 30초 동기화로 넘어감).
 - `lib/static-server.cjs` — 저장소를 `http://127.0.0.1`로 제공(file://는 앱이 오프라인으로 봄).

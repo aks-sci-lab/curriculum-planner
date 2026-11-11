@@ -36,7 +36,7 @@ test("static UI bindings refer to unique shipped or dynamically generated IDs", 
   const filenames = ["app.js", "course-groups.js", "supabase-client.js", "result-import.js", "round-status.js",
     "curriculum-versions.js", "hours-stats.js", "curriculum-subject-actions.js", "curriculum-choice-blocks.js", "curriculum-data.js", "curriculum-data-view.js",
     "curriculum-subject-list.js", "curriculum-annual.js", "workspace-file.js", "app-version.js", "course-checks.js", "curriculum-compliance.js",
-    "workspace-store.js", "view-keep.js", "workspace-header.js", "neis-enrollment.js", "curriculum-reconvert.js", "curriculum-office-format.js",
+    "workspace-store.js", "view-keep.js", "workspace-header.js", "neis-enrollment.js", "curriculum-reconvert.js", "curriculum-office-format.js", "course-semester-picks.js",
     "curriculum-data-export.js", "curriculum-workbook.js", "class-sections.js", "class-sections-view.js", "class-sections-edit.js", "class-sections-print.js", "class-sections-teachers.js"];
   const sources = filenames.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
   const declared = new Set([...ids, ...sources.flatMap((source) =>

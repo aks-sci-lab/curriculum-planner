@@ -60,7 +60,7 @@ function hoursSettings(year = hoursTargetYear(), create = false) {
     if (create && /^\d{4}$/.test(year)) state.hoursStats[year] = entry;
   }
   for (const key of ["classCounts", "teachers", "departmentOverrides", "classOverrides", "allocations", "previousAverages", "sourceRounds", "lastAverages",
-    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative"]) {
+    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative", "commonModes", "commonShares"]) {
     if (!hoursPlainObject(entry[key])) entry[key] = {};
   }
   return entry;
@@ -169,7 +169,8 @@ function hoursDefaultDepartment(subject, area = "") {
 function hoursRoundSnapshot(round, failed = null) {
   if (isRoundLocked(round) && state.roundStatuses?.[round]?.snapshot) return state.roundStatuses[round].snapshot;
   try {
-    return buildRoundSnapshot(round);
+    // 과목 개설 결정의 한 출처(round-status.js): 확정 스냅샷, 아니면 지금 4단계 기준 스냅샷(캐시).
+    return typeof courseOpeningSnapshot === "function" ? courseOpeningSnapshot(round) : buildRoundSnapshot(round);
   } catch (error) {
     failed?.add(String(round));
     return null;
@@ -186,8 +187,10 @@ function hoursSourceResult(currentGrade, settings, failed = null) {
   const rounds = applicationRoundNumbers().slice().reverse();
   const hasGrade = (round) => roundStatusData(round)?.students?.some((student) => String(student.grade) === currentGrade);
   const pinned = String(settings.sourceRounds?.[String(Number(currentGrade) + 1)] || "");
+  // 읽을 차수는 6단계와 같은 규칙(courseOpeningRound: 최근 확정 → 4단계에서 보는 차수 → 최근 결과). 시수 설정에서 고정한 차수가 있으면 그것.
   const round = pinned && rounds.includes(pinned) && (hasGrade(pinned) || state.roundStatuses?.[pinned]?.snapshot)
     ? pinned
+    : typeof courseOpeningRound === "function" ? courseOpeningRound(currentGrade)
     : rounds.find((item) => isRoundLocked(item) &&
         state.roundStatuses[item]?.snapshot?.rows?.some((row) => row.grade === currentGrade)) ||
       rounds.find(hasGrade);
@@ -195,7 +198,8 @@ function hoursSourceResult(currentGrade, settings, failed = null) {
   const snapshot = hoursRoundSnapshot(round, failed?.source);
   const rows = (snapshot?.rows || []).filter((row) => row.grade === currentGrade);
   if (!rows.length) return null;
-  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
+  const stale = typeof roundSnapshotStale === "function" ? roundSnapshotStale(round).filter((item) => item.grade === currentGrade) : [];
+  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, stale, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
 }
 
 // 근거 차수보다 앞 차수에서 폐강한 과목(정규화 이름 → { round, semesters }). 2차 재신청 결과에는 1차에 폐강한 과목이
@@ -265,14 +269,15 @@ function hoursDesignatedShare(total, entry) {
 }
 
 // ---- 교사 수 추천·공통 시수 배분 (순수 계산) ----
-// 학교 규칙(사용자 결정): 총 교원 수를 먼저 확정하고(기준 교과 교사 수 total) 교과별 1인당 시수(두 학기 중 큰 값)를 비교한다.
-// 1인당 시수가 upHours(기본 19) 초과인 교과는 1명 증 — 단, 증했을 때 roamingHours(기본 13) 이하가 되면 증하지 않고 '순회교사 지원'.
+// 학교 규칙(사용자 결정): 총 교원 수를 먼저 확정하고(기준 교과 교사 수 total) 교과별 1인당 시수(두 학기 평균)를 비교한다.
+// 1인당 시수(두 학기 평균 = (1학기 + 2학기) ÷ 2 ÷ 교사 수)가 upHours(기본 19) 초과인 교과는 1명 증 — 단, 증했을 때 roamingHours(기본 13) 이하가 되면 증하지 않고 '순회교사 지원'.
 // 증할 사람은 1인당 시수가 가장 작은 교과에서 1명 감 — 그 교과가 1명이거나, 감하면 upHours를 넘거나, 고정했거나, 이번에 증한 교과면
 // 그다음으로 작은 교과에서 감한다(1인당 시수가 같으면 학교 평균 대비 편차가 작아지는 쪽). 19 초과 교과가 여럿이면 시수가 큰 교과부터,
-// 19 초과 교과가 없어질 때까지 반복한다. 시수가 있는 교과는 최소 1명(0명이면 먼저 1명). 결과는 단계 기록(steps)으로 남기고, 추천만 한다.
+// 19 초과 교과가 없어질 때까지 반복한다. 시수가 있는데 0명인 교과는 무한대(19 초과)로 보아 같은 규칙을 따른다(교양처럼
+// 타교과 담당 교과는 부르는 쪽에서 뺀다). 결과는 단계 기록(steps)으로 남기고, 추천만 한다.
 function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEACHER_HOURS, roamingHours = HOURS_DEFAULT_ROAMING_HOURS, name = (id) => id } = {}) {
   const round = (value) => Math.round(value * 1000) / 1000;
-  const fmt = (value) => Number.isFinite(value) ? String(Math.round(value * 10) / 10) : "교사 0명";
+  const fmt = (value) => Number.isFinite(value) ? (Math.round(value * 10) / 10).toFixed(1) : "교사 0명";
   const list = (units || []).map((unit) => {
     const current = Number.isFinite(unit.current) && unit.current >= 0 ? unit.current : null;
     return {
@@ -291,17 +296,20 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
   const busy = (unit) => unit.h1 > 0 || unit.h2 > 0;
   const lockedTeachers = list.filter((unit) => unit.locked).reduce((acc, unit) => acc + unit.current, 0);
   const free = list.filter((unit) => !unit.locked);
-  const minimum = free.filter(busy).length;
-  if (Math.round(totalTeachers - lockedTeachers) < minimum) {
-    return { ...result, reason: `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, Math.round(totalTeachers - lockedTeachers))}명뿐입니다.` };
+  if (Math.round(totalTeachers - lockedTeachers) < 0) {
+    return { ...result, reason: `고정한 교과 교사 ${lockedTeachers}명이 기준 교과 교사 수 ${totalTeachers}명보다 많습니다.` };
   }
   const count = new Map(list.map((unit) => [unit.id, unit.locked ? unit.current : Math.max(0, Math.round(unit.current ?? 0))]));
-  const per = (unit, n = count.get(unit.id)) => n > 0 ? Math.max(unit.h1, unit.h2) / n : busy(unit) ? Infinity : 0;
+  // 기준(사용자 결정): 1인당 시수 = 두 학기 평균 = (1학기 + 2학기) ÷ 2 ÷ 교사 수. 시수가 있는데 0명이면 무한대(19 초과).
+  const per = (unit, n = count.get(unit.id)) => n > 0 ? (unit.h1 + unit.h2) / 2 / n : busy(unit) ? Infinity : 0;
+  const schoolAverage = (average["1"] + average["2"]) / 2;
   const deviationWith = (changes) => Math.max(0, ...list.filter(busy).map((unit) => {
     const n = changes.get(unit.id) ?? count.get(unit.id);
-    if (!(n > 0)) return Infinity;
-    return Math.max(Math.abs(unit.h1 / n - average["1"]), Math.abs(unit.h2 / n - average["2"]));
+    return n > 0 ? Math.abs(per(unit, n) - schoolAverage) : Infinity;
   }));
+  // 단계 기록 값: '19 (20 / 18)' = 학기 평균 (1학기 / 2학기).
+  const short = (value) => String(Math.round(value * 10) / 10);
+  const show = (unit, n = count.get(unit.id)) => n > 0 ? `${fmt(per(unit, n))} (${short(unit.h1 / n)} / ${short(unit.h2 / n)})` : "교사 0명";
   const raised = new Set();
   const lowered = new Set();
   // 감할 교과: 1인당 시수가 작은 순. 1명(시수 있는 교과의 마지막 1명)·감하면 up 초과·고정·이번에 증한 교과는 건너뛴다.
@@ -314,7 +322,7 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
       if (best && per(unit) > per(best.unit) + 1e-9) break;
       const reason = raised.has(unit.id) ? "이번에 증한 교과"
         : busy(unit) && n <= 1 ? "1명"
-        : !force && busy(unit) && per(unit, n - 1) > up + 1e-9 ? `감하면 ${fmt(per(unit, n - 1))}시간` : "";
+        : !force && busy(unit) && per(unit, n - 1) > up + 1e-9 ? `감하면 ${show(unit, n - 1)}` : "";
       if (reason) { if (skipped && !raised.has(unit.id)) skipped.push(`${name(unit.id)}(${reason})`); continue; }
       const deviation = deviationWith(new Map([[unit.id, n - 1]]));
       if (!best || deviation < best.deviation - 1e-9) best = { unit, deviation };
@@ -323,14 +331,14 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
   };
   let changes = 0;
   const stepText = (upUnit, before, downUnit, downBefore) =>
-    `${++changes}. ${name(upUnit.id)} +1 (${fmt(before)} → ${fmt(per(upUnit))})` +
-    (downUnit ? ` ← ${name(downUnit.id)} −1 (${fmt(downBefore)} → ${fmt(per(downUnit))})` : "");
+    `${++changes}. ${name(upUnit.id)} +1 (${before} → ${show(upUnit)})` +
+    (downUnit ? ` ← ${name(downUnit.id)} −1 (${downBefore} → ${show(downUnit)})` : "");
   // 1) 총 교원 수 확정: 지금 교사 수 합이 기준과 다르면 먼저 맞춘다(모자라면 1인당 시수가 큰 교과에, 남으면 작은 교과에서).
   let assigned = [...count.values()].reduce((acc, n) => acc + n, 0);
   while (assigned < totalTeachers - 1e-9) {
     const target = free.filter(busy).sort((a, b) => per(b) - per(a))[0];
     if (!target) break;
-    const before = per(target);
+    const before = show(target);
     count.set(target.id, count.get(target.id) + 1);
     raised.add(target.id);
     assigned += 1;
@@ -340,11 +348,11 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
     // 남는 교원은 19시간을 넘지 않는 교과에서 먼저 빼고, 그런 교과가 없을 때만 넘더라도 뺀다(넘은 교과는 아래에서 다시 증).
     const target = pickDown(null, null) || pickDown(null, null, true);
     if (!target) break;
-    const before = per(target);
+    const before = show(target);
     count.set(target.id, count.get(target.id) - 1);
     lowered.add(target.id);
     assigned -= 1;
-    result.steps.push(`${++changes}. ${name(target.id)} −1 (${fmt(before)} → ${fmt(per(target))}) · 기준 교원 수에 맞춤`);
+    result.steps.push(`${++changes}. ${name(target.id)} −1 (${before} → ${show(target)}) · 기준 교원 수에 맞춤`);
   }
   // 2)~5) 19 초과 교과를 시수가 큰 교과부터 증, 감할 교과에서 1명.
   const done = new Set();
@@ -352,23 +360,23 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
     const over = free.filter((unit) => busy(unit) && !done.has(unit.id) && per(unit) > up + 1e-9).sort((a, b) => per(b) - per(a))[0];
     if (!over) break;
     const n = count.get(over.id);
-    const before = per(over);
-    if (n > 0 && per(over, n + 1) <= roaming + 1e-9) {
+    const before = show(over);
+    // 0명 교과도 같은 규칙: +1 해서 학기 평균이 13 이하면 순회교사 지원, 넘으면 증하고 같은 감 규칙으로 데려온다.
+    if (per(over, n + 1) <= roaming + 1e-9) {
       done.add(over.id);
       result.roaming.push(over.id);
-      result.steps.push(`${name(over.id)}: 순회교사 지원(증하면 ${fmt(per(over, n + 1))}시간 · ${roaming} 이하)`);
+      result.steps.push(`${name(over.id)}: 순회교사 지원(지금 ${before} · 증하면 ${show(over, n + 1)} · ${roaming} 이하)`);
       continue;
     }
     const skipped = [];
-    // 0명 교과는 최소 1명이 먼저라, 19시간을 넘게 되는 교과에서라도 1명을 데려온다.
-    const down = pickDown(over.id, skipped) || (n === 0 ? pickDown(over.id, null, true) : null);
+    const down = pickDown(over.id, skipped);
     if (!down) {
       done.add(over.id);
       result.unresolved.push(over.id);
-      result.steps.push(`${name(over.id)}: 감할 교과 없음 — 총 교원 수 늘리기 검토(지금 ${fmt(before)}시간)`);
+      result.steps.push(`${name(over.id)}: 감할 교과 없음 — 총 교원 수 늘리기 검토(지금 ${before})`);
       continue;
     }
-    const downBefore = per(down);
+    const downBefore = show(down);
     count.set(over.id, n + 1);
     count.set(down.id, count.get(down.id) - 1);
     raised.add(over.id);
@@ -376,7 +384,7 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
     result.steps.push(stepText(over, before, down, downBefore) + (skipped.length ? ` · 건너뜀: ${skipped.join(", ")}` : ""));
   }
   for (const unit of list.filter((item) => item.locked && busy(item) && per(item) > up + 1e-9)) {
-    result.steps.push(`${name(unit.id)}: 고정이라 증하지 않음(${fmt(per(unit))}시간)`);
+    result.steps.push(`${name(unit.id)}: 고정이라 증하지 않음(${show(unit)})`);
   }
   const perTeacher = (unit, n) => n > 0 ? { "1": unit.h1 / n, "2": unit.h2 / n } : null;
   result.rows = list.map((unit) => {
@@ -386,7 +394,7 @@ function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEAC
       diff: unit.current === null ? recommended : round(recommended - unit.current),
       currentPerTeacher: unit.current > 0 ? perTeacher(unit, unit.current) : null,
       recommendedPerTeacher: perTeacher(unit, recommended),
-      overUp: unit.current > 0 ? Math.max(unit.h1, unit.h2) / unit.current > up + 1e-9 : busy(unit),
+      overUp: unit.current > 0 ? (unit.h1 + unit.h2) / 2 / unit.current > up + 1e-9 : busy(unit),
       recommendedOverUp: busy(unit) && per(unit, recommended) > up + 1e-9,
       roaming: result.roaming.includes(unit.id),
       unresolved: result.unresolved.includes(unit.id)
@@ -435,6 +443,209 @@ function hoursYearChange(departments) {
   return { rows: [...ranked, ...rows.filter((row) => row.change === null)], hasPrevious: ranked.length > 0 };
 }
 
+// ---- 전년도 교사시수표 올리기 (순수 계산) ----
+// 학교 교과별 시수표(앱이 내보내는 교사시수표와 같은 열: A 교과군 · B 세부 · C 학기 · D~O 학년별 · P 1학기 · Q 2학기 · R 합계 · S 교사수 ·
+// T 평균(학기별) · U 평균(1년) · V 비고 · W 전년 평균)를 읽는다. rows는 parseWorkbook(…, { expandMergedCells: true })의 시트 행(0부터).
+// 수식 칸은 캐시 값을 쓰고, 없으면 열 값으로 다시 계산한다. 교과 이름은 앱 교과(세부)에 맞춰 보고(hoursPreviousMatchId), 못 맞추면 id null.
+function hoursPreviousText(value) {
+  return String(value ?? "").replace(/\s+/g, "").replace(/[·ㆍ・.()（）]/g, "");
+}
+
+function hoursPreviousNumber(value) {
+  const text = String(value ?? "").trim();
+  if (!text || /^#/.test(text)) return null;
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
+var HOURS_PREVIOUS_LANGUAGES = ["일본어", "중국어", "독일어", "프랑스어", "스페인어", "러시아어", "아랍어", "베트남어", "한문", "제2외국어"];
+function hoursPreviousMatchId(group, detail) {
+  const g = hoursPreviousText(group), d = hoursPreviousText(detail) || g;
+  const has = (text, words) => words.some((word) => text.includes(word));
+  if (has(d, ["진로와직업", "진로"]) && !has(d, ["진로선택"])) return "진로";
+  if (has(d, ["교양", "생태", "환경"])) return "교양";
+  if (has(d, HOURS_PREVIOUS_LANGUAGES) || has(d, ["외국어"])) return "제2외국어";
+  if (has(d, ["기술", "가정", "기가"])) return "기술가정";
+  if (has(d, ["정보"])) return "정보";
+  if (has(d, ["체육"])) return "체육";
+  if (has(d, ["음악"])) return "음악";
+  if (has(d, ["미술"])) return "미술";
+  const science = has(g, ["과학"]), social = has(g, ["사회"]);
+  if (science || has(d, ["물리", "화학", "생명", "지구"])) {
+    if (has(d, ["물리"])) return "과학-물리";
+    if (has(d, ["화학"])) return "과학-화학";
+    if (has(d, ["생명", "생물"])) return "과학-생명";
+    if (has(d, ["지구"])) return "과학-지구";
+    if (has(d, ["공통", "통합", "과학"])) return "과학-공통";
+  }
+  if (social || has(d, ["한국사", "역사", "지리", "일사", "일반사회", "윤리"])) {
+    if (has(d, ["한국사", "역사"])) return "사회-한국사";
+    if (has(d, ["지리"])) return "사회-지리";
+    if (has(d, ["일사", "일반사회"])) return "사회-일사";
+    if (has(d, ["윤리"])) return "사회-윤리";
+    if (has(d, ["공통", "통합", "사회"])) return "사회-공통";
+  }
+  if (has(d, ["국어"])) return "국어";
+  if (has(d, ["수학"])) return "수학";
+  if (has(d, ["영어"])) return "영어";
+  return null;
+}
+
+// 시트 학년도: 시트 이름에 4자리(2026)·2자리(26, '(1) 25교과시수(24.9월)'의 25 — 괄호 번호·'24.9' 같은 날짜는 뺌) 연도가 있으면
+// 그것, 없으면 A1 제목의 '○○○○학년도'. 실제 파일에는 제목이 틀린 시트가 있어 시트 이름을 먼저 믿는다. basis = '시트명'/'제목'.
+function hoursPreviousSheetYear(name, title) {
+  const text = String(name ?? "");
+  const full = text.match(/(?:^|[^\d])(20\d{2})(?!\d)/)?.[1];
+  if (full) return { year: Number(full), basis: "시트명" };
+  const short = text.replace(/^\s*\(\d+\)\s*/, "").match(/(?:^|[^\d.])(\d{2})(?![\d.])/)?.[1];
+  if (short) return { year: 2000 + Number(short), basis: "시트명" };
+  const titled = String(title ?? "").match(/(\d{4})\s*학년도/)?.[1];
+  return titled ? { year: Number(titled), basis: "제목" } : { year: null, basis: "" };
+}
+
+// 시트 한 장을 읽는다. 교과별 시수표가 아니면 null(교과 시수 배정표도 null — 따로 셈).
+function hoursPreviousParseSheet(sheet) {
+  const rows = sheet?.rows || [];
+  const cell = (r, c) => rows[r]?.[c] ?? "";
+  const header = rows.findIndex((row, index) => index < 15 && hoursPreviousText(row?.[0]).startsWith("교과군") && (row || []).some((value) => /교사수/.test(hoursPreviousText(value))));
+  if (header < 0 || hoursPreviousIsAllocation(sheet)) return null;
+  const title = String(cell(0, 0)).trim();
+  const { year, basis: yearBasis } = hoursPreviousSheetYear(sheet.name, title);
+  const stampText = String(cell(1, 0)).trim();
+  const stamp = stampText.match(/(\d{2,4})\s*\.\s*(\d{1,2})\s*\.?\s*(\d{1,2})?\s*\.?\s*\)?\s*$/) || stampText.match(/(\d{2,4})\s*\.\s*(\d{1,2})/);
+  const date = stamp ? (Number(stamp[1]) < 100 ? 2000 + Number(stamp[1]) : Number(stamp[1])) * 10000 + Number(stamp[2]) * 100 + (Number(stamp[3]) || 0) : 0;
+  const blocks = [];
+  let block = null;
+  let stop = rows.length;
+  for (let r = header + 1; r < rows.length; r++) {
+    const group = String(cell(r, 0)).trim();
+    if (/^창체|창의적/.test(hoursPreviousText(group))) { stop = r; break; }
+    if (/^교과$|전체평균|창체포함/.test(hoursPreviousText(cell(r, 13)))) { stop = r; break; }
+    const semester = String(hoursPreviousNumber(cell(r, 2)) ?? "");
+    if (semester !== "1" && semester !== "2") continue;
+    const detailRaw = String(cell(r, 1)).trim();
+    const detail = detailRaw === group ? "" : detailRaw;
+    const key = `${group}|${detail}`;
+    if (!block || block.key !== key || (semester === "1" && block.lastSemester === "2")) {
+      block = { key, group, detail, rows: [], first: {}, sums: { "1": 0, "2": 0 } };
+      blocks.push(block);
+    }
+    block.rows.push(r + 1);
+    block.lastSemester = semester;
+    if (!block.first[semester]) block.first[semester] = r;
+    block.sums[semester] += hoursPreviousNumber(cell(r, semester === "1" ? 15 : 16)) || 0;
+  }
+  const pooledGroups = new Set(["과학", "사회"]);
+  const departments = blocks.map((item) => {
+    const firstRow = item.first["1"] ?? item.first["2"];
+    const teachers = hoursPreviousNumber(cell(firstRow, 18));
+    const hours = {}, averages = {};
+    for (const semester of ["1", "2"]) {
+      const r = item.first[semester];
+      if (r === undefined) { hours[semester] = 0; averages[semester] = null; continue; }
+      const total = hoursPreviousNumber(cell(r, 17));
+      hours[semester] = total ?? item.sums[semester];
+      const average = hoursPreviousNumber(cell(r, 19));
+      averages[semester] = average ?? (teachers > 0 ? hours[semester] / teachers : null);
+    }
+    // 진로와 직업은 교양 칸(B '교양')을 함께 쓰는 양식이 있다: 비고 '합계·평균 제외'나 세부과목 '진로와 직업'이면 진로.
+    const subjects = item.rows.flatMap((rowNumber) => [3, 7, 11].map((column) => hoursPreviousText(cell(rowNumber - 1, column)))).filter(Boolean);
+    const career = /합계.*제외/.test(hoursPreviousText(cell(firstRow, 21))) || (subjects.length && subjects.every((name) => name.includes("진로와직업")));
+    const id = career ? "진로" : hoursPreviousMatchId(item.group, item.detail);
+    const pooled = [...pooledGroups].some((name) => hoursPreviousText(item.group).includes(name));
+    const both = [averages["1"], averages["2"]].filter((value) => value !== null);
+    const ownYear = teachers > 0 ? (hours["1"] + hours["2"]) / 2 / teachers : null;
+    const u = hoursPreviousNumber(cell(firstRow, 20));
+    return {
+      label: [item.group, item.detail].filter(Boolean).map((text) => text.replace(/\s+/g, " ")).join(" · "), group: item.group, detail: item.detail, id, rows: item.rows,
+      teachers, hours, averages, pooled,
+      year: pooled ? (ownYear ?? (both.length ? both.reduce((a, b) => a + b, 0) / both.length : null)) : (u ?? ownYear),
+      groupYear: pooled ? u : null
+    };
+  });
+  // 요약 상자: N열 '교과'·'전체 평균'·'창체 포함' 글자로 찾는다(행 위치는 시트마다 다름).
+  const summary = {};
+  for (let r = stop; r < rows.length; r++) {
+    const label = hoursPreviousText(cell(r, 13));
+    const values = { "1": hoursPreviousNumber(cell(r, 15)), "2": hoursPreviousNumber(cell(r, 16)), total: hoursPreviousNumber(cell(r, 17)), teachers: hoursPreviousNumber(cell(r, 18)) };
+    if (label === "교과" && !summary.subject) summary.subject = values;
+    else if (label.startsWith("전체평균") && !summary.average) summary.average = values;
+    else if (label.startsWith("창체포함") && !summary.creative) summary.creative = values;
+  }
+  // 메모: '◈ … 비교과 교사 : 특수2, 영양1, 보건2(1명만 수업참여), 사서1', '◈ … ⇒ …과 n명 감/증'.
+  const memo = [];
+  for (const row of rows) for (const value of row || []) {
+    const text = String(value ?? "");
+    if (text.includes("◈")) for (const line of text.split(/\n|(?=◈)/)) if (line.trim().startsWith("◈") && !memo.includes(line.trim())) memo.push(line.trim());
+  }
+  const nonTeaching = {};
+  const nonTeachingLine = memo.find((line) => line.includes("비교과"));
+  if (nonTeachingLine) {
+    for (const [, kind, count] of nonTeachingLine.matchAll(/(특수|영양|보건|사서|상담)\s*(?:교사)?\s*(\d+)/g)) nonTeaching[kind] = Number(count);
+  }
+  const subjectTeachers = summary.subject?.teachers ?? null;
+  return { name: sheet.name, title, year, yearBasis, stamp: stampText, date, final: /최종/.test(sheet.name || ""), departments, summary, memo, nonTeaching, subjectTeachers };
+}
+
+// 교과 시수 배정표(창체·교양을 교과별로 나눈 표): 1차는 읽어서 보여 주기만 한다(A1 '시수 배정표').
+function hoursPreviousIsAllocation(sheet) {
+  const title = String(sheet?.rows?.[0]?.[0] ?? "").trim();
+  return /배정표/.test(hoursPreviousText(title)) || /창체.*교양|교양.*창체/.test(hoursPreviousText(sheet?.name));
+}
+
+function hoursPreviousParseAllocation(sheet) {
+  const rows = sheet?.rows || [];
+  const title = String(rows[0]?.[0] ?? "").trim();
+  if (!hoursPreviousIsAllocation(sheet)) return null;
+  const { year, basis: yearBasis } = hoursPreviousSheetYear(sheet?.name, title);
+  const body = rows.slice(0, 60).map((row) => (row || []).slice(0, 24).map((value) => String(value ?? "").replace(/\s+/g, " ").trim()))
+    .filter((row) => row.some(Boolean));
+  return { name: sheet.name, title, year, yearBasis, rows: body };
+}
+
+// 여러 시트 가운데 앱 학년도 − 1의 교과별 시수표를 고른다: 같은 학년도가 여럿이면 시트 이름에 '최종', 없으면 A2 날짜가 가장 늦은 것.
+function hoursPreviousPickSheets(sheets, previousYear) {
+  const stats = (sheets || []).map(hoursPreviousParseSheet).filter(Boolean);
+  const allocations = (sheets || []).map(hoursPreviousParseAllocation).filter(Boolean);
+  const matching = stats.filter((item) => String(item.year) === String(previousYear));
+  const pool = matching.length ? matching : stats;
+  const chosen = pool.slice().sort((a, b) => Number(b.final) - Number(a.final) || b.date - a.date)[0] || null;
+  const allocation = allocations.filter((item) => String(item.year) === String(previousYear))[0] || null;
+  return { total: (sheets || []).length, stats, allocations, chosen: chosen ? chosen.name : null, matched: matching.length > 0, allocation: allocation ? allocation.name : null };
+}
+
+// 확인 창에서 고른 교과 맞춤(파일 줄 → 앱 교과 id)으로 저장할 모양을 만든다(성명 없음, 숫자만).
+function hoursPreviousUploadRecord(parsed, mapping = {}, { fileName = "", allocation = null, at = "" } = {}) {
+  const departments = {};
+  const groups = {};
+  parsed.departments.forEach((department, index) => {
+    const id = Object.prototype.hasOwnProperty.call(mapping, index) ? mapping[index] : department.id;
+    if (!id) return;
+    const current = departments[id];
+    const teachers = department.teachers ?? null;
+    const hours = { "1": department.hours["1"] || 0, "2": department.hours["2"] || 0 };
+    if (current) {
+      current.teachers = (current.teachers || 0) + (teachers || 0);
+      current.hours = { "1": current.hours["1"] + hours["1"], "2": current.hours["2"] + hours["2"] };
+      current.year = current.teachers > 0 ? (current.hours["1"] + current.hours["2"]) / 2 / current.teachers : null;
+    } else departments[id] = { teachers, hours, year: department.year ?? null };
+    const groupName = ["과학", "사회"].find((name) => id.startsWith(`${name}-`));
+    if (groupName && department.groupYear !== null && groups[groupName] === undefined) groups[groupName] = department.groupYear;
+  });
+  for (const groupName of ["과학", "사회"]) {
+    const members = Object.entries(departments).filter(([id]) => id.startsWith(`${groupName}-`));
+    const teachers = members.reduce((sum, [, item]) => sum + (item.teachers || 0), 0);
+    if (groups[groupName] === undefined && teachers > 0) {
+      groups[groupName] = members.reduce((sum, [, item]) => sum + item.hours["1"] + item.hours["2"], 0) / 2 / teachers;
+    }
+  }
+  return {
+    fileName, sheetName: parsed.name, year: parsed.year, stamp: parsed.stamp, at,
+    departments, groups, subjectTeachers: parsed.subjectTeachers, summary: parsed.summary, nonTeaching: parsed.nonTeaching, memo: parsed.memo,
+    allocation: allocation ? { sheetName: allocation.name, year: allocation.year, rows: allocation.rows } : null
+  };
+}
+
 // 1인당 시수 목록(학기별)에서 가장 적은 값과 가장 많은 값.
 function hoursPerTeacherRange(list) {
   const values = list.filter(Boolean).flatMap((item) => [item["1"], item["2"]]).filter((value) => Number.isFinite(value) && value > 0);
@@ -474,41 +685,161 @@ function hoursTeacherChangeLine(year, rows) {
   return `◈ ${year}학년도 ⇒ ${groups.length ? groups.join(", ") : "교과 교사 수 변동 없음"}`;
 }
 
-// 과학·사회 공통 과목 시수를 세부 교과에 반 단위(한 반 = 그 과목 학점만큼)로 나눈다.
-// 큰 덩어리부터, 맡은 뒤 1인당 시수가 가장 적은 세부 교과에 준다(교사 수가 있는 세부 교과만). 학기마다 따로 나눈다.
-function hoursBalanceCommonAllocation(members, items) {
+// 과학·사회 공통 과목 시수를 세부 교과에 나눈다. 과목마다 방식(사용자 결정):
+//   equal = 교과별 같은 시간: 한 반의 주당 시수를 세부 교과에 똑같이(통합과학 4시간 = 물·화·생·지 1시간씩, 반마다 교사 4명),
+//           나머지 시간은 1인당 시수가 낮은 교과부터 1시간씩. 기본: 통합과학.
+//   time  = 시간 균형 분배: 한 반의 주당 시수를 1시간씩, 더했을 때 1인당 시수가 가장 낮은 교과에(반마다 같은 나눔). 기본: 통합사회.
+//   class = 반 단위 균형(예전 방식): 반 하나(그 과목 학점만큼)를 통째로, 맡은 뒤 1인당 시수가 가장 낮은 교과에. 기본: 그 밖(과학탐구실험 등).
+// shares[과목 키] = { 교과 id: 한 반 주당 시간 }을 넣으면(합 = 학점) equal·time 대신 그 나눔을 쓴다. 교사 수가 있는 세부 교과만 받는다.
+// 시간 나눔 과목(equal·time)을 먼저 정한 뒤 반 단위 과목을 나눈다. 학기마다 따로. plan은 반마다 { 교과 id: 시간 }(6단계·시간표용).
+function hoursCommonSubjectKey(subject) {
+  return String(subject ?? "").replace(/\s+/g, "");
+}
+
+function hoursCommonDefaultMode(subject) {
+  const key = hoursCommonSubjectKey(subject);
+  if (/^통합과학/.test(key)) return "equal";
+  if (/^통합사회/.test(key)) return "time";
+  return "class";
+}
+
+function hoursBalanceCommonAllocation(members, items, { modes = {}, shares = {} } = {}) {
   const usable = (members || []).filter((member) => member.teachers > 0);
   const allocations = Object.fromEntries((members || []).map((member) => [member.id, { "1": 0, "2": 0 }]));
   const notes = Object.fromEntries((members || []).map((member) => [member.id, { "1": "", "2": "" }]));
-  if (!usable.length) return { ok: false, reason: "세부 교과 교사 수를 먼저 입력하세요.", allocations, notes };
+  const plan = [];
+  if (!usable.length) return { ok: false, reason: "세부 교과 교사 수를 먼저 입력하세요.", allocations, notes, plan };
+  const modeOf = (subject) => ["equal", "time", "class"].includes(modes[hoursCommonSubjectKey(subject)]) ? modes[hoursCommonSubjectKey(subject)] : hoursCommonDefaultMode(subject);
+  const order = (member) => usable.indexOf(member);
   for (const semester of ["1", "2"]) {
-    const chunks = (items || []).filter((item) => String(item.semester) === semester && item.credit > 0 && item.classes > 0)
-      .flatMap((item) => Array.from({ length: item.classes }, () => ({ subject: item.subject, size: item.credit })))
-      .sort((a, b) => b.size - a.size || a.subject.localeCompare(b.subject, "ko"));
+    const list = (items || []).filter((item) => String(item.semester) === semester && item.credit > 0 && item.classes > 0);
     const load = new Map(usable.map((member) => [member.id, Number(member.hours?.[semester]) || 0]));
     const given = new Map(usable.map((member) => [member.id, new Map()]));
+    const give = (id, subject, hours) => {
+      load.set(id, load.get(id) + hours);
+      allocations[id][semester] += hours;
+      const short = hoursShortSubject(subject);
+      given.get(id).set(short, (given.get(id).get(short) || 0) + hours);
+    };
+    const per = (member, extra = 0) => (load.get(member.id) + extra) / member.teachers;
+    // 1) 시간 나눔 과목: 교과별 같은 시간 먼저, 다음 시간 균형.
+    const timed = list.filter((item) => modeOf(item.subject) !== "class")
+      .sort((a, b) => (modeOf(a.subject) === "equal" ? 0 : 1) - (modeOf(b.subject) === "equal" ? 0 : 1) || a.subject.localeCompare(b.subject, "ko"));
+    for (const item of timed) {
+      const mode = modeOf(item.subject);
+      const split = new Map(usable.map((member) => [member.id, 0]));
+      const fixed = shares[hoursCommonSubjectKey(item.subject)];
+      const fixedTotal = fixed ? usable.reduce((sum, member) => sum + (Number(fixed[member.id]) || 0), 0) : 0;
+      if (fixed && fixedTotal === item.credit) {
+        for (const member of usable) split.set(member.id, Number(fixed[member.id]) || 0);
+      } else if (mode === "equal") {
+        const base = Math.floor(item.credit / usable.length);
+        for (const member of usable) split.set(member.id, base);
+        const rest = usable.slice().sort((a, b) => per(a, base * item.classes) - per(b, base * item.classes) || order(a) - order(b));
+        for (let index = 0; index < item.credit - base * usable.length; index++) split.set(rest[index].id, split.get(rest[index].id) + 1);
+      } else {
+        for (let hour = 0; hour < item.credit; hour++) {
+          const best = usable.slice().sort((a, b) => per(a, (split.get(a.id) + 1) * item.classes) - per(b, (split.get(b.id) + 1) * item.classes) || order(a) - order(b))[0];
+          split.set(best.id, split.get(best.id) + 1);
+        }
+      }
+      for (const [id, hours] of split) if (hours) give(id, item.subject, hours * item.classes);
+      const perClass = Object.fromEntries([...split].filter(([, hours]) => hours > 0));
+      plan.push({ grade: String(item.grade ?? ""), semester, subject: item.subject, mode: fixed && fixedTotal === item.credit ? "shares" : mode,
+        byClass: Object.fromEntries(Array.from({ length: item.classes }, (_, index) => [String(index + 1), { ...perClass }])) });
+    }
+    // 2) 반 단위 과목: 큰 덩어리부터, 맡은 뒤 1인당 시수가 가장 적은 세부 교과에(반 번호는 과목 안에서 차례로).
+    const classed = list.filter((item) => modeOf(item.subject) === "class");
+    const entries = new Map(classed.map((item) => [item, { grade: String(item.grade ?? ""), semester, subject: item.subject, mode: "class", byClass: {} }]));
+    const chunks = classed.flatMap((item) => Array.from({ length: item.classes }, (_, index) => ({ item, classNo: String(index + 1), subject: item.subject, size: item.credit })))
+      .sort((a, b) => b.size - a.size || a.subject.localeCompare(b.subject, "ko") || Number(a.classNo) - Number(b.classNo));
     for (const chunk of chunks) {
       let best = null;
       for (const member of usable) {
-        const after = (load.get(member.id) + chunk.size) / member.teachers;
+        const after = per(member, chunk.size);
         if (!best || after < best.after - 1e-9) best = { member, after };
       }
-      load.set(best.member.id, load.get(best.member.id) + chunk.size);
-      allocations[best.member.id][semester] += chunk.size;
-      const subjects = given.get(best.member.id);
-      const short = hoursShortSubject(chunk.subject);
-      subjects.set(short, (subjects.get(short) || 0) + chunk.size);
+      give(best.member.id, chunk.subject, chunk.size);
+      entries.get(chunk.item).byClass[chunk.classNo] = { [best.member.id]: chunk.size };
     }
-    // 원래 양식의 배분 메모처럼 '통과8 · 과탐실2'(줄인 과목명 + 시수)로 적는다.
+    plan.push(...entries.values());
+    // 원래 양식의 배분 메모처럼 '통과10 · 과탐실2'(줄인 과목명 + 시수)로 적는다.
     for (const [id, subjects] of given) notes[id][semester] = [...subjects].map(([subject, hours]) => `${subject}${hours}`).join(" · ");
   }
-  return { ok: true, allocations, notes };
+  return { ok: true, allocations, notes, plan };
+}
+
+// 전년도 값(1인당 평균·교사 수)의 출처: 앱에 이관된 자료(같은 작업 자료의 전년 학년도 시수 설정 — 교사 수 teachers·내려받을 때 남긴
+// lastAverages — 와 올해 설정의 previousAverages·previousTeachers: '전년도 설정 불러오기'나 W 칸 입력)가 먼저, 없는 값은 올린 교사시수표
+// (settings.previousUpload). settings.previousPrefer === "upload"면 올린 파일을 먼저 쓴다. 값이 다른 교과는 differences로 안내한다.
+function hoursPreviousSources(year, settings) {
+  const previousYear = String(Number(year) - 1);
+  const previous = typeof state !== "undefined" && hoursPlainObject(state.hoursStats?.[previousYear]) ? state.hoursStats[previousYear] : null;
+  const upload = hoursPlainObject(settings.previousUpload) ? settings.previousUpload : null;
+  const preferUpload = Boolean(upload) && settings.previousPrefer === "upload";
+  const migratedAverage = (key) => hoursNumber(settings.previousAverages?.[key], { max: 100 }) ?? hoursNumber(previous?.lastAverages?.[key], { max: 100 });
+  const migratedTeachers = (id) => hoursNumber(settings.previousTeachers?.[id], { max: 200 }) ?? hoursNumber(previous?.teachers?.[id], { max: 200 });
+  // 파일 값은 반올림하지 않고 그대로 쓴다(16.545는 16.5로 보임 · 비교만 0.005 허용).
+  const finite = (value) => value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+  const uploadAverage = (key) => finite(upload?.groups?.[key] ?? upload?.departments?.[key]?.year ?? null);
+  const uploadTeachers = (id) => finite(upload?.departments?.[id]?.teachers ?? null);
+  // 교과군(과학·사회) 키의 교사 수는 세부 교과 합(아는 값이 없으면 null).
+  const groupMembers = (key) => HOURS_DEPARTMENTS.filter((department) => department.group === key && ["과학", "사회"].includes(key)).map((department) => department.id);
+  const teachersOf = (key, read) => {
+    const members = groupMembers(key);
+    if (!members.length) return read(key);
+    const values = members.map(read).filter((value) => value !== null);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+  };
+  const used = { migrated: 0, upload: 0 };
+  const differences = [];
+  const pick = (key, migratedValue, uploadValue, kind) => {
+    if (migratedValue !== null && uploadValue !== null && Math.abs(migratedValue - uploadValue) > 0.005) differences.push({ key, kind, migrated: migratedValue, upload: uploadValue });
+    const first = preferUpload ? uploadValue : migratedValue, second = preferUpload ? migratedValue : uploadValue;
+    const value = first ?? second;
+    if (value !== null) used[(first !== null) === preferUpload ? "upload" : "migrated"]++;
+    return value;
+  };
+  // 1인당 평균: 어느 출처든 그 교과를 '교사 0명'이라고 하면 전년 1인당은 비운다('-' · 순위 제외).
+  // 다른 출처로 빈칸을 채울 때는 그 출처에 교사 수가 있고(> 0) 1인당이 계산될 때만(먼저 쓰는 출처는 W 칸 직접 입력처럼 교사 수가 없어도 씀).
+  const average = (key) => {
+    const migratedCount = teachersOf(key, migratedTeachers), uploadCount = teachersOf(key, uploadTeachers);
+    const migratedValue = migratedAverage(key), uploadValue = uploadAverage(key);
+    if (migratedValue !== null && uploadValue !== null && Math.abs(migratedValue - uploadValue) > 0.005) differences.push({ key, kind: "average", migrated: migratedValue, upload: uploadValue });
+    // '0명이면 비움'은 교과 하나일 때만(교과군은 세부 교과 하나가 0명이어도 교과군 평균은 있음).
+    if (!groupMembers(key).length && (migratedCount === 0 || uploadCount === 0)) return null;
+    const first = preferUpload ? { value: uploadValue, source: "upload" } : { value: migratedValue, source: "migrated" };
+    const second = preferUpload ? { value: migratedValue, count: migratedCount, source: "migrated" } : { value: uploadValue, count: uploadCount, source: "upload" };
+    const chosen = first.value !== null ? first : second.value !== null && second.count > 0 ? second : null;
+    if (!chosen) return null;
+    used[chosen.source]++;
+    return chosen.value;
+  };
+  const hasMigrated = Boolean(previous && (Object.keys(previous.teachers || {}).length || Object.keys(previous.lastAverages || {}).length)) ||
+    Object.keys(settings.previousAverages || {}).length > 0 || Object.keys(settings.previousTeachers || {}).length > 0;
+  return {
+    previousYear, upload, preferUpload, hasMigrated, differences, used,
+    average,
+    teachers: (id) => pick(id, migratedTeachers(id), uploadTeachers(id), "teachers")
+  };
+}
+
+// 화면 근거: '전년도: 앱에 이관된 2026학년도 자료' / '전년도: 올린 파일(2026 교사시수표 …)' / 둘 다.
+function hoursPreviousSourceLabel(sources) {
+  if (!sources) return "";
+  const file = sources.upload ? `올린 파일(${sources.upload.sheetName}${sources.upload.fileName ? ` · ${sources.upload.fileName}` : ""})` : "";
+  const migrated = sources.hasMigrated ? `앱에 이관된 ${sources.previousYear}학년도 자료` : "";
+  if (sources.used.upload && sources.used.migrated) return `전년도: ${sources.preferUpload ? file : migrated} + 빈 교과는 ${sources.preferUpload ? migrated : file}`;
+  if (sources.used.upload) return `전년도: ${file}`;
+  if (sources.used.migrated) return `전년도: ${migrated}`;
+  return "";
 }
 
 function computeHoursStats(year = hoursTargetYear()) {
   if (!/^\d{4}$/.test(year)) throw new Error("학년도를 먼저 올바르게 입력하세요.");
   if (typeof syncActiveCurriculumCohort === "function") syncActiveCurriculumCohort();
   const settings = hoursSettings(year);
+  const previousSources = hoursPreviousSources(year, settings);
   const issues = [];
   const classCounts = Object.fromEntries(["1", "2", "3"].map((grade) =>
     [grade, hoursNumber(settings.classCounts[grade], { integer: true, max: 99 })]));
@@ -558,6 +889,8 @@ function computeHoursStats(year = hoursTargetYear()) {
         // 결과는 있는데 기준 설정 때문에 읽지 못한 경우: '결과가 없다'고 하지 않는다(위 확인 항목으로 알림).
       } else if (!info.source) {
         issues.push({ level: "error", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
+      } else if (info.source.confirmed && info.source.stale?.length && typeof roundSnapshotStaleText === "function") {
+        issues.push({ level: "warning", text: `${grade}학년 선택과목: ${info.source.round}차 확정 스냅샷이 지금 4단계 집계와 다릅니다(${roundSnapshotStaleText(info.source.stale)}). 시수는 확정 스냅샷 값입니다. 4단계에서 확정을 해제하고 다시 확정하면 맞춰집니다.`, action: "4" });
       } else if (info.source.confirmed && typeof roundSnapshotDrift === "function") {
         // 확정 뒤 학급 수·기준 비율이 바뀌면 선택과목은 확정 시점 값, 지정 과목은 현재 학급 수로 계산돼 서로 어긋난다.
         const drift = roundSnapshotDrift(info.source.round);
@@ -604,11 +937,28 @@ function computeHoursStats(year = hoursTargetYear()) {
       } else {
         const candidates = resultIndex.get(normalizeResultCourseName(entry.subject)) || [];
         const exact = candidates.filter((row) => row.semester === entry.semester);
-        const semesterless = !exact.length && candidates.length === 1 && !candidates[0].semester;
+        // 편제표 두 학기에 모두 편성된 과목(같은 과목은 한 학기만): 4단계 집계의 학기 그대로만 쓴다.
+        // 다른 학기에만 개설됐으면 이 학기는 0(정상), 학기 미정으로 남은 결과는 어느 학기에도 넣지 않고 4단계에서 학기를 정하게 한다.
+        const twoSemester = entries.filter((other) => other.kind !== "지정" &&
+          normalizeResultCourseName(other.subject) === normalizeResultCourseName(entry.subject)).map((other) => other.semester);
+        const plannedBoth = twoSemester.includes("1") && twoSemester.includes("2");
+        const semesterless = !exact.length && candidates.length === 1 && !candidates[0].semester && !plannedBoth;
         // 학기 표시가 없는 결과 한 칸이 편제표의 두 학기와 모두 맞으면 이중 계산하지 않고 앞 학기에만 반영한다.
         const alreadyUsed = semesterless && usedResults.has(candidates[0]);
         const matched = exact.length ? exact : semesterless && !alreadyUsed ? candidates : [];
-        if (alreadyUsed) {
+        const otherOnly = plannedBoth && !exact.length && candidates.some((row) => row.semester && row.semester !== entry.semester);
+        const undecidedRows = plannedBoth && !exact.length ? candidates.filter((row) => !row.semester) : [];
+        if (otherOnly || undecidedRows.length) {
+          item.autoClasses = 0;
+          undecidedRows.forEach((row) => usedResults.add(row));
+          const opened = [...new Set(candidates.filter((row) => row.semester).map((row) => row.semester))].sort();
+          item.basis = otherOnly
+            ? `두 학기 편성 · 현 ${currentGrade}학년 ${info.source.round}차${info.source.confirmed ? " 확정" : " 미확정"} 결과 ${opened.join("·")}학기만 개설`
+            : "두 학기 편성 · 4단계 학기 미정";
+          if (undecidedRows.length && entry.semester === "1") {
+            issues.push({ level: "warning", action: "4", text: `${grade}학년 ${entry.subject}: 편제표 1·2학기에 모두 편성됐는데 현 ${currentGrade}학년 ${info.source.round}차 결과에 학기 미정 신청 ${undecidedRows.reduce((sum, row) => sum + (Number(row.enrollment) || 0), 0)}명이 있어 개설반에 넣지 않았습니다. 4단계 과목 메뉴 '개설 학기 바꾸기'에서 학기를 정하세요.` });
+          }
+        } else if (alreadyUsed) {
           item.autoClasses = 0;
           item.basis = "학기 표시 없는 결과 · 앞 학기에만 반영";
           issues.push({ level: "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 신청 결과에 학기 표시가 없어 앞 학기에만 반영했습니다. 이 학기에도 개설하면 상세 표에서 개설반을 입력하세요.` });
@@ -637,7 +987,9 @@ function computeHoursStats(year = hoursTargetYear()) {
       const override = hoursNumber(settings.classOverrides[item.key], { integer: true, max: 99 });
       item.classes = override ?? item.autoClasses;
       item.manual = override !== null;
-      if (item.manual) item.basis = `직접 입력 (자동 ${item.autoClasses})`;
+      // 직접 입력이 우선이지만, 4단계(신청 결과) 값과 다르면 칸에 표시한다(학교 지정 과목은 학급 수 기준이라 표시하지 않음).
+      item.differs = item.manual && item.kind !== "지정" && grade !== "1" && Boolean(info.source) && item.classes !== item.autoClasses;
+      if (item.manual) item.basis = item.differs ? `직접 입력 ${item.classes}반 · 4단계 ${item.autoClasses}반과 다름(${item.basis})` : `직접 입력 (자동 ${item.autoClasses})`;
       const departmentOverride = settings.departmentOverrides[normalizeResultCourseName(item.subject)];
       item.defaultDepartment = hoursDefaultDepartment(item.subject, item.area);
       item.department = HOURS_DEPARTMENTS.some((department) => department.id === departmentOverride) || hoursNonTeachingId(departmentOverride)
@@ -671,8 +1023,8 @@ function computeHoursStats(year = hoursTargetYear()) {
       // 맡을 교과를 고르지 않은 교양 시수: '타교과 담당(미지정)'으로 표시하고 1인당 평균은 내지 않는다.
       otherUnassigned: Boolean(definition.otherTeachers) && !(teachers > 0) && (hours["1"] > 0 || hours["2"] > 0),
       yearAverage: averages ? (averages["1"] + averages["2"]) / 2 : null,
-      previous: hoursNumber(settings.previousAverages[definition.id], { max: 100 }),
-      previousTeachers: hoursNumber(settings.previousTeachers[definition.id], { max: 200 }),
+      previous: previousSources.average(definition.id),
+      previousTeachers: previousSources.teachers(definition.id),
       formLabel: hoursFormLabel(definition, own)
     };
   });
@@ -694,7 +1046,7 @@ function computeHoursStats(year = hoursTargetYear()) {
     common.groupTeachers = groupTeachers;
     common.groupSemester = groupTeachers > 0 ? Object.fromEntries(["1", "2"].map((semester) =>
       [semester, groupMembers.reduce((sum, department) => sum + department.hours[semester], 0) / groupTeachers])) : null;
-    common.groupPrevious = hoursNumber(settings.previousAverages[common.group], { max: 100 });
+    common.groupPrevious = previousSources.average(common.group);
   }
   const included = departments.filter((department) => !department.excluded);
   const totalClasses = ["1", "2", "3"].reduce((sum, grade) => sum + (classCounts[grade] || 0), 0);
@@ -743,6 +1095,10 @@ function computeHoursStats(year = hoursTargetYear()) {
   const staff = hoursStaffStats(departments, totals, nonTeaching, settings, issues);
   const recommendation = hoursTeacherRecommendation(departments, staff, settings);
   const yearChange = hoursYearChange(departments);
+  yearChange.sourceLabel = hoursPreviousSourceLabel(previousSources);
+  yearChange.differences = previousSources.differences.map((item) => ({ ...item, name: HOURS_DEPARTMENTS.some((department) => department.id === item.key) ? hoursDepartmentName(item.key) : `${item.key}(교과군)` }));
+  yearChange.upload = previousSources.upload ? { sheetName: previousSources.upload.sheetName, fileName: previousSources.upload.fileName, year: previousSources.upload.year, allocation: previousSources.upload.allocation } : null;
+  yearChange.preferUpload = previousSources.preferUpload;
   return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, yearChange, issues };
 }
 
@@ -980,15 +1336,35 @@ function hoursStaffSettings(stats) {
 }
 
 // 교과별 교사 수 추천(학교 규칙: 19 초과 증·13 이하 순회·가장 작은 교과 감, '교사 수 추천' 팝업): 추천만 보이고, '추천 적용'을 눌러야 교사 수가 바뀐다.
+// 전년도 근거 줄·'전년도 교사시수표 올리기'·이관 자료와 다른 교과 안내·'올린 파일로 바꾸기'·교과 시수 배정표(읽어서 보여 주기만).
+function hoursPreviousUploadTools(stats, suffix = "") {
+  const change = stats.yearChange || {};
+  const upload = change.upload;
+  const differences = change.differences || [];
+  const value = (item) => `${hoursFormat(item.migrated, 1)} / 파일 ${hoursFormat(item.upload, 1)}`;
+  const allocation = upload?.allocation;
+  return `<div class="hours-settings-row hours-previous-tools">
+      ${change.sourceLabel ? `<span class="hours-note" id="hoursPreviousSource${suffix}"><b>${escapeHtml(change.sourceLabel)}</b></span>` : ""}
+      <label class="button" for="hoursPreviousUploadInput${suffix}" tabindex="0" role="button">전년도 교사시수표 올리기</label>
+      <input class="hidden" id="hoursPreviousUploadInput${suffix}" data-hours-previous-upload="1" type="file" accept=".xlsx" aria-label="전년도 교사시수표 올리기(.xlsx)">
+      ${upload ? `<button class="button button-quiet" type="button" data-hours-action="${change.preferUpload ? "prefer-migrated" : "prefer-upload"}">${change.preferUpload ? "앱에 이관된 자료 먼저 쓰기" : "올린 파일로 바꾸기"}</button>
+        <button class="button button-quiet" type="button" data-hours-action="remove-previous-upload">올린 파일 지우기</button>` : ""}
+    </div>
+    ${differences.length ? `<p class="note" id="hoursPreviousDifferences${suffix}">이관 자료와 올린 파일 값이 다른 교과(지금 쓰는 값: ${change.preferUpload ? "올린 파일" : "이관 자료"}): ${escapeHtml(differences.map((item) => `${item.name} ${item.kind === "teachers" ? "교사 수" : "1인당"} ${value(item)}`).join(", "))}</p>` : ""}
+    ${allocation ? `<details class="hours-previous-allocation"><summary>전년도 교과 시수 배정표(창체·교양 교과별 배분) · ${escapeHtml(allocation.sheetName)} — 읽어서 보여 주기만 합니다</summary>
+      <div class="aggregate-sheet-wrap"><table class="closure-table"><tbody>${allocation.rows.slice(0, 40).map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>` : ""}`;
+}
+
 // 전년도 대비 증감 순위표(교사 수 추천 팝업 위쪽). 전년 자료가 없으면 안내만.
 function hoursYearChangeSection(stats) {
   const change = stats.yearChange || { rows: [], hasPrevious: false };
   const pair = (value) => value ? `${hoursFormat(value["1"], 1)} / ${hoursFormat(value["2"], 1)}` : "-";
   const teachers = (row) => row.previousTeachers === null || row.previousTeachers === undefined
     ? `${hoursFormat(row.teachers, 1)}` : `${hoursFormat(row.previousTeachers, 1)} → ${hoursFormat(row.teachers, 1)}${row.teachers !== row.previousTeachers ? ` (${row.teachers > row.previousTeachers ? "+" : ""}${hoursFormat(row.teachers - row.previousTeachers, 1)})` : ""}`;
+  const tools = hoursPreviousUploadTools(stats);
   if (!change.hasPrevious) {
     return `<section class="hours-year-change" aria-label="전년도 대비 증감 순위"><h4>전년도 대비 1인당 시수 증감 순위</h4>
-      <p class="note" id="hoursYearChangeEmpty">전년도 자료 없음 — 시수표 W 열 '전년도 평균'을 입력하거나 '전년도 설정 불러오기'를 하면 교과별 증감 순위를 보여 드립니다.</p></section>`;
+      <p class="note" id="hoursYearChangeEmpty">전년도 자료 없음 — 시수표 W 열 '전년도 평균'을 입력하거나 '전년도 설정 불러오기', 또는 '전년도 교사시수표 올리기'를 하면 교과별 증감 순위를 보여 드립니다.</p>${tools}</section>`;
   }
   const body = change.rows.map((row) => `<tr>
       <th scope="row" class="closure-subject">${escapeHtml(row.group ? row.label : hoursDepartmentName(row.id))}</th>
@@ -997,6 +1373,7 @@ function hoursYearChangeSection(stats) {
       <td class="${row.change > 0 ? "hours-up" : row.change < 0 ? "hours-down" : ""}">${row.change === null ? "-" : `${row.change > 0 ? "+" : ""}${hoursFormat(row.change, 1)}`}</td>
       <td>${row.rank ?? "-"}</td><td>${escapeHtml(teachers(row))}</td></tr>`).join("");
   return `<section class="hours-year-change" aria-label="전년도 대비 증감 순위"><h4>전년도 대비 1인당 시수 증감 순위 <small>많이 늘어난 순 · 지금 교사 수 기준</small></h4>
+    ${tools}
     <div class="aggregate-sheet-wrap"><table class="closure-table hours-year-change-table">
       <thead><tr><th scope="col">교과</th><th scope="col">전년 1인당<br>(1년)</th><th scope="col">올해 1인당<br>(1학기 / 2학기)</th><th scope="col">올해 1인당<br>(1년)</th><th scope="col">증감</th><th scope="col">순위</th><th scope="col">교사 수<br>(전년 → 올해)</th></tr></thead>
       <tbody>${body}</tbody></table></div></section>`;
@@ -1049,7 +1426,7 @@ function hoursRecommendationSection(stats) {
       <button class="button" type="button" data-hours-action="apply-recommendation"${recommendation.ok && recommendation.changed ? "" : " disabled"}>추천 적용</button>
       ${undo ? `<button class="button button-quiet" type="button" data-hours-action="undo">되돌리기 (${escapeHtml(undo.label)})</button>` : ""}
     </div>
-    <p class="note">교사 수는 정원·표시과목에 따라 학교가 정하므로 <b>추천만</b> 합니다. 기준 교과 교사 수(총 교원 수)를 먼저 정하고, 1인당 시수(두 학기 중 큰 값)가 <b>${up}시간을 넘는</b> 교과를 시수가 큰 교과부터 1명 증합니다. 증했을 때 <b>${roaming}시간 이하</b>가 되면 증하지 않고 순회교사 지원으로 둡니다. 증할 사람은 1인당 시수가 가장 작은 교과에서 1명 감하고, 그 교과가 1명이거나 감하면 ${up}시간을 넘으면 그다음 교과에서 감합니다(같으면 학교 평균과의 편차가 작아지는 쪽). 시수가 있는 교과는 최소 1명, '고정'한 교과는 바꾸지 않습니다. 진로(합계 제외)·타교과 담당 교양은 추천에서 뺍니다.</p>
+    <p class="note">교사 수는 정원·표시과목에 따라 학교가 정하므로 <b>추천만</b> 합니다. 기준 교과 교사 수(총 교원 수)를 먼저 정하고, 1인당 시수(두 학기 평균 = (1학기 + 2학기) ÷ 2 ÷ 교사 수)가 <b>${up}시간을 넘는</b> 교과(시수가 있는데 교사 0명인 교과 포함)를 시수가 큰 교과부터 1명 증합니다. 증했을 때 <b>${roaming}시간 이하</b>가 되면 증하지 않고 순회교사 지원으로 둡니다. 증할 사람은 1인당 시수가 가장 작은 교과에서 1명 감하고, 그 교과가 1명이거나 감하면 ${up}시간을 넘으면 그다음 교과에서 감합니다(같으면 학교 평균과의 편차가 작아지는 쪽). '고정'한 교과는 바꾸지 않습니다. 진로(합계 제외)·타교과 담당 교양은 추천에서 뺍니다.</p>
     ${recommendation.notes.map((note) => `<p class="note">${escapeHtml(note)}</p>`).join("")}
     ${steps.length ? `<ul class="hours-recommend-steps" aria-label="추천 단계 기록">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ul>` : ""}
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-recommend-table">
@@ -1155,7 +1532,7 @@ function renderHoursStatsView() {
   const detailOpen = content.querySelector('details[data-hours-details="detail"]')?.open ?? stats.items.some((item) => item.department === "기타");
   const detailRows = !detailOpen ? "" : stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) ||
     hoursDepartmentOrder(a.department) - hoursDepartmentOrder(b.department) ||
-    a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}">
+    a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}${item.differs ? " is-differ" : ""}">
       <td>${item.grade}</td><td>${item.cohortYear}</td><td>${item.currentGrade ? `현 ${item.currentGrade}` : "신입"}</td><td>${item.semester}</td><th scope="row" class="closure-subject">${escapeHtml(item.subject)}</th>
       <td>${item.kind}</td>
       <td><select data-hours-department="${escapeHtml(normalizeResultCourseName(item.subject))}" data-default-department="${item.defaultDepartment}" data-focus-key="dept-${escapeHtml(item.key)}" aria-label="${escapeHtml(item.subject)} 담당 교과">${departmentOptions(item.department)}</select></td>
@@ -1179,6 +1556,7 @@ function renderHoursStatsView() {
     settingsBody.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
     <p class="note">창체 시수(학급당 학기 자율·진로)는 시수표 맨 아래 창체 행의 학점 칸에서 고칩니다. 교과별 교사 수·전년도 평균·공통 과목 배분도 시수표 칸에서 바로 입력합니다(소수 0.5도 됨). 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</p>
     ${hoursStaffSettings(stats)}
+    ${hoursCommonSettings(stats)}
     ${hoursPreviousTeachersSettings(stats)}`;
   }
   const recommendBody = document.getElementById("hoursRecommendBody");
@@ -1228,6 +1606,7 @@ function hoursPreviousTeachersSettings(stats) {
     <h4 id="hoursPreviousTeachersTitle">전년도(${Number(stats.year) - 1}학년도) 교과별 교사 수</h4>
     <p class="note">시수표 아래 메모의 '◈ ${stats.year}학년도 ⇒ …과 n명 증/감' 줄을 자동으로 씁니다. 메모는 시수표에서 직접 고칠 수 있습니다.</p>
     <p class="hours-staff-line">${escapeHtml(memo.changeLine || hoursChangeLineMissingText(stats))}</p>
+    ${hoursPreviousUploadTools(stats, "Settings")}
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-staff-table">
       <thead><tr><th scope="col">교과</th><th scope="col">전년도 교사 수</th><th scope="col">올해 교사 수</th><th scope="col">증감</th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : ""}
@@ -1284,6 +1663,13 @@ function updateHoursSetting(target) {
   else if (target.dataset.hoursRecommendTotal) set(settings, "recommendTeachers", hoursNumber(target.value, { max: 500 }));
   else if (target.dataset.hoursMaxHours) set(settings, "maxTeacherHours", hoursNumber(target.value, { max: 40 }));
   else if (target.dataset.hoursRoamingHours) set(settings, "roamingTeacherHours", hoursNumber(target.value, { max: 40 }));
+  else if (target.dataset.hoursCommonMode) set(settings.commonModes, target.dataset.hoursCommonMode, target.value === hoursCommonDefaultMode(target.dataset.hoursCommonMode) ? null : target.value);
+  else if (target.dataset.hoursCommonShare) {
+    const key = target.dataset.hoursCommonShare;
+    if (!hoursPlainObject(settings.commonShares[key])) settings.commonShares[key] = {};
+    set(settings.commonShares[key], target.dataset.hoursCommonMember, hoursNumber(target.value, { integer: true, max: 20 }));
+    if (!Object.keys(settings.commonShares[key]).length) delete settings.commonShares[key];
+  }
   else if (target.dataset.hoursSource) set(settings.sourceRounds, target.dataset.hoursSource, target.value || null);
   else if (target.dataset.hoursTeachers) set(settings.teachers, target.dataset.hoursTeachers, hoursNumber(target.value, { max: 200 }));
   else if (target.dataset.hoursPrevious) set(settings.previousAverages, target.dataset.hoursPrevious, hoursNumber(target.value, { max: 100 }));
@@ -1392,14 +1778,74 @@ async function applyHoursRecommendation() {
   hoursFinishChange(`교과별 교사 수를 추천값으로 바꿨습니다(${changes.length}개 교과). 되돌리려면 '되돌리기'를 누르세요.`);
 }
 
+// 교과군 공통 과목 나눔 계획(설정의 과목별 방식·시간 나눔 반영). 자동 배분 단추와 hoursCommonClassAssignment가 같이 쓴다.
+function hoursCommonPlanFor(stats, group) {
+  const common = stats.departments.find((department) => department.common && department.group === group);
+  const members = stats.departments.filter((department) => department.group === group && !department.common);
+  return hoursBalanceCommonAllocation(
+    members.map((member) => ({ id: member.id, hours: member.hours, teachers: member.teachers || 0 })),
+    (common?.items || []).map((item) => ({ subject: item.subject, semester: item.semester, credit: item.credit, classes: item.classes, grade: item.grade })),
+    { modes: stats.settings.commonModes || {}, shares: stats.settings.commonShares || {} });
+}
+
+// 6단계·시간표용 반별 공통 과목 담당: hoursCommonClassAssignment(학년(내년 학년), 학기) → { 과목: { 반: { 교과 id: 주당 시간 } } }.
+// 통합과학 4시간이면 반마다 { 과학-물리: 1, 과학-화학: 1, 과학-생명: 1, 과학-지구: 1 }. 반 단위 과목은 그 반을 맡은 교과 하나에 학점 전부.
+// 자동 배분 규칙으로 계산한 값이다(시수표 배분 칸을 직접 고쳤으면 그 값과 다를 수 있음 — matchesSaved로 알림).
+function hoursCommonClassAssignment(grade, semester, year = hoursTargetYear()) {
+  const stats = typeof hoursStatsCached === "function" ? hoursStatsCached(year) : computeHoursStats(year);
+  const out = {};
+  let matchesSaved = true;
+  for (const group of ["과학", "사회"]) {
+    const result = hoursCommonPlanFor(stats, group);
+    if (!result.ok) continue;
+    for (const entry of result.plan) {
+      if (String(entry.semester) !== String(semester) || (grade && String(entry.grade) !== String(grade))) continue;
+      out[entry.subject] = JSON.parse(JSON.stringify(entry.byClass));
+    }
+    for (const member of stats.departments.filter((department) => department.group === group && !department.common)) {
+      if ((Number(stats.settings.allocations?.[member.id]?.[semester]) || 0) !== (result.allocations[member.id]?.[semester] || 0)) matchesSaved = false;
+    }
+  }
+  Object.defineProperty(out, "matchesSaved", { value: matchesSaved, enumerable: false });
+  return out;
+}
+
+// 시수 설정 팝업: 공통 과목마다 나누는 방식과(시간 나눔이면) 교과별 한 반 주당 시간.
+function hoursCommonSettings(stats) {
+  const labels = { equal: "교과별 같은 시간", time: "시간 균형 분배", class: "반 단위 균형" };
+  const rows = [];
+  for (const group of ["과학", "사회"]) {
+    const common = stats.departments.find((department) => department.common && department.group === group);
+    const members = stats.departments.filter((department) => department.group === group && !department.common && department.teachers > 0);
+    const subjects = [...new Map((common?.items || []).filter((item) => item.credit > 0 && item.classes > 0).map((item) => [hoursCommonSubjectKey(item.subject), item])).values()];
+    if (!subjects.length) continue;
+    const plan = hoursCommonPlanFor(stats, group);
+    for (const item of subjects) {
+      const key = hoursCommonSubjectKey(item.subject);
+      const mode = stats.settings.commonModes?.[key] || hoursCommonDefaultMode(item.subject);
+      const planned = plan.plan?.find((entry) => hoursCommonSubjectKey(entry.subject) === key)?.byClass?.["1"] || {};
+      const shares = mode === "class" ? "" : members.map((member) => `<label class="hours-zero-toggle">${escapeHtml(hoursDepartmentName(member.id).replace(/^.*\(|\)$/g, ""))}
+        <input class="hours-small-input" type="number" min="0" max="20" step="1" data-hours-common-share="${escapeHtml(key)}" data-hours-common-member="${escapeHtml(member.id)}" data-focus-key="common-share-${escapeHtml(key)}-${escapeHtml(member.id)}"
+          value="${stats.settings.commonShares?.[key]?.[member.id] ?? ""}" placeholder="${planned[member.id] ?? 0}" aria-label="${escapeHtml(`${item.subject} ${hoursDepartmentName(member.id)} 한 반 주당 시간`)}"></label>`).join("");
+      rows.push(`<tr><th scope="row" class="closure-subject">${escapeHtml(item.subject)}<br><small>${escapeHtml(group)} · ${item.credit}학점</small></th>
+        <td><select data-hours-common-mode="${escapeHtml(key)}" data-focus-key="common-mode-${escapeHtml(key)}" aria-label="${escapeHtml(item.subject)} 나누는 방식">${Object.entries(labels).map(([value, label]) => `<option value="${value}"${value === mode ? " selected" : ""}>${label}${value === hoursCommonDefaultMode(item.subject) ? " (기본)" : ""}</option>`).join("")}</select></td>
+        <td>${shares || '<span class="hours-note">반 하나를 한 교과가 맡음</span>'}</td></tr>`);
+    }
+  }
+  if (!rows.length) return "";
+  return `<section class="hours-staff-settings" aria-labelledby="hoursCommonSettingsTitle">
+    <h4 id="hoursCommonSettingsTitle">공통 과목 나누기(과학·사회)</h4>
+    <p class="note">'교과별 같은 시간'은 한 반의 주당 시수를 세부 교과에 똑같이 나눕니다(통합과학 4시간 = 물리·화학·생명·지구 1시간씩, 반마다 교사 4명). '시간 균형 분배'는 1인당 시수가 낮은 교과부터 1시간씩, '반 단위 균형'은 반 하나를 한 교과가 맡습니다. 교과별 시간 칸(한 반 주당)을 채우면 그 나눔을 씁니다(합이 학점과 같을 때만, 회색은 자동 값). 시수표의 '공통 시수 자동 배분'을 누르면 배분 칸·메모에 반영됩니다.</p>
+    <div class="aggregate-sheet-wrap"><table class="closure-table hours-staff-table"><thead><tr><th scope="col">공통 과목</th><th scope="col">나누는 방식</th><th scope="col">교과별 한 반 주당 시간</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
+  </section>`;
+}
+
 function autoAllocateHoursCommon(group) {
   const stats = computeHoursStats();
   const common = stats.departments.find((department) => department.common && department.group === group);
   if (!common?.items.length) return;
   const members = stats.departments.filter((department) => department.group === group && !department.common);
-  const result = hoursBalanceCommonAllocation(
-    members.map((member) => ({ id: member.id, hours: member.hours, teachers: member.teachers || 0 })),
-    common.items.map((item) => ({ subject: item.subject, semester: item.semester, credit: item.credit, classes: item.classes })));
+  const result = hoursCommonPlanFor(stats, group);
   if (!result.ok) {
     hoursNotify(`${group} 공통 시수 자동 배분: ${result.reason}`, false);
     return;
@@ -1416,7 +1862,7 @@ function autoAllocateHoursCommon(group) {
       if (result.notes[member.id][semester]) settings.allocationNotes[member.id][semester] = result.notes[member.id][semester];
     }
   }
-  hoursFinishChange(`${group} 공통 과목 시수를 세부 교과 교사 수에 맞춰 반 단위로 나눴습니다. 되돌리려면 '되돌리기'를 누르세요.`);
+  hoursFinishChange(`${group} 공통 과목 시수를 세부 교과에 나눴습니다(통합과학은 교과별 같은 시간, 통합사회는 시간 균형, 그 밖은 반 단위 — 시수 설정에서 바꿈). 되돌리려면 '되돌리기'를 누르세요.`);
 }
 
 function undoHoursChange() {
@@ -1589,7 +2035,7 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
             put(row, column + 1, { v: item.credit, k: "cell" });
             put(row, column + 2, {
               v: item.classes, k: item.kind !== "지정" && item.grade !== "1" ? "cellRed" : "cell", item,
-              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
+              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.differs ? " is-differ" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
                 attrs: { "data-hours-item-classes": item.key, "data-hours-auto": item.autoClasses, "data-focus-key": `item-${item.key}`, min: 0, max: 99, step: 1,
                   "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반` } }
             });
@@ -2065,11 +2511,85 @@ function downloadHoursStats() {
   hoursNotify(`${stats.year}학년도 교과별 시수 통계를 내려받았습니다. 교과별 평균은 다음 해 '전년도 평균'으로 불러올 수 있습니다.`, true);
 }
 
+// '전년도 교사시수표 올리기': 파일을 읽어 앱 학년도 − 1 시트를 고르고, 확인 창(시트·교과 맞춤·교사 수·평균)에서 반영하면 저장한다.
+async function importPreviousHoursFile(file) {
+  const year = hoursTargetYear();
+  const previousYear = String(Number(year) - 1);
+  let sheets;
+  try {
+    if (typeof parseWorkbook !== "function") throw new Error("엑셀 읽기 기능을 불러오지 못했습니다.");
+    sheets = await parseWorkbook(await file.arrayBuffer(), { expandMergedCells: true });
+  } catch (error) {
+    hoursNotify(error?.message || "전년도 교사시수표를 읽지 못했습니다.", false);
+    return;
+  }
+  const picked = hoursPreviousPickSheets(sheets, previousYear);
+  if (!picked.stats.length) {
+    hoursNotify("교과별 시수표(머리글 '교과군'·'교사수')가 있는 시트를 찾지 못했습니다. 학교 교과별 시수표나 앱에서 내려받은 교사시수표를 올려 주세요.", false);
+    return;
+  }
+  const record = await askPreviousHoursImport(picked, file.name, previousYear);
+  if (!record) return;
+  const settings = hoursSettings(year, true);
+  settings.previousUpload = record;
+  if (!settings.previousPrefer) settings.previousPrefer = "migrated";
+  hoursFinishChange(`전년도 교사시수표 '${record.sheetName}'을(를) 반영했습니다(교과 ${Object.keys(record.departments).length}개). 앱에 이관된 전년도 자료가 있으면 그것을 먼저 씁니다.`);
+}
+
+function askPreviousHoursImport(picked, fileName, previousYear) {
+  const dialog = document.getElementById("hoursPreviousImportDialog");
+  const body = document.getElementById("hoursPreviousImportBody");
+  if (!dialog || !body || typeof dialog.showModal !== "function") {
+    const parsed = picked.stats.find((item) => item.name === picked.chosen);
+    return Promise.resolve(window.confirm(`'${parsed.name}' 시트(교과 ${parsed.departments.length}줄)를 전년도 교사시수표로 반영할까요?`)
+      ? hoursPreviousUploadRecord(parsed, {}, { fileName, allocation: picked.allocations.find((item) => item.name === picked.allocation), at: new Date().toISOString() }) : null);
+  }
+  let sheetName = picked.chosen;
+  const options = HOURS_DEPARTMENTS.filter((department) => department.id !== "기타")
+    .map((department) => `<option value="${escapeHtml(department.id)}">${escapeHtml(hoursDepartmentName(department.id))}</option>`).join("");
+  const draw = () => {
+    const parsed = picked.stats.find((item) => item.name === sheetName);
+    const unmatched = parsed.departments.filter((department) => !department.id).length;
+    body.innerHTML = `<p class="note">${escapeHtml(fileName)} · 시트 ${picked.total}개 중 교과별 시수표 ${picked.stats.length}개${picked.allocations.length ? ` · 교과 시수 배정표 ${picked.allocations.length}개` : ""}${picked.matched ? ` · ${previousYear}학년도 시트를 자동으로 골랐습니다` : ` · ${previousYear}학년도 시트가 없어 가장 알맞은 시트를 골랐습니다`}.</p>
+      <label class="hours-classes">시트 <select id="hoursPreviousImportSheet">${picked.stats.map((item) => `<option value="${escapeHtml(item.name)}"${item.name === sheetName ? " selected" : ""}>${escapeHtml(item.name)}${item.year ? ` · ${item.year}학년도(${item.yearBasis})` : ""}${item.stamp ? ` · ${escapeHtml(item.stamp)}` : ""}${item.final ? " · 최종" : ""}</option>`).join("")}</select></label>
+      <p class="hours-staff-line" id="hoursPreviousImportSummary">${escapeHtml(parsed.title || parsed.name)} · 교과 교사 ${hoursFormat(parsed.subjectTeachers, 1)}명 · 교과 시수 ${hoursFormat(parsed.summary.subject?.["1"], 1)} / ${hoursFormat(parsed.summary.subject?.["2"], 1)}${Object.keys(parsed.nonTeaching).length ? ` · 비교과 ${Object.entries(parsed.nonTeaching).map(([kind, count]) => `${kind}${count}`).join(", ")}` : ""}</p>
+      ${unmatched ? `<p class="note is-warn">앱 교과와 이름이 맞지 않는 줄 ${unmatched}개: '맞출 교과'를 고르세요(비워 두면 반영하지 않음).</p>` : ""}
+      <div class="aggregate-sheet-wrap"><table class="closure-table hours-previous-import-table">
+        <thead><tr><th scope="col">파일 교과</th><th scope="col">맞출 교과</th><th scope="col">교사 수</th><th scope="col">1인당 1학기 / 2학기</th><th scope="col">1인당 1년</th></tr></thead>
+        <tbody>${parsed.departments.map((department, index) => `<tr${department.id ? "" : ' class="is-attention"'}><th scope="row" class="closure-subject">${escapeHtml(department.label)}</th>
+          <td><select data-previous-map="${index}" aria-label="${escapeHtml(department.label)} 맞출 교과"><option value="">(반영 안 함 · 맞출 교과 고르기)</option>${options.replace(`value="${department.id}"`, `value="${department.id}" selected`)}</select></td>
+          <td>${hoursFormat(department.teachers, 1)}</td><td>${hoursFormat(department.averages["1"], 1)} / ${hoursFormat(department.averages["2"], 1)}</td><td>${hoursFormat(department.year, 1)}</td></tr>`).join("")}</tbody>
+      </table></div>
+      ${parsed.memo.length ? `<p class="note">메모: ${escapeHtml(parsed.memo.join(" / "))}</p>` : ""}
+      ${picked.allocations.length ? `<p class="note">교과 시수 배정표: ${escapeHtml(picked.allocations.map((item) => `${item.name}${item.year ? ` · ${item.year}학년도(${item.yearBasis})` : ""}`).join(", "))}</p>` : ""}
+      ${picked.allocation ? `<p class="note">같은 학년도 교과 시수 배정표 '${escapeHtml(picked.allocation)}'도 함께 읽어 둡니다(창체·교양 교과별 배분 — 지금은 보여 주기만).</p>` : ""}`;
+    body.querySelector("#hoursPreviousImportSheet").onchange = (event) => { sheetName = event.target.value; draw(); };
+  };
+  draw();
+  return new Promise((resolve) => {
+    const finish = (value) => { dialog.close(); resolve(value); };
+    document.getElementById("confirmHoursPreviousImport").onclick = () => {
+      const parsed = picked.stats.find((item) => item.name === sheetName);
+      const mapping = Object.fromEntries([...body.querySelectorAll("[data-previous-map]")].map((select) => [select.dataset.previousMap, select.value || null]));
+      finish(hoursPreviousUploadRecord(parsed, mapping, { fileName, allocation: picked.allocations.find((item) => item.name === picked.allocation) || null, at: new Date().toISOString() }));
+    };
+    document.getElementById("cancelHoursPreviousImport").onclick = () => finish(null);
+    dialog.oncancel = () => resolve(null);
+    dialog.showModal();
+  });
+}
+
 function initHoursStats() {
   const content = document.getElementById("hoursStatsContent");
   if (!content) return;
   const handleChange = (event) => {
     const target = event.target;
+    if (target.dataset?.hoursPreviousUpload) {
+      const file = target.files?.[0];
+      target.value = "";
+      if (file) importPreviousHoursFile(file);
+      return;
+    }
     const changed = updateHoursSetting(target);
     if (!changed) return;
     // 4MB 자료를 칸마다 바로 직렬화하지 않고 묶어서 저장(app.js persistStateSoon).
@@ -2102,6 +2622,13 @@ function initHoursStats() {
     if (button.dataset.hoursAutoAllocate) autoAllocateHoursCommon(button.dataset.hoursAutoAllocate);
     else if (button.dataset.hoursAction === "apply-recommendation") applyHoursRecommendation();
     else if (button.dataset.hoursAction === "undo") undoHoursChange();
+    else if (["prefer-upload", "prefer-migrated", "remove-previous-upload"].includes(button.dataset.hoursAction)) {
+      const settings = hoursSettings(hoursTargetYear(), true);
+      if (button.dataset.hoursAction === "remove-previous-upload") { delete settings.previousUpload; delete settings.previousPrefer; }
+      else settings.previousPrefer = button.dataset.hoursAction === "prefer-upload" ? "upload" : "migrated";
+      hoursFinishChange(button.dataset.hoursAction === "remove-previous-upload" ? "올린 전년도 교사시수표를 지웠습니다."
+        : button.dataset.hoursAction === "prefer-upload" ? "전년도 값을 올린 파일에서 먼저 가져옵니다(빈 교과는 앱에 이관된 자료)." : "전년도 값을 앱에 이관된 자료에서 먼저 가져옵니다(빈 교과는 올린 파일).");
+    }
     else if (button.dataset.hoursAction === "reset-memo") {
       const settings = hoursSettings(hoursTargetYear(), true);
       delete settings.staffMemo;
@@ -2118,6 +2645,7 @@ function initHoursStats() {
   const settingsBody = document.getElementById("hoursSettingsBody");
   settingsBody?.addEventListener("change", handleChange);
   settingsBody?.addEventListener("click", openCohort);
+  settingsBody?.addEventListener("click", handleAction);
   const recommendBody = document.getElementById("hoursRecommendBody");
   recommendBody?.addEventListener("change", handleChange);
   recommendBody?.addEventListener("click", handleAction);
