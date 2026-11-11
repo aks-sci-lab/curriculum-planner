@@ -60,7 +60,7 @@ function hoursSettings(year = hoursTargetYear(), create = false) {
     if (create && /^\d{4}$/.test(year)) state.hoursStats[year] = entry;
   }
   for (const key of ["classCounts", "teachers", "departmentOverrides", "classOverrides", "allocations", "previousAverages", "sourceRounds", "lastAverages",
-    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative"]) {
+    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative", "commonModes", "commonShares"]) {
     if (!hoursPlainObject(entry[key])) entry[key] = {};
   }
   return entry;
@@ -681,35 +681,88 @@ function hoursTeacherChangeLine(year, rows) {
   return `◈ ${year}학년도 ⇒ ${groups.length ? groups.join(", ") : "교과 교사 수 변동 없음"}`;
 }
 
-// 과학·사회 공통 과목 시수를 세부 교과에 반 단위(한 반 = 그 과목 학점만큼)로 나눈다.
-// 큰 덩어리부터, 맡은 뒤 1인당 시수가 가장 적은 세부 교과에 준다(교사 수가 있는 세부 교과만). 학기마다 따로 나눈다.
-function hoursBalanceCommonAllocation(members, items) {
+// 과학·사회 공통 과목 시수를 세부 교과에 나눈다. 과목마다 방식(사용자 결정):
+//   equal = 교과별 같은 시간: 한 반의 주당 시수를 세부 교과에 똑같이(통합과학 4시간 = 물·화·생·지 1시간씩, 반마다 교사 4명),
+//           나머지 시간은 1인당 시수가 낮은 교과부터 1시간씩. 기본: 통합과학.
+//   time  = 시간 균형 분배: 한 반의 주당 시수를 1시간씩, 더했을 때 1인당 시수가 가장 낮은 교과에(반마다 같은 나눔). 기본: 통합사회.
+//   class = 반 단위 균형(예전 방식): 반 하나(그 과목 학점만큼)를 통째로, 맡은 뒤 1인당 시수가 가장 낮은 교과에. 기본: 그 밖(과학탐구실험 등).
+// shares[과목 키] = { 교과 id: 한 반 주당 시간 }을 넣으면(합 = 학점) equal·time 대신 그 나눔을 쓴다. 교사 수가 있는 세부 교과만 받는다.
+// 시간 나눔 과목(equal·time)을 먼저 정한 뒤 반 단위 과목을 나눈다. 학기마다 따로. plan은 반마다 { 교과 id: 시간 }(6단계·시간표용).
+function hoursCommonSubjectKey(subject) {
+  return String(subject ?? "").replace(/\s+/g, "");
+}
+
+function hoursCommonDefaultMode(subject) {
+  const key = hoursCommonSubjectKey(subject);
+  if (/^통합과학/.test(key)) return "equal";
+  if (/^통합사회/.test(key)) return "time";
+  return "class";
+}
+
+function hoursBalanceCommonAllocation(members, items, { modes = {}, shares = {} } = {}) {
   const usable = (members || []).filter((member) => member.teachers > 0);
   const allocations = Object.fromEntries((members || []).map((member) => [member.id, { "1": 0, "2": 0 }]));
   const notes = Object.fromEntries((members || []).map((member) => [member.id, { "1": "", "2": "" }]));
-  if (!usable.length) return { ok: false, reason: "세부 교과 교사 수를 먼저 입력하세요.", allocations, notes };
+  const plan = [];
+  if (!usable.length) return { ok: false, reason: "세부 교과 교사 수를 먼저 입력하세요.", allocations, notes, plan };
+  const modeOf = (subject) => ["equal", "time", "class"].includes(modes[hoursCommonSubjectKey(subject)]) ? modes[hoursCommonSubjectKey(subject)] : hoursCommonDefaultMode(subject);
+  const order = (member) => usable.indexOf(member);
   for (const semester of ["1", "2"]) {
-    const chunks = (items || []).filter((item) => String(item.semester) === semester && item.credit > 0 && item.classes > 0)
-      .flatMap((item) => Array.from({ length: item.classes }, () => ({ subject: item.subject, size: item.credit })))
-      .sort((a, b) => b.size - a.size || a.subject.localeCompare(b.subject, "ko"));
+    const list = (items || []).filter((item) => String(item.semester) === semester && item.credit > 0 && item.classes > 0);
     const load = new Map(usable.map((member) => [member.id, Number(member.hours?.[semester]) || 0]));
     const given = new Map(usable.map((member) => [member.id, new Map()]));
+    const give = (id, subject, hours) => {
+      load.set(id, load.get(id) + hours);
+      allocations[id][semester] += hours;
+      const short = hoursShortSubject(subject);
+      given.get(id).set(short, (given.get(id).get(short) || 0) + hours);
+    };
+    const per = (member, extra = 0) => (load.get(member.id) + extra) / member.teachers;
+    // 1) 시간 나눔 과목: 교과별 같은 시간 먼저, 다음 시간 균형.
+    const timed = list.filter((item) => modeOf(item.subject) !== "class")
+      .sort((a, b) => (modeOf(a.subject) === "equal" ? 0 : 1) - (modeOf(b.subject) === "equal" ? 0 : 1) || a.subject.localeCompare(b.subject, "ko"));
+    for (const item of timed) {
+      const mode = modeOf(item.subject);
+      const split = new Map(usable.map((member) => [member.id, 0]));
+      const fixed = shares[hoursCommonSubjectKey(item.subject)];
+      const fixedTotal = fixed ? usable.reduce((sum, member) => sum + (Number(fixed[member.id]) || 0), 0) : 0;
+      if (fixed && fixedTotal === item.credit) {
+        for (const member of usable) split.set(member.id, Number(fixed[member.id]) || 0);
+      } else if (mode === "equal") {
+        const base = Math.floor(item.credit / usable.length);
+        for (const member of usable) split.set(member.id, base);
+        const rest = usable.slice().sort((a, b) => per(a, base * item.classes) - per(b, base * item.classes) || order(a) - order(b));
+        for (let index = 0; index < item.credit - base * usable.length; index++) split.set(rest[index].id, split.get(rest[index].id) + 1);
+      } else {
+        for (let hour = 0; hour < item.credit; hour++) {
+          const best = usable.slice().sort((a, b) => per(a, (split.get(a.id) + 1) * item.classes) - per(b, (split.get(b.id) + 1) * item.classes) || order(a) - order(b))[0];
+          split.set(best.id, split.get(best.id) + 1);
+        }
+      }
+      for (const [id, hours] of split) if (hours) give(id, item.subject, hours * item.classes);
+      const perClass = Object.fromEntries([...split].filter(([, hours]) => hours > 0));
+      plan.push({ grade: String(item.grade ?? ""), semester, subject: item.subject, mode: fixed && fixedTotal === item.credit ? "shares" : mode,
+        byClass: Object.fromEntries(Array.from({ length: item.classes }, (_, index) => [String(index + 1), { ...perClass }])) });
+    }
+    // 2) 반 단위 과목: 큰 덩어리부터, 맡은 뒤 1인당 시수가 가장 적은 세부 교과에(반 번호는 과목 안에서 차례로).
+    const classed = list.filter((item) => modeOf(item.subject) === "class");
+    const entries = new Map(classed.map((item) => [item, { grade: String(item.grade ?? ""), semester, subject: item.subject, mode: "class", byClass: {} }]));
+    const chunks = classed.flatMap((item) => Array.from({ length: item.classes }, (_, index) => ({ item, classNo: String(index + 1), subject: item.subject, size: item.credit })))
+      .sort((a, b) => b.size - a.size || a.subject.localeCompare(b.subject, "ko") || Number(a.classNo) - Number(b.classNo));
     for (const chunk of chunks) {
       let best = null;
       for (const member of usable) {
-        const after = (load.get(member.id) + chunk.size) / member.teachers;
+        const after = per(member, chunk.size);
         if (!best || after < best.after - 1e-9) best = { member, after };
       }
-      load.set(best.member.id, load.get(best.member.id) + chunk.size);
-      allocations[best.member.id][semester] += chunk.size;
-      const subjects = given.get(best.member.id);
-      const short = hoursShortSubject(chunk.subject);
-      subjects.set(short, (subjects.get(short) || 0) + chunk.size);
+      give(best.member.id, chunk.subject, chunk.size);
+      entries.get(chunk.item).byClass[chunk.classNo] = { [best.member.id]: chunk.size };
     }
-    // 원래 양식의 배분 메모처럼 '통과8 · 과탐실2'(줄인 과목명 + 시수)로 적는다.
+    plan.push(...entries.values());
+    // 원래 양식의 배분 메모처럼 '통과10 · 과탐실2'(줄인 과목명 + 시수)로 적는다.
     for (const [id, subjects] of given) notes[id][semester] = [...subjects].map(([subject, hours]) => `${subject}${hours}`).join(" · ");
   }
-  return { ok: true, allocations, notes };
+  return { ok: true, allocations, notes, plan };
 }
 
 // 전년도 값(1인당 평균·교사 수)의 출처: 앱에 이관된 자료(같은 작업 자료의 전년 학년도 시수 설정 — 교사 수 teachers·내려받을 때 남긴
@@ -1478,6 +1531,7 @@ function renderHoursStatsView() {
     settingsBody.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
     <p class="note">창체 시수(학급당 학기 자율·진로)는 시수표 맨 아래 창체 행의 학점 칸에서 고칩니다. 교과별 교사 수·전년도 평균·공통 과목 배분도 시수표 칸에서 바로 입력합니다(소수 0.5도 됨). 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</p>
     ${hoursStaffSettings(stats)}
+    ${hoursCommonSettings(stats)}
     ${hoursPreviousTeachersSettings(stats)}`;
   }
   const recommendBody = document.getElementById("hoursRecommendBody");
@@ -1584,6 +1638,13 @@ function updateHoursSetting(target) {
   else if (target.dataset.hoursRecommendTotal) set(settings, "recommendTeachers", hoursNumber(target.value, { max: 500 }));
   else if (target.dataset.hoursMaxHours) set(settings, "maxTeacherHours", hoursNumber(target.value, { max: 40 }));
   else if (target.dataset.hoursRoamingHours) set(settings, "roamingTeacherHours", hoursNumber(target.value, { max: 40 }));
+  else if (target.dataset.hoursCommonMode) set(settings.commonModes, target.dataset.hoursCommonMode, target.value === hoursCommonDefaultMode(target.dataset.hoursCommonMode) ? null : target.value);
+  else if (target.dataset.hoursCommonShare) {
+    const key = target.dataset.hoursCommonShare;
+    if (!hoursPlainObject(settings.commonShares[key])) settings.commonShares[key] = {};
+    set(settings.commonShares[key], target.dataset.hoursCommonMember, hoursNumber(target.value, { integer: true, max: 20 }));
+    if (!Object.keys(settings.commonShares[key]).length) delete settings.commonShares[key];
+  }
   else if (target.dataset.hoursSource) set(settings.sourceRounds, target.dataset.hoursSource, target.value || null);
   else if (target.dataset.hoursTeachers) set(settings.teachers, target.dataset.hoursTeachers, hoursNumber(target.value, { max: 200 }));
   else if (target.dataset.hoursPrevious) set(settings.previousAverages, target.dataset.hoursPrevious, hoursNumber(target.value, { max: 100 }));
@@ -1692,14 +1753,74 @@ async function applyHoursRecommendation() {
   hoursFinishChange(`교과별 교사 수를 추천값으로 바꿨습니다(${changes.length}개 교과). 되돌리려면 '되돌리기'를 누르세요.`);
 }
 
+// 교과군 공통 과목 나눔 계획(설정의 과목별 방식·시간 나눔 반영). 자동 배분 단추와 hoursCommonClassAssignment가 같이 쓴다.
+function hoursCommonPlanFor(stats, group) {
+  const common = stats.departments.find((department) => department.common && department.group === group);
+  const members = stats.departments.filter((department) => department.group === group && !department.common);
+  return hoursBalanceCommonAllocation(
+    members.map((member) => ({ id: member.id, hours: member.hours, teachers: member.teachers || 0 })),
+    (common?.items || []).map((item) => ({ subject: item.subject, semester: item.semester, credit: item.credit, classes: item.classes, grade: item.grade })),
+    { modes: stats.settings.commonModes || {}, shares: stats.settings.commonShares || {} });
+}
+
+// 6단계·시간표용 반별 공통 과목 담당: hoursCommonClassAssignment(학년(내년 학년), 학기) → { 과목: { 반: { 교과 id: 주당 시간 } } }.
+// 통합과학 4시간이면 반마다 { 과학-물리: 1, 과학-화학: 1, 과학-생명: 1, 과학-지구: 1 }. 반 단위 과목은 그 반을 맡은 교과 하나에 학점 전부.
+// 자동 배분 규칙으로 계산한 값이다(시수표 배분 칸을 직접 고쳤으면 그 값과 다를 수 있음 — matchesSaved로 알림).
+function hoursCommonClassAssignment(grade, semester, year = hoursTargetYear()) {
+  const stats = typeof hoursStatsCached === "function" ? hoursStatsCached(year) : computeHoursStats(year);
+  const out = {};
+  let matchesSaved = true;
+  for (const group of ["과학", "사회"]) {
+    const result = hoursCommonPlanFor(stats, group);
+    if (!result.ok) continue;
+    for (const entry of result.plan) {
+      if (String(entry.semester) !== String(semester) || (grade && String(entry.grade) !== String(grade))) continue;
+      out[entry.subject] = JSON.parse(JSON.stringify(entry.byClass));
+    }
+    for (const member of stats.departments.filter((department) => department.group === group && !department.common)) {
+      if ((Number(stats.settings.allocations?.[member.id]?.[semester]) || 0) !== (result.allocations[member.id]?.[semester] || 0)) matchesSaved = false;
+    }
+  }
+  Object.defineProperty(out, "matchesSaved", { value: matchesSaved, enumerable: false });
+  return out;
+}
+
+// 시수 설정 팝업: 공통 과목마다 나누는 방식과(시간 나눔이면) 교과별 한 반 주당 시간.
+function hoursCommonSettings(stats) {
+  const labels = { equal: "교과별 같은 시간", time: "시간 균형 분배", class: "반 단위 균형" };
+  const rows = [];
+  for (const group of ["과학", "사회"]) {
+    const common = stats.departments.find((department) => department.common && department.group === group);
+    const members = stats.departments.filter((department) => department.group === group && !department.common && department.teachers > 0);
+    const subjects = [...new Map((common?.items || []).filter((item) => item.credit > 0 && item.classes > 0).map((item) => [hoursCommonSubjectKey(item.subject), item])).values()];
+    if (!subjects.length) continue;
+    const plan = hoursCommonPlanFor(stats, group);
+    for (const item of subjects) {
+      const key = hoursCommonSubjectKey(item.subject);
+      const mode = stats.settings.commonModes?.[key] || hoursCommonDefaultMode(item.subject);
+      const planned = plan.plan?.find((entry) => hoursCommonSubjectKey(entry.subject) === key)?.byClass?.["1"] || {};
+      const shares = mode === "class" ? "" : members.map((member) => `<label class="hours-zero-toggle">${escapeHtml(hoursDepartmentName(member.id).replace(/^.*\(|\)$/g, ""))}
+        <input class="hours-small-input" type="number" min="0" max="20" step="1" data-hours-common-share="${escapeHtml(key)}" data-hours-common-member="${escapeHtml(member.id)}" data-focus-key="common-share-${escapeHtml(key)}-${escapeHtml(member.id)}"
+          value="${stats.settings.commonShares?.[key]?.[member.id] ?? ""}" placeholder="${planned[member.id] ?? 0}" aria-label="${escapeHtml(`${item.subject} ${hoursDepartmentName(member.id)} 한 반 주당 시간`)}"></label>`).join("");
+      rows.push(`<tr><th scope="row" class="closure-subject">${escapeHtml(item.subject)}<br><small>${escapeHtml(group)} · ${item.credit}학점</small></th>
+        <td><select data-hours-common-mode="${escapeHtml(key)}" data-focus-key="common-mode-${escapeHtml(key)}" aria-label="${escapeHtml(item.subject)} 나누는 방식">${Object.entries(labels).map(([value, label]) => `<option value="${value}"${value === mode ? " selected" : ""}>${label}${value === hoursCommonDefaultMode(item.subject) ? " (기본)" : ""}</option>`).join("")}</select></td>
+        <td>${shares || '<span class="hours-note">반 하나를 한 교과가 맡음</span>'}</td></tr>`);
+    }
+  }
+  if (!rows.length) return "";
+  return `<section class="hours-staff-settings" aria-labelledby="hoursCommonSettingsTitle">
+    <h4 id="hoursCommonSettingsTitle">공통 과목 나누기(과학·사회)</h4>
+    <p class="note">'교과별 같은 시간'은 한 반의 주당 시수를 세부 교과에 똑같이 나눕니다(통합과학 4시간 = 물리·화학·생명·지구 1시간씩, 반마다 교사 4명). '시간 균형 분배'는 1인당 시수가 낮은 교과부터 1시간씩, '반 단위 균형'은 반 하나를 한 교과가 맡습니다. 교과별 시간 칸(한 반 주당)을 채우면 그 나눔을 씁니다(합이 학점과 같을 때만, 회색은 자동 값). 시수표의 '공통 시수 자동 배분'을 누르면 배분 칸·메모에 반영됩니다.</p>
+    <div class="aggregate-sheet-wrap"><table class="closure-table hours-staff-table"><thead><tr><th scope="col">공통 과목</th><th scope="col">나누는 방식</th><th scope="col">교과별 한 반 주당 시간</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
+  </section>`;
+}
+
 function autoAllocateHoursCommon(group) {
   const stats = computeHoursStats();
   const common = stats.departments.find((department) => department.common && department.group === group);
   if (!common?.items.length) return;
   const members = stats.departments.filter((department) => department.group === group && !department.common);
-  const result = hoursBalanceCommonAllocation(
-    members.map((member) => ({ id: member.id, hours: member.hours, teachers: member.teachers || 0 })),
-    common.items.map((item) => ({ subject: item.subject, semester: item.semester, credit: item.credit, classes: item.classes })));
+  const result = hoursCommonPlanFor(stats, group);
   if (!result.ok) {
     hoursNotify(`${group} 공통 시수 자동 배분: ${result.reason}`, false);
     return;
@@ -1716,7 +1837,7 @@ function autoAllocateHoursCommon(group) {
       if (result.notes[member.id][semester]) settings.allocationNotes[member.id][semester] = result.notes[member.id][semester];
     }
   }
-  hoursFinishChange(`${group} 공통 과목 시수를 세부 교과 교사 수에 맞춰 반 단위로 나눴습니다. 되돌리려면 '되돌리기'를 누르세요.`);
+  hoursFinishChange(`${group} 공통 과목 시수를 세부 교과에 나눴습니다(통합과학은 교과별 같은 시간, 통합사회는 시간 균형, 그 밖은 반 단위 — 시수 설정에서 바꿈). 되돌리려면 '되돌리기'를 누르세요.`);
 }
 
 function undoHoursChange() {
