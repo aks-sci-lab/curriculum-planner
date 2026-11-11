@@ -306,13 +306,23 @@ function classSectionsTeacherList(settings) {
   }));
 }
 
-// 5단계 공통 시수 배분 메모(시수 설정 allocationNotes[세부 교과][학기] = '통과8 · 융과4', 줄인 과목명 hoursShortSubject + 시수)에서
-// 공통 과목마다 맡는 세부 교과를 읽는다: { 과목명: [세부 교과 id] }. 메모가 없거나 그 과목이 안 나오면 빈 목록.
-function classSectionsCommonMemoDepartments(courseNames, notes, semester) {
+// 공통 과목마다 맡는 세부 교과: { 과목명: [세부 교과 id] }. 먼저 5단계 반별 배분(assignment = hoursCommonClassAssignment(학년, 학기)
+// = { 과목: { 반: 교과 id } }, 통합과학은 전공별로 같은 수)에서 그 과목을 받은 교과, 없으면 5단계 공통 시수 배분 메모
+// (allocationNotes[세부 교과][학기] = '통과8 · 융과4', 줄인 과목명 hoursShortSubject + 시수)에 그 과목이 나오는 교과. 둘 다 없으면 빈 목록.
+function classSectionsCommonMemoDepartments(courseNames, notes, semester, assignment = null) {
   const out = {};
+  const plainName = (name) => String(name || "").replace(/\s+/g, "").replace(/\s*[(（]\s*[12]\s*학기\s*[)）]\s*$/, "");
+  if (assignment && typeof assignment === "object") {
+    for (const name of courseNames) {
+      const key = Object.keys(assignment).find((item) => plainName(item) === plainName(name));
+      const departments = key ? [...new Set(Object.values(assignment[key] || {}).map(String).filter(Boolean))] : [];
+      if (departments.length) out[name] = departments;
+    }
+  }
   if (!notes || typeof notes !== "object") return out;
   const short = (name) => (typeof hoursShortSubject === "function" ? String(hoursShortSubject(name) || "") : "");
   for (const name of courseNames) {
+    if (out[name]) continue;
     const key = short(name);
     if (!key) continue;
     const token = new RegExp(`(^|[\\s·,])${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\d`);
@@ -322,9 +332,12 @@ function classSectionsCommonMemoDepartments(courseNames, notes, semester) {
   return out;
 }
 
-function classSectionsCommonMemo(semester) {
+// grade = 그 수업의 학년(내년 학년). 5단계 세션의 hoursCommonClassAssignment가 있으면 반별 배분도 함께(없으면 메모만).
+function classSectionsCommonMemo(semester, grade = "") {
   if (typeof hoursSettings !== "function" || typeof hoursTargetYear !== "function") return null;
-  try { return { notes: hoursSettings(hoursTargetYear()).allocationNotes || null, semester: String(semester) }; } catch { return null; }
+  let assignment = null;
+  if (typeof hoursCommonClassAssignment === "function") { try { assignment = hoursCommonClassAssignment(String(grade), String(semester)) || null; } catch { assignment = null; } }
+  try { return { notes: hoursSettings(hoursTargetYear()).allocationNotes || null, semester: String(semester), assignment }; } catch { return assignment ? { notes: null, semester: String(semester), assignment } : null; }
 }
 
 // 공통 교과(예: 과학-공통 = 통합과학·융합과학 탐구, 사회-공통)에 따로 정한 교사가 없으면 세부 교과 교사를 그 공통 과목의 자동 배정 후보로 넣는다.
@@ -335,7 +348,7 @@ function classSectionsCommonDepartmentFallback(courses, teachers, departmentTeac
   for (const dept of commons) {
     const family = dept.replace(/공통$/, "");
     const names = [...new Set(courses.filter((course) => course.department === dept && course.name).map((course) => course.name))];
-    const byMemo = memo ? classSectionsCommonMemoDepartments(names, memo.notes, memo.semester) : {};
+    const byMemo = memo ? classSectionsCommonMemoDepartments(names, memo.notes, memo.semester, memo.assignment) : {};
     const memoDepartments = [...new Set(Object.values(byMemo).flat())];
     if (teachers.length) {
       if (teachers.some((teacher) => teacher.departments.includes(dept))) continue;
@@ -387,7 +400,7 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
     const used = Object.entries(counts).filter(([, value]) => Number(value) > 0);
     if (used.length) departmentTeachers = Object.fromEntries(used.map(([key, value]) => [key, Number(value)]));
   }
-  classSectionsCommonDepartmentFallback(courses, teachers, departmentTeachers, classSectionsCommonMemo(group.semester));
+  classSectionsCommonDepartmentFallback(courses, teachers, departmentTeachers, classSectionsCommonMemo(group.semester, group.targetGrade));
   // 같은 차수·학기의 다른 그룹(다른 학년) 결과가 차지한 교사·교과·특별실(블록 시간이 있을 때만).
   const occupied = [];
   const store = classSectionsStore()[round] || {};

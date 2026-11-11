@@ -530,6 +530,18 @@ test("공통 과목 교사: 5단계 배분 메모(통과·융과 …)가 정한 
   const partial = make();
   ctx.classSectionsCommonDepartmentFallback([...courses, { name: "과학의 역사", department: "과학-공통" }], partial, null, { notes, semester: "2" });
   assert.ok(partial.every((teacher) => teacher.departments.includes("과학-공통")));
+  // 5단계 반별 배분(hoursCommonClassAssignment → { 과목: { 반: 교과 } })이 있으면 그것이 먼저(통합과학은 전공별로 같은 수)
+  const assignment = { "통합과학1": { "1": "과학-물리", "2": "과학-화학", "3": "과학-생명", "4": "과학-지구" }, "융합과학 탐구 (2학기)": { "1": "과학-생명" } };
+  assert.deepEqual(plain(ctx.classSectionsCommonMemoDepartments(["융합과학 탐구", "통합과학1", "기후변화와 환경생태"], notes, "2", assignment)),
+    { "융합과학 탐구": ["과학-생명"], "통합과학1": ["과학-물리", "과학-화학", "과학-생명", "과학-지구"], "기후변화와 환경생태": ["과학-화학"] }, "배분에 없는 과목은 메모");
+  ctx.hoursCommonClassAssignment = (grade, semester) => (grade === "2" && semester === "2" ? assignment : null);
+  ctx.hoursSettings = () => ({ teachers: {}, allocationNotes: notes });
+  assert.deepEqual(plain(ctx.classSectionsCommonMemo("2", "2").assignment), assignment);
+  assert.equal(ctx.classSectionsCommonMemo("2", "3").assignment, null);
+  const assigned = make();
+  ctx.classSectionsCommonDepartmentFallback(courses, assigned, null, ctx.classSectionsCommonMemo("2", "2"));
+  assert.deepEqual(assigned.map((teacher) => teacher.courses.slice().sort().join(",")), ["통합과학1", "통합과학1", ["융합과학 탐구", "통합과학1"].sort().join(",")]);
+  delete ctx.hoursCommonClassAssignment;
   // 시수표 교사 수만 있으면 메모가 정한 세부 교과 수 합
   const counts = { "과학-물리": 2, "과학-화학": 3, "과학-생명": 4 };
   ctx.classSectionsCommonDepartmentFallback(courses, [], counts, { notes, semester: "2" });
