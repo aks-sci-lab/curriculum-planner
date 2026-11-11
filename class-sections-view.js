@@ -4,7 +4,7 @@
 // 저장: state.classSections = { settings: {교사·고정 시간·특별실·기준}, "<차수>": { "<현학년>:<학기>:<그룹>": 그룹 설정 + sectionResult } }
 // 개인정보: 저장하는 학생 키는 '현학년-반-번호'뿐이다. 성명은 명렬표·나이스 내보내기 때 차수 자료에서 읽어 파일에만 쓴다.
 
-var CLASS_SECTIONS_VIEW = { round: "", roundDefault: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1 };
+var CLASS_SECTIONS_VIEW = { round: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1 };
 var CLASS_SECTIONS_DAY_NAMES = ["월", "화", "수", "목", "금"];
 var CLASS_SECTIONS_PERIODS = 7;
 var CLASS_SECTIONS_MODE_OPTIONS = [["move", "완전 이동"], ["homeroom", "같은 담임반끼리 묶기 우선"], ["balance", "분반 인원 균형"]];
@@ -133,12 +133,8 @@ function classSectionsRoundChoices() {
 }
 
 function classSectionsDefaultRound() {
-  const rounds = classSectionsRoundChoices();
-  // 5단계와 같은 규칙(round-status.js courseOpeningRound: 최근 확정 → 4단계에서 보는 차수 → 최근 결과).
-  const shared = typeof courseOpeningRound === "function" ? courseOpeningRound("") : "";
-  if (shared && rounds.includes(shared)) return shared;
-  const locked = rounds.slice().reverse().find((round) => typeof isRoundLocked === "function" && isRoundLocked(round));
-  return locked || (rounds.includes(String(state.currentRound)) ? String(state.currentRound) : rounds.at(-1) || "");
+  // 맨 위에서 고른 차수(사용자 결정 2026-11 · 차수별 흐름 분리). 6단계 차수 선택 상자는 없앴다.
+  return String(state.currentRound || "1");
 }
 
 // 편제표 교과(군)·학점: 현 학년 신청 과목 목록(collectApplicationSubjects)에서 N+1학년 과목을 이름으로 찾는다.
@@ -898,13 +894,9 @@ function classSectionsSetStatus(text, error = false, scope = null) {
 function classSectionsCurrent() {
   const rounds = classSectionsRoundChoices();
   if (!rounds.length) return null;
-  // 차수는 5단계와 같은 기본값(courseOpeningRound)을 따른다. 교사가 고른 차수는 기본값이 더 뒤 차수로 바뀔 때(새 차수 확정 등)까지 유지한다
-  // (확정을 잠시 해제해 고치는 동안에는 고른 차수 그대로).
-  const fallback = classSectionsDefaultRound();
-  if (!rounds.includes(CLASS_SECTIONS_VIEW.round) || !CLASS_SECTIONS_VIEW.roundDefault || Number(fallback) > Number(CLASS_SECTIONS_VIEW.roundDefault)) {
-    CLASS_SECTIONS_VIEW.round = fallback;
-    CLASS_SECTIONS_VIEW.roundDefault = fallback;
-  }
+  // 차수 = 맨 위에서 고른 차수(5단계와 같음).
+  CLASS_SECTIONS_VIEW.round = classSectionsDefaultRound();
+  if (!rounds.includes(CLASS_SECTIONS_VIEW.round)) return null;
   const round = CLASS_SECTIONS_VIEW.round;
   const source = classSectionsSource(round);
   if (!source.groups.length) return { round, source, group: null, entry: null };
@@ -925,23 +917,19 @@ function renderClassSectionsView() {
   if (!panel) return;
   const esc = classSectionsEsc;
   const rounds = classSectionsRoundChoices();
-  const select = document.getElementById("classSectionsRound");
-  if (!rounds.length) {
-    if (select) select.innerHTML = "";
-    panel.innerHTML = `<p class="cs-empty">수강신청 결과가 있는 차수가 없습니다. 2단계에서 결과를 반영하고 4단계에서 개설 과목·분반 수를 확정한 뒤 분반을 편성하세요.</p>`;
+  const basis = typeof roundBasisHtml === "function" ? roundBasisHtml(state.currentRound) : "";
+  if (!rounds.includes(String(state.currentRound))) {
+    panel.innerHTML = `${basis}<p class="cs-empty">${esc(state.currentRound)}차에 수강신청 결과가 없습니다. 2단계에서 결과를 반영하고 4단계에서 개설 과목·분반 수를 확정한 뒤 분반을 편성하세요.</p>`;
     return;
   }
   const context = classSectionsCurrent();
-  if (select) {
-    select.innerHTML = rounds.map((round) => `<option value="${esc(round)}"${round === context.round ? " selected" : ""}>${esc(round)}차${typeof isRoundLocked === "function" && isRoundLocked(round) ? " (확정)" : " (확정 전)"}</option>`).join("");
-  }
   const badge = document.getElementById("classSectionsRoundBadge");
   if (badge) {
     badge.textContent = context.source.locked ? `${context.round}차 확정 결과` : `${context.round}차 · 확정 전 시안`;
     badge.dataset.state = context.source.locked ? "done" : "draft";
   }
   if (!context.group) {
-    panel.innerHTML = `<p class="cs-empty">${esc(context.round)}차 결과에서 택n 선택 그룹을 찾지 못했습니다. 2단계 그룹 설정(택n)을 확인하세요.</p>`;
+    panel.innerHTML = `${basis}<p class="cs-empty">${esc(context.round)}차 결과에서 택n 선택 그룹을 찾지 못했습니다. 2단계 그룹 설정(택n)을 확인하세요.</p>`;
     return;
   }
   const { round, source, group, entry } = context;
@@ -989,7 +977,7 @@ function renderClassSectionsView() {
   const modeOptions = CLASS_SECTIONS_MODE_OPTIONS.map(([value, label]) => `<option value="${value}"${(entry.mode || "move") === value ? " selected" : ""}>${label}</option>`).join("");
   const statusHere = CLASS_SECTIONS_VIEW.status && CLASS_SECTIONS_VIEW.status.round === round && CLASS_SECTIONS_VIEW.status.group === group.key ? CLASS_SECTIONS_VIEW.status : null;
   const teacherNote = classSectionsTeacherNote(settings, group, input);
-  panel.innerHTML = `
+  panel.innerHTML = `${basis}
     <div class="cs-groups" role="group" aria-label="편성할 그룹">${groupsHtml}</div>
     <div class="cs-badges">
       ${source.locked ? "" : '<span class="cs-badge" data-state="draft">확정 전 시안</span>'}
@@ -1727,12 +1715,6 @@ function initClassSections() {
   const content = document.getElementById("classSectionsContent");
   content.addEventListener("click", classSectionsHandleClick);
   content.addEventListener("change", classSectionsHandleChange);
-  document.getElementById("classSectionsRound")?.addEventListener("change", (event) => {
-    CLASS_SECTIONS_VIEW.round = event.target.value;
-    CLASS_SECTIONS_VIEW.roundDefault = classSectionsDefaultRound();
-    CLASS_SECTIONS_VIEW.compare = null;
-    renderClassSections();
-  });
   document.getElementById("classSectionsTeachersOpen")?.addEventListener("click", () => {
     renderClassSectionsTeachers();
     document.getElementById("classSectionsTeacherDialog")?.showModal();

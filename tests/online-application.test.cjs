@@ -1015,7 +1015,7 @@ test("result Excel upload opens a validated preview and never replaces data whil
   assert.match(status.textContent,/반영할 수 없습니다: 차수가 다릅니다/);
 });
 
-test("a new round inherits class counts and groups from the previous round but not open/close decisions", () => {
+test("uploading into an empty round does not inherit an earlier round's settings (a new round is a copy of the previous one instead)", () => {
   const state={currentRound:"2",students:[],courses:[],classOverrides:{},semesterAssignments:{},groupAssignments:{},roundClosures:{"1":{},"2":{}},
     rounds:{"1":{
       students:[{id:"s"}],
@@ -1029,19 +1029,20 @@ test("a new round inherits class counts and groups from the previous round but n
     persistState(){ctx.syncActiveRound();},
   });
   vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
-  vm.runInContext(functionSource("function priorRoundSettings(", "async function handleApplicationFiles("),ctx);
+  vm.runInContext(functionSource("function storeGradeResults(", "async function handleApplicationFiles("),ctx);
   state.roundClosures["1"]={"1:result-1-0":"closed"};
   const carry=ctx.storeGradeResults({
     courses:[{column:7,name:"새 과목",semesterKey:"1"},{column:4,name:"공통 이름",semesterKey:"1"}],
     students:[{id:"n",grade:"1",name:"학생",classroom:"1",number:"1",selections:[{column:4,name:"공통 이름",semesterKey:"1"}]}]
   },"2차.xlsx","1");
   const column=state.students[0].selections[0].column;
-  assert.equal(state.classOverrides[`1:${column}`],2);
-  assert.equal(state.semesterAssignments[column],"1");
-  assert.equal(state.groupAssignments[column],"유지할 그룹");
-  assert.equal(carry.inheritedFrom,"1");
-  assert.equal(carry.inherited,3);
-  assert.deepEqual(plain(state.roundClosures["2"]),{}, "closure decisions are never inherited");
+  assert.equal(state.classOverrides[`1:${column}`],undefined);
+  assert.equal(state.semesterAssignments[column],undefined);
+  assert.equal(state.groupAssignments[column],undefined);
+  assert.equal(carry.inheritedFrom,null);
+  assert.equal(carry.inherited,0);
+  assert.deepEqual(plain(state.roundClosures["2"]),{});
+  assert.deepEqual(plain(state.rounds["2"].gradeSources["1"]).kind,"upload","학년마다 어디서 온 결과인지 기록");
 });
 
 test("grade results replace only the chosen grade and carry settings to re-imported courses by name and semester", () => {
@@ -1054,7 +1055,7 @@ test("grade results replace only the chosen grade and carry settings to re-impor
     persistState(){ctx.syncActiveRound();},
   });
   vm.runInContext(functionSource("function syncActiveRound(", "function persistState("),ctx);
-  vm.runInContext(functionSource("function priorRoundSettings(", "async function handleApplicationFiles("),ctx);
+  vm.runInContext(functionSource("function storeGradeResults(", "async function handleApplicationFiles("),ctx);
   const defaultCourses=[{column:4,name:"공통 이름",credits:3,semesterKey:"1"},{column:5,name:"미신청 과목",credits:3,semesterKey:"2"}];
   const data=(grade,name,courses=defaultCourses)=>({
     courses,

@@ -96,7 +96,11 @@ test("시수표 양식: 머리 3~4행, 교과군 행, 빨간 개설반(2·3학�
   assert.equal(cellAt(model, 5, 5).k, "cell");
   const physics = findRow(model, 7, "물리학");
   assert.equal(cellAt(model, physics, 9).k, "cellRed");
-  assert.equal(cellAt(model, physics, 9).input.attrs["data-hours-item-classes"], "2|1|물리학");
+  // 2·3학년 선택과목 개설반은 4단계 연동(입력 상자가 아니라 누르면 4단계로 가는 값 단추), 학교 지정·1학년은 직접 입력.
+  assert.equal(cellAt(model, physics, 9).input, null);
+  assert.deepEqual(plain([cellAt(model, physics, 9).link.grade, cellAt(model, physics, 9).link.semester, cellAt(model, physics, 9).link.subject]), ["1", "1", "물리학"]);
+  assert.match(ctx.hoursFormHtml(model), /<button class="hf-link" type="button" data-hours-goto4="1\|1\|물리학"/);
+  assert.equal(cellAt(model, 5, 5).input.attrs["data-hours-item-classes"], "1|1|공통국어1", "학교 지정 과목은 직접 입력");
   // 과학: 세부(공통·물리), 공통 배분은 오른쪽 메모(X~AA)와 합계(AB), 합계 R = P:Q + AB, 공통 행 R은 배분하고 남은 시수.
   const science = findRow(model, 0, "과학");
   assert.equal(cellAt(model, science, 1).v, "공통");

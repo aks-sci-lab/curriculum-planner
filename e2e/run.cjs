@@ -311,8 +311,11 @@ async function stepAggregate({ page, h, report }, round) {
     // 화면 튐: 아래쪽 개설 학급수 칸에 값을 넣었다 지우는 동안 창 스크롤 위치가 유지되는지.
     const input = page.locator("#aggregatePanel .aggregate-class-input").nth(8);
     if (await input.count()) {
-      await input.scrollIntoViewIfNeeded();
-      const before = await page.evaluate(() => ({ y: window.scrollY }));
+      // 칸을 화면 가운데로(Tab이 옮겨 갈 다음 칸도 화면 안에 있게: 시작 스크롤 위치에 따라 브라우저가 다음 칸을 보이려고 굴리는 것은 튐이 아님).
+      await input.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await sleep(200);
+      const before = await page.evaluate(() => ({ y: window.scrollY, label: document.querySelectorAll("#aggregatePanel .aggregate-class-input")[8]?.getAttribute("aria-label") || "",
+        layout: [...document.querySelectorAll("#aggregatePanel > *, #aggregateContent > *")].map((el) => [el.id || el.className, Math.round(el.getBoundingClientRect().top + scrollY), Math.round(el.getBoundingClientRect().height)]) }));
       const original = await input.inputValue();
       await input.fill(String((Number(original) || 1) + 1));
       await input.press("Tab");
@@ -323,7 +326,8 @@ async function stepAggregate({ page, h, report }, round) {
       await sleep(400);
       const after = await page.evaluate(() => ({ y: window.scrollY, focus: document.activeElement?.className || document.activeElement?.tagName }));
       result.scroll = { start: before.y, mid, after: after.y, focus: after.focus };
-      h.check(Math.abs(mid - before.y) < 40 && Math.abs(after.y - before.y) < 40, "중요", "4단계", "개설 학급수 입력 후 화면 스크롤 위치가 튐", { expected: before.y, actual: [mid, after.y] });
+      const layout = await page.evaluate(() => [...document.querySelectorAll("#aggregatePanel > *, #aggregateContent > *")].map((el) => [el.id || el.className, Math.round(el.getBoundingClientRect().top + scrollY), Math.round(el.getBoundingClientRect().height)]));
+      h.check(Math.abs(mid - before.y) < 40 && Math.abs(after.y - before.y) < 40, "중요", "4단계", "개설 학급수 입력 후 화면 스크롤 위치가 튐", { expected: before.y, actual: [mid, after.y], before: before.layout, after: layout, label: before.label });
     }
     // 개설/폐강: 그룹마다 (과목 수 − 택n − 1)개까지, 개설기준(학급당 인원 × 90%) 미만인 과목부터 폐강, 나머지 위험 과목은 개설.
     const perClass = (grade) => totals[grade] / NEXT_CLASSES;
@@ -426,7 +430,7 @@ async function stepAggregate({ page, h, report }, round) {
     h.check(/확정/.test(stateText), "중요", "4단계", `${round}차 결과 확정이 되지 않음`, { actual: stateText, dialogs: open.map((d) => d.text.slice(0, 300)) });
     if (round === 1 && result.step6Draft?.group) {
       await S6.open6(page);
-      await page.locator("#classSectionsRound").selectOption("1").catch(() => {});
+      await page.locator("#workspaceRound").selectOption("1").catch(() => {});
       await S6.selectGroup(page, result.step6Draft.group);
       const scr = await S6.readScreen(page);
       result.step6AfterConfirm = { badge: scr.badge, stale: scr.stale, header: scr.header };
@@ -675,7 +679,7 @@ async function snapshot(page) {
   const nav6 = page.locator('[data-workflow-step="8"]');
   if (await nav6.count()) {
     await S6.open6(page);
-    await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+    await page.locator("#workspaceRound").selectOption("2").catch(() => {});
     await sleep(300);
     const gs = await S6.groups(page);
     snap.step6 = gs.map((g) => g.text).join(" | ");
@@ -819,6 +823,12 @@ async function stepResultTwice({ page, h, report, roster, dialogs }) {
     h.check(/같은 과목을 두 학기에 신청한 학생 1명/.test(out.errorList) && out.errorList.includes(`${twice.classroom}-${twice.number}`) && /심화 영어/.test(out.errorList), "중요", "2단계·결과", "두 학기 모두 고른 학생이 있는데 검증 미리보기에 오류 목록이 없음(또는 학생·과목이 다름)", { expected: `같은 과목을 두 학기에 신청한 학생 1명: ${twice.classroom}-${twice.number} … 심화 영어`, actual: out.errorList.slice(0, 400) || (await text(page, "#resultImportPreview")).slice(0, 600) });
     h.check(/오류 1건 확인 후 결과 반영/.test(out.button) && !(await page.locator("#confirmResultImport").isDisabled()), "중요", "2단계·결과", "결과 반영 단추가 '오류 1건 확인 후 결과 반영'(누를 수 있음)이 아님", { actual: out.button });
     out.previewWords = (await text(page, "#resultImportPreview")).match(SEPARATE_WORDS)?.[0] || "";
+    // 차수별 흐름 분리: 새 차수(3차)는 2차 복사로 시작 → 3명 파일은 '재신청한 학생만 있는 파일'로 올린다(나머지 학생은 그대로).
+    const partial = page.locator('#resultImportMode input[value="partial"]');
+    h.check(await partial.count() === 1, "중요", "2단계·결과", "결과 검증 미리보기에 '올리는 방식(재신청한 학생만)'이 없음", { actual: await text(page, "#resultImportPreview") });
+    if (await partial.count()) { await partial.check(); await sleep(300); }
+    out.modeCounts = await text(page, "#resultImportModeCounts");
+    h.check(/^바뀌는 학생 [0-3]명 · 그대로 \d+명/.test(out.modeCounts), "중요", "2단계·결과", "'재신청한 학생만' 미리보기에 '바뀌는 학생 n명 · 그대로 m명'이 없음", { actual: out.modeCounts });
     h.check(!out.previewWords, "중요", "2단계·결과", "결과 검증 미리보기에 '소인수/공동/따로 신청' 글자가 남음", { actual: out.previewWords });
     await h.screenshot(page, "result-twice-preview");
     await page.locator("#confirmResultImport").click();
@@ -1144,7 +1154,7 @@ function sectionChips(panelText) {
 async function step6Draft(page, h, report) {
   const out = {};
   report.timings.step6EnterDraft = await S6.open6(page);
-  await page.locator("#classSectionsRound").selectOption("1").catch(() => {});
+  await page.locator("#workspaceRound").selectOption("1").catch(() => {});
   await sleep(300);
   const gs = await S6.groups(page);
   out.groups = gs.length;
@@ -1179,8 +1189,8 @@ async function stepClassSections({ page, h, report, roster }) {
   return h.step("6. 분반 편성: 교사·시간·전 그룹 편성·학급 단위·재신청 부분 재계산·엑셀 검증", async () => {
     const result = { groups: {}, solves: [] };
     report.timings.step6Enter = await S6.open6(page);
-    const rounds = await page.locator("#classSectionsRound option").allInnerTexts();
-    await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+    const rounds = await page.locator("#workspaceRound option").allInnerTexts();
+    await page.locator("#workspaceRound").selectOption("2").catch(() => {});
     await sleep(300);
     result.rounds = rounds;
     result.badge = (await S6.readScreen(page)).badge;
@@ -1666,7 +1676,7 @@ async function step6Partial({ page, h, report, groupKey, before }) {
   if (out.skipped) { report.notes = [...(report.notes || []), `6단계 재신청 부분 재계산: 건너뜀 — ${out.skipped}`]; return out; }
   // 6단계: 재계산 필요 → 바뀐 학생만 다시 계산
   await S6.open6(page);
-  await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+  await page.locator("#workspaceRound").selectOption("2").catch(() => {});
   await S6.selectGroup(page, groupKey);
   const scr = await S6.readScreen(page);
   out.staleBefore = scr.stale;

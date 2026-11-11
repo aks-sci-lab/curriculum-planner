@@ -1892,6 +1892,14 @@
 .aggregate-course-semester { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #d4dbe8; }
 .aggregate-course-semester > span { grid-column: 1 / -1; font-weight: 700; color: #33425f; }
 .aggregate-course-semester small { font-weight: 400; color: #6a7489; }
+.round-basis-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 8px; padding: 6px 10px; border: 1px solid #c9d3e6; border-radius: 8px; background: #f6f9ff; color: #33425f; font-size: 12px; }
+.round-basis-line b { color: #1f2d47; }
+.round-basis-changed { color: #9a4a00; font-weight: 700; }
+.result-import-mode { margin: 10px 0; padding: 10px 12px; border: 1px solid #b9c6dd; border-radius: 8px; background: #fbfcff; }
+.result-import-mode legend { padding: 0 4px; font-weight: 700; }
+.result-import-mode label { display: block; margin: 4px 0; font-weight: 700; }
+.result-import-mode small { font-weight: 400; color: #65738a; }
+.result-import-mode-counts { margin: 6px 0 0; color: #244ba0; font-weight: 700; }
 .result-semester-picks { margin: 10px 0; padding: 10px 12px; border: 1px solid #b9c6dd; border-radius: 8px; background: #f6f9ff; }
 .result-semester-picks legend { padding: 0 4px; font-weight: 700; }
 .result-semester-picks p { margin: 0 0 6px; color: #46546e; font-size: 12px; line-height: 1.5; }
@@ -1902,6 +1910,9 @@
 .result-semester-pick-state.is-picked { color: #287956; font-weight: 700; }
 .result-semester-pick-basis { flex-basis: 100%; color: #65738a; font-size: 12px; }
 .hours-form .hf-input.is-differ { box-shadow: inset 0 0 0 2px #e07a16; }
+.hf-link { width: 100%; min-height: 22px; padding: 0 2px; border: 0; border-bottom: 1px dotted currentColor; background: none; color: inherit; font: inherit; text-align: center; cursor: pointer; }
+.hf-link:hover, .hf-link:focus-visible { background: #fff3c4; outline: 1px solid #b8c4dc; }
+.aggregate-form td.is-flash { box-shadow: inset 0 0 0 3px #3b68e8; transition: box-shadow .3s; }
 .hours-detail-table tr.is-differ td { color: #9a4a00; }
 .aggregate-course-menu-prereq { width: 100%; min-height: 30px; margin-top: 8px; font-size: 12px; }
 .aggregate-fold-panel { padding-top: 4px; padding-bottom: 4px; }

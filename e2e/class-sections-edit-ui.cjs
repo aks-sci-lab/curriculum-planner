@@ -41,7 +41,7 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   await nav; await sleep(2500);
   await page.getByRole("button", { name: /6\. 분반 편성/ }).click();
   await sleep(800);
-  await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+  await page.locator("#workspaceRound").selectOption("2").catch(() => {});
   // 택3 그룹(이동 분반 있음)
   await page.locator("[data-cs-group]").filter({ hasText: "2-2 택3" }).first().click();
   await sleep(500);

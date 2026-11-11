@@ -45,7 +45,6 @@ function context() {
     aggregateThresholds: () => ({ openingPercent: 90, divisionPercent: 110 }),
     aggregateMaxClassSize: () => 34,
     nextYearClassBases: () => ({ "2": 11, "3": 11 }),
-    applicationRoundNumbers: () => Object.keys(state.rounds).sort((a, b) => Number(a) - Number(b)),
     // 같은 state 판(revision)에서만 캐시(app.js cachedByStateRevision 흉내: 자료를 바꾸면 bump()).
     cachedByStateRevision: (name, key, compute) => { const id = `${revision}|${name}|${key}`; if (!caches.has(id)) caches.set(id, compute()); return caches.get(id); },
     resultExampleList: (items) => [...items].join(", "),
@@ -63,9 +62,15 @@ function context() {
   vm.runInContext(read("round-status.js"), ctx);
   vm.runInContext(read("hours-stats.js"), ctx);
   vm.runInContext(read("course-semester-picks.js"), ctx);
+  vm.runInContext(read("round-copy.js"), ctx);
+  vm.runInContext(between(app, "function applicationRoundNumbers(", "function switchRound("), ctx);
+  ctx.switchRound = (round) => { state.currentRound = String(round); const data = state.rounds[round]; state.students = data?.students || []; state.courses = data?.courses || []; };
+  ctx.syncActiveRound = () => {};
+  ctx.persistStateSoon = () => {};
   vm.runInContext(read("class-sections.js"), ctx);
   const view = read("class-sections-view.js");
   vm.runInContext(between(view, "function classSectionsPlanSubjects(", "function classSectionsNeisFamily("), ctx);
+  vm.runInContext(between(view, "function classSectionsRoundChoices(", "function classSectionsPlanSubjects("), ctx);
   vm.runInContext(between(view, "function classSectionsDisplayName(", "function classSectionsFamily("), ctx);
   vm.runInContext(between(view, "function classSectionsSourceCompute(", "function classSectionsParseTimes("), ctx);
   return { ctx, state, groups };
@@ -318,36 +323,117 @@ test("확정 스냅샷이 지금 집계와 달라지면 roundSnapshotStale이 �
   assert.equal(five, snapshot.rows.find((row) => row.semester === "2" && ctx.normalizeResultCourseName(row.name) === courseKey).classCount);
 });
 
-test("5·6단계가 읽는 차수는 같은 규칙(courseOpeningRound): 최근 확정 → 4단계에서 보는 차수 → 최근 결과", () => {
+test("5·6단계가 읽는 차수 = 맨 위에서 고른 차수(courseOpeningRound · 숨은 규칙 없음)", () => {
   const env = context();
   const { ctx, state } = env;
   load(env, { pick: "2" });
   state.rounds = { "1": { students: state.students, courses: state.courses }, "2": null };
   state.roundStatuses = { "1": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("1") } };
-  state.currentRound = "2";
-  state.students = [];
+  state.currentRound = "2"; state.students = [];
   ctx.bump();
-  assert.equal(ctx.courseOpeningRound("2"), "1", "확정 차수");
-  state.roundStatuses = {};
-  ctx.bump();
-  assert.equal(ctx.courseOpeningRound("2"), "1", "지금 차수(2차)에 결과 없음 → 결과가 있는 최근 차수");
+  assert.equal(ctx.courseOpeningRound("2"), "2", "2차에 결과가 없어도 1차 확정으로 넘어가지 않음");
+  assert.equal(ctx.computeHoursStats("2027").grades.find((info) => info.grade === "3").source, null);
+  assert.equal(ctx.classSectionsDefaultRound(), "2");
   state.currentRound = "1";
   ctx.bump();
   assert.equal(ctx.courseOpeningRound("2"), "1");
-  assert.equal(ctx.courseOpeningRound("1"), "", "현 1학년 결과 없음");
 });
 
-test("5단계 직접 입력 개설반은 우선하되 4단계 값과 다르면 표시(is-differ)", () => {
+test("직접 입력이 있어도 2·3학년 선택과목 개설반은 4단계 값(4단계 연동) — 예전 직접 입력은 지우지 않고 안내만", () => {
   const env = context();
   const { ctx, state } = env;
   load(env, { pick: "2" });
-  const auto = stages(env).five.get(`2|${ctx.normalizeResultCourseName(COURSE)}`);
-  state.hoursStats["2027"].classOverrides = { [`3|2|${ctx.normalizeResultCourseName(COURSE)}`]: auto + 1 };
+  const key = ctx.normalizeResultCourseName(COURSE);
+  const before = stages(env);
+  const auto = before.five.get(`2|${key}`);
+  // 예전 버전에서 넣은 값(사용자 화면: 주제 탐구 독서 10 · 독서 토론과 글쓰기 1 처럼 4단계와 다른 값)
+  state.hoursStats["2027"].classOverrides = { [`3|2|${key}`]: auto + 3, [`3|1|${ctx.normalizeResultCourseName("화학 반응의 세계")}`]: 10 };
   ctx.bump();
-  const item = ctx.computeHoursStats("2027").items.find((entry) => entry.grade === "3" && entry.semester === "2" && entry.subject === COURSE);
-  assert.equal(item.classes, auto + 1);
-  assert.equal(item.differs, true);
-  assert.match(item.basis, new RegExp(`직접 입력 ${auto + 1}반 · 4단계 ${auto}반과 다름`));
+  const result = stages(env);
+  assertSame(result, "직접 입력 있음");
+  const item = result.stats.items.find((entry) => entry.grade === "3" && entry.semester === "2" && entry.subject === COURSE);
+  assert.deepEqual([item.classes, item.autoClasses, item.manual, item.linked], [auto, auto, false, true]);
+  assert.equal(state.hoursStats["2027"].classOverrides[`3|2|${key}`], auto + 3, "저장 자료는 그대로(되돌릴 수 있게)");
+  const notice = result.stats.issues.find((issue) => /^4단계와 다른 직접 입력 2개를 4단계 값으로 바꿨습니다/.test(issue.text));
+  assert.ok(notice && notice.level === "info", result.stats.issues.map((issue) => issue.text).join("\n"));
+  assert.match(notice.text, new RegExp(`3학년 2학기 ${COURSE} ${auto + 3} → ${auto}`));
+  // 시수표 칸: 연동 칸은 입력 상자가 아니라 값 단추(4단계에서 고치기)
+  const model = ctx.hoursFormModel(result.stats, { schoolName: "가상고", date: new Date(2026, 10, 11) });
+  const cell = [...model.cells.values()].find((entry) => entry.item === item);
+  assert.equal(cell.input, null);
+  assert.equal(cell.link.value, auto);
+});
+
+test("4단계에 없는 선택과목(과목명 불일치 등)만 직접 입력을 쓰고 '4단계에 없는 과목 · 직접 입력' 표시", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  // 4단계 결과에서 한 과목을 빼서(과목명이 달라 집계에 없음) 직접 입력만 남긴다.
+  const name = "행성우주과학";
+  state.courses = state.courses.filter((course) => !course.name.startsWith(name));
+  for (const student of state.students) student.selections = student.selections.filter((selection) => !selection.name.startsWith(name));
+  state.hoursStats["2027"].classOverrides = { [`3|2|${ctx.normalizeResultCourseName(name)}`]: 4 };
+  ctx.bump();
+  const item = ctx.computeHoursStats("2027").items.find((entry) => entry.grade === "3" && entry.semester === "2" && entry.subject === name);
+  assert.deepEqual([item.linked || false, item.manual, item.classes, item.missingStage4], [false, true, 4, true]);
+  assert.match(item.basis, /^4단계에 없는 과목 · 직접 입력 4반/);
+});
+
+// 원인 재현(사용자 화면 v2026.11.23, 사용자가 '선택과목 근거'를 '자동'으로 바꾸자 해결됨): 5단계 시수 설정의 '선택과목 근거' 고정값
+// (settings.sourceRounds, 예전에 한 번 고른 1차)이 자동 규칙(courseOpeningRound)보다 먼저라, 4단계가 2차(확정)여도 5단계는 미확정 1차를 읽는다.
+// 원인(사용자 화면 v2026.11.23): 예전 5단계 '선택과목 근거' 고정값(settings.sourceRounds, 1차)이 자동 규칙보다 먼저라 4단계 2차(확정)와 달리
+// 미확정 1차를 읽었다. 차수별 흐름 분리 뒤에는 고정값을 읽지 않고 맨 위 차수만 쓴다.
+test("여러 차수: 1차 미확정 + 2차 확정 + 예전 고정값(1차) → 화면 2차면 5단계도 2차(고정값 무시), 화면 1차면 1차(미확정이어도 그 차수 값)", () => {
+  const env = context();
+  const { ctx, state } = env;
+  state.currentRound = "1";
+  load(env, { pick: "1" });
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {} } };
+  state.currentRound = "2";
+  load(env, { pick: "2" });
+  state.rounds["2"] = { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {} };
+  state.roundStatuses = { "2": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("2") } };
+  state.hoursStats["2027"].sourceRounds = { "3": "1" };
+  const key = ctx.normalizeResultCourseName(COURSE);
+  const read = () => {
+    ctx.bump();
+    const result = stages(env);
+    const info = result.stats.grades.find((item) => item.grade === "3");
+    return { result, round: info.source.round, confirmed: info.source.confirmed, label: info.label, first: result.five.get(`1|${key}`), second: result.five.get(`2|${key}`), issues: result.stats.issues.map((issue) => issue.text) };
+  };
+  let view = read();
+  assert.deepEqual([view.round, view.confirmed], ["2", true], "예전 고정값(1차)은 읽지 않음");
+  assert.ok(view.second > 0 && view.first === 0);
+  assertSame(view.result, "화면 2차");
+  assert.ok(!view.issues.some((text) => /확정되지 않아/.test(text)));
+  // 화면을 1차로 바꾸면(미확정) 5·6단계도 1차 값 — '임시 계산' 경고 없이 근거 줄에 '미확정'
+  state.currentRound = "1"; state.students = state.rounds["1"].students; state.courses = state.rounds["1"].courses;
+  view = read();
+  assert.deepEqual([view.round, view.confirmed], ["1", false]);
+  assert.ok(view.first > 0 && view.second === 0);
+  assertSame(view.result, "화면 1차");
+  assert.ok(!view.issues.some((text) => /확정되지 않아 현재 집계로 임시 계산/.test(text)));
+  assert.match(ctx.roundBasisHtml("1"), /근거: 1차<\/b> · <span class="round-basis-item">현1: 결과 없음<\/span> · <span class="round-basis-item">현2: 1차 결과\(미확정\)<\/span>/);
+});
+
+test("근거 줄: 복사한 학년은 '2차에서 복사', 앞 차수가 복사 뒤 바뀌면 '2차가 복사 뒤 바뀜 · 이 학년 다시 복사' → 누르면 다시 복사", async () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } };
+  state.roundClosures = { "1": {} };
+  ctx.bump();
+  ctx.addApplicationRound();
+  assert.match(ctx.roundBasisHtml("2"), /근거: 2차<\/b> · .*현2: 1차에서 복사\(미확정\)<\/span>/);
+  assert.doesNotMatch(ctx.roundBasisHtml("2"), /복사 뒤 바뀜/);
+  const course = state.rounds["1"].courses[0];
+  state.roundClosures["1"] = { [`2:${course.column}`]: "closed" };
+  ctx.bump();
+  assert.match(ctx.roundBasisHtml("2"), /1차가 복사 뒤 바뀜<\/span> <button type="button" class="button button-quiet" data-round-recopy="2">이 학년 다시 복사<\/button>/);
+  ctx.appConfirm = async () => true;
+  assert.equal(await ctx.recopyRoundGrade("2"), true);
+  assert.equal(state.roundClosures["2"][`2:${course.column}`], "closed", "다시 복사");
+  assert.doesNotMatch(ctx.roundBasisHtml("2"), /복사 뒤 바뀜/);
 });
 
 test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기화에 연결, 스크립트는 result-import.js 뒤", () => {
@@ -362,4 +448,167 @@ test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기�
   // 4단계 메뉴·미리보기 연결
   assert.match(app, /data-opening-semester/);
   assert.match(read("result-import.js"), /twoSemesterPickMarkup\(candidate\.semesterPicks, preview\.grade, candidate\.semesterNotes\)/);
+});
+
+// ---- 차수별 흐름 분리(사용자 결정 2026-11) ----
+test("새 차수 = 직전 차수 복사: 두 학년 결과·개설/폐강·6단계 분반, 확정·고른 학기는 복사하지 않음 · 학년마다 '복사' 근거와 서명", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const course = state.courses.find((item) => ctx.courseSemesterPickKey(item.name) === ctx.courseSemesterPickKey(COURSE));
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: { [`2:${course.column}`]: 5 }, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } };
+  state.roundClosures = { "1": { [`2:${course.column}`]: "closed" } };
+  state.roundStatuses = { "1": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("1") } };
+  state.classSections = { settings: {}, "1": { "2:2:3-2 택5": { classCounts: { [COURSE]: 4 } } } };
+  ctx.bump();
+  ctx.addApplicationRound();
+  assert.equal(state.currentRound, "2");
+  const copied = state.rounds["2"];
+  assert.equal(copied.students.length, state.rounds["1"].students.length);
+  assert.notEqual(copied.students, state.rounds["1"].students, "깊은 복사");
+  assert.deepEqual(plain(copied.classOverrides), { [`2:${course.column}`]: 5 });
+  assert.deepEqual(plain(state.roundClosures["2"]), { [`2:${course.column}`]: "closed" });
+  assert.equal(state.roundStatuses["2"], undefined, "확정은 복사하지 않음(미확정으로 시작)");
+  assert.deepEqual(plain(state.classSections["2"]), plain(state.classSections["1"]));
+  assert.equal(state.courseSemesterPicks["2026"]["2"]["2"], undefined, "고른 개설 학기는 복사하지 않음(차수마다 따로 · 추천은 앞 차수 결과에서)");
+  assert.deepEqual([copied.gradeSources["2"].kind, copied.gradeSources["2"].round], ["copy", "1"]);
+  assert.equal(copied.gradeSources["2"].from.signature, ctx.roundGradeSignature(state.rounds["1"], state.roundClosures["1"], "2"));
+  assert.equal(copied.gradeSources["1"], undefined, "결과가 없는 학년은 복사 근거 없음");
+  // 앞 차수가 바뀌면 서명이 달라진다(근거 줄 '복사 뒤 바뀜').
+  state.roundClosures["1"][`2:${course.column}`] = "open";
+  assert.notEqual(copied.gradeSources["2"].from.signature, ctx.roundGradeSignature(state.rounds["1"], state.roundClosures["1"], "2"));
+});
+
+test("학년 몫 바꾸기(roundReplaceGrade)는 다른 학년을 그대로 두고, 겹치는 열 이름은 바꿔 넣는다", () => {
+  const { ctx } = context();
+  const course = (column, name, grade) => ({ column, name, semesterKey: "1", applicationCurrentGrade: grade });
+  const data = { students: [{ grade: "1", classroom: "1", number: "1", selections: [course("app1", "물리학", "1")] }, { grade: "2", classroom: "1", number: "1", selections: [course("app2", "경제", "2")] }],
+    courses: [course("app1", "물리학", "1"), course("app2", "경제", "2")], classOverrides: { "1:app1": 3, "2:app2": 2 }, semesterAssignments: {}, groupAssignments: {} };
+  const slice = { students: [{ grade: "2", classroom: "1", number: "1", selections: [course("app1", "기하", "2")] }], courses: [course("app1", "기하", "2")], classOverrides: { "2:app1": 4 }, semesterAssignments: {}, groupAssignments: {}, closures: { "2:app1": "closed" } };
+  const result = ctx.roundReplaceGrade(data, { "1:app1": "open", "2:app2": "closed" }, "2", slice);
+  assert.deepEqual(plain(result.data.courses.map((item) => [item.column, item.name])), [["app1", "물리학"], ["app1~1", "기하"]]);
+  assert.equal(result.data.students.find((student) => student.grade === "2").selections[0].column, "app1~1");
+  assert.deepEqual(plain(result.data.classOverrides), { "1:app1": 3, "2:app1~1": 4 });
+  assert.deepEqual(plain(result.closures), { "1:app1": "open", "2:app1~1": "closed" });
+});
+
+test("웹 재신청처럼 열 번호가 밀려도 개설 결정·학급수 입력은 이름·학기로 옮긴다(roundRemapKeysByName)", () => {
+  const { ctx } = context();
+  const from = [{ column: "app0", name: "미적분", semesterKey: "1", applicationCurrentGrade: "1" }, { column: "app1", name: "기하", semesterKey: "1", applicationCurrentGrade: "1" }];
+  const to = [{ column: "app0", name: "기하", semesterKey: "1", applicationCurrentGrade: "1" }];
+  assert.deepEqual(plain(ctx.roundRemapKeysByName(from, to, { "1:app0": "closed", "1:app1": "open", "2:app1": "open" }, "1")), { "1:app0": "open" });
+});
+
+test("'재신청한 학생만 있는 파일': 파일 학생만 바꾸고(학년·반·번호) 나머지는 그대로, 없던 학생은 추가, 과목 열은 같은 이름·학기 열", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const before = plain(state.students);
+  const seat = (student) => `${student.classroom}-${student.number}`;
+  const target = before.slice(0, 3);
+  // 3명은 다른 과목(일본어 회화 → 중국어 회화 등)으로, 1명은 전입(없던 번호)
+  const swap = (student) => ({ ...student, selections: student.selections.map((selection) => /일본어 회화/.test(selection.name) ? { ...selection, column: "z1", name: "중국어 회화" }
+    : /중국어 회화/.test(selection.name) ? { ...selection, column: "z2", name: "일본어 회화" } : selection) });
+  const overlay = { courses: [{ column: "z1", name: "중국어 회화", semesterKey: "2", credits: 2 }, { column: "z2", name: "일본어 회화", semesterKey: "2", credits: 2 }, { column: "z3", name: "새 과목", semesterKey: "2", credits: 2 }],
+    students: [...target.map(swap), { grade: "2", classroom: "11", number: "99", name: "학생전입", selections: [{ column: "z3", name: "새 과목", semesterKey: "2", credits: 2 }] }] };
+  const { slice, counts } = ctx.roundMergeGradeStudents({ students: state.students, courses: state.courses }, {}, "2", overlay);
+  assert.deepEqual(plain(counts), { changed: 3, same: 0, added: 1, kept: before.length - 3 });
+  assert.equal(slice.students.length, before.length + 1);
+  const columns = new Map(state.courses.map((course) => [course.name.replace(/\s+/g, ""), course.column]));
+  const changed = slice.students.find((student) => seat(student) === seat(target[0]));
+  for (const selection of changed.selections) if (/회화/.test(selection.name)) assert.equal(selection.column, columns.get(selection.name.replace(/\s+/g, "")), "기존 열");
+  assert.ok(slice.courses.some((course) => course.name === "새 과목" && course.column.startsWith("result-2-")), "없던 과목은 새 열");
+  const untouched = slice.students.find((student) => seat(student) === seat(before[10]));
+  assert.deepEqual(plain(untouched.selections.map((item) => item.name)), plain(before[10].selections.map((item) => item.name)));
+});
+
+test("예전 자료 옮기기 계획: 빈 학년은 복사, 일부 학생만 있는 학년(직전 차수의 절반 미만, 모두 직전 차수 학생)은 묻기, 확정·이미 정한 학년은 건너뜀", () => {
+  const { ctx } = context();
+  const student = (grade, number) => ({ grade, classroom: "1", number: String(number), selections: [] });
+  const many = (grade, count) => Array.from({ length: count }, (_, index) => student(grade, index + 1));
+  const rounds = {
+    "1": { students: [...many("1", 30), ...many("2", 28)] },
+    "2": { students: [...many("1", 30)] },                       // 현2 비어 있음 → 복사
+    "3": { students: [...many("1", 30), student("2", 3), student("2", 7)] } // 현2 2명뿐 → 묻기
+  };
+  let plan = ctx.roundMigrationPlan(rounds, () => false);
+  assert.deepEqual(plain(plan.map((item) => [item.round, item.grade, item.action, item.from])), [["2", "2", "copy", "1"]]);
+  // 2차에 현2를 복사하고 나면 3차 현2(2명)를 묻는다.
+  rounds["2"].students.push(...many("2", 28));
+  plan = ctx.roundMigrationPlan(rounds, () => false);
+  assert.deepEqual(plain(plan.map((item) => [item.round, item.grade, item.action, item.count, item.previous])), [["3", "2", "ask", 2, 28]]);
+  assert.deepEqual(plain(ctx.roundMigrationPlan(rounds, (round) => round === "3")), [], "확정 차수는 묻지 않음");
+  rounds["3"].gradeSources = { "2": { kind: "upload", decided: "kept" } };
+  assert.deepEqual(plain(ctx.roundMigrationPlan(rounds, () => false)), [], "이미 정한 학년은 다시 묻지 않음");
+});
+
+test("예전 자료 옮기기(migrateRoundGrades): 빈 학년은 직전 차수에서 복사·안내, 3명뿐인 학년은 물어서 합치기/그대로 두기, 다시 묻지 않음", async () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const full = plain({ students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] });
+  const few = plain(full);
+  few.students = few.students.slice(0, 3);
+  state.rounds = { "1": full, "2": { ...plain(full), students: [], courses: [] }, "3": few };
+  state.roundClosures = { "1": {}, "2": {}, "3": {} };
+  state.currentRound = "3"; state.students = few.students; state.courses = few.courses;
+  const asked = [];
+  ctx.appConfirm = async (text, options) => { asked.push({ text, options }); return true; };
+  ctx.bump();
+  const notes = await ctx.migrateRoundGrades();
+  assert.equal(state.rounds["2"].students.length, full.students.length, "빈 2차 현2를 1차에서 복사");
+  assert.deepEqual([state.rounds["2"].gradeSources["2"].kind, state.rounds["2"].gradeSources["2"].round], ["copy", "1"]);
+  assert.match(notes[0], /^2차에 현2 결과가 없어 1차 결과를 복사했습니다$/);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].text, /^3차 현2 결과가 3명뿐입니다\(2차 308명\)\. 재신청한 학생만 있는 결과로 보고 2차 결과와 합칠까요\?/);
+  assert.deepEqual([asked[0].options.ok, asked[0].options.cancel], ["합치기", "그대로 두기"]);
+  assert.equal(state.rounds["3"].students.length, full.students.length, "합치면 3차 현2 = 2차 + 3명");
+  assert.equal(state.students.length, full.students.length, "지금 보는 차수 화면 자료도 바뀜");
+  assert.equal(state.rounds["3"].gradeSources["2"].decided, "merged");
+  // 다시 열어도 묻지 않음
+  asked.length = 0;
+  await ctx.migrateRoundGrades();
+  assert.equal(asked.length, 0);
+});
+
+test("예전 자료 옮기기: '그대로 두기'면 그 학년은 그대로이고 다시 묻지 않는다 · 확정 차수는 묻지 않음", async () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const full = plain({ students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] });
+  const few = plain(full); few.students = few.students.slice(0, 3);
+  state.rounds = { "1": full, "2": few };
+  state.roundClosures = { "1": {}, "2": {} };
+  state.currentRound = "1"; state.students = full.students; state.courses = full.courses;
+  let count = 0;
+  ctx.appConfirm = async () => { count++; return false; };
+  ctx.bump();
+  await ctx.migrateRoundGrades();
+  assert.equal(count, 1);
+  assert.equal(state.rounds["2"].students.length, 3);
+  assert.equal(state.rounds["2"].gradeSources["2"].decided, "kept");
+  await ctx.migrateRoundGrades();
+  assert.equal(count, 1, "다시 묻지 않음");
+  state.rounds["2"].gradeSources = {};
+  state.roundStatuses = { "2": { status: "confirmed", snapshot: { rows: [] } } };
+  ctx.bump();
+  await ctx.migrateRoundGrades();
+  assert.equal(count, 1, "확정 차수는 묻지 않음");
+});
+
+test("하네스 회귀: 웹 과목 열 번호가 밀려도 폐강이 다른 과목(중국어)에 붙지 않고, '재신청 학생만' 파일의 'X (2학기)'는 2학기 열에 들어간다", () => {
+  const { ctx } = context();
+  const web = (column, subject, semester, group) => ({ column, name: subject, applicationCurrentGrade: "2", applicationGroupSource: "online",
+    applicationSubject: { subject: semester ? `${subject} (${semester}학기)` : subject, semester: semester || "1", groupName: group } });
+  // 1차(복사해 온 열): app17 = 심화 영어 2학기(폐강), 2차 웹 결과: 폐강 과목을 빼서 app17 = 중국어
+  const before = [web("app16", "심화 영어", "1", "3-1 택5"), web("app17", "심화 영어", "2", "3-2 택5"), web("app18", "중국어", "", "3-1 택1")];
+  const after = [web("app16", "심화 영어", "1", "3-1 택5"), web("app17", "중국어", "", "3-1 택1")];
+  assert.deepEqual(plain(ctx.roundRemapKeysByName(before, after, { "2:app17": "closed", "2:app18": "open" }, "2")), { "2:app17": "open" }, "중국어는 앞 차수 중국어 결정(개설)");
+  // '재신청 학생만': 학기 칸 없이 웹 과목 정보로 학기를 아는 두 열 → 파일의 '심화 영어 (2학기)'는 2학기 열
+  const data = { students: [{ grade: "2", classroom: "1", number: "1", selections: [before[0]] }], courses: before };
+  const overlay = { courses: [{ column: 9, name: "심화 영어 (2학기)", semesterKey: "2" }],
+    students: [{ grade: "2", classroom: "1", number: "1", selections: [{ column: 9, name: "심화 영어 (2학기)", semesterKey: "2" }] }] };
+  const { slice } = ctx.roundMergeGradeStudents(data, {}, "2", overlay);
+  assert.equal(slice.students[0].selections[0].column, "app17");
+  assert.deepEqual(plain(ctx.roundCourseIdentity(before[1])), { name: "심화영어", semester: "2", key: "심화영어|2" });
 });

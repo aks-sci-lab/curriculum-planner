@@ -382,7 +382,9 @@ function buildResultImportPreview(sheets, options) {
   const selected = Math.max(0, candidates.findIndex((candidate) => !candidate.issues.blocking.length));
   return {
     fileName: options.fileName, round: String(options.round), grade: String(options.grade),
-    revision: options.revision, candidates, selected, sheets
+    revision: options.revision, candidates, selected, sheets,
+    existingStudents: options.existingStudents || [], roundData: options.roundData || null, roundClosures: options.roundClosures || null,
+    mode: options.mode === "partial" ? "partial" : "all"
   };
 }
 
@@ -433,11 +435,22 @@ function renderResultImportPreview() {
     : "";
   const warningCount = candidate.issues.warnings.length;
   const errorCount = (candidate.issues.errors || []).length;
+  // 재신청 결과 올리기 방식(사용자 결정): '학년 전원 파일'(그 학년 통째로) / '재신청한 학생만 있는 파일'(파일 학생만 바꿈, 학년·반·번호로 맞춤).
+  const existing = (preview.existingStudents || []).filter((student) => String(student.grade) === String(preview.grade));
+  const partialCounts = !blocked && existing.length && preview.mode === "partial" && typeof roundMergeGradeStudents === "function" && preview.roundData
+    ? roundMergeGradeStudents(preview.roundData, preview.roundClosures || {}, preview.grade, candidate.data).counts : null;
+  const modeBox = !blocked && existing.length
+    ? `<fieldset class="result-import-mode" id="resultImportMode"><legend>올리는 방식</legend>
+        <label><input type="radio" name="resultImportMode" value="all"${preview.mode !== "partial" ? " checked" : ""}> 학년 전원 파일 <small>(${esc(resultCurrentLabel(preview.grade))} ${existing.length}명을 이 파일 ${candidate.summary?.students || 0}명으로 바꿈)</small></label>
+        <label><input type="radio" name="resultImportMode" value="partial"${preview.mode === "partial" ? " checked" : ""}> 재신청한 학생만 있는 파일 <small>(파일에 있는 학생만 바꾸고 나머지는 그대로 · 학년·반·번호로 맞춤)</small></label>
+        ${partialCounts ? `<p class="result-import-mode-counts" id="resultImportModeCounts">바뀌는 학생 ${partialCounts.changed}명 · 그대로 ${partialCounts.kept + partialCounts.same}명${partialCounts.same ? `(파일에 있으나 같음 ${partialCounts.same}명)` : ""}${partialCounts.added ? ` · 추가 ${partialCounts.added}명(전입 등)` : ""}</p>` : ""}
+      </fieldset>` : "";
   container.innerHTML = `<div class="result-import-head">
       <div><strong>결과 파일 검증 · ${esc(preview.round)}차 ${esc(resultCurrentLabel(preview.grade))}</strong><span>${esc(preview.fileName)} · ${formatLabel}</span></div>
       ${sheetPicker}
     </div>
     ${summary}
+    ${modeBox}
     ${!blocked && typeof twoSemesterPickMarkup === "function" ? twoSemesterPickMarkup(candidate.semesterPicks, preview.grade, candidate.semesterNotes) : ""}
     ${list(candidate.issues.blocking, "is-blocking", "반영할 수 없는 오류")}
     ${list(candidate.issues.errors || [], "is-blocking is-error", "오류 · 확인 후 반영할 수 있음")}
@@ -499,7 +512,7 @@ async function confirmResultImport() {
   const unclassified = candidate.unclassified || [];
   let carry;
   try {
-    carry = storeGradeResults(candidate.data, preview.fileName, preview.grade) || { kept: 0, dropped: 0 };
+    carry = storeGradeResults(candidate.data, preview.fileName, preview.grade, { partial: preview.mode === "partial" }) || { kept: 0, dropped: 0 };
   } catch (error) {
     // 저장 공간 부족 같은 일시적 오류에서는 검증한 미리보기를 유지해 다시 시도할 수 있게 한다.
     status.style.color = "#a44939";
@@ -510,7 +523,9 @@ async function confirmResultImport() {
   if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
   if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("결과 반영");
   status.style.color = "#287956";
-  status.textContent = `${preview.round}차 ${resultCurrentLabel(preview.grade)} ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.` +
+  status.textContent = (carry.partial
+    ? `${preview.round}차 ${resultCurrentLabel(preview.grade)}: 재신청한 학생 ${carry.partial.changed}명을 반영했습니다(그대로 ${carry.partial.kept + carry.partial.same}명${carry.partial.added ? ` · 추가 ${carry.partial.added}명` : ""}). 다른 학년 결과는 유지됩니다.`
+    : `${preview.round}차 ${resultCurrentLabel(preview.grade)} ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.`) +
     (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +
     (carry.dropped ? ` 새 결과에 없는 과목의 설정 ${carry.dropped}건은 해제했습니다.` : "") +
     (unclassified.length ? ` 그룹 미확인 ${resultTargetLabel(preview.grade)} ${unclassified.length}개.` : "");
@@ -530,6 +545,7 @@ function revalidateResultImport() {
     ...resultImportOptions(previous.grade),
     fileName: previous.fileName, round: previous.round, grade: previous.grade, revision: previous.revision
   });
+  preview.mode = previous.mode;
   const keep = preview.candidates[previous.selected];
   if (keep && !keep.issues.blocking.length) preview.selected = previous.selected;
   showResultImportPreview(preview);
@@ -561,6 +577,12 @@ function initResultImport() {
     }
   });
   container.addEventListener("change", (event) => {
+    if (event.target.name === "resultImportMode" && resultImportPending) {
+      resultImportPending.mode = event.target.value === "partial" ? "partial" : "all";
+      renderResultImportPreview();
+      resultImportElement()?.querySelector(`input[name="resultImportMode"][value="${resultImportPending.mode}"]`)?.focus({ preventScroll: true });
+      return;
+    }
     const pick = event.target.closest?.("[data-semester-pick]");
     if (pick && resultImportPending && typeof setCourseSemesterPick === "function") {
       setCourseSemesterPick(resultImportPending.grade, pick.dataset.semesterPickName || pick.dataset.semesterPick, pick.value, undefined, resultImportPending.round);
