@@ -487,14 +487,26 @@ function hoursPreviousMatchId(group, detail) {
   return null;
 }
 
-// 시트 한 장을 읽는다. 교과별 시수표가 아니면 null.
+// 시트 학년도: 시트 이름에 4자리(2026)·2자리(26, '(1) 25교과시수(24.9월)'의 25 — 괄호 번호·'24.9' 같은 날짜는 뺌) 연도가 있으면
+// 그것, 없으면 A1 제목의 '○○○○학년도'. 실제 파일에는 제목이 틀린 시트가 있어 시트 이름을 먼저 믿는다. basis = '시트명'/'제목'.
+function hoursPreviousSheetYear(name, title) {
+  const text = String(name ?? "");
+  const full = text.match(/(?:^|[^\d])(20\d{2})(?!\d)/)?.[1];
+  if (full) return { year: Number(full), basis: "시트명" };
+  const short = text.replace(/^\s*\(\d+\)\s*/, "").match(/(?:^|[^\d.])(\d{2})(?![\d.])/)?.[1];
+  if (short) return { year: 2000 + Number(short), basis: "시트명" };
+  const titled = String(title ?? "").match(/(\d{4})\s*학년도/)?.[1];
+  return titled ? { year: Number(titled), basis: "제목" } : { year: null, basis: "" };
+}
+
+// 시트 한 장을 읽는다. 교과별 시수표가 아니면 null(교과 시수 배정표도 null — 따로 셈).
 function hoursPreviousParseSheet(sheet) {
   const rows = sheet?.rows || [];
   const cell = (r, c) => rows[r]?.[c] ?? "";
   const header = rows.findIndex((row, index) => index < 15 && hoursPreviousText(row?.[0]).startsWith("교과군") && (row || []).some((value) => /교사수/.test(hoursPreviousText(value))));
-  if (header < 0) return null;
+  if (header < 0 || hoursPreviousIsAllocation(sheet)) return null;
   const title = String(cell(0, 0)).trim();
-  const year = Number(title.match(/(\d{4})\s*학년도/)?.[1]) || null;
+  const { year, basis: yearBasis } = hoursPreviousSheetYear(sheet.name, title);
   const stampText = String(cell(1, 0)).trim();
   const stamp = stampText.match(/(\d{2,4})\s*\.\s*(\d{1,2})\s*\.?\s*(\d{1,2})?\s*\.?\s*\)?\s*$/) || stampText.match(/(\d{2,4})\s*\.\s*(\d{1,2})/);
   const date = stamp ? (Number(stamp[1]) < 100 ? 2000 + Number(stamp[1]) : Number(stamp[1])) * 10000 + Number(stamp[2]) * 100 + (Number(stamp[3]) || 0) : 0;
@@ -568,19 +580,23 @@ function hoursPreviousParseSheet(sheet) {
     for (const [, kind, count] of nonTeachingLine.matchAll(/(특수|영양|보건|사서|상담)\s*(?:교사)?\s*(\d+)/g)) nonTeaching[kind] = Number(count);
   }
   const subjectTeachers = summary.subject?.teachers ?? null;
-  return { name: sheet.name, title, year, stamp: stampText, date, final: /최종/.test(sheet.name || ""), departments, summary, memo, nonTeaching, subjectTeachers };
+  return { name: sheet.name, title, year, yearBasis, stamp: stampText, date, final: /최종/.test(sheet.name || ""), departments, summary, memo, nonTeaching, subjectTeachers };
 }
 
 // 교과 시수 배정표(창체·교양을 교과별로 나눈 표): 1차는 읽어서 보여 주기만 한다(A1 '시수 배정표').
+function hoursPreviousIsAllocation(sheet) {
+  const title = String(sheet?.rows?.[0]?.[0] ?? "").trim();
+  return /배정표/.test(hoursPreviousText(title)) || /창체.*교양|교양.*창체/.test(hoursPreviousText(sheet?.name));
+}
+
 function hoursPreviousParseAllocation(sheet) {
   const rows = sheet?.rows || [];
   const title = String(rows[0]?.[0] ?? "").trim();
-  if (!/배정표/.test(hoursPreviousText(title)) && !/창체.*교양|교양.*창체/.test(hoursPreviousText(sheet?.name))) return null;
-  const nameYear = String(sheet?.name || "").match(/(?:^|[^\d])(\d{2})\s*(?:창체|교과|교양)/)?.[1] || String(sheet?.name || "").match(/(20\d{2})/)?.[1];
-  const year = nameYear ? (nameYear.length === 2 ? 2000 + Number(nameYear) : Number(nameYear)) : Number(title.match(/(\d{4})\s*학년도/)?.[1]) || null;
+  if (!hoursPreviousIsAllocation(sheet)) return null;
+  const { year, basis: yearBasis } = hoursPreviousSheetYear(sheet?.name, title);
   const body = rows.slice(0, 60).map((row) => (row || []).slice(0, 24).map((value) => String(value ?? "").replace(/\s+/g, " ").trim()))
     .filter((row) => row.some(Boolean));
-  return { name: sheet.name, title, year, rows: body };
+  return { name: sheet.name, title, year, yearBasis, rows: body };
 }
 
 // 여러 시트 가운데 앱 학년도 − 1의 교과별 시수표를 고른다: 같은 학년도가 여럿이면 시트 이름에 '최종', 없으면 A2 날짜가 가장 늦은 것.
@@ -706,9 +722,18 @@ function hoursPreviousSources(year, settings) {
   const preferUpload = Boolean(upload) && settings.previousPrefer === "upload";
   const migratedAverage = (key) => hoursNumber(settings.previousAverages?.[key], { max: 100 }) ?? hoursNumber(previous?.lastAverages?.[key], { max: 100 });
   const migratedTeachers = (id) => hoursNumber(settings.previousTeachers?.[id], { max: 200 }) ?? hoursNumber(previous?.teachers?.[id], { max: 200 });
-  const round = (value) => value === null || value === undefined || !Number.isFinite(value) ? null : Math.round(value * 100) / 100;
-  const uploadAverage = (key) => round(upload?.groups?.[key] ?? upload?.departments?.[key]?.year ?? null);
-  const uploadTeachers = (id) => round(upload?.departments?.[id]?.teachers ?? null);
+  // 파일 값은 반올림하지 않고 그대로 쓴다(16.545는 16.5로 보임 · 비교만 0.005 허용).
+  const finite = (value) => value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+  const uploadAverage = (key) => finite(upload?.groups?.[key] ?? upload?.departments?.[key]?.year ?? null);
+  const uploadTeachers = (id) => finite(upload?.departments?.[id]?.teachers ?? null);
+  // 교과군(과학·사회) 키의 교사 수는 세부 교과 합(아는 값이 없으면 null).
+  const groupMembers = (key) => HOURS_DEPARTMENTS.filter((department) => department.group === key && ["과학", "사회"].includes(key)).map((department) => department.id);
+  const teachersOf = (key, read) => {
+    const members = groupMembers(key);
+    if (!members.length) return read(key);
+    const values = members.map(read).filter((value) => value !== null);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+  };
   const used = { migrated: 0, upload: 0 };
   const differences = [];
   const pick = (key, migratedValue, uploadValue, kind) => {
@@ -718,11 +743,26 @@ function hoursPreviousSources(year, settings) {
     if (value !== null) used[(first !== null) === preferUpload ? "upload" : "migrated"]++;
     return value;
   };
+  // 1인당 평균: 어느 출처든 그 교과를 '교사 0명'이라고 하면 전년 1인당은 비운다('-' · 순위 제외).
+  // 다른 출처로 빈칸을 채울 때는 그 출처에 교사 수가 있고(> 0) 1인당이 계산될 때만(먼저 쓰는 출처는 W 칸 직접 입력처럼 교사 수가 없어도 씀).
+  const average = (key) => {
+    const migratedCount = teachersOf(key, migratedTeachers), uploadCount = teachersOf(key, uploadTeachers);
+    const migratedValue = migratedAverage(key), uploadValue = uploadAverage(key);
+    if (migratedValue !== null && uploadValue !== null && Math.abs(migratedValue - uploadValue) > 0.005) differences.push({ key, kind: "average", migrated: migratedValue, upload: uploadValue });
+    // '0명이면 비움'은 교과 하나일 때만(교과군은 세부 교과 하나가 0명이어도 교과군 평균은 있음).
+    if (!groupMembers(key).length && (migratedCount === 0 || uploadCount === 0)) return null;
+    const first = preferUpload ? { value: uploadValue, source: "upload" } : { value: migratedValue, source: "migrated" };
+    const second = preferUpload ? { value: migratedValue, count: migratedCount, source: "migrated" } : { value: uploadValue, count: uploadCount, source: "upload" };
+    const chosen = first.value !== null ? first : second.value !== null && second.count > 0 ? second : null;
+    if (!chosen) return null;
+    used[chosen.source]++;
+    return chosen.value;
+  };
   const hasMigrated = Boolean(previous && (Object.keys(previous.teachers || {}).length || Object.keys(previous.lastAverages || {}).length)) ||
     Object.keys(settings.previousAverages || {}).length > 0 || Object.keys(settings.previousTeachers || {}).length > 0;
   return {
     previousYear, upload, preferUpload, hasMigrated, differences, used,
-    average: (key) => pick(key, migratedAverage(key), uploadAverage(key), "average"),
+    average,
     teachers: (id) => pick(id, migratedTeachers(id), uploadTeachers(id), "teachers")
   };
 }
@@ -2364,8 +2404,8 @@ function askPreviousHoursImport(picked, fileName, previousYear) {
   const draw = () => {
     const parsed = picked.stats.find((item) => item.name === sheetName);
     const unmatched = parsed.departments.filter((department) => !department.id).length;
-    body.innerHTML = `<p class="note">${escapeHtml(fileName)} · 시트 ${picked.total}개 중 교과별 시수표 ${picked.stats.length}개${picked.matched ? ` · ${previousYear}학년도 시트를 자동으로 골랐습니다` : ` · ${previousYear}학년도 시트가 없어 가장 알맞은 시트를 골랐습니다`}.</p>
-      <label class="hours-classes">시트 <select id="hoursPreviousImportSheet">${picked.stats.map((item) => `<option value="${escapeHtml(item.name)}"${item.name === sheetName ? " selected" : ""}>${escapeHtml(item.name)}${item.year ? ` · ${item.year}학년도` : ""}${item.stamp ? ` · ${escapeHtml(item.stamp)}` : ""}${item.final ? " · 최종" : ""}</option>`).join("")}</select></label>
+    body.innerHTML = `<p class="note">${escapeHtml(fileName)} · 시트 ${picked.total}개 중 교과별 시수표 ${picked.stats.length}개${picked.allocations.length ? ` · 교과 시수 배정표 ${picked.allocations.length}개` : ""}${picked.matched ? ` · ${previousYear}학년도 시트를 자동으로 골랐습니다` : ` · ${previousYear}학년도 시트가 없어 가장 알맞은 시트를 골랐습니다`}.</p>
+      <label class="hours-classes">시트 <select id="hoursPreviousImportSheet">${picked.stats.map((item) => `<option value="${escapeHtml(item.name)}"${item.name === sheetName ? " selected" : ""}>${escapeHtml(item.name)}${item.year ? ` · ${item.year}학년도(${item.yearBasis})` : ""}${item.stamp ? ` · ${escapeHtml(item.stamp)}` : ""}${item.final ? " · 최종" : ""}</option>`).join("")}</select></label>
       <p class="hours-staff-line" id="hoursPreviousImportSummary">${escapeHtml(parsed.title || parsed.name)} · 교과 교사 ${hoursFormat(parsed.subjectTeachers, 1)}명 · 교과 시수 ${hoursFormat(parsed.summary.subject?.["1"], 1)} / ${hoursFormat(parsed.summary.subject?.["2"], 1)}${Object.keys(parsed.nonTeaching).length ? ` · 비교과 ${Object.entries(parsed.nonTeaching).map(([kind, count]) => `${kind}${count}`).join(", ")}` : ""}</p>
       ${unmatched ? `<p class="note is-warn">앱 교과와 이름이 맞지 않는 줄 ${unmatched}개: '맞출 교과'를 고르세요(비워 두면 반영하지 않음).</p>` : ""}
       <div class="aggregate-sheet-wrap"><table class="closure-table hours-previous-import-table">
@@ -2375,6 +2415,7 @@ function askPreviousHoursImport(picked, fileName, previousYear) {
           <td>${hoursFormat(department.teachers, 1)}</td><td>${hoursFormat(department.averages["1"], 1)} / ${hoursFormat(department.averages["2"], 1)}</td><td>${hoursFormat(department.year, 1)}</td></tr>`).join("")}</tbody>
       </table></div>
       ${parsed.memo.length ? `<p class="note">메모: ${escapeHtml(parsed.memo.join(" / "))}</p>` : ""}
+      ${picked.allocations.length ? `<p class="note">교과 시수 배정표: ${escapeHtml(picked.allocations.map((item) => `${item.name}${item.year ? ` · ${item.year}학년도(${item.yearBasis})` : ""}`).join(", "))}</p>` : ""}
       ${picked.allocation ? `<p class="note">같은 학년도 교과 시수 배정표 '${escapeHtml(picked.allocation)}'도 함께 읽어 둡니다(창체·교양 교과별 배분 — 지금은 보여 주기만).</p>` : ""}`;
     body.querySelector("#hoursPreviousImportSheet").onchange = (event) => { sheetName = event.target.value; draw(); };
   };
