@@ -45,7 +45,6 @@ function context() {
     aggregateThresholds: () => ({ openingPercent: 90, divisionPercent: 110 }),
     aggregateMaxClassSize: () => 34,
     nextYearClassBases: () => ({ "2": 11, "3": 11 }),
-    applicationRoundNumbers: () => Object.keys(state.rounds).sort((a, b) => Number(a) - Number(b)),
     // 같은 state 판(revision)에서만 캐시(app.js cachedByStateRevision 흉내: 자료를 바꾸면 bump()).
     cachedByStateRevision: (name, key, compute) => { const id = `${revision}|${name}|${key}`; if (!caches.has(id)) caches.set(id, compute()); return caches.get(id); },
     resultExampleList: (items) => [...items].join(", "),
@@ -63,6 +62,10 @@ function context() {
   vm.runInContext(read("round-status.js"), ctx);
   vm.runInContext(read("hours-stats.js"), ctx);
   vm.runInContext(read("course-semester-picks.js"), ctx);
+  vm.runInContext(read("round-copy.js"), ctx);
+  vm.runInContext(between(app, "function applicationRoundNumbers(", "function switchRound("), ctx);
+  ctx.switchRound = (round) => { state.currentRound = String(round); const data = state.rounds[round]; state.students = data?.students || []; state.courses = data?.courses || []; };
+  ctx.syncActiveRound = () => {};
   vm.runInContext(read("class-sections.js"), ctx);
   const view = read("class-sections-view.js");
   vm.runInContext(between(view, "function classSectionsPlanSubjects(", "function classSectionsNeisFamily("), ctx);
@@ -421,4 +424,96 @@ test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기�
   // 4단계 메뉴·미리보기 연결
   assert.match(app, /data-opening-semester/);
   assert.match(read("result-import.js"), /twoSemesterPickMarkup\(candidate\.semesterPicks, preview\.grade, candidate\.semesterNotes\)/);
+});
+
+// ---- 차수별 흐름 분리(사용자 결정 2026-11) ----
+test("새 차수 = 직전 차수 복사: 두 학년 결과·개설/폐강·6단계 분반·고른 학기, 확정은 복사하지 않음 · 학년마다 '복사' 근거와 서명", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const course = state.courses.find((item) => ctx.courseSemesterPickKey(item.name) === ctx.courseSemesterPickKey(COURSE));
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: { [`2:${course.column}`]: 5 }, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } };
+  state.roundClosures = { "1": { [`2:${course.column}`]: "closed" } };
+  state.roundStatuses = { "1": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("1") } };
+  state.classSections = { settings: {}, "1": { "2:2:3-2 택5": { classCounts: { [COURSE]: 4 } } } };
+  ctx.bump();
+  ctx.addApplicationRound();
+  assert.equal(state.currentRound, "2");
+  const copied = state.rounds["2"];
+  assert.equal(copied.students.length, state.rounds["1"].students.length);
+  assert.notEqual(copied.students, state.rounds["1"].students, "깊은 복사");
+  assert.deepEqual(plain(copied.classOverrides), { [`2:${course.column}`]: 5 });
+  assert.deepEqual(plain(state.roundClosures["2"]), { [`2:${course.column}`]: "closed" });
+  assert.equal(state.roundStatuses["2"], undefined, "확정은 복사하지 않음(미확정으로 시작)");
+  assert.deepEqual(plain(state.classSections["2"]), plain(state.classSections["1"]));
+  assert.equal(state.courseSemesterPicks["2026"]["2"]["2"][ctx.courseSemesterPickKey(COURSE)], "2", "고른 개설 학기도 복사");
+  assert.deepEqual([copied.gradeSources["2"].kind, copied.gradeSources["2"].round], ["copy", "1"]);
+  assert.equal(copied.gradeSources["2"].from.signature, ctx.roundGradeSignature(state.rounds["1"], state.roundClosures["1"], "2"));
+  assert.equal(copied.gradeSources["1"], undefined, "결과가 없는 학년은 복사 근거 없음");
+  // 앞 차수가 바뀌면 서명이 달라진다(근거 줄 '복사 뒤 바뀜').
+  state.roundClosures["1"][`2:${course.column}`] = "open";
+  assert.notEqual(copied.gradeSources["2"].from.signature, ctx.roundGradeSignature(state.rounds["1"], state.roundClosures["1"], "2"));
+});
+
+test("학년 몫 바꾸기(roundReplaceGrade)는 다른 학년을 그대로 두고, 겹치는 열 이름은 바꿔 넣는다", () => {
+  const { ctx } = context();
+  const course = (column, name, grade) => ({ column, name, semesterKey: "1", applicationCurrentGrade: grade });
+  const data = { students: [{ grade: "1", classroom: "1", number: "1", selections: [course("app1", "물리학", "1")] }, { grade: "2", classroom: "1", number: "1", selections: [course("app2", "경제", "2")] }],
+    courses: [course("app1", "물리학", "1"), course("app2", "경제", "2")], classOverrides: { "1:app1": 3, "2:app2": 2 }, semesterAssignments: {}, groupAssignments: {} };
+  const slice = { students: [{ grade: "2", classroom: "1", number: "1", selections: [course("app1", "기하", "2")] }], courses: [course("app1", "기하", "2")], classOverrides: { "2:app1": 4 }, semesterAssignments: {}, groupAssignments: {}, closures: { "2:app1": "closed" } };
+  const result = ctx.roundReplaceGrade(data, { "1:app1": "open", "2:app2": "closed" }, "2", slice);
+  assert.deepEqual(plain(result.data.courses.map((item) => [item.column, item.name])), [["app1", "물리학"], ["app1~1", "기하"]]);
+  assert.equal(result.data.students.find((student) => student.grade === "2").selections[0].column, "app1~1");
+  assert.deepEqual(plain(result.data.classOverrides), { "1:app1": 3, "2:app1~1": 4 });
+  assert.deepEqual(plain(result.closures), { "1:app1": "open", "2:app1~1": "closed" });
+});
+
+test("웹 재신청처럼 열 번호가 밀려도 개설 결정·학급수 입력은 이름·학기로 옮긴다(roundRemapKeysByName)", () => {
+  const { ctx } = context();
+  const from = [{ column: "app0", name: "미적분", semesterKey: "1", applicationCurrentGrade: "1" }, { column: "app1", name: "기하", semesterKey: "1", applicationCurrentGrade: "1" }];
+  const to = [{ column: "app0", name: "기하", semesterKey: "1", applicationCurrentGrade: "1" }];
+  assert.deepEqual(plain(ctx.roundRemapKeysByName(from, to, { "1:app0": "closed", "1:app1": "open", "2:app1": "open" }, "1")), { "1:app0": "open" });
+});
+
+test("'재신청한 학생만 있는 파일': 파일 학생만 바꾸고(학년·반·번호) 나머지는 그대로, 없던 학생은 추가, 과목 열은 같은 이름·학기 열", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const before = plain(state.students);
+  const seat = (student) => `${student.classroom}-${student.number}`;
+  const target = before.slice(0, 3);
+  // 3명은 다른 과목(일본어 회화 → 중국어 회화 등)으로, 1명은 전입(없던 번호)
+  const swap = (student) => ({ ...student, selections: student.selections.map((selection) => /일본어 회화/.test(selection.name) ? { ...selection, column: "z1", name: "중국어 회화" }
+    : /중국어 회화/.test(selection.name) ? { ...selection, column: "z2", name: "일본어 회화" } : selection) });
+  const overlay = { courses: [{ column: "z1", name: "중국어 회화", semesterKey: "2", credits: 2 }, { column: "z2", name: "일본어 회화", semesterKey: "2", credits: 2 }, { column: "z3", name: "새 과목", semesterKey: "2", credits: 2 }],
+    students: [...target.map(swap), { grade: "2", classroom: "11", number: "99", name: "학생전입", selections: [{ column: "z3", name: "새 과목", semesterKey: "2", credits: 2 }] }] };
+  const { slice, counts } = ctx.roundMergeGradeStudents({ students: state.students, courses: state.courses }, {}, "2", overlay);
+  assert.deepEqual(plain(counts), { changed: 3, same: 0, added: 1, kept: before.length - 3 });
+  assert.equal(slice.students.length, before.length + 1);
+  const columns = new Map(state.courses.map((course) => [course.name.replace(/\s+/g, ""), course.column]));
+  const changed = slice.students.find((student) => seat(student) === seat(target[0]));
+  for (const selection of changed.selections) if (/회화/.test(selection.name)) assert.equal(selection.column, columns.get(selection.name.replace(/\s+/g, "")), "기존 열");
+  assert.ok(slice.courses.some((course) => course.name === "새 과목" && course.column.startsWith("result-2-")), "없던 과목은 새 열");
+  const untouched = slice.students.find((student) => seat(student) === seat(before[10]));
+  assert.deepEqual(plain(untouched.selections.map((item) => item.name)), plain(before[10].selections.map((item) => item.name)));
+});
+
+test("예전 자료 옮기기 계획: 빈 학년은 복사, 일부 학생만 있는 학년(직전 차수의 절반 미만, 모두 직전 차수 학생)은 묻기, 확정·이미 정한 학년은 건너뜀", () => {
+  const { ctx } = context();
+  const student = (grade, number) => ({ grade, classroom: "1", number: String(number), selections: [] });
+  const many = (grade, count) => Array.from({ length: count }, (_, index) => student(grade, index + 1));
+  const rounds = {
+    "1": { students: [...many("1", 30), ...many("2", 28)] },
+    "2": { students: [...many("1", 30)] },                       // 현2 비어 있음 → 복사
+    "3": { students: [...many("1", 30), student("2", 3), student("2", 7)] } // 현2 2명뿐 → 묻기
+  };
+  let plan = ctx.roundMigrationPlan(rounds, () => false);
+  assert.deepEqual(plain(plan.map((item) => [item.round, item.grade, item.action, item.from])), [["2", "2", "copy", "1"]]);
+  // 2차에 현2를 복사하고 나면 3차 현2(2명)를 묻는다.
+  rounds["2"].students.push(...many("2", 28));
+  plan = ctx.roundMigrationPlan(rounds, () => false);
+  assert.deepEqual(plain(plan.map((item) => [item.round, item.grade, item.action, item.count, item.previous])), [["3", "2", "ask", 2, 28]]);
+  assert.deepEqual(plain(ctx.roundMigrationPlan(rounds, (round) => round === "3")), [], "확정 차수는 묻지 않음");
+  rounds["3"].gradeSources = { "2": { kind: "upload", decided: "kept" } };
+  assert.deepEqual(plain(ctx.roundMigrationPlan(rounds, () => false)), [], "이미 정한 학년은 다시 묻지 않음");
 });

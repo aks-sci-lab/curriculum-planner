@@ -1892,6 +1892,11 @@
 .aggregate-course-semester { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #d4dbe8; }
 .aggregate-course-semester > span { grid-column: 1 / -1; font-weight: 700; color: #33425f; }
 .aggregate-course-semester small { font-weight: 400; color: #6a7489; }
+.result-import-mode { margin: 10px 0; padding: 10px 12px; border: 1px solid #b9c6dd; border-radius: 8px; background: #fbfcff; }
+.result-import-mode legend { padding: 0 4px; font-weight: 700; }
+.result-import-mode label { display: block; margin: 4px 0; font-weight: 700; }
+.result-import-mode small { font-weight: 400; color: #65738a; }
+.result-import-mode-counts { margin: 6px 0 0; color: #244ba0; font-weight: 700; }
 .result-semester-picks { margin: 10px 0; padding: 10px 12px; border: 1px solid #b9c6dd; border-radius: 8px; background: #f6f9ff; }
 .result-semester-picks legend { padding: 0 4px; font-weight: 700; }
 .result-semester-picks p { margin: 0 0 6px; color: #46546e; font-size: 12px; line-height: 1.5; }

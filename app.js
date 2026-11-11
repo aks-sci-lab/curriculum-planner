@@ -405,6 +405,8 @@
         state.rounds[state.currentRound] = {
           fileName: state.fileName,
           gradeFiles: state.rounds[state.currentRound]?.gradeFiles || {},
+          // 학년마다 어디서 온 결과인지(round-copy.js · 올림/일부/웹/앞 차수 복사).
+          gradeSources: state.rounds[state.currentRound]?.gradeSources || {},
           students: state.students,
           courses: state.courses,
           classOverrides: state.classOverrides,
@@ -1465,8 +1467,32 @@
       const nextNumber = Math.max(...rounds.map(Number)) + 1;
       if (!Number.isSafeInteger(nextNumber) || nextNumber > 999999999) throw new Error("추가할 차수 번호가 너무 큽니다.");
       const next = String(nextNumber);
+      // 새 차수 = 직전 차수 복사(사용자 결정): 두 학년 결과·개설/폐강·학급수 입력·6단계 분반·고른 개설 학기. 확정은 복사하지 않는다.
+      if (typeof syncActiveRound === "function") syncActiveRound();
+      const previous = String(Math.max(...rounds.map(Number)));
+      const source = state.rounds?.[previous];
       state.rounds[next] = null;
       state.roundClosures[next] = {};
+      if (source?.students?.length && typeof roundCopyClone === "function") {
+        const plain = (value) => JSON.parse(JSON.stringify(value ?? null, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined));
+        const data = plain(source);
+        const closures = plain(state.roundClosures?.[previous] || {});
+        data.gradeSources = {};
+        data.gradeFiles = {};
+        for (const grade of ["1", "2"]) {
+          if (!data.students.some((student) => String(student.grade) === grade)) continue;
+          data.gradeSources[grade] = { kind: "copy", round: previous, at: new Date().toISOString(),
+            from: { round: previous, signature: roundGradeSignature(data, closures, grade) } };
+          data.gradeFiles[grade] = `${previous}차에서 복사`;
+        }
+        data.fileName = `${previous}차에서 복사`;
+        state.rounds[next] = data;
+        state.roundClosures[next] = closures;
+        if (state.classSections?.[previous] && typeof state.classSections[previous] === "object") state.classSections[next] = plain(state.classSections[previous]);
+        for (const byGrade of Object.values(state.courseSemesterPicks || {})) {
+          for (const byRound of Object.values(byGrade || {})) if (byRound?.[previous]) byRound[next] = plain(byRound[previous]);
+        }
+      }
       switchRound(next);
     }
 
@@ -1632,6 +1658,7 @@
           return {
             fileName: String(data.fileName || ""),
             gradeFiles: data.gradeFiles && typeof data.gradeFiles === "object" ? data.gradeFiles : {},
+            gradeSources: data.gradeSources && typeof data.gradeSources === "object" && !Array.isArray(data.gradeSources) ? data.gradeSources : {},
             students: data.students,
             courses: normalizeCourses(Array.isArray(data.courses) ? data.courses : []),
             classOverrides: data.classOverrides && typeof data.classOverrides === "object" ? data.classOverrides : {},
@@ -4557,91 +4584,12 @@
       return Object.hasOwn(closures || {}, key) ? closures[key] : atRisk ? "" : "open";
     }
 
-    // 이 차수의 개설/폐강 결정 + 앞 차수에서 교사가 정한 결정(같은 현 학년·같은 과목명)을 이어받은 것.
-    // 이 차수에 직접 정한 값(미정 "" 포함)이 있으면 그것이 우선이고, 이어받은 값은 메뉴에서 바꿀 수 있다.
-    // 이어받은 키는 숨은 속성 inherited(Map 키 → 앞 차수 번호)로 알려 준다(목록·저장에는 나오지 않음).
+    // 이 차수의 개설/폐강 결정. 앞 차수 결정은 이어받지 않고, 새 차수를 만들 때 직전 차수에서 복사한다(round-copy.js · 사용자 결정 2026-11).
+    // 부르는 곳이 많아 이름은 그대로 두고, 예전 '이어받음' 표시(inherited)는 늘 비어 있다.
     function effectiveRoundClosures(round) {
-      round = String(round);
-      const own = state.roundClosures?.[round] || {};
-      const compute = () => {
-        const merged = { ...own };
-        const inherited = new Map();
-        const rounds = typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : Object.keys(state.rounds || {});
-        const earlier = rounds.filter((item) => Number(item) < Number(round)).sort((a, b) => Number(b) - Number(a));
-        const data = state.rounds?.[round];
-        if (earlier.length && data?.courses?.length) {
-          // 같은 과목 = 같은 현 학년 + 같은 학기 + 같은 그룹 + 같은 과목명. normalizeResultCourseName은 '(2학기)' 꼬리표를 떼므로
-          // 학기는 따로 맞춘다(두 학기 과목의 한 학기만 폐강해도 다른 학기로 번지지 않게). 키가 겹쳐 하나로 정할 수 없으면 이어받지 않는다.
-          const normalize = (name) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name || "").replace(/\s+/g, "");
-          const courseName = (course) => course.applicationSubject?.subject || course.subjectName || course.name;
-          const semesterTag = (text) => String(text || "").match(/[（(]\s*([12])\s*학기\s*[)）]/)?.[1] || "";
-          const semesterOf = (course, roundData) => {
-            const listed = String(course.applicationSubject?.semester ?? "");
-            if (/^[12]$/.test(listed)) return listed;
-            const tag = semesterTag(course.applicationSubject?.subject) || semesterTag(course.name);
-            if (tag) return tag;
-            const forced = roundData?.semesterAssignments?.[String(course.column)];
-            if (forced === "1" || forced === "2") return forced;
-            if (course.semesterKey === "1" || course.semesterKey === "2") return course.semesterKey;
-            return listed.includes("·") ? "1·2" : "";
-          };
-          const groupOf = (course, roundData) => {
-            const label = course.applicationSubject?.groupName ||
-              (typeof parseAssignedGroupLabel === "function" ? parseAssignedGroupLabel(roundData?.groupAssignments?.[String(course.column)] || "").category : "");
-            return String(label || "").replace(/\s+/g, "");
-          };
-          const identity = (course, grade, roundData) => `${grade}|${semesterOf(course, roundData)}|${normalize(courseName(course))}`;
-          // 같은 학년·학기·이름 과목이 여럿이면(다른 그룹) 그룹까지 같아야 하고, 그래도 여럿이면 이어받지 않는다.
-          const index = (roundData) => {
-            const map = new Map();
-            for (const course of roundData.courses) {
-              const grades = course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)] : ["1", "2"];
-              for (const grade of grades) {
-                const id = identity(course, grade, roundData);
-                if (!map.has(id)) map.set(id, []);
-                map.get(id).push({ course, grade, group: groupOf(course, roundData) });
-              }
-            }
-            return map;
-          };
-          const pick = (list, group) => {
-            if (list.length === 1) return list[0];
-            const same = group ? list.filter((item) => item.group === group) : [];
-            return same.length === 1 ? same[0] : null;
-          };
-          const currentIndex = index(data);
-          for (const prev of earlier) {
-            const prevData = state.rounds?.[prev];
-            if (!prevData?.courses?.length) continue;
-            const prevIndex = index(prevData);
-            const decided = new Map();
-            for (const [key, verdict] of Object.entries(state.roundClosures?.[prev] || {})) {
-              if (verdict !== "open" && verdict !== "closed") continue;
-              const separator = key.indexOf(":");
-              decided.set(key, { grade: key.slice(0, separator), column: key.slice(separator + 1), verdict });
-            }
-            for (const [id, list] of currentIndex) {
-              const before = prevIndex.get(id) || [];
-              for (const item of list) {
-                const key = `${item.grade}:${item.course.column}`;
-                if (Object.hasOwn(merged, key)) continue;
-                // 지금 차수에서도 같은 키 과목이 여럿이면 그룹으로 하나를 고를 수 있을 때만.
-                if (list.length > 1 && !(item.group && list.filter((other) => other.group === item.group).length === 1)) continue;
-                const match = pick(before, item.group);
-                if (!match) continue;
-                if (item.group && match.group && item.group !== match.group) continue;
-                const decision = decided.get(`${match.grade}:${match.course.column}`);
-                if (!decision) continue;
-                merged[key] = decision.verdict;
-                inherited.set(key, prev);
-              }
-            }
-          }
-        }
-        Object.defineProperty(merged, "inherited", { value: inherited, enumerable: false });
-        return merged;
-      };
-      return typeof cachedByStateRevision === "function" ? cachedByStateRevision("effectiveRoundClosures", round, compute) : compute();
+      const merged = { ...(state.roundClosures?.[String(round)] || {}) };
+      Object.defineProperty(merged, "inherited", { value: new Map(), enumerable: false });
+      return merged;
     }
 
     // 택n 그룹의 총 학급수는 n × 학급 수와 같아야 한다. 택 수를 모르는 그룹(미분류 등)은 목표가 없다.
@@ -6424,7 +6372,7 @@
       state.roundClosures[round] ||= {};
       syncActiveRound();
       const previous = state.rounds[round];
-      const data = {
+      let data = {
         students: merged.students, courses: merged.courses,
         classOverrides: previous?.classOverrides || {},
         semesterAssignments: previous?.semesterAssignments || {},
@@ -6432,6 +6380,37 @@
         customGroupNames: previous?.customGroupNames || [],
         fileName: `온라인 자동 연동 ${merged.students.length}명`
       };
+      // 웹 결과가 없는 학년(그 차수에 그 학년 신청을 만들지 않음)은 지우지 않는다: 이 차수에 있던 그 학년 몫, 없으면 직전 차수에서 복사(round-copy.js).
+      const covered = new Set(merged.students.map((student) => String(student.grade)));
+      const sources = {};
+      let closures = state.roundClosures[round] || {};
+      if (typeof roundReplaceGrade === "function") {
+        const prior = applicationRoundNumbers().filter((item) => Number(item) < Number(round)).at(-1);
+        for (const grade of ["1", "2"]) {
+          if (covered.has(grade)) {
+            sources[grade] = { kind: "online", round, at: new Date().toISOString() };
+            // 새로 생긴 차수(직전 차수 복사가 없음): 직전 차수의 그 학년 개설 결정·학급수 입력을 이름·학기로 옮겨 온다(새 차수 = 직전 차수 복사).
+            if (!previous?.students?.some((student) => String(student.grade) === grade) && prior && state.rounds[prior]) {
+              closures = { ...roundRemapKeysByName(state.rounds[prior].courses, merged.courses, state.roundClosures[prior], grade), ...closures };
+              data.classOverrides = { ...roundRemapKeysByName(state.rounds[prior].courses, merged.courses, state.rounds[prior].classOverrides, grade), ...data.classOverrides };
+            }
+            continue;
+          }
+          const own = previous ? roundGradeSlice(previous, state.roundClosures[round], grade) : null;
+          const priorData = prior ? state.rounds[prior] : null;
+          const from = own?.students.length ? null : priorData ? roundGradeSlice(priorData, state.roundClosures[prior], grade) : null;
+          const slice = own?.students.length ? own : from;
+          if (!slice?.students.length) continue;
+          const replaced = roundReplaceGrade(data, closures, grade, slice);
+          data = { ...replaced.data, fileName: data.fileName };
+          closures = replaced.closures;
+          sources[grade] = own?.students.length ? (previous.gradeSources?.[grade] || { kind: "upload", round })
+            : { kind: "copy", round: prior, at: new Date().toISOString(), from: { round: prior, signature: roundGradeSignature(priorData, state.roundClosures[prior], grade) } };
+        }
+        data.gradeSources = sources;
+        data.gradeFiles = previous?.gradeFiles || {};
+        state.roundClosures[round] = closures;
+      }
       state.rounds[round] = data;
       if (String(round) === state.currentRound) {
         state.students = data.students;
@@ -6513,28 +6492,21 @@
     }
 
     // 개설/폐강 결정은 차수마다 새로 내려야 하므로 이어받지 않는다.
-    function priorRoundSettings(grade) {
-      const current = Number(state.currentRound);
-      for (const round of applicationRoundNumbers().filter((item) => Number(item) < current).reverse()) {
-        const data = state.rounds?.[round];
-        const courses = (data?.courses || []).filter((course) => course.applicationCurrentGrade === grade);
-        if (courses.length) {
-          return {
-            round, courses,
-            classOverrides: data.classOverrides || {},
-            semesterAssignments: data.semesterAssignments || {},
-            groupAssignments: data.groupAssignments || {}
-          };
-        }
-      }
-      return null;
-    }
-
     // 같은 과목(과목명·학기)의 개설 학급 수·개설 결정·학기·그룹 지정은 새 열로 옮겨 유지한다.
-    function storeGradeResults(data, sourceLabel, grade) {
+    function storeGradeResults(data, sourceLabel, grade, options = {}) {
       grade = String(grade);
       if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) {
         throw new Error(`${state.currentRound}차는 확정된 차수입니다. 확정을 해제한 뒤 다시 업로드하세요.`);
+      }
+      // '재신청한 학생만 있는 파일': 지금 차수의 그 학년에 파일 학생만 바꿔 넣은 자료로 아래 '학년 통째로 바꾸기'를 한다(과목 설정은 이름·학기로 이어짐).
+      let partialCounts = null;
+      if (options.partial && typeof roundMergeGradeStudents === "function" &&
+          state.students.some((student) => String(student.grade) === grade)) {
+        const merged = roundMergeGradeStudents({ students: state.students, courses: state.courses, classOverrides: state.classOverrides,
+          semesterAssignments: state.semesterAssignments, groupAssignments: state.groupAssignments },
+        state.roundClosures?.[state.currentRound] || {}, grade, data);
+        data = { students: merged.slice.students, courses: merged.slice.courses };
+        partialCounts = merged.counts;
       }
       const students = data.students.filter((student) => String(student.grade) === grade);
       if (!students.length) throw new Error(`현 ${grade}학년(${Number(grade) + 1}학년 과목 신청) 학생이 없는 결과 파일입니다. 파일의 학년 열(현재 학년)에 맞는 탭에서 올려 주세요.`);
@@ -6570,9 +6542,8 @@
         return new Map([...candidates].filter(([, target]) => targetCounts.get(target) === 1));
       };
       const columnMap = mapColumns(previousCourses);
-      const inherited = previousCourses.length ? null : priorRoundSettings(grade);
-      const inheritedMap = inherited ? mapColumns(inherited.courses) : new Map();
-      const carry = { kept: 0, dropped: 0, inheritedFrom: null, inherited: 0 };
+      // 앞 차수 설정은 이어받지 않는다(새 차수 = 직전 차수 복사라 같은 차수 안에서 이름·학기로 옮긴다).
+      const carry = { kept: 0, dropped: 0, inheritedFrom: null, inherited: 0, ...(partialCounts ? { partial: partialCounts } : {}) };
       const remapGradeKeys = (source) => {
         const result = {};
         for (const [key, value] of Object.entries(source || {})) {
@@ -6609,28 +6580,14 @@
       state.classOverrides = remapGradeKeys(state.classOverrides);
       state.semesterAssignments = remapColumnKeys(state.semesterAssignments);
       state.groupAssignments = remapColumnKeys(state.groupAssignments);
-      if (inherited) {
-        const inheritInto = (target, source, build) => {
-          for (const [key, value] of Object.entries(source)) {
-            const mapped = build(key);
-            if (mapped && !Object.hasOwn(target, mapped)) { target[mapped] = value; carry.inherited++; }
-          }
-        };
-        inheritInto(state.classOverrides, inherited.classOverrides, (key) => {
-          const separator = key.indexOf(":");
-          return separator > 0 && key.slice(0, separator) === grade && inheritedMap.has(key.slice(separator + 1))
-            ? `${grade}:${inheritedMap.get(key.slice(separator + 1))}` : null;
-        });
-        inheritInto(state.semesterAssignments, inherited.semesterAssignments, (key) => inheritedMap.get(key) || null);
-        inheritInto(state.groupAssignments, inherited.groupAssignments, (key) => inheritedMap.get(key) || null);
-        if (carry.inherited) carry.inheritedFrom = inherited.round;
-      }
       state.roundClosures ||= {};
       state.roundClosures[state.currentRound] = remapGradeKeys(state.roundClosures[state.currentRound]);
       state.customGroupNames ||= [];
       state.rounds ||= {"1":null};
       const gradeFiles = {...state.rounds[state.currentRound]?.gradeFiles, [grade]:sourceLabel};
-      state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles};
+      const gradeSources = {...state.rounds[state.currentRound]?.gradeSources,
+        [grade]: { kind: partialCounts ? "partial" : "upload", round: String(state.currentRound), at: new Date().toISOString() }};
+      state.rounds[state.currentRound] = {...state.rounds[state.currentRound], gradeFiles, gradeSources};
       state.fileName = typeof resultFileNameLabel === "function"
         ? resultFileNameLabel({gradeFiles})
         : Object.entries(gradeFiles).map(([g,name]) => `현 ${g}학년: ${name}`).join(" / ");
@@ -7570,7 +7527,11 @@
       return {
         subjects: collectApplicationSubjects({ includeExcluded: true, currentGrade: grade }),
         cohortYear: typeof applicationCohortYear === "function" ? applicationCohortYear(grade) : "",
-        existingStudents: state.students
+        existingStudents: state.students,
+        // '재신청한 학생만' 미리보기 인원(round-copy.js roundMergeGradeStudents)용 지금 차수 자료.
+        roundData: { students: state.students, courses: state.courses, classOverrides: state.classOverrides,
+          semesterAssignments: state.semesterAssignments, groupAssignments: state.groupAssignments },
+        roundClosures: state.roundClosures?.[state.currentRound] || {}
       };
     }
 

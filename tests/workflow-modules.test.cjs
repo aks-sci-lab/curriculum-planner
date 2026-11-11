@@ -1302,63 +1302,13 @@ test("5단계 담당 교과: 교과(군) '기술·가정/정보'는 과목명으
   assert.equal(ctx.hoursDefaultDepartment("일본어", "제2외국어"), "제2외국어");
 });
 
-test("4단계: 앞 차수에서 '개설'로 정한 미달 과목은 다음 차수에서도 그 결정을 이어받고(바꿀 수 있음), 이 차수에 직접 정한 값이 우선", () => {
-  const state = {
-    rounds: {
-      "1": { courses: [{ column: "c7", name: "일본어 회화", applicationCurrentGrade: "2" }, { column: "c8", name: "기하", applicationCurrentGrade: "2" }] },
-      "2": { courses: [{ column: "x3", name: "일본어 회화", applicationCurrentGrade: "2" }, { column: "x4", name: "기하", applicationCurrentGrade: "2" }] }
-    },
-    roundClosures: { "1": { "2:c7": "open", "2:c8": "closed" }, "2": {} }
-  };
-  const { ctx } = aggregateHelpers({ globals: { state, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: (name) => String(name).replace(/\s+/g, "") } });
-  const merged = ctx.effectiveRoundClosures("2");
-  assert.deepEqual({ ...merged }, { "2:x3": "open", "2:x4": "closed" });
-  assert.equal(merged.inherited.get("2:x3"), "1");
-  assert.equal(ctx.aggregateClosureDecision(merged, "2:x3", true), "open", "미달이어도 1차 '개설' 결정을 이어받아 미정으로 돌아가지 않는다");
-  assert.deepEqual(Object.keys(merged), ["2:x3", "2:x4"], "숨은 inherited 속성은 목록에 나오지 않는다");
-  // 2차에서 직접 '미정'으로 바꾸면 그것이 우선
-  state.roundClosures["2"]["2:x3"] = "";
-  const changed = ctx.effectiveRoundClosures("2");
-  assert.equal(changed["2:x3"], "");
-  assert.equal(changed.inherited.has("2:x3"), false);
-  assert.deepEqual({ ...ctx.effectiveRoundClosures("1") }, { "2:c7": "open", "2:c8": "closed" }, "1차는 그대로");
-});
-
-test("4단계 이어받기는 학기·그룹까지 같은 과목만: 두 학기 과목의 한 학기 폐강은 다른 학기로 번지지 않고, 같은 이름의 다른 그룹 과목에도 번지지 않는다", () => {
-  // 실제 normalizeResultCourseName처럼 '(n학기)' 꼬리표를 뗀다(시드 10 회귀: 심화 영어 (2학기) 폐강이 (1학기)까지 폐강).
-  const normalize = (name) => String(name).replace(/[（(]\s*[12]\s*학기\s*[)）]/g, "").replace(/\s+/g, "");
-  const english = (column, semester) => ({ column, name: `심화 영어 (${semester}학기)`, applicationCurrentGrade: "2", semesterKey: semester,
-    applicationSubject: { subject: `심화 영어 (${semester}학기)`, semester } });
-  const state = {
-    rounds: {
-      "1": { courses: [english("e1", "1"), english("e2", "2"),
-        { column: "g1", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택1" } },
-        { column: "g2", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택5" } }] },
-      "2": { courses: [english("f1", "1"), english("f2", "2"),
-        { column: "h1", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택1" } },
-        { column: "h2", name: "음악 감상과 비평", applicationCurrentGrade: "2", semesterKey: "1", applicationSubject: { subject: "음악 감상과 비평", semester: "1", groupName: "3-1 택5" } }] }
-    },
-    // 1차: 심화 영어는 2학기만 폐강(1학기는 기준 충족이라 결정 없음), 음악 감상과 비평은 택1 그룹만 폐강
-    roundClosures: { "1": { "2:e2": "closed", "2:g1": "closed" }, "2": {} }
-  };
-  const { ctx } = aggregateHelpers({ globals: { state, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: normalize } });
-  const merged = { ...ctx.effectiveRoundClosures("2") };
-  assert.equal(merged["2:f2"], "closed", "같은 학기(2학기) 과목은 이어받음");
-  assert.equal(Object.hasOwn(merged, "2:f1"), false, "다른 학기(1학기) 과목으로 번지지 않음");
-  assert.equal(merged["2:h1"], "closed", "같은 그룹 과목은 이어받음");
-  assert.equal(Object.hasOwn(merged, "2:h2"), false, "같은 이름이라도 다른 그룹 과목으로 번지지 않음");
-  // 그룹을 알 수 없는 같은 이름 과목이 여럿이면 하나로 정할 수 없으니 이어받지 않는다.
-  for (const round of ["1", "2"]) for (const course of state.rounds[round].courses) delete course.applicationSubject.groupName;
-  state.roundClosures["2"] = {};
-  const ambiguous = { ...ctx.effectiveRoundClosures("2") };
-  assert.equal(Object.hasOwn(ambiguous, "2:h1") || Object.hasOwn(ambiguous, "2:h2"), false);
-  assert.equal(ambiguous["2:f2"], "closed");
-  // 학기 정보가 꼬리표로만 있는 결과 엑셀 과목(semesterKey 없음)도 학기를 구분한다.
-  const tagOnly = { rounds: { "1": { courses: [{ column: "a", name: "심화 영어 (1학기)", applicationCurrentGrade: "2" }, { column: "b", name: "심화 영어 (2학기)", applicationCurrentGrade: "2" }] },
-    "2": { courses: [{ column: "c", name: "심화 영어 (1학기)", applicationCurrentGrade: "2" }, { column: "d", name: "심화 영어 (2학기)", applicationCurrentGrade: "2" }] } },
-    roundClosures: { "1": { "2:b": "closed" }, "2": {} } };
-  const tagged = aggregateHelpers({ globals: { state: tagOnly, applicationRoundNumbers: () => ["1", "2"], normalizeResultCourseName: normalize } }).ctx;
-  assert.deepEqual({ ...tagged.effectiveRoundClosures("2") }, { "2:d": "closed" });
+test("4단계 개설/폐강 결정은 차수마다 따로: 앞 차수 결정은 이어받지 않는다(새 차수를 만들 때 복사 · round-copy.js)", () => {
+  const state = { roundClosures: { "1": { "2:c7": "open", "2:c8": "closed" }, "2": { "2:x4": "closed" } }, rounds: { "1": { courses: [] }, "2": { courses: [] } } };
+  const ctx = vm.createContext({ state, applicationRoundNumbers: () => ["1", "2"] });
+  vm.runInContext(functionSource(app, "function effectiveRoundClosures(", "function aggregateGroupTarget("), ctx);
+  assert.deepEqual({ ...ctx.effectiveRoundClosures("2") }, { "2:x4": "closed" });
+  assert.equal(ctx.effectiveRoundClosures("2").inherited.size, 0);
+  assert.deepEqual({ ...ctx.effectiveRoundClosures("1") }, { "2:c7": "open", "2:c8": "closed" });
 });
 
 test("1단계 원본 교체: 신청·확정에 쓰는 편제표면 바뀌는 과목과 영향(확정 차수·선택 그룹)을 요약해 묻는다", () => {
