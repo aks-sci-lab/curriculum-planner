@@ -66,6 +66,7 @@ function context() {
   vm.runInContext(between(app, "function applicationRoundNumbers(", "function switchRound("), ctx);
   ctx.switchRound = (round) => { state.currentRound = String(round); const data = state.rounds[round]; state.students = data?.students || []; state.courses = data?.courses || []; };
   ctx.syncActiveRound = () => {};
+  ctx.persistStateSoon = () => {};
   vm.runInContext(read("class-sections.js"), ctx);
   const view = read("class-sections-view.js");
   vm.runInContext(between(view, "function classSectionsPlanSubjects(", "function classSectionsNeisFamily("), ctx);
@@ -516,4 +517,58 @@ test("예전 자료 옮기기 계획: 빈 학년은 복사, 일부 학생만 있
   assert.deepEqual(plain(ctx.roundMigrationPlan(rounds, (round) => round === "3")), [], "확정 차수는 묻지 않음");
   rounds["3"].gradeSources = { "2": { kind: "upload", decided: "kept" } };
   assert.deepEqual(plain(ctx.roundMigrationPlan(rounds, () => false)), [], "이미 정한 학년은 다시 묻지 않음");
+});
+
+test("예전 자료 옮기기(migrateRoundGrades): 빈 학년은 직전 차수에서 복사·안내, 3명뿐인 학년은 물어서 합치기/그대로 두기, 다시 묻지 않음", async () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const full = plain({ students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] });
+  const few = plain(full);
+  few.students = few.students.slice(0, 3);
+  state.rounds = { "1": full, "2": { ...plain(full), students: [], courses: [] }, "3": few };
+  state.roundClosures = { "1": {}, "2": {}, "3": {} };
+  state.currentRound = "3"; state.students = few.students; state.courses = few.courses;
+  const asked = [];
+  ctx.appConfirm = async (text, options) => { asked.push({ text, options }); return true; };
+  ctx.bump();
+  const notes = await ctx.migrateRoundGrades();
+  assert.equal(state.rounds["2"].students.length, full.students.length, "빈 2차 현2를 1차에서 복사");
+  assert.deepEqual([state.rounds["2"].gradeSources["2"].kind, state.rounds["2"].gradeSources["2"].round], ["copy", "1"]);
+  assert.match(notes[0], /^2차에 현2 결과가 없어 1차 결과를 복사했습니다$/);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].text, /^3차 현2 결과가 3명뿐입니다\(2차 308명\)\. 재신청한 학생만 있는 결과로 보고 2차 결과와 합칠까요\?/);
+  assert.deepEqual([asked[0].options.ok, asked[0].options.cancel], ["합치기", "그대로 두기"]);
+  assert.equal(state.rounds["3"].students.length, full.students.length, "합치면 3차 현2 = 2차 + 3명");
+  assert.equal(state.students.length, full.students.length, "지금 보는 차수 화면 자료도 바뀜");
+  assert.equal(state.rounds["3"].gradeSources["2"].decided, "merged");
+  // 다시 열어도 묻지 않음
+  asked.length = 0;
+  await ctx.migrateRoundGrades();
+  assert.equal(asked.length, 0);
+});
+
+test("예전 자료 옮기기: '그대로 두기'면 그 학년은 그대로이고 다시 묻지 않는다 · 확정 차수는 묻지 않음", async () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const full = plain({ students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] });
+  const few = plain(full); few.students = few.students.slice(0, 3);
+  state.rounds = { "1": full, "2": few };
+  state.roundClosures = { "1": {}, "2": {} };
+  state.currentRound = "1"; state.students = full.students; state.courses = full.courses;
+  let count = 0;
+  ctx.appConfirm = async () => { count++; return false; };
+  ctx.bump();
+  await ctx.migrateRoundGrades();
+  assert.equal(count, 1);
+  assert.equal(state.rounds["2"].students.length, 3);
+  assert.equal(state.rounds["2"].gradeSources["2"].decided, "kept");
+  await ctx.migrateRoundGrades();
+  assert.equal(count, 1, "다시 묻지 않음");
+  state.rounds["2"].gradeSources = {};
+  state.roundStatuses = { "2": { status: "confirmed", snapshot: { rows: [] } } };
+  ctx.bump();
+  await ctx.migrateRoundGrades();
+  assert.equal(count, 1, "확정 차수는 묻지 않음");
 });

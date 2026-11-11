@@ -843,6 +843,8 @@
         // 예전 변환기로 만든 편제표는 보관된 원본 엑셀을 새 변환기로 다시 읽는다(curriculum-reconvert.js). 변환기 버전이 낮을 때만 돈다.
         if (typeof reconvertCurriculumOriginals === "function") afterWorkspaceFirstPaint(() => reconvertCurriculumOriginals({ startup: true }).catch(() => {}));
         afterWorkspaceFirstPaint(() => renderWorkspaceStorageUsage());
+        // 차수별 흐름 분리 전 자료: 빈 학년 복사·일부 학생만 있는 학년 합치기(한 번).
+        afterWorkspaceFirstPaint(() => migrateRoundGrades().catch(() => {}));
       } finally {
         resolveWorkspaceStartup?.();
       }
@@ -1494,6 +1496,97 @@
         }
       }
       switchRound(next);
+    }
+
+    // ---- 차수 학년 몫 복사·합치기(round-copy.js 순수 계산 연결) ----
+    // 차수 round의 현 grade학년 몫을 slice로 바꾸고 근거(gradeSources)를 남긴다. 지금 보는 차수면 화면 자료도 다시 읽는다.
+    function writeRoundGrade(round, grade, slice, source) {
+      round = String(round);
+      syncActiveRound();
+      const replaced = roundReplaceGrade(state.rounds[round], state.roundClosures?.[round] || {}, grade, slice);
+      replaced.data.gradeSources = { ...(state.rounds[round]?.gradeSources || {}), [String(grade)]: source };
+      if (source?.kind === "copy") replaced.data.gradeFiles = { ...(state.rounds[round]?.gradeFiles || {}), [String(grade)]: `${source.round}차에서 복사` };
+      state.rounds[round] = replaced.data;
+      state.roundClosures ||= {};
+      state.roundClosures[round] = replaced.closures;
+      if (round === String(state.currentRound)) {
+        const data = state.rounds[round];
+        state.students = data.students;
+        state.courses = data.courses;
+        state.classOverrides = data.classOverrides || {};
+        state.semesterAssignments = data.semesterAssignments || {};
+        state.groupAssignments = data.groupAssignments || {};
+        state.customGroupNames = data.customGroupNames || [];
+        state.fileName = data.fileName || state.fileName;
+        if (!state.students.some((student) => student.id === state.selectedId)) state.selectedId = state.students[0]?.id || null;
+        if (typeof applyClassFilterOptions === "function") applyClassFilterOptions(state.students);
+        if (typeof renderRoster === "function") renderRoster();
+        if (typeof renderPreview === "function") renderPreview();
+        if (typeof renderSemesterClassifier === "function") renderSemesterClassifier();
+        if (typeof renderAggregate === "function") renderAggregate();
+      }
+    }
+
+    // 앞 차수 from의 현 grade학년 몫을 차수 round에 복사한다(근거 줄 '다시 복사', 예전 자료 옮기기).
+    function copyRoundGrade(from, round, grade, extra = {}) {
+      syncActiveRound();
+      const source = state.rounds?.[String(from)];
+      if (!source || typeof roundGradeSlice !== "function") return false;
+      const closures = state.roundClosures?.[String(from)] || {};
+      const slice = roundGradeSlice(source, closures, grade);
+      if (!slice.students.length) return false;
+      writeRoundGrade(round, grade, slice, { kind: "copy", round: String(from), at: new Date().toISOString(),
+        from: { round: String(from), signature: roundGradeSignature(source, closures, grade) }, ...extra });
+      return true;
+    }
+
+    // 예전 자료 옮기기(열 때 한 번): 학년이 비어 있는 차수는 직전 차수에서 복사하고, 일부 학생만 있으면(예전 '재신청 학생만' 파일) 합칠지 묻는다.
+    // 확정된 차수는 건드리지 않는다. 고른 값은 gradeSources[학년].decided에 남겨 다시 묻지 않는다.
+    async function migrateRoundGrades() {
+      if (typeof roundMigrationPlan !== "function" || !state.rounds) return [];
+      syncActiveRound();
+      const locked = (round) => typeof isRoundLocked === "function" && isRoundLocked(round);
+      const notes = [];
+      for (let guard = 0; guard < 50; guard++) {
+        const copy = roundMigrationPlan(state.rounds, locked).find((item) => item.action === "copy");
+        if (!copy) break;
+        if (!copyRoundGrade(copy.from, copy.round, copy.grade, { migrated: true })) break;
+        if (!state.classSections?.[copy.round] && state.classSections?.[copy.from]) {
+          state.classSections[copy.round] = JSON.parse(JSON.stringify(state.classSections[copy.from], typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined));
+        }
+        notes.push(`${copy.round}차에 현${copy.grade} 결과가 없어 ${copy.from}차 결과를 복사했습니다`);
+      }
+      for (const ask of roundMigrationPlan(state.rounds, locked).filter((item) => item.action === "ask")) {
+        const text = `${ask.round}차 현${ask.grade} 결과가 ${ask.count}명뿐입니다(${ask.from}차 ${ask.previous}명). 재신청한 학생만 있는 결과로 보고 ${ask.from}차 결과와 합칠까요?\n\n` +
+          `합치면 ${ask.from}차 현${ask.grade} 결과에 이 ${ask.count}명의 신청만 바꿔 넣습니다. 그대로 두면 ${ask.round}차 현${ask.grade}은 ${ask.count}명으로 계산합니다(다시 묻지 않음).`;
+        const ok = typeof appConfirm === "function" ? await appConfirm(text, { title: "차수 결과 합치기", ok: "합치기", cancel: "그대로 두기" }) : window.confirm(text);
+        syncActiveRound();
+        const data = state.rounds[ask.round];
+        if (!data || locked(ask.round)) continue;
+        if (ok) {
+          const base = state.rounds[ask.from];
+          const own = roundGradeSlice(data, state.roundClosures?.[ask.round] || {}, ask.grade);
+          const merged = roundMergeGradeStudents(base, state.roundClosures?.[ask.from] || {}, ask.grade, own);
+          // 이 차수에서 정한 개설 결정·학급수 입력은 이름·학기로 합친 열에 옮긴다(앞 차수 값보다 우선).
+          merged.slice.closures = { ...merged.slice.closures, ...roundRemapKeysByName(own.courses, merged.slice.courses, own.closures, ask.grade) };
+          merged.slice.classOverrides = { ...merged.slice.classOverrides, ...roundRemapKeysByName(own.courses, merged.slice.courses, own.classOverrides, ask.grade) };
+          writeRoundGrade(ask.round, ask.grade, merged.slice, { kind: "partial", round: ask.round, at: new Date().toISOString(), decided: "merged",
+            from: { round: ask.from, signature: roundGradeSignature(base, state.roundClosures?.[ask.from] || {}, ask.grade) } });
+          notes.push(`${ask.round}차 현${ask.grade} ${ask.count}명을 ${ask.from}차 결과와 합쳤습니다`);
+        } else {
+          state.rounds[ask.round] = { ...data, gradeSources: { ...(data.gradeSources || {}), [ask.grade]: { ...(data.gradeSources?.[ask.grade] || { kind: "upload", round: ask.round }), decided: "kept" } } };
+          if (ask.round === String(state.currentRound)) syncActiveRound();
+        }
+      }
+      if (notes.length) {
+        if (typeof persistStateSoon === "function") persistStateSoon(); else persistState();
+        if (typeof status !== "undefined" && status) {
+          status.style.color = "#287956";
+          status.textContent = `${notes.join(" · ")}.`;
+        }
+        if (typeof renderRoundStatus === "function") renderRoundStatus();
+      }
+      return notes;
     }
 
     function switchRound(round, skipRender = false) {
