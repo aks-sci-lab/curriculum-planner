@@ -524,7 +524,7 @@ async function confirmResultImport() {
   if (typeof suggestWorkspaceBackup === "function") suggestWorkspaceBackup("결과 반영");
   status.style.color = "#287956";
   status.textContent = (carry.partial
-    ? `${preview.round}차 ${resultCurrentLabel(preview.grade)}: 재신청한 학생 ${carry.partial.changed}명을 바꾸고 ${carry.partial.kept + carry.partial.same}명은 그대로 두었습니다${carry.partial.added ? `(추가 ${carry.partial.added}명)` : ""}. 다른 학년 결과는 유지됩니다.`
+    ? `${preview.round}차 ${resultCurrentLabel(preview.grade)}: 재신청한 학생 ${carry.partial.changed}명을 반영했습니다(그대로 ${carry.partial.kept + carry.partial.same}명${carry.partial.added ? ` · 추가 ${carry.partial.added}명` : ""}). 다른 학년 결과는 유지됩니다.`
     : `${preview.round}차 ${resultCurrentLabel(preview.grade)} ${candidate.summary.students}명을 반영했습니다. 다른 학년 결과는 유지됩니다.`) +
     (carry.kept ? ` 기존 학급 수·개설 결정 등 ${carry.kept}건을 이어서 적용했습니다.` : "") +
     (carry.dropped ? ` 새 결과에 없는 과목의 설정 ${carry.dropped}건은 해제했습니다.` : "") +

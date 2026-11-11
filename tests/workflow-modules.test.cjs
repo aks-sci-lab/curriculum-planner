@@ -360,7 +360,7 @@ test("hours stats treat a course closed in an earlier round as closed, not as a 
   const layout = { rows: [] };
   const ctx = vm.createContext({
     document: { getElementById: () => null },
-    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
+    state: { currentRound: "2", curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
       roundStatuses: { "1": { status: "confirmed", snapshot: snapshots["1"] }, "2": { status: "confirmed", snapshot: snapshots["2"] } } },
     $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
     curriculumCohortLayout: (year) => year === "2026" ? layout : null,
@@ -1191,8 +1191,9 @@ test("long help text and settings live in dialogs, leaving a one-line summary an
     { grade: "3", cohortYear: "2025", hasLayout: true, classes: 11, source: null }
   ] });
   assert.match(settings, /<b>1학년<\/b> <span class="is-missing">학급 수 미입력<\/span>[\s\S]*data-hours-cohort="2027"/);
-  assert.match(settings, /<b>2학년<\/b> 10학급 \(현1 1차 확정\)/);
-  assert.match(settings, /<b>3학년<\/b> 11학급 \(현2 결과 없음\)/);
+  // 어느 차수 결과인지는 맨 위 '근거' 줄 하나(round-status.js roundBasisHtml)에서 보여 주고 이 줄에는 없다.
+  assert.match(settings, /<b>2학년<\/b> 10학급<\/span>/);
+  assert.match(settings, /<b>3학년<\/b> 11학급<\/span>/);
   assert.match(settings, /창체 2시간[\s\S]*data-open-dialog="hoursSettingsDialog"[^>]*>시수 설정</);
 });
 
@@ -1217,8 +1218,8 @@ test("the shared guidance banner says the shortfall note only on step 4 and give
   const six = banner(8);
   assert.doesNotMatch(six, /기준 미달/);
   assert.match(six, /6단계는 4단계에서 정한 개설 과목·분반 수로/);
-  assert.doesNotMatch(six, /위 '차수'/, "머리 줄 '결과 차수'와 헷갈리지 않게 6단계 화면의 차수를 가리킨다");
-  assert.equal(el("#workspaceRound").disabled, true, "6단계에서는 머리 줄 결과 차수를 잠근다");
+  assert.match(six, /맨 위 '결과 차수'의 결과 기준/, "6단계도 맨 위 결과 차수를 따른다");
+  assert.equal(el("#workspaceRound").disabled, false, "6단계도 머리 줄 결과 차수를 따른다(차수별 흐름 분리 · 6단계 차수 선택 상자 없음)");
   assert.equal(el("#workflowNextAction").textContent, "집계·개설 확정으로", "확정 전이면 확정하러 가기");
   ctx.locked = true;
   banner(8);
@@ -1257,7 +1258,7 @@ test("5단계: 확정 전 차수를 4단계 기준 비율이 잘못돼 읽지 �
   const layout = { rows: [] };
   const ctx = vm.createContext({
     document: { getElementById: () => null },
-    state: { curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
+    state: { currentRound: "2", curriculumCohortYear: "", curriculumCohorts: {}, hoursStats: { "2027": { classCounts: { "1": 10, "2": 10, "3": 10 } } },
       roundStatuses: { "2": { status: "confirmed", snapshot: confirmed } } },
     $: (selector) => selector === "#schoolYear" ? { value: "2026" } : { value: "고등학교" },
     curriculumCohortLayout: (year) => year === "2026" ? layout : null,

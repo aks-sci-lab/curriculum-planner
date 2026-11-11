@@ -183,23 +183,16 @@ function hoursThresholdIssue(rounds, what) {
     text: `${list} 기준 설정 값이 올바르지 않아 ${what}를 읽지 못했습니다. 4단계 '기준 설정'에서 개설·분반 기준(%)을 고치세요.` };
 }
 
+// 선택과목 근거 차수 = 맨 위에서 고른 차수(사용자 결정 2026-11 · 차수별 흐름 분리). 예전 '선택과목 근거' 고정값(settings.sourceRounds)은 읽지 않는다.
+// 미확정 차수도 그 차수 4단계 값으로 계산하고, 확정 여부는 5단계 위 '근거' 줄(round-status.js roundBasisHtml)에 보인다.
 function hoursSourceResult(currentGrade, settings, failed = null) {
-  const rounds = applicationRoundNumbers().slice().reverse();
-  const hasGrade = (round) => roundStatusData(round)?.students?.some((student) => String(student.grade) === currentGrade);
-  const pinned = String(settings.sourceRounds?.[String(Number(currentGrade) + 1)] || "");
-  // 읽을 차수는 6단계와 같은 규칙(courseOpeningRound: 최근 확정 → 4단계에서 보는 차수 → 최근 결과). 시수 설정에서 고정한 차수가 있으면 그것.
-  const round = pinned && rounds.includes(pinned) && (hasGrade(pinned) || state.roundStatuses?.[pinned]?.snapshot)
-    ? pinned
-    : typeof courseOpeningRound === "function" ? courseOpeningRound(currentGrade)
-    : rounds.find((item) => isRoundLocked(item) &&
-        state.roundStatuses[item]?.snapshot?.rows?.some((row) => row.grade === currentGrade)) ||
-      rounds.find(hasGrade);
+  const round = typeof courseOpeningRound === "function" ? courseOpeningRound(currentGrade) : String(state.currentRound || "1");
   if (!round) return null;
   const snapshot = hoursRoundSnapshot(round, failed?.source);
   const rows = (snapshot?.rows || []).filter((row) => row.grade === currentGrade);
   if (!rows.length) return null;
   const stale = typeof roundSnapshotStale === "function" ? roundSnapshotStale(round).filter((item) => item.grade === currentGrade) : [];
-  return { round, confirmed: isRoundLocked(round), pinned: pinned === round, rows, stale, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
+  return { round, confirmed: isRoundLocked(round), pinned: false, rows, stale, earlierClosed: hoursEarlierClosed(currentGrade, round, failed?.closed) };
 }
 
 // 근거 차수보다 앞 차수에서 폐강한 과목(정규화 이름 → { round, semesters }). 2차 재신청 결과에는 1차에 폐강한 과목이
@@ -889,7 +882,7 @@ function computeHoursStats(year = hoursTargetYear()) {
       if (!info.source && failed.source.size) {
         // 결과는 있는데 기준 설정 때문에 읽지 못한 경우: '결과가 없다'고 하지 않는다(위 확인 항목으로 알림).
       } else if (!info.source) {
-        issues.push({ level: "error", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
+        issues.push({ level: "error", text: `${grade}학년 선택과목: ${state.currentRound}차에 현 ${currentGrade}학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다. 2단계에서 결과를 반영하세요.`, action: "results" });
       } else if (info.source.confirmed && info.source.stale?.length && typeof roundSnapshotStaleText === "function") {
         issues.push({ level: "warning", text: `${grade}학년 선택과목: ${info.source.round}차 확정 스냅샷이 지금 4단계 집계와 다릅니다(${roundSnapshotStaleText(info.source.stale)}). 시수는 확정 스냅샷 값입니다. 4단계에서 확정을 해제하고 다시 확정하면 맞춰집니다.`, action: "4" });
       } else if (info.source.confirmed && typeof roundSnapshotDrift === "function") {
@@ -898,8 +891,6 @@ function computeHoursStats(year = hoursTargetYear()) {
         if (drift.length && !issues.some((issue) => issue.drift === info.source.round)) {
           issues.push({ level: "warning", drift: info.source.round, text: `${info.source.round}차 확정 이후 ${drift.join(", ")}이(가) 바뀌었습니다. 선택과목 개설반은 확정 시점 결과이고 학교 지정 과목은 현재 학급 수로 계산해 서로 맞지 않을 수 있습니다. 4단계에서 확정을 해제하고 다시 확정하세요.`, action: "4" });
         }
-      } else if (!info.source.confirmed) {
-        issues.push({ level: "warning", text: `${grade}학년 선택과목: 현 ${currentGrade}학년 ${info.source.round}차 결과가 확정되지 않아 현재 집계로 임시 계산했습니다. 4단계에서 확정하면 그 시점 결과로 고정됩니다.`, action: "4" });
       }
     }
     const resultIndex = new Map();
@@ -1297,9 +1288,8 @@ function hoursSettingsSummary(stats) {
     const classes = info.classes > 0 ? `${info.classes}학급` : '<span class="is-missing">학급 수 미입력</span>';
     const plan = info.hasLayout ? ""
       : ` <button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">${info.cohortYear} 편제표 미업로드 · 1단계에서 업로드</button>`;
-    const source = info.grade === "1" ? ""
-      : info.source ? ` (현${Number(info.grade) - 1} ${info.source.round}차${info.source.confirmed ? " 확정" : " 임시"})`
-        : info.sourceFailed ? ` ${hoursThresholdLink(info, `현${Number(info.grade) - 1} · 4단계 기준 설정 오류`)}` : ` (현${Number(info.grade) - 1} 결과 없음)`;
+    // 어느 차수 결과인지·확정 여부는 맨 위 '근거' 줄 하나에서 보여 준다(여기서는 기준 설정 오류만).
+    const source = info.grade !== "1" && !info.source && info.sourceFailed ? ` ${hoursThresholdLink(info, `현${Number(info.grade) - 1} · 4단계 기준 설정 오류`)}` : "";
     return `<span class="hours-summary-item"><b>${info.grade}학년</b> ${classes}${source}${plan}</span>`;
   }).join("");
   return `<p class="hours-summary-line hours-settings-summary">
@@ -1502,15 +1492,7 @@ function renderHoursStatsView() {
   download.disabled = !stats.items.length;
   ensureHoursFormStyles();
   const settings = stats.settings;
-  const rounds = applicationRoundNumbers().filter((round) => roundStatusData(round)?.students?.length || state.roundStatuses?.[round]?.snapshot);
   const gradeCards = stats.grades.map((info) => {
-    const sourceSelect = info.grade === "1" ? "" : `<label class="hours-source">선택과목 근거
-      <select data-hours-source="${info.grade}" data-focus-key="source-${info.grade}">
-        <option value="">자동 (최근 확정 차수)</option>
-        ${rounds.map((round) => `<option value="${round}"${settings.sourceRounds[info.grade] === round ? " selected" : ""}>${round}차 · ${escapeHtml(roundStatusLabel(round))}</option>`).join("")}
-      </select></label>
-      <span class="hours-source-state">${info.source ? `현 ${Number(info.grade) - 1}학년 ${info.source.round}차 ${info.source.confirmed ? "확정 결과" : "미확정 결과(임시)"}`
-        : info.sourceFailed ? hoursThresholdLink(info, `현 ${Number(info.grade) - 1}학년 · 4단계 기준 설정 오류`) : `현 ${Number(info.grade) - 1}학년 결과 없음`}</span>`;
     return `<article class="hours-grade-card${info.hasLayout ? "" : " is-missing"}">
       <h4>내년도 ${info.grade}학년</h4>
       <label class="hours-classes">학급 수 <input id="hoursClasses${info.grade}" data-hours-classes="${info.grade}" data-focus-key="classes-${info.grade}" type="number" min="0" max="99" step="1" value="${info.classes ?? ""}" placeholder="입력"></label>
@@ -1522,7 +1504,6 @@ function renderHoursStatsView() {
         return `<p class="hours-roster-classes${differs ? " is-diff" : ""}">현 ${Number(info.grade) - 1}학년 명단 ${roster}반${differs ? ` → 내년 ${info.grade}학년 ${info.classes}학급으로 계산` : ""}</p>`;
       })()}
       <p class="hours-plan-file">${info.cohortYear}학년도 입학생 편제표 · ${info.hasLayout ? escapeHtml(info.fileName || "불러옴") : `<button class="button button-quiet" type="button" data-hours-cohort="${info.cohortYear}">미업로드 · 1단계에서 업로드</button>`}</p>
-      ${sourceSelect}
     </article>`;
   }).join("");
   const model = hoursFormModel(stats, { schoolName: $("#schoolName")?.value || "" });
@@ -1583,7 +1564,7 @@ function renderHoursStatsView() {
   const issuesBody = document.getElementById("hoursIssuesBody");
   if (issuesBody) issuesBody.innerHTML = hoursIssueList(stats.issues);
   const opened = new Map([...content.querySelectorAll("details[data-hours-details]")].map((element) => [element.dataset.hoursDetails, element.open]));
-  content.innerHTML = `${hoursSettingsSummary(stats)}
+  content.innerHTML = `${typeof roundBasisHtml === "function" ? roundBasisHtml(state.currentRound) : ""}${hoursSettingsSummary(stats)}
     ${hoursIssueSummary(stats.issues)}
     ${tools}
     <div class="aggregate-sheet-wrap hours-form-wrap" data-hours-scroll="form">${hoursFormHtml(model)}</div>
@@ -1689,7 +1670,6 @@ function updateHoursSetting(target) {
     set(settings.commonShares[key], target.dataset.hoursCommonMember, hoursNumber(target.value, { integer: true, max: 20 }));
     if (!Object.keys(settings.commonShares[key]).length) delete settings.commonShares[key];
   }
-  else if (target.dataset.hoursSource) set(settings.sourceRounds, target.dataset.hoursSource, target.value || null);
   else if (target.dataset.hoursTeachers) set(settings.teachers, target.dataset.hoursTeachers, hoursNumber(target.value, { max: 200 }));
   else if (target.dataset.hoursPrevious) set(settings.previousAverages, target.dataset.hoursPrevious, hoursNumber(target.value, { max: 100 }));
   else if (target.dataset.hoursItemClasses) {

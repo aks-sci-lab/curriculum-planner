@@ -55,10 +55,12 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
   const picked = await text("#resultSemesterPicks");
   check(/고름/.test(picked) && await page.getByRole("radio", { name: `${COURSE} 2학기` }).isChecked(), "고른 학기가 표시됨(고름)", picked);
   // 섞지 않음: 과목별 신청 인원 표에 심화 영어는 2학기 한 줄, 신청 학생 전부.
-  await page.locator("#resultImportPreview details.result-import-compare summary").click().catch(() => {});
+  await page.locator("#resultImportPreview details.result-import-compare").evaluate((details) => { details.open = true; }).catch(() => {});
   await sleep(200);
   const compareRows = (await page.locator("#resultImportPreview .result-import-table tbody tr").allInnerTexts()).map((row) => row.replace(/\s+/g, " ").trim()).filter((row) => row.startsWith(COURSE));
-  check(compareRows.length === 1 && /2학기/.test(compareRows[0]) && compareRows[0].includes(String(fixture.firstCount + fixture.secondCount)), `한 번만 나온 과목은 학생별로 섞지 않고 2학기 한 줄(${fixture.firstCount + fixture.secondCount}명)`, JSON.stringify(compareRows));
+  // 표: 과목 · 학기 · 기존(복사해 온 앞 차수) · 새 결과 · 변화 — 새 결과가 있는 줄만 본다.
+  const filled = compareRows.filter((row) => Number(row.split(" ").at(-2)) > 0);
+  check(filled.length === 1 && /2학기/.test(filled[0]) && filled[0].includes(String(fixture.firstCount + fixture.secondCount)), `한 번만 나온 과목은 학생별로 섞지 않고 2학기 한 줄(${fixture.firstCount + fixture.secondCount}명)`, JSON.stringify(compareRows));
   await page.locator("#confirmResultImport").click(); await sleep(500);
   const confirmText = await appOk();
   check(!/개설 학기 확인/.test(confirmText), "고른 뒤에는 '개설 학기 확인' 창 없이 반영", confirmText);
@@ -145,8 +147,22 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
   const before = await read4();
   console.log("반영 뒤 4단계:", JSON.stringify(before), "|", (await text("#aggregateOpeningSourceNote")) || "(안내 없음)");
   check(before.length === 1 && before[0].head === "3학년 2학기", "4단계: 고른 학기(3학년 2학기) 구역에만 있음", JSON.stringify(before));
-  check(/5·6단계는 현 2학년 \d+차 확정 결과/.test(await text("#aggregateOpeningSourceNote")), "4단계: 5·6단계가 다른 차수(최근 확정 차수)를 읽는다고 안내", await text("#aggregateOpeningSourceNote"));
-  if (before[0]?.closed) await decide("개설");  // 앞 차수(2차)에서 폐강한 2학기 과목이라 결정을 이어받음 → 교사가 개설로 바꿈
+  // 차수별 흐름 분리: 5·6단계도 맨 위 차수(지금 이 차수)를 읽는다. 확정 전이면 맨 위 '근거' 줄에 '미확정'만 보인다.
+  const viewRound = (await text("#roundConfirmState")).match(/(\d+)차/)?.[1] || "";
+  check(!(await text("#aggregateOpeningSourceNote")), "4단계: '다른 차수를 읽는다' 안내 없음(5·6단계도 같은 차수)", await text("#aggregateOpeningSourceNote"));
+  if (before[0]?.closed) await decide("개설");
+  {
+    const draft4 = (await read4())[0]?.classes;
+    const draft5 = await read5();
+    const basis5 = await text("#workflowStep7Panel .round-basis-line");
+    check(new RegExp(`^근거: ${viewRound}차 · .*현2: ${viewRound}차 결과\\(미확정\\)`).test(basis5.replace(/\s+/g, " ")), `5단계 맨 위 근거 줄이 '${viewRound}차 · 현2: ${viewRound}차 결과(미확정)'`, basis5);
+    check(draft5["2"]?.classes === draft4 && draft4 > 0, `확정 전에도 5단계 3학년 2학기 ${COURSE} 개설반 = 4단계 ${draft4}(그 차수 값)`, JSON.stringify(draft5));
+    await shot("02b-hours-draft.png");
+    await gotoStep(8, "#workflowStep8Panel"); await sleep(700);
+    const basis6 = await text("#workflowStep8Panel .round-basis-line");
+    check(basis6.replace(/\s+/g, " ") === basis5.replace(/\s+/g, " "), "6단계 맨 위 근거 줄도 같은 차수", `${basis6} | ${basis5}`);
+    await open4();
+  }  // 앞 차수(2차)에서 폐강한 2학기 과목이라 결정을 이어받음 → 교사가 개설로 바꿈
   console.log("3차 확정:", await confirmRound());
   if (DIAGNOSE) {
     const diag = await page.evaluate((course) => {
@@ -228,6 +244,20 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
   check(headerAsk !== "개설 학기 확인", "머리글 표시 파일은 반영할 때도 '개설 학기 확인' 창 없음", headerAsk);
   if (headerAsk) await page.locator("#appConfirmDialog[open] #appConfirmCancel").click();
   else await sleep(800);
+
+  // 맨 위 '결과 차수'를 바꾸면 4·5단계가 함께 그 차수를 따른다(차수별 흐름 분리) ------------------------------------------
+  {
+    const options = await page.locator("#workspaceRound option").evaluateAll((list) => list.map((option) => option.value));
+    for (const round of options.slice(-3)) {
+      await page.locator("#workspaceRound").selectOption(round); await sleep(900);
+      await open4();
+      const four = await read4();
+      const five = await read5();
+      const basis = (await text("#workflowStep7Panel .round-basis-line")).replace(/\s+/g, " ");
+      const same = ["1", "2"].every((semester) => (four.find((item) => item.head === `3학년 ${semester}학기`)?.classes || 0) === (five[semester]?.classes || 0));
+      check(basis.startsWith(`근거: ${round}차`) && same, `맨 위 차수 ${round}차: 5단계 근거 줄·${COURSE} 개설반 = 4단계`, `${basis} | 4단계 ${JSON.stringify(four)} | 5단계 ${JSON.stringify(five)}`);
+    }
+  }
   return { fixture };
 }
 

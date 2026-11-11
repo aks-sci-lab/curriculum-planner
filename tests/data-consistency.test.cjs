@@ -70,6 +70,7 @@ function context() {
   vm.runInContext(read("class-sections.js"), ctx);
   const view = read("class-sections-view.js");
   vm.runInContext(between(view, "function classSectionsPlanSubjects(", "function classSectionsNeisFamily("), ctx);
+  vm.runInContext(between(view, "function classSectionsRoundChoices(", "function classSectionsPlanSubjects("), ctx);
   vm.runInContext(between(view, "function classSectionsDisplayName(", "function classSectionsFamily("), ctx);
   vm.runInContext(between(view, "function classSectionsSourceCompute(", "function classSectionsParseTimes("), ctx);
   return { ctx, state, groups };
@@ -322,23 +323,20 @@ test("확정 스냅샷이 지금 집계와 달라지면 roundSnapshotStale이 �
   assert.equal(five, snapshot.rows.find((row) => row.semester === "2" && ctx.normalizeResultCourseName(row.name) === courseKey).classCount);
 });
 
-test("5·6단계가 읽는 차수는 같은 규칙(courseOpeningRound): 최근 확정 → 4단계에서 보는 차수 → 최근 결과", () => {
+test("5·6단계가 읽는 차수 = 맨 위에서 고른 차수(courseOpeningRound · 숨은 규칙 없음)", () => {
   const env = context();
   const { ctx, state } = env;
   load(env, { pick: "2" });
   state.rounds = { "1": { students: state.students, courses: state.courses }, "2": null };
   state.roundStatuses = { "1": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("1") } };
-  state.currentRound = "2";
-  state.students = [];
+  state.currentRound = "2"; state.students = [];
   ctx.bump();
-  assert.equal(ctx.courseOpeningRound("2"), "1", "확정 차수");
-  state.roundStatuses = {};
-  ctx.bump();
-  assert.equal(ctx.courseOpeningRound("2"), "1", "지금 차수(2차)에 결과 없음 → 결과가 있는 최근 차수");
+  assert.equal(ctx.courseOpeningRound("2"), "2", "2차에 결과가 없어도 1차 확정으로 넘어가지 않음");
+  assert.equal(ctx.computeHoursStats("2027").grades.find((info) => info.grade === "3").source, null);
+  assert.equal(ctx.classSectionsDefaultRound(), "2");
   state.currentRound = "1";
   ctx.bump();
   assert.equal(ctx.courseOpeningRound("2"), "1");
-  assert.equal(ctx.courseOpeningRound("1"), "", "현 1학년 결과 없음");
 });
 
 test("직접 입력이 있어도 2·3학년 선택과목 개설반은 4단계 값(4단계 연동) — 예전 직접 입력은 지우지 않고 안내만", () => {
@@ -383,7 +381,9 @@ test("4단계에 없는 선택과목(과목명 불일치 등)만 직접 입력�
 
 // 원인 재현(사용자 화면 v2026.11.23, 사용자가 '선택과목 근거'를 '자동'으로 바꾸자 해결됨): 5단계 시수 설정의 '선택과목 근거' 고정값
 // (settings.sourceRounds, 예전에 한 번 고른 1차)이 자동 규칙(courseOpeningRound)보다 먼저라, 4단계가 2차(확정)여도 5단계는 미확정 1차를 읽는다.
-test("원인 재현: 선택과목 근거를 1차로 고정해 두면 4단계 2차(확정)와 달리 5단계는 미확정 1차를 읽는다 · 자동이면 2차", () => {
+// 원인(사용자 화면 v2026.11.23): 예전 5단계 '선택과목 근거' 고정값(settings.sourceRounds, 1차)이 자동 규칙보다 먼저라 4단계 2차(확정)와 달리
+// 미확정 1차를 읽었다. 차수별 흐름 분리 뒤에는 고정값을 읽지 않고 맨 위 차수만 쓴다.
+test("여러 차수: 1차 미확정 + 2차 확정 + 예전 고정값(1차) → 화면 2차면 5단계도 2차(고정값 무시), 화면 1차면 1차(미확정이어도 그 차수 값)", () => {
   const env = context();
   const { ctx, state } = env;
   state.currentRound = "1";
@@ -393,24 +393,47 @@ test("원인 재현: 선택과목 근거를 1차로 고정해 두면 4단계 2�
   load(env, { pick: "2" });
   state.rounds["2"] = { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {} };
   state.roundStatuses = { "2": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("2") } };
+  state.hoursStats["2027"].sourceRounds = { "3": "1" };
   const key = ctx.normalizeResultCourseName(COURSE);
   const read = () => {
     ctx.bump();
-    const stats = ctx.computeHoursStats("2027");
-    const info = stats.grades.find((item) => item.grade === "3");
-    const classes = (semester) => stats.items.find((item) => item.grade === "3" && item.semester === semester && ctx.normalizeResultCourseName(item.subject) === key).classes;
-    return { round: info.source.round, confirmed: info.source.confirmed, label: info.label, first: classes("1"), second: classes("2"), issues: stats.issues.map((issue) => issue.text) };
+    const result = stages(env);
+    const info = result.stats.grades.find((item) => item.grade === "3");
+    return { result, round: info.source.round, confirmed: info.source.confirmed, label: info.label, first: result.five.get(`1|${key}`), second: result.five.get(`2|${key}`), issues: result.stats.issues.map((issue) => issue.text) };
   };
-  state.hoursStats["2027"].sourceRounds = { "3": "1" };
-  const pinned = read();
-  assert.deepEqual([pinned.round, pinned.confirmed], ["1", false], "고정값 1차가 이김(사용자 화면과 같음)");
-  assert.match(pinned.label, /현 2학년 1차 미확정/);
-  assert.ok(pinned.issues.some((text) => /현 2학년 1차 결과가 확정되지 않아 현재 집계로 임시 계산했습니다/.test(text)));
-  assert.ok(pinned.first > 0 && pinned.second === 0, "1차 값(1학기)");
-  state.hoursStats["2027"].sourceRounds = {};
-  const auto = read();
-  assert.deepEqual([auto.round, auto.confirmed], ["2", true], "자동이면 4단계 2차 확정");
-  assert.ok(auto.second > 0 && auto.first === 0, "2차 값(2학기) = 4단계");
+  let view = read();
+  assert.deepEqual([view.round, view.confirmed], ["2", true], "예전 고정값(1차)은 읽지 않음");
+  assert.ok(view.second > 0 && view.first === 0);
+  assertSame(view.result, "화면 2차");
+  assert.ok(!view.issues.some((text) => /확정되지 않아/.test(text)));
+  // 화면을 1차로 바꾸면(미확정) 5·6단계도 1차 값 — '임시 계산' 경고 없이 근거 줄에 '미확정'
+  state.currentRound = "1"; state.students = state.rounds["1"].students; state.courses = state.rounds["1"].courses;
+  view = read();
+  assert.deepEqual([view.round, view.confirmed], ["1", false]);
+  assert.ok(view.first > 0 && view.second === 0);
+  assertSame(view.result, "화면 1차");
+  assert.ok(!view.issues.some((text) => /확정되지 않아 현재 집계로 임시 계산/.test(text)));
+  assert.match(ctx.roundBasisHtml("1"), /근거: 1차<\/b> · <span class="round-basis-item">현1: 결과 없음<\/span> · <span class="round-basis-item">현2: 1차 결과\(미확정\)<\/span>/);
+});
+
+test("근거 줄: 복사한 학년은 '2차에서 복사', 앞 차수가 복사 뒤 바뀌면 '2차가 복사 뒤 바뀜 · 이 학년 다시 복사' → 누르면 다시 복사", async () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } };
+  state.roundClosures = { "1": {} };
+  ctx.bump();
+  ctx.addApplicationRound();
+  assert.match(ctx.roundBasisHtml("2"), /근거: 2차<\/b> · .*현2: 1차에서 복사\(미확정\)<\/span>/);
+  assert.doesNotMatch(ctx.roundBasisHtml("2"), /복사 뒤 바뀜/);
+  const course = state.rounds["1"].courses[0];
+  state.roundClosures["1"] = { [`2:${course.column}`]: "closed" };
+  ctx.bump();
+  assert.match(ctx.roundBasisHtml("2"), /1차가 복사 뒤 바뀜<\/span> <button type="button" class="button button-quiet" data-round-recopy="2">이 학년 다시 복사<\/button>/);
+  ctx.appConfirm = async () => true;
+  assert.equal(await ctx.recopyRoundGrade("2"), true);
+  assert.equal(state.roundClosures["2"][`2:${course.column}`], "closed", "다시 복사");
+  assert.doesNotMatch(ctx.roundBasisHtml("2"), /복사 뒤 바뀜/);
 });
 
 test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기화에 연결, 스크립트는 result-import.js 뒤", () => {
@@ -428,7 +451,7 @@ test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기�
 });
 
 // ---- 차수별 흐름 분리(사용자 결정 2026-11) ----
-test("새 차수 = 직전 차수 복사: 두 학년 결과·개설/폐강·6단계 분반·고른 학기, 확정은 복사하지 않음 · 학년마다 '복사' 근거와 서명", () => {
+test("새 차수 = 직전 차수 복사: 두 학년 결과·개설/폐강·6단계 분반, 확정·고른 학기는 복사하지 않음 · 학년마다 '복사' 근거와 서명", () => {
   const env = context();
   const { ctx, state } = env;
   load(env, { pick: "2" });
@@ -447,7 +470,7 @@ test("새 차수 = 직전 차수 복사: 두 학년 결과·개설/폐강·6단�
   assert.deepEqual(plain(state.roundClosures["2"]), { [`2:${course.column}`]: "closed" });
   assert.equal(state.roundStatuses["2"], undefined, "확정은 복사하지 않음(미확정으로 시작)");
   assert.deepEqual(plain(state.classSections["2"]), plain(state.classSections["1"]));
-  assert.equal(state.courseSemesterPicks["2026"]["2"]["2"][ctx.courseSemesterPickKey(COURSE)], "2", "고른 개설 학기도 복사");
+  assert.equal(state.courseSemesterPicks["2026"]["2"]["2"], undefined, "고른 개설 학기는 복사하지 않음(차수마다 따로 · 추천은 앞 차수 결과에서)");
   assert.deepEqual([copied.gradeSources["2"].kind, copied.gradeSources["2"].round], ["copy", "1"]);
   assert.equal(copied.gradeSources["2"].from.signature, ctx.roundGradeSignature(state.rounds["1"], state.roundClosures["1"], "2"));
   assert.equal(copied.gradeSources["1"], undefined, "결과가 없는 학년은 복사 근거 없음");

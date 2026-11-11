@@ -29,7 +29,7 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 10000 }).catch(() => {}); // 백업 복원은 앱 확인 창으로 묻는다
   await nav; await sleep(2500);
   await page.getByRole("button", { name: /6\. 분반 편성/ }).click(); await sleep(800);
-  await page.locator("#classSectionsRound").selectOption("2").catch(() => {});
+  await page.locator("#workspaceRound").selectOption("2").catch(() => {});
   await page.locator("[data-cs-group]").filter({ hasText: "2-2 택3" }).first().click(); await sleep(400);
   await page.locator("#classSectionsTeachersOpen").click();
   await page.locator("#classSectionsTeacherDialog[open]").waitFor({ timeout: 10000 });

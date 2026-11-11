@@ -85,19 +85,63 @@ function buildRoundSnapshot(round) {
 // ---- 과목 개설 결정의 한 출처 ----
 // 과목 개설 결정(현학년·학기·그룹·과목 → 개설 여부·학급 수·인원)은 4단계 집계(aggregateRecords)를 차수 스냅샷 모양으로 만든 행 하나에서 읽는다.
 // 확정된 차수는 확정 스냅샷, 아니면 지금 4단계 기준으로 만든 스냅샷(buildRoundSnapshot). 5단계 개설반 자동 값·6단계 분반 수가 모두 이것을 쓴다.
-// 읽을 차수(courseOpeningRound): 가장 최근에 확정된 차수(그 학년 행이 있는) → 지금 4단계에서 보는 차수(결과 있음) → 결과가 있는 가장 최근 차수.
-function courseOpeningRound(currentGrade = "") {
-  const rounds = (typeof applicationRoundNumbers === "function" ? applicationRoundNumbers() : Object.keys(state.rounds || {})).map(String);
-  const grade = String(currentGrade || "");
-  const hasData = (round) => {
-    const students = roundStatusData(round)?.students || [];
-    return grade ? students.some((student) => String(student.grade) === grade) : students.length > 0;
-  };
-  const locked = rounds.slice().reverse().find((round) => isRoundLocked(round) &&
-    state.roundStatuses?.[round]?.snapshot?.rows?.some((row) => !grade || String(row.grade) === grade));
-  if (locked) return locked;
-  if (rounds.includes(String(state.currentRound)) && hasData(String(state.currentRound))) return String(state.currentRound);
-  return rounds.slice().reverse().find(hasData) || "";
+// 읽을 차수(사용자 결정 2026-11 · 차수별 흐름 분리): 맨 위에서 고른 차수 하나(state.currentRound). 숨은 차수 고르기 규칙은 없다.
+// (예전 '최근 확정 → 4단계 차수 → 최근 결과' 규칙과 5단계 '선택과목 근거' 고정값은 없앴다. 부르는 곳이 많아 이름은 그대로 둔다.)
+function courseOpeningRound() {
+  return String(state.currentRound || "1");
+}
+
+// 5·6단계 맨 위 '근거' 한 줄(차수 관련 안내는 이 줄 하나): '3차 · 현1: 3차 결과(확정) · 현2: 2차에서 복사(미확정)'.
+// 복사한 학년의 앞 차수가 복사 뒤 바뀌었으면 '2차가 복사 뒤 바뀜 · 이 학년 다시 복사' 단추(round-copy.js 서명 비교).
+function roundBasisParts(round = state.currentRound) {
+  round = String(round);
+  const data = roundStatusData(round);
+  const sources = state.rounds?.[round]?.gradeSources || {};
+  const confirmed = isRoundLocked(round);
+  return ["1", "2"].map((grade) => {
+    const has = (data?.students || []).some((student) => String(student.grade) === grade);
+    const source = sources[grade] || null;
+    let text = !has ? "결과 없음" : source?.kind === "copy" ? `${source.round}차에서 복사` : source?.kind === "online" ? `${round}차 웹 신청` : `${round}차 결과`;
+    if (has && source?.kind === "partial") text += "(재신청 학생만 바꿈)";
+    let changed = "";
+    if (has && source?.kind === "copy" && source.from?.round && typeof roundGradeSignature === "function") {
+      const from = state.rounds?.[source.from.round] || (String(source.from.round) === String(state.currentRound) ? roundStatusData(source.from.round) : null);
+      if (from && roundGradeSignature(from, state.roundClosures?.[source.from.round] || {}, grade) !== source.from.signature) changed = String(source.from.round);
+    }
+    return { grade, has, text, confirmed, changed };
+  });
+}
+
+function roundBasisHtml(round = state.currentRound) {
+  const esc = typeof escapeHtml === "function" ? escapeHtml : (value) => String(value ?? "");
+  const parts = roundBasisParts(round);
+  const locked = isRoundLocked(round);
+  const items = parts.map((part) => `<span class="round-basis-item">현${part.grade}: ${esc(part.text)}${part.has ? `(${part.confirmed ? "확정" : "미확정"})` : ""}${part.changed
+    ? ` · <span class="round-basis-changed">${esc(part.changed)}차가 복사 뒤 바뀜</span> <button type="button" class="button button-quiet" data-round-recopy="${part.grade}"${locked ? " disabled title=\"확정된 차수입니다. 확정 해제 후 다시 복사하세요.\"" : ""}>이 학년 다시 복사</button>` : ""}</span>`).join(" · ");
+  return `<p class="round-basis-line" data-round-basis="${esc(String(round))}"><b>근거: ${esc(String(round))}차</b> · ${items}</p>`;
+}
+
+// '이 학년 다시 복사': 지금 차수의 그 학년을 앞 차수에서 다시 복사한다(확인 창, 확정 차수는 안 됨).
+async function recopyRoundGrade(grade) {
+  const round = String(state.currentRound);
+  const source = state.rounds?.[round]?.gradeSources?.[grade];
+  if (!source?.from?.round || isRoundLocked(round) || typeof copyRoundGrade !== "function") return false;
+  const text = `${round}차 현${grade} 결과를 지금의 ${source.from.round}차 현${grade} 결과로 다시 복사합니다. 이 차수에서 이 학년에 고친 개설·폐강·학급 수는 ${source.from.round}차 값으로 바뀝니다.\n\n다시 복사할까요?`;
+  const ok = typeof appConfirm === "function" ? await appConfirm(text, { title: "이 학년 다시 복사", ok: "다시 복사", cancel: "취소" }) : window.confirm(text);
+  if (!ok || isRoundLocked(round)) return false;
+  copyRoundGrade(source.from.round, round, grade);
+  if (typeof persistState === "function") persistState();
+  if (typeof renderHoursStats === "function" && Number(state.workflowStep) === 7) renderHoursStats();
+  if (typeof renderClassSections === "function" && Number(state.workflowStep) === 8) renderClassSections();
+  if (typeof renderWorkspaceContext === "function") renderWorkspaceContext();
+  return true;
+}
+
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-round-recopy]");
+    if (button && !button.disabled) recopyRoundGrade(button.dataset.roundRecopy);
+  });
 }
 
 function courseOpeningSnapshot(round) {

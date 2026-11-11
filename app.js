@@ -1383,8 +1383,8 @@
         `<option value="${round}">${round}차</option>`).join("");
       if (selector.innerHTML !== options) selector.innerHTML = options;
       selector.value = state.currentRound;
-      // 5단계(7)·6단계(8)는 자기 화면에서 근거 차수를 고르므로 머리 줄 '결과 차수'는 잠근다.
-      selector.disabled = step === 1 || step === 6 || step === 7 || step === 8;
+      // 맨 위 '결과 차수' 하나가 2~6단계 모든 화면의 기준이다(5단계 시수(7)·6단계 분반(8)도 이 차수). 편제표(1)·보류 단계(6)에서만 잠근다.
+      selector.disabled = step === 1 || step === 6;
       const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
       const message = $("#workflowReadinessMessage");
       const action = $("#workflowNextAction");
@@ -1442,7 +1442,7 @@
         action.dataset.nextStep = "7";
       } else if (step === 8 && state.students.length) {
         // 6단계는 자기 화면의 '차수'에서 고른 결과로 편성한다(4단계 문구를 쓰지 않는다).
-        message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 아래 6단계 화면 오른쪽의 '차수'에서 고른 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
+        message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 맨 위 '결과 차수'의 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
         action.textContent = roundConfirmed ? "4단계 집계 보기" : "집계·개설 확정으로";
         action.dataset.nextStep = "4";
       } else {
@@ -1469,7 +1469,7 @@
       const nextNumber = Math.max(...rounds.map(Number)) + 1;
       if (!Number.isSafeInteger(nextNumber) || nextNumber > 999999999) throw new Error("추가할 차수 번호가 너무 큽니다.");
       const next = String(nextNumber);
-      // 새 차수 = 직전 차수 복사(사용자 결정): 두 학년 결과·개설/폐강·학급수 입력·6단계 분반·고른 개설 학기. 확정은 복사하지 않는다.
+      // 새 차수 = 직전 차수 복사(사용자 결정): 두 학년 결과·개설/폐강·학급수 입력·6단계 분반. 확정·고른 개설 학기는 복사하지 않는다.
       if (typeof syncActiveRound === "function") syncActiveRound();
       const previous = String(Math.max(...rounds.map(Number)));
       const source = state.rounds?.[previous];
@@ -1491,9 +1491,8 @@
         state.rounds[next] = data;
         state.roundClosures[next] = closures;
         if (state.classSections?.[previous] && typeof state.classSections[previous] === "object") state.classSections[next] = plain(state.classSections[previous]);
-        for (const byGrade of Object.values(state.courseSemesterPicks || {})) {
-          for (const byRound of Object.values(byGrade || {})) if (byRound?.[previous]) byRound[next] = plain(byRound[previous]);
-        }
+        // 두 학기 편성 과목의 '고른 개설 학기'는 복사하지 않는다(사용자 규칙: 차수마다 따로 고르고, 추천은 앞 차수 4단계 결과에서).
+        // 복사한 결과 자료에는 앞 차수에서 정한 학기가 그대로 들어 있다.
       }
       switchRound(next);
     }
@@ -4990,16 +4989,9 @@
         <button type="button" class="button button-quiet" data-aggregate-resplit${locked ? " disabled" : ""}>학기 다시 정하기</button></span>`;
     }
 
-    // 5·6단계가 읽는 개설 결정(round-status.js courseOpeningRound·courseOpeningSnapshot)이 지금 4단계 화면과 다를 수 있는 두 경우를 알린다:
-    // 다른 차수(최근 확정 차수)를 읽는 경우, 확정 스냅샷이 지금 자료로 다시 만든 집계와 다른 경우.
+    // 확정 스냅샷이 지금 자료로 다시 만든 집계와 다르면 알린다(5·6단계는 확정 스냅샷을 씀). 5·6단계도 맨 위 차수를 쓰므로 '다른 차수' 안내는 없다.
     function aggregateOpeningSourceNotice(round, locked, scope) {
-      if (typeof courseOpeningRound !== "function") return "";
       const notes = [];
-      const grades = scope ? [String(scope)] : [...new Set(state.students.map((student) => String(student.grade)))].sort();
-      const others = grades.map((grade) => ({ grade, source: courseOpeningRound(grade) })).filter((item) => item.source && item.source !== String(round));
-      if (others.length) {
-        notes.push(`5·6단계는 ${others.map((item) => `현 ${item.grade}학년 ${item.source}차${typeof isRoundLocked === "function" && isRoundLocked(item.source) ? " 확정" : ""}`).join(", ")} 결과를 씁니다(지금 화면은 ${round}차)`);
-      }
       const stale = locked && typeof roundSnapshotStale === "function"
         ? roundSnapshotStale(round).filter((item) => !scope || item.grade === String(scope)) : [];
       if (stale.length) {
