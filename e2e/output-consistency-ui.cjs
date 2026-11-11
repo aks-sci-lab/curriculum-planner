@@ -140,16 +140,16 @@ async function read6(page, H, tag, { neis = true } = {}) {
   await H.gotoStep(8, "#workflowStep8Panel"); await sleep(600);
   const basis = (await H.text("#workflowStep8Panel .round-basis-line")).replace(/\s+/g, " ").trim();
   const groups = await page.locator("[data-cs-group]").evaluateAll((els) => els.map((e) => ({ key: e.dataset.csGroup, state: e.querySelector("em")?.dataset.state || "" })));
-  const four = new Map(), sections = new Map(), rooms = new Map(), stale = [];
+  const four = new Map(), sections = new Map(), rooms = new Map(), stale = [], marked = new Set();
   for (const group of groups) {
     await page.locator(`[data-cs-group="${group.key}"]`).click(); await sleep(500);
     const [current, semester] = group.key.split(":");
     const target = Number(current) + 1;
     const rows = await page.evaluate(() => [...document.querySelectorAll("[data-cs-sections]")].map((input) => {
       const row = input.closest("tr");
-      return { key: input.dataset.csSections, four: Number(row.cells[2]?.textContent.trim()) || 0, sections: Number(input.value) || 0 };
+      return { key: input.dataset.csSections, four: Number(row.cells[2]?.textContent.trim()) || 0, sections: Number(input.value) || 0, marked: Boolean(row.querySelector(".cs-diff")) };
     }));
-    for (const row of rows) { addTo(four, `${target}|${semester}|${norm(row.key)}`, row.four); addTo(sections, `${target}|${semester}|${norm(row.key)}`, row.sections); }
+    for (const row of rows) { const id = `${target}|${semester}|${norm(row.key)}`; addTo(four, id, row.four); addTo(sections, id, row.sections); if (row.marked) marked.add(id); }
     if (!neis || group.state === "wait") continue;
     if (await page.locator("#classSectionsStale").count()) { stale.push(group.key); continue; }
     const button = page.getByRole("button", { name: "나이스 편성 엑셀", exact: true });
@@ -165,7 +165,7 @@ async function read6(page, H, tag, { neis = true } = {}) {
       addTo(rooms, `${row[2]}|${row[1]}|${norm(subject)}`, 1);
     }
   }
-  return { basis, four, sections, rooms, stale, groups: groups.length };
+  return { basis, four, sections, rooms, stale, marked, groups: groups.length };
 }
 
 // 같은 차수 대조. label = 화면에 남길 이름.
@@ -188,7 +188,9 @@ async function compareRound(page, H, label, { neis = true } = {}) {
   check(!missing.length, `${label}: 4단계에서 개설한 과목이 5단계 그 학기에 있음`, missing.map(([key, value]) => `${key}=${value}`).join(" / "));
   // 6단계 '4단계' 열 = 4단계(확정 차수는 확정 스냅샷 = 확정 때 4단계), 분반 수 = '4단계' 열(직접 고친 곳은 '4단계와 다름'), 나이스 강의실 수 = 분반 수.
   check(s6.groups > 0 && !diff(s6.four, only23(s4.screen), { onlyA: true }).length, `${label}: 6단계 '4단계' 열 = 4단계(${s6.four.size}과목)`, diff(s6.four, only23(s4.screen), { onlyA: true }).join(" / "));
-  check(!diff(s6.sections, s6.four, { onlyA: true }).length, `${label}: 6단계 분반 수 = 4단계 열`, diff(s6.sections, s6.four, { onlyA: true }).join(" / "));
+  // 6단계에서 직접 고친 분반 수('제안 적용' 포함)는 4단계와 달라도 되지만 그 줄에 '4단계와 다름'이 보여야 한다.
+  const unmarked = [...s6.sections].filter(([key, value]) => value !== (s6.four.get(key) || 0) && !s6.marked.has(key)).map(([key, value]) => `${key}: ${value} ≠ ${s6.four.get(key) || 0}`);
+  check(!unmarked.length, `${label}: 6단계 분반 수 = 4단계 열(다른 곳은 '4단계와 다름' 표시 ${s6.marked.size}과목)`, unmarked.join(" / "));
   if (neis) check(!diff(s6.rooms, s6.sections, { onlyA: true }).length, `${label}: 6단계 나이스 편성 엑셀 과목별 강의실 수 = 분반 수(${s6.rooms.size}과목, 재계산 필요 ${s6.stale.length}그룹 제외)`, diff(s6.rooms, s6.sections, { onlyA: true }).join(" / "));
   return { round, s4, s5, s6 };
 }
