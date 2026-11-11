@@ -50,6 +50,7 @@
       roundStatuses: {},
       hoursStats: {},
       classSections: {},
+      twoSemesterPicks: {},
       applicationRosters: {},
       courseChecks: {},
       curriculumCompliance: {},
@@ -453,6 +454,7 @@
           hoursStats: state.hoursStats,
           classSections: state.classSections,
           applicationRosters: state.applicationRosters,
+          twoSemesterPicks: state.twoSemesterPicks,
           courseChecks: state.courseChecks,
           curriculumCompliance: state.curriculumCompliance,
           curriculumVersions: state.curriculumVersions,
@@ -1548,6 +1550,7 @@
       state.hoursStats = {};
       state.classSections = {};
       state.applicationRosters = {};
+      state.twoSemesterPicks = {};
       state.courseChecks = {};
       state.curriculumCompliance = {};
       state.curriculumVersions = {};
@@ -1672,6 +1675,11 @@
           : plainObject(saved.classSections) ? saved.classSections : {};
         // 웹 신청 명렬(현 학년 전체, 이 PC에만). 예전 저장분·백업에는 없음 → 빈 객체.
         state.applicationRosters = typeof applicationRostersRestore === "function" ? applicationRostersRestore(saved.applicationRosters) : {};
+        // 한 학기만 개설된 두 학기 편성 과목의 학기(교사가 고른 값). 예전 저장분·백업에는 없음 → 빈 객체.
+        state.twoSemesterPicks = plainObject(saved.twoSemesterPicks) ? Object.fromEntries(Object.entries(saved.twoSemesterPicks)
+          .filter(([year, byGrade]) => /^\d{4}$/.test(year) && plainObject(byGrade))
+          .map(([year, byGrade]) => [year, Object.fromEntries(Object.entries(byGrade).filter(([, picks]) => plainObject(picks))
+            .map(([grade, picks]) => [grade, Object.fromEntries(Object.entries(picks).filter(([, value]) => value === "1" || value === "2"))]))])) : {};
         // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.
         if (typeof courseCheckMigrateRequired === "function") {
           const migrated = courseCheckMigrateRequired(saved.courseChecks, saved.curriculumCompliance);
@@ -2162,13 +2170,14 @@
         return variant;
       };
       let split = 0;
-      for (const student of data.students) {
+      // 학생 한 명의 꼬리표 없는 두 학기 선택과 그 학기 조합 후보. fixedOf(column, grade) = 정해진 학기('1'·'2'·'').
+      const decide = (student, fixedOf) => {
         const grade = String(student.grade);
         const picked = (student.selections || []).filter((selection) => {
           const course = data.courses.find((item) => item.column === selection.column);
           return course && twoSemester.get(course)?.has(grade);
         });
-        if (!picked.length) continue;
+        if (!picked.length) return null;
         // 꼬리표 없는 두 학기 과목 말고 이미 그룹이 정해진 선택 수(학기 그룹별).
         const groupsOfStudent = new Map();
         for (const course of picked) for (const group of twoSemester.get(data.courses.find((item) => item.column === course.column)).get(grade).values()) {
@@ -2181,7 +2190,7 @@
         }
         const options = [];
         const total = 2 ** Math.min(picked.length, 10);
-        const fixed = picked.map((selection) => positionSemester.get(`${selection.column}|${grade}`) || "");
+        const fixed = picked.map((selection) => fixedOf(selection.column, grade) || "");
         for (let mask = 0; mask < total; mask++) {
           if (fixed.some((semester, index) => semester && semester !== ((mask >> index) & 1 ? "2" : "1"))) continue;
           const counts = new Map([...groupsOfStudent].map(([id, entry]) => [id, entry.have]));
@@ -2196,7 +2205,42 @@
         }
         const best = Math.min(...options.map((option) => option.error));
         const winners = options.filter((option) => option.error === best);
-        if (winners.length !== 1) {
+        return { grade, picked, winner: winners.length === 1 ? winners[0] : null };
+      };
+      // 한 학기만 개설(사용자 결정): 결과에 꼬리표 없이 한 번만 나온(같은 이름 다른 학기 과목이 없는) 두 학기 과목은 학생마다 학기를
+      // 섞지 않고 한 학기로 모두 고정한다. 학기 = 교사가 고른 값(state.twoSemesterPicks) → 열 위치(이웃 열) → 학생별 추정의 다수 → 1학기.
+      const onceCourses = [...twoSemester.keys()].filter((course) => !data.courses.some((other) => other !== course && key(other.name) === key(course.name) &&
+        (other.applicationCurrentGrade || "") === (course.applicationCurrentGrade || "")));
+      const tally = new Map();
+      for (const student of data.students) {
+        const result = decide(student, (column, grade) => positionSemester.get(`${column}|${grade}`));
+        if (!result?.winner) continue;
+        result.picked.forEach((selection, index) => {
+          const id = `${selection.column}|${result.grade}`;
+          if (!tally.has(id)) tally.set(id, { "1": 0, "2": 0 });
+          tally.get(id)[result.winner.semesters[index]]++;
+        });
+      }
+      const onceSemester = new Map();
+      const once = [];
+      for (const course of onceCourses) for (const grade of twoSemester.get(course).keys()) {
+        const id = `${course.column}|${grade}`;
+        if (!data.students.some((student) => String(student.grade) === grade && (student.selections || []).some((selection) => selection.column === course.column))) continue;
+        const chosen = typeof twoSemesterPickGet === "function" ? twoSemesterPickGet(grade, course.name) : "";
+        const position = positionSemester.get(id) || "";
+        const votes = tally.get(id) || { "1": 0, "2": 0 };
+        const estimate = position || (votes["2"] > votes["1"] ? "2" : votes["1"] > 0 ? "1" : "");
+        const semester = chosen || estimate || "1";
+        onceSemester.set(id, semester);
+        once.push({ key: typeof twoSemesterPickKey === "function" ? twoSemesterPickKey(course.name) : key(course.name), name: String(course.name).replace(/\s*\([23]학년\)$/, ""),
+          grade, semester, picked: Boolean(chosen), estimate: estimate || "1",
+          basis: position ? `이웃 열 ${position}학기` : votes["1"] || votes["2"] ? `학생 선택 수(1학기 ${votes["1"]}명 · 2학기 ${votes["2"]}명)` : "근거 없음(1학기)" });
+      }
+      for (const student of data.students) {
+        const result = decide(student, (column, grade) => onceSemester.get(`${column}|${grade}`) || positionSemester.get(`${column}|${grade}`));
+        if (!result) continue;
+        const { picked, winner } = result;
+        if (!winner) {
           for (const selection of picked) {
             const base = data.courses.find((item) => item.column === selection.column);
             base.semesterUndecided = true;
@@ -2206,10 +2250,11 @@
         }
         picked.forEach((selection, index) => {
           const base = data.courses.find((item) => item.column === selection.column);
-          const variant = variantFor(base, winners[0].semesters[index]);
+          const variant = variantFor(base, winner.semesters[index]);
+          if (onceSemester.has(`${base.column}|${result.grade}`)) variant.twoSemesterOnce = true;
           const at = student.selections.indexOf(selection);
           student.selections[at] = selection === base ? variant : { ...selection, column: variant.column, name: variant.name, semesterKey: variant.semesterKey,
-            credits: variant.credits, ...(variant.applicationSubject ? { applicationSubject: variant.applicationSubject } : {}) };
+            credits: variant.credits, ...(variant.twoSemesterOnce ? { twoSemesterOnce: true } : {}), ...(variant.applicationSubject ? { applicationSubject: variant.applicationSubject } : {}) };
           split++;
         });
       }
@@ -2221,7 +2266,31 @@
       for (const student of data.students) {
         student.totalCredits = (student.selections || []).reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
       }
-      return { undecided, split };
+      return { undecided, split, once };
+    }
+
+    // 한 학기만 개설된 두 학기 편성 과목의 학기(교사가 고른 값): state.twoSemesterPicks[학년도][현학년][과목 키] = "1"|"2".
+    function twoSemesterPickKey(name) {
+      return normalizeRomanNumerals(String(name ?? "").replace(/\s*\((?:[23]학년|[12]학기|일반|진로|융합)(?:선택)?\)/g, "")).replace(/\s+/g, "");
+    }
+
+    function twoSemesterPickYear() {
+      return typeof $ === "function" ? String($("#schoolYear")?.value || "").trim() : "";
+    }
+
+    function twoSemesterPickGet(grade, name) {
+      if (typeof state === "undefined") return "";
+      const value = state.twoSemesterPicks?.[twoSemesterPickYear()]?.[String(grade)]?.[twoSemesterPickKey(name)];
+      return value === "1" || value === "2" ? value : "";
+    }
+
+    function twoSemesterPickSet(grade, name, semester) {
+      const year = twoSemesterPickYear();
+      if (!/^\d{4}$/.test(year) || !["1", "2"].includes(String(semester))) return;
+      const picks = { ...(state.twoSemesterPicks || {}) };
+      picks[year] = { ...(picks[year] || {}) };
+      picks[year][String(grade)] = { ...(picks[year][String(grade)] || {}), [twoSemesterPickKey(name)]: String(semester) };
+      state.twoSemesterPicks = picks;
     }
 
     function classifyApplicationRecords(data) {
@@ -2256,6 +2325,8 @@
       const result = [...warnings];
       // 학기를 정할 수 없는 선택(학생·과목): 결과 검증이 따로 경고한다(배열 속성 — 부르는 곳은 그대로 배열로 씀).
       result.undecidedSemester = splitResult.undecided;
+      // 한 학기만 개설로 본 두 학기 편성 과목(결과 검증의 '개설 학기 선택' 칸).
+      result.onceSemester = splitResult.once || [];
       return result;
     }
 
@@ -3938,6 +4009,8 @@
             name: course.name,
             subjectName: applicationSubject?.subject || course.name,
             semesterKey: semesterKey === "1" || semesterKey === "2" ? semesterKey : "",
+            // 한 학기만 개설된 두 학기 편성 과목(4단계 과목 메뉴 '개설 학기 바꾸기').
+            ...(course.twoSemesterOnce ? { twoSemesterOnce: true } : {}),
             displayName: applicationSubject
               ? (typeof aggregateCourseDisplayName === "function" ? aggregateCourseDisplayName(applicationSubject, semesterKey) : applicationCourseLabel(applicationSubject))
               : semesterKey ? String(course.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/, "") : course.name,
@@ -4905,6 +4978,11 @@
         menu = holder.firstElementChild;
         document.body.append(menu);
         menu.addEventListener("click", (event) => {
+          const switcher = event.target.closest("[data-two-semester-switch]");
+          if (switcher) {
+            if (!switcher.disabled) switchTwoSemesterCourse(menu.dataset.key);
+            return;
+          }
           const choice = event.target.closest("[data-closure-choice]");
           if (choice) {
             if (!choice.disabled) setAggregateClosure(menu.dataset.round, menu.dataset.key, choice.dataset.closureChoice);
@@ -4936,6 +5014,7 @@
         <ul class="aggregate-course-menu-status">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
         <div class="aggregate-course-choices" role="group" aria-label="교사 결정">${choices}</div>
         ${locked ? '<p class="aggregate-course-menu-note">확정된 차수입니다. 확정 해제 후 바꾸세요.</p>' : '<p class="aggregate-course-menu-note">폐강이면 개설 학급수 0, 엑셀처럼 노란 칸·폐강으로 표시하고 재신청 대상이 됩니다.</p>'}
+        ${head.dataset.twoSemesterOnce ? `<button type="button" class="button aggregate-course-menu-semester" data-two-semester-switch${locked ? " disabled" : ""}>개설 학기 바꾸기(${head.dataset.twoSemesterOnce}학기 → ${head.dataset.twoSemesterOnce === "1" ? 2 : 1}학기)</button>` : ""}
         ${prereqCount ? `<button type="button" class="button aggregate-course-menu-prereq" data-open-dialog="prereqStudentsDialog" data-prereq-course="${escapeHtml(key)}" data-prereq-label="${escapeHtml(label)}">위계 경고 학생 ${prereqCount}명 보기</button>` : ""}`;
       menu.hidden = false;
       menu.aggregateOpener = head;
@@ -4951,6 +5030,50 @@
       menu.style.top = `${Math.round(top + window.scrollY)}px`;
       (menu.querySelector('[data-closure-choice][aria-pressed="true"]:not(:disabled)') ||
         menu.querySelector("[data-closure-choice]:not(:disabled)") || menu.querySelector("[data-aggregate-menu-close]"))?.focus({ preventScroll: true });
+    }
+
+    // 한 학기만 개설된 두 학기 편성 과목의 학기를 바꾼다(1학기 ↔ 2학기): 이 차수 결과의 그 과목(열 그대로)과 신청 학생 선택을
+    // 다른 학기 과목으로 고치고, 고른 값(state.twoSemesterPicks)도 바꾼다. 열 번호가 같아 개설/폐강·학급수 입력은 그대로 따라간다.
+    // 확정된 차수는 잠금. 집계·위계·확인서·5·6단계는 결과 자료를 다시 읽으므로 그 학기로 따라간다.
+    function switchTwoSemesterCourse(key) {
+      const round = String(state.currentRound);
+      if (typeof isRoundLocked === "function" && isRoundLocked(round)) { renderAggregate(); return false; }
+      const [grade, ...rest] = String(key || "").split(":");
+      const column = rest.join(":");
+      const data = JSON.parse(JSON.stringify({ courses: state.courses, students: state.students }));
+      const course = data.courses.find((item) => String(item.column) === column && (!item.applicationCurrentGrade || item.applicationCurrentGrade === grade));
+      if (!course?.twoSemesterOnce || !["1", "2"].includes(String(course.semesterKey))) return false;
+      const next = course.semesterKey === "1" ? "2" : "1";
+      const tag = /\s*[（(]\s*[12]\s*학기\s*[)）]/;
+      const base = String(course.name).replace(tag, "").replace(/\s*\([23]학년\)$/, "").trim();
+      if (data.courses.some((item) => item !== course && twoSemesterPickKey(item.name) === twoSemesterPickKey(course.name) && String(item.semesterKey) === next &&
+        (item.applicationCurrentGrade || "") === (course.applicationCurrentGrade || ""))) {
+        if (typeof showAppToast === "function") showAppToast(`${base}: ${next}학기 과목이 이미 있어 바꿀 수 없습니다.`);
+        return false;
+      }
+      const subject = course.applicationSubject;
+      const credit = subject?.semesterCredits?.[next] || course.credits;
+      const fields = {
+        name: tag.test(course.name) ? String(course.name).replace(/([（(]\s*)[12](\s*학기)/, `$1${next}$2`) : `${course.name} (${next}학기)`,
+        semesterKey: next, credits: credit,
+        ...(subject ? { applicationSubject: { ...subject, subject: String(subject.subject || base).replace(tag, "").trim() + ` (${next}학기)`, semester: next, credit } } : {})
+      };
+      Object.assign(course, fields, { applicationGroups: {} });
+      for (const student of data.students) {
+        if (String(student.grade) !== grade) continue;
+        student.selections = (student.selections || []).map((selection) => String(selection.column) === column ? { ...selection, ...fields, applicationGroups: {} } : selection);
+      }
+      classifyApplicationRecords(data);
+      state.courses = data.courses;
+      state.students = data.students;
+      twoSemesterPickSet(grade, base, next);
+      persistState();
+      if (typeof closeAggregateCourseMenu === "function") closeAggregateCourseMenu();
+      if (typeof renderRoster === "function") renderRoster();
+      if (typeof renderPreview === "function") renderPreview();
+      renderAggregate();
+      if (typeof showAppToast === "function") showAppToast(`${base}을(를) ${next}학기 개설로 바꿨습니다.`);
+      return true;
     }
 
     // 교사 결정(개설·폐강·미정)을 저장하고 집계표·재신청 대상자를 다시 그린다. 확정된 차수는 바꾸지 않는다.
@@ -7124,7 +7247,7 @@
           if (undecided) classes.push("is-undecided");
           // 미달이어도 '개설'로 정했으면 빨간 경고 대신 결정 표시(인원 칸 모서리 '미달·개설').
           if (course.atRisk && !course.closed && status.decision !== "open") classes.push("is-risk");
-          return `<button type="button" class="af-course" data-aggregate-course="${esc(status.key)}" data-closure-round="${esc(round)}" data-decision="${esc(status.decision)}" data-course-label="${esc(name)}" data-group-label="${esc(info.label)}" data-course-status="${esc(status.lines.join("\n"))}" data-prereq-count="${status.prereqCount}"${locked ? " data-locked" : ""} aria-haspopup="dialog" aria-label="${esc(`${name} — 개설/폐강/미정 결정(지금 ${status.decision === "open" ? "개설" : status.decision === "closed" ? "폐강" : "미정"})`)}">${value}</button>`;
+          return `<button type="button" class="af-course" data-aggregate-course="${esc(status.key)}" data-closure-round="${esc(round)}" data-decision="${esc(status.decision)}" data-course-label="${esc(name)}" data-group-label="${esc(info.label)}" data-course-status="${esc(status.lines.join("\n"))}" data-prereq-count="${status.prereqCount}"${course.twoSemesterOnce && course.semesterKey ? ` data-two-semester-once="${esc(course.semesterKey)}"` : ""}${locked ? " data-locked" : ""} aria-haspopup="dialog" aria-label="${esc(`${name} — 개설/폐강/미정 결정(지금 ${status.decision === "open" ? "개설" : status.decision === "closed" ? "폐강" : "미정"})`)}">${value}</button>`;
         }
         if (role === "count") {
           const decidedOpen = course.atRisk && !course.closed && status.decision === "open";

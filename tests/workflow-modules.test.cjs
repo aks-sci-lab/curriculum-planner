@@ -714,47 +714,45 @@ test("the retake list download names the next round without throwing", () => {
   assert.match(files["xl/worksheets/sheet1.xml"], /신청 학년/);
 });
 
-test("a two-semester subject without a semester tag is split per student into 'X (n학기)' by the group each student is one pick short in", () => {
+test("two-semester subject listed once (only one semester opened): every chooser goes to one semester — teacher pick → neighbour columns → majority estimate", () => {
   const groups = [
     { grade: "3", semester: "1", name: "3-1 택2", count: 2, courses: ["물리", "화학", "기후", "심화"] },
     { grade: "3", semester: "2", name: "3-2 택2", count: 2, courses: ["생명", "지구", "기후", "심화"] }
   ];
-  const ctx = vm.createContext({ getApplicationGroupSettings: () => groups, parseSemesterFromCourseName: (name) => String(name).match(/([12])학기/)?.[1] || "" });
+  const ctx = vm.createContext({ getApplicationGroupSettings: () => groups, parseSemesterFromCourseName: (name) => String(name).match(/([12])학기/)?.[1] || "",
+    state: { twoSemesterPicks: {} }, $: () => ({ value: "2026" }) });
   vm.runInContext(functionSource(app, "function applicationGroupForCourse(", "function courseGroupLabel("), ctx);
   const make = () => [["a", "물리"], ["b", "화학"], ["c", "생명"], ["d", "지구"], ["e", "기후"], ["f", "심화"]].map(([column, name]) => ({ column, name, credits: 3 }));
   const student = (courses, picks, number) => ({ grade: "2", classroom: "1", number: String(number), selections: picks.map((column) => ({ ...courses.find((c) => c.column === column) })) });
-  const names = (data, number) => data.students.find((item) => item.number === String(number)).selections.map((selection) => selection.name);
-  // 1번은 1학기 2과목을 채워 2학기에, 2번은 2학기를 채워 1학기에 기후를 고른 것(같은 과목이 학생마다 다른 학기).
+  const climate = (data) => data.students.map((item) => item.selections.find((selection) => selection.name.startsWith("기후"))?.name || "");
+  // 학생별 추정: 1·3번은 2학기, 2번은 1학기 → 학기를 섞지 않고 다수(2학기)로 모두.
   let courses = make();
-  let data = { courses, students: [student(courses, ["a", "b", "c", "e"], 1), student(courses, ["c", "d", "a", "e"], 2), student(courses, ["a", "b", "c", "d"], 3)] };
+  let data = { courses, students: [student(courses, ["a", "b", "c", "e"], 1), student(courses, ["c", "d", "a", "e"], 2), student(courses, ["a", "b", "d", "e"], 3)] };
   let warnings = ctx.classifyApplicationRecords(data);
+  assert.deepEqual(plain(climate(data)), ["기후 (2학기)", "기후 (2학기)", "기후 (2학기)"]);
+  assert.deepEqual(plain(warnings.onceSemester), [{ key: "기후", name: "기후", grade: "2", semester: "2", picked: false, estimate: "2", basis: "학생 선택 수(1학기 1명 · 2학기 2명)" }]);
   assert.deepEqual(plain(warnings), [], "선택 그룹이 정해지지 않은 과목 경고 없음");
-  assert.deepEqual(plain(warnings.undecidedSemester), []);
-  assert.deepEqual(names(data, 1).at(-1), "기후 (2학기)");
-  assert.deepEqual(names(data, 2).at(-1), "기후 (1학기)");
-  assert.ok(!data.courses.some((course) => course.name === "기후"), "나눈 뒤 남은 학생이 없는 기본 과목은 지움");
-  const variant = (semester) => data.courses.find((course) => course.name === `기후 (${semester}학기)`);
-  assert.deepEqual(plain(variant("1").applicationGroups["2"]), { name: "3-1 택2", semester: "1" });
-  assert.deepEqual(plain(variant("2").applicationGroups["2"]), { name: "3-2 택2", semester: "2" });
-  assert.equal(data.students.filter((item) => item.selections.some((selection) => selection.column === variant("2").column)).length, 1);
-  // 꼬리표 없는 두 학기 과목을 두 개 고른 학생: 학기 조합을 함께 맞춘다(1학기 물리 + ?, 2학기 생명 + ?).
+  assert.ok(!data.courses.some((course) => course.name === "기후"), "기본 과목은 지움");
+  assert.equal(data.courses.find((course) => course.name === "기후 (2학기)").twoSemesterOnce, true);
+  // 교사가 고른 학기(state.twoSemesterPicks[학년도][현학년][과목 키])가 먼저.
+  ctx.state.twoSemesterPicks = { "2026": { "2": { "기후": "1" } } };
   courses = make();
-  data = { courses, students: [student(courses, ["a", "c", "e", "f"], 1), student(courses, ["a", "b", "c", "e"], 2)] };
+  data = { courses, students: [student(courses, ["a", "b", "c", "e"], 1), student(courses, ["c", "d", "a", "e"], 2)] };
   warnings = ctx.classifyApplicationRecords(data);
-  assert.deepEqual(plain(warnings.undecidedSemester).map((item) => item.course), ["기후", "심화"], "1번은 기후·심화 어느 쪽이 어느 학기인지 정할 수 없음");
-  assert.deepEqual(names(data, 2).at(-1), "기후 (2학기)");
-  assert.ok(data.courses.find((course) => course.name === "기후").semesterUndecided, "정하지 못한 학생은 기본 과목(학기 미정)에 남음");
-  courses = make();
-  data = { courses, students: [student(courses, ["a", "b", "e", "f"], 1)] };
-  warnings = ctx.classifyApplicationRecords(data);
-  assert.deepEqual(plain(warnings.undecidedSemester), [], "1학기를 채웠으면 둘 다 2학기");
-  assert.deepEqual(names(data, 1).slice(2), ["기후 (2학기)", "심화 (2학기)"]);
-  // 꼬리표가 있으면 그대로, 아무도 고르지 않은 두 학기 과목은 지운다(0명 미분류 없음).
+  assert.deepEqual(plain(climate(data)), ["기후 (1학기)", "기후 (1학기)"]);
+  assert.equal(warnings.onceSemester[0].picked, true);
+  ctx.state.twoSemesterPicks = {};
+  // 같은 이름의 꼬리표 과목이 함께 있으면(두 학기 모두 개설) '한 학기만 개설'이 아니라 학생마다 정한다.
   courses = [...make(), { column: "g", name: "기후 (1학기)", semesterKey: "1", credits: 3 }];
-  data = { courses, students: [student(courses, ["b", "g", "c", "d"], 1)] };
+  data = { courses, students: [student(courses, ["a", "b", "c", "e"], 1), student(courses, ["g", "a", "c", "d"], 2), student(courses, ["c", "d", "a", "e"], 3)] };
   warnings = ctx.classifyApplicationRecords(data);
-  assert.deepEqual(plain(warnings), []);
-  assert.deepEqual(data.courses.map((course) => course.name), ["물리", "화학", "생명", "지구", "기후 (1학기)"], "0명 기후·심화 기본 과목은 지움");
+  assert.deepEqual(plain(warnings.onceSemester), []);
+  assert.deepEqual(plain(climate(data)), ["기후 (2학기)", "기후 (1학기)", "기후 (1학기)"]);
+  // 아무도 고르지 않은 두 학기 과목은 지운다(0명 미분류 없음).
+  courses = make();
+  data = { courses, students: [student(courses, ["a", "b", "c", "d"], 1)] };
+  ctx.classifyApplicationRecords(data);
+  assert.deepEqual(data.courses.map((course) => course.name), ["물리", "화학", "생명", "지구"]);
 });
 
 test("when a result sheet lists the same subject twice, the left column is the 1st semester", () => {
@@ -1497,9 +1495,18 @@ test("wide result: an untagged two-semester column listed once takes the semeste
   let result = run(["물리", "화학", "생명", "기후", "지구"], [["물리", "기후", "생명", "지구"], ["물리", "화학", "생명", "기후"]]);
   assert.deepEqual(plain(result.names.map((list) => list.find((name) => name.startsWith("기후")))), ["기후 (2학기)", "기후 (2학기)"]);
   assert.deepEqual(plain(result.warnings.undecidedSemester), []);
-  // 학기 경계(왼쪽 1학기·오른쪽 2학기)면 열 위치로 못 정하니 학생별 추정.
+  assert.equal(result.warnings.onceSemester[0].basis, "이웃 열 2학기");
+  // 학기 경계(1학기 과목 바로 뒤 · 오른쪽은 2학기)면 열 위치로 못 정한다: 학생별 추정이 1:1이면 1학기로 모두(섞지 않음),
+  // 교사가 '2학기'를 고르면 모든 학생이 2학기 그룹으로(2학기 전용 과목).
   result = run(["물리", "화학", "기후", "생명", "지구"], [["물리", "기후", "생명", "지구"], ["물리", "화학", "생명", "기후"]]);
-  assert.deepEqual(plain(result.names.map((list) => list.find((name) => name.startsWith("기후")))), ["기후 (1학기)", "기후 (2학기)"]);
+  assert.deepEqual(plain(result.names.map((list) => list.find((name) => name.startsWith("기후")))), ["기후 (1학기)", "기후 (1학기)"]);
+  assert.equal(result.warnings.onceSemester[0].basis, "학생 선택 수(1학기 1명 · 2학기 1명)");
+  ctx.state = { twoSemesterPicks: { "2026": { "2": { "기후": "2" } } } };
+  ctx.$ = () => ({ value: "2026" });
+  result = run(["물리", "화학", "기후", "생명", "지구"], [["물리", "기후", "생명", "지구"], ["물리", "화학", "생명", "기후"]]);
+  assert.deepEqual(plain(result.names.map((list) => list.find((name) => name.startsWith("기후")))), ["기후 (2학기)", "기후 (2학기)"]);
+  const variant = result.data.courses.find((course) => course.name === "기후 (2학기)");
+  assert.deepEqual(plain(variant.applicationGroups["2"]), { name: "3-2 택2", semester: "2" }, "고른 학기 그룹");
 });
 
 // 사용자 화면 '3학년 미분류' 재현: 결과 파일에 학기 꼬리표 없이 '심화 영어'(3-1 택5·3-2 택5에 모두)가 적힌 경우.
@@ -1533,17 +1540,49 @@ test("untagged two-semester course in a result file is split per student so 4단
   const semesters = aggregate.reports[0].semesters;
   assert.ok(!semesters.some((semester) => /미분류|학기 미정/.test(semester.name)), semesters.map((semester) => semester.name).join(","));
   const count = (semesterName, name) => semesters.find((semester) => semester.name === semesterName).groups.flatMap((group) => group.courses).find((course) => course.name === name)?.enrollment;
-  assert.equal(count("3학년 1학기", "심화 영어 (1학기)"), 2, "1·3번");
-  assert.equal(count("3학년 2학기", "심화 영어 (2학기)"), 1, "2번");
+  // 결과에 한 번만 나온 두 학기 과목 = 한 학기만 개설: 학생별 추정 다수(1학기 2명 · 2학기 1명)로 모두 1학기.
+  assert.equal(count("3학년 1학기", "심화 영어 (1학기)"), 3, "1·2·3번");
+  assert.ok(!semesters.some((semester) => semester.groups.some((group) => group.courses.some((course) => course.name === "심화 영어 (2학기)"))));
   // 표시: 학기별 구역 안이라 과목명에 '(n학기)'를 붙이지 않는다(안쪽 키 name은 변형 과목 그대로).
   const shown = semesters.flatMap((semester) => semester.groups.flatMap((group) => group.courses)).filter((course) => /^심화 영어/.test(course.name));
-  assert.deepEqual(plain(shown.map((course) => course.displayName)), ["심화 영어", "심화 영어"]);
-  // 택n 수: 나눈 뒤 학생마다 그룹별 선택 수가 맞는다.
-  for (const target of data.students) for (const group of groups) {
+  assert.deepEqual(plain(shown.map((course) => course.displayName)), ["심화 영어"]);
+  // 택n 수: 다수 학기와 맞게 고른 학생(1·3·4번)은 그룹별 선택 수가 맞는다(2번은 2학기에 고른 꼴이라 어긋남 → 경고로 보임).
+  for (const target of data.students.filter((item) => item.number !== "2")) for (const group of groups) {
     const have = target.selections.filter((selection) => {
       const owner = data.courses.find((course) => course.column === selection.column)?.applicationGroups?.["2"];
       return owner && owner.name === group.name && String(owner.semester) === group.semester;
     }).length;
     assert.equal(have, group.count, `${target.name} ${group.name}`);
   }
+});
+
+test("4단계 '개설 학기 바꾸기': 한 학기만 개설된 두 학기 편성 과목을 다른 학기로 옮기고(열 그대로) 고른 값도 바꿈, 확정 차수는 잠금", () => {
+  const groups = [
+    { grade: "3", semester: "1", name: "3-1 택2", count: 2, courses: ["물리", "화학", "기후"] },
+    { grade: "3", semester: "2", name: "3-2 택2", count: 2, courses: ["생명", "지구", "기후"] }
+  ];
+  const calls = [];
+  const ctx = vm.createContext({ getApplicationGroupSettings: () => groups, parseSemesterFromCourseName: (name) => String(name).match(/([12])학기/)?.[1] || "",
+    state: { twoSemesterPicks: {}, currentRound: "1" }, $: () => ({ value: "2026" }), isRoundLocked: () => false,
+    persistState: () => calls.push("save"), renderAggregate: () => calls.push("render"), closeAggregateCourseMenu: () => {}, showAppToast: (text) => calls.push(text) });
+  vm.runInContext(functionSource(app, "function applicationGroupForCourse(", "function courseGroupLabel("), ctx);
+  vm.runInContext(functionSource(app, "function switchTwoSemesterCourse(", "function setAggregateClosure("), ctx);
+  const courses = [["a", "물리"], ["b", "화학"], ["c", "생명"], ["d", "지구"], ["e", "기후"]].map(([column, name]) => ({ column, name, credits: 3 }));
+  const student = (picks, number) => ({ grade: "2", classroom: "1", number: String(number), selections: picks.map((column) => ({ ...courses.find((c) => c.column === column) })) });
+  const data = { courses, students: [student(["a", "e", "c", "d"], 1), student(["a", "b", "c", "e"], 2)] };
+  ctx.state.twoSemesterPicks = { "2026": { "2": { "기후": "1" } } };
+  ctx.classifyApplicationRecords(data);
+  ctx.state.courses = data.courses;
+  ctx.state.students = data.students;
+  const once = ctx.state.courses.find((course) => course.twoSemesterOnce);
+  assert.deepEqual([once.name, once.semesterKey], ["기후 (1학기)", "1"], "저장된 고른 값(1학기)을 그대로 씀");
+  assert.equal(ctx.switchTwoSemesterCourse(`2:${once.column}`), true);
+  const moved = ctx.state.courses.find((course) => course.column === once.column);
+  assert.deepEqual([moved.name, moved.semesterKey], ["기후 (2학기)", "2"]);
+  assert.deepEqual(plain(moved.applicationGroups["2"]), { name: "3-2 택2", semester: "2" });
+  assert.ok(ctx.state.students.every((item) => item.selections.filter((selection) => selection.column === once.column).every((selection) => selection.semesterKey === "2" && selection.name === "기후 (2학기)")));
+  assert.equal(ctx.state.twoSemesterPicks["2026"]["2"]["기후"], "2", "고른 값도 바뀜(다시 올려도 2학기)");
+  ctx.isRoundLocked = () => true;
+  assert.equal(ctx.switchTwoSemesterCourse(`2:${once.column}`), false, "확정된 차수는 잠금");
+  assert.equal(ctx.state.courses.find((course) => course.column === once.column).semesterKey, "2");
 });

@@ -358,6 +358,7 @@ function analyzeResultCandidate(candidate, options) {
   }));
   return {
     ...candidate, issues, comparison, unclassified, courseCheckHtml: courseChecks?.html || "",
+    onceSemester: (unclassified.onceSemester || []).filter((item) => String(item.grade) === grade),
     summary: { students: students.length, previousStudents: previousStudents.length, classes, courses: courses.length }
   };
 }
@@ -432,6 +433,7 @@ function renderResultImportPreview() {
     ${list(candidate.issues.errors || [], "is-blocking is-error", "오류 · 확인 후 반영할 수 있음")}
     ${list(candidate.issues.warnings, "is-warning", "확인이 필요한 경고")}
     ${list(candidate.issues.info, "is-info", "참고")}
+    ${resultOnceSemesterHtml(candidate, esc)}
     ${candidate.courseCheckHtml || ""}
     ${comparison}
     ${candidate.issues.actions?.length ? `<div class="result-import-fixes"><span>설정을 고친 뒤 파일을 다시 올리지 않고 아래 버튼으로 다시 검증할 수 있습니다.</span>${candidate.issues.actions.map((action) =>
@@ -443,10 +445,34 @@ function renderResultImportPreview() {
   container.classList.remove("hidden");
 }
 
+// 두 학기 편성 과목 중 결과에 한 번만 나온(한 학기만 개설된) 과목: 개설 학기를 고른다. 고른 값은 state.twoSemesterPicks에 바로 저장되고
+// 다시 검증한다(학기를 섞지 않고 그 과목 신청 학생 전부를 고른 학기로). 고르지 않으면 추정값이고, 반영할 때 확인 창으로 묻는다.
+function resultOnceSemesterHtml(candidate, esc) {
+  const items = candidate?.onceSemester || [];
+  if (!items.length) return "";
+  const rows = items.map((item) => `<tr><th scope="row">${esc(item.name)}</th>
+      <td><select data-two-semester-pick="${esc(item.name)}" data-two-semester-grade="${esc(item.grade)}" aria-label="${esc(item.name)} 개설 학기">${["1", "2"].map((semester) =>
+        `<option value="${semester}"${semester === item.semester ? " selected" : ""}>${semester}학기</option>`).join("")}</select></td>
+      <td>${item.picked ? "고름" : `추정: ${esc(item.basis)}`}</td></tr>`).join("");
+  return `<section class="result-import-once" aria-label="두 학기 편성 과목 개설 학기 선택"><strong>두 학기 편성 과목 — 개설 학기 선택 ${items.length}개</strong>
+    <p class="note">편제표에는 1·2학기 모두 있지만 결과 파일에는 한 번만 나와 한 학기만 개설된 것으로 봅니다. 고른 학기로 이 과목을 신청한 학생 전부를 넣습니다(4단계 과목 메뉴에서 바꿀 수 있음).</p>
+    <div class="aggregate-sheet-wrap"><table class="result-import-table"><thead><tr><th scope="col">과목</th><th scope="col">개설 학기</th><th scope="col">근거</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
 async function confirmResultImport() {
   const preview = resultImportPending;
   if (!preview) return;
   const candidate = preview.candidates[preview.selected];
+  // 개설 학기를 고르지 않은 두 학기 편성 과목: 추정한 학기로 반영할지 묻고, 반영하면 그 값을 고른 값으로 저장한다.
+  const unpicked = (candidate?.onceSemester || []).filter((item) => !item.picked);
+  if (unpicked.length && !candidate.issues.blocking.length) {
+    const text = `두 학기 편성 과목 중 한 학기만 개설된 과목의 학기를 아직 고르지 않았습니다.\n${unpicked.map((item) => `· ${item.name}: ${item.semester}학기(추정: ${item.basis})`).join("\n")}\n\n추정한 학기로 반영할까요? 바꾸려면 '취소'를 누르고 검증 화면의 '개설 학기 선택'에서 고르세요.`;
+    const ok = typeof appConfirm === "function"
+      ? await appConfirm(text, { title: "개설 학기 확인", ok: "추정대로 반영", cancel: "취소" })
+      : window.confirm(text);
+    if (!ok || resultImportPending !== preview) return;
+    if (typeof twoSemesterPickSet === "function") for (const item of unpicked) twoSemesterPickSet(item.grade, item.name, item.semester);
+  }
   // 빨간 오류(같은 과목 두 학기 신청 등)는 자료를 버리지 않고, 앱 확인 창으로 한 번 더 묻고 반영한다.
   const errors = candidate?.issues?.errors || [];
   if (errors.length && !candidate.issues.blocking.length) {
@@ -533,6 +559,13 @@ function initResultImport() {
     }
   });
   container.addEventListener("change", (event) => {
+    const pick = event.target.closest?.("[data-two-semester-pick]");
+    if (pick && resultImportPending) {
+      if (typeof twoSemesterPickSet === "function") twoSemesterPickSet(pick.dataset.twoSemesterGrade, pick.dataset.twoSemesterPick, pick.value);
+      if (typeof persistStateSoon === "function") persistStateSoon();
+      revalidateResultImport();
+      return;
+    }
     if (event.target.id !== "resultImportSheet" || !resultImportPending) return;
     resultImportPending.selected = Math.max(0, Math.min(resultImportPending.candidates.length - 1, Number(event.target.value) || 0));
     renderResultImportPreview();
