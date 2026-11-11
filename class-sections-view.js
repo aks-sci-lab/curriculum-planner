@@ -185,7 +185,7 @@ function classSectionsSourceCompute(round, thresholds) {
   const classBases = snapshot?.classBases || (typeof nextYearClassBases === "function" ? nextYearClassBases() : {});
   const aggregate = aggregateRecords(data.students, data.courses, thresholds.openingPercent, thresholds.divisionPercent,
     data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases,
-    // 앞 차수 개설/폐강 결정을 이어받은 결정(4단계와 같은 기준). 확정 스냅샷 classCount가 있으면 아래에서 그것이 우선.
+    // 이 차수의 개설/폐강 결정(4단계와 같은 기준). 확정 스냅샷 classCount가 있으면 아래에서 그것이 우선.
     (typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round]) || {});
   const unassignedName = typeof UNASSIGNED_GROUP === "string" ? UNASSIGNED_GROUP : "미분류";
   const snapshotCount = new Map((snapshot?.rows || []).map((row) => [`${row.grade}|${row.semester}|${row.group}|${row.name}`, Number(row.classCount) || 0]));

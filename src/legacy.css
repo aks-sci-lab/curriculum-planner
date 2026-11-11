@@ -1433,6 +1433,7 @@
       vertical-align: top;
     }
     .result-import-table .is-changed, .round-compare-table .is-changed { background: #fff8e9; }
+    .round-compare-table .round-compare-source { display: block; font-weight: 400; font-size: .78em; color: #6b6255; }
     .round-compare-table .round-compare-total { background: #edf3fb; font-weight: 700; }
     .result-import-actions { justify-content: flex-end; margin-top: 14px; }
     .round-confirm-bar {

@@ -1173,8 +1173,9 @@ test("application rounds start at one and can be added sequentially beyond three
   assert.equal(state.rounds["3"].students[0].id,"preserved");
 });
 
-test("retake decisions follow course names when column IDs change between rounds", () => {
+test("retake targets use only the round chosen at the top (its own decisions; earlier rounds are not merged by name)", () => {
   const state={
+    currentRound:"2",
     rounds:{
       "1":{courses:[{column:"old-a",name:"미적분",applicationCurrentGrade:"1"}]},
       "2":{courses:[
@@ -1195,6 +1196,11 @@ test("retake decisions follow course names when column IDs change between rounds
   assert.equal(result.sourceRound,"2");
   assert.equal(result.rows.length,1);
   assert.deepEqual(Array.from(result.rows[0].courses),["기하"]);
+  // 맨 위에서 1차를 고르면 1차 결과·결정(1차는 학생 결과가 없으므로 대상 없음) — 가장 뒤 차수로 저절로 가지 않는다.
+  state.currentRound="1";
+  const first=ctx.retakeTargets();
+  assert.equal(first.sourceRound,"1");
+  assert.equal(first.rows.length,0);
 });
 
 test("roster upload exports selected subjects and round without overwriting application results", async () => {
