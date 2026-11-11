@@ -768,7 +768,12 @@ async function stepTwoSemesterPick({ page, h, OUT }) {
       results.push({ ok: Boolean(ok), what });
       h.check(Boolean(ok), "중요", "단계 일치", what, { actual: String(detail).slice(0, 600) });
     };
-    await twoSemesterScenario(page, { OUT, check, log: () => {} });
+    await page.evaluate(() => { window.__e2eAppConfirmManual = true; });
+    try {
+      await twoSemesterScenario(page, { OUT, check, log: () => {} });
+    } finally {
+      await page.evaluate(() => { window.__e2eAppConfirmManual = false; }).catch(() => {});
+    }
     return { passed: results.filter((item) => item.ok).length, total: results.length, failed: results.filter((item) => !item.ok).map((item) => item.what) };
   });
 }
@@ -1778,7 +1783,8 @@ async function main() {
         if (!dialog.open) return;
         const entry = { title: dialog.querySelector("#appConfirmTitle")?.textContent || "", message: dialog.querySelector("#appConfirmText")?.textContent || "", ok: dialog.querySelector("#appConfirmOk")?.textContent || "" };
         try { window.__e2eAppConfirm(entry); } catch { /* 기록 실패는 무시 */ }
-        setTimeout(() => { if (dialog.open) dialog.querySelector("#appConfirmOk")?.click(); }, 150);
+        // 단계가 직접 확인 창을 누르는 동안(window.__e2eAppConfirmManual)은 기록만 한다(2-7 '개설 학기 확인' 창의 '돌아가서 고르기').
+        if (!window.__e2eAppConfirmManual) setTimeout(() => { if (dialog.open && !window.__e2eAppConfirmManual) dialog.querySelector("#appConfirmOk")?.click(); }, 150);
       }).observe(dialog, { attributes: true, attributeFilter: ["open"] });
     };
     const finder = new MutationObserver(() => { watch(); if (document.getElementById("appConfirmDialog")) finder.disconnect(); });
