@@ -4523,6 +4523,35 @@
         ? aggregateGradeScope : "";
     }
 
+    // 5단계 '4단계에서 고치기'(4단계 연동 개설반 칸): 4단계를 열고 그 학년 탭에서 과목(학기·이름)의 개설 학급수 칸으로 간다.
+    // 칸 이름표('3학년 2학기 심화 영어 (2학기) 개설 학급수')로 찾는다(정규화 이름 비교). 못 찾으면 4단계만 연다.
+    function focusAggregateCourse(currentGrade, semester, subject) {
+      aggregateGradeScope = String(currentGrade || "");
+      if (typeof switchWorkflowStep === "function") switchWorkflowStep("4");
+      // 단계를 바꾸면 4단계가 다시 그려지므로(지연 렌더) 그린 뒤에 칸을 찾는다.
+      setTimeout(() => focusAggregateCourseCell(currentGrade, semester, subject), 60);
+      return true;
+    }
+
+    function focusAggregateCourseCell(currentGrade, semester, subject) {
+      const key = (text) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(text) : String(text || "").replace(/\s+/g, "");
+      const head = `${Number(currentGrade) + 1}학년 ${semester}학기 `;
+      const input = [...document.querySelectorAll("#aggregateContent .aggregate-class-input")].find((element) => {
+        const label = element.getAttribute("aria-label") || "";
+        return label.startsWith(head) && key(label.slice(head.length).replace(/\s*개설 학급수.*$/, "")) === key(subject);
+      });
+      if (!input) return false;
+      // 확정된 차수는 칸이 잠겨(disabled) 초점을 못 받으므로 그 과목 이름 단추(개설/폐강 메뉴)에 초점을 준다.
+      const target = input.disabled
+        ? document.querySelector(`#aggregateContent [data-aggregate-course="${CSS.escape(`${input.dataset.grade}:${input.dataset.courseColumn}`)}"]`) || input
+        : input;
+      input.scrollIntoView({ block: "center" });
+      target.focus({ preventScroll: true });
+      input.closest("td")?.classList.add("is-flash");
+      setTimeout(() => input.closest("td")?.classList.remove("is-flash"), 1600);
+      return true;
+    }
+
     // 교사 결정이 없으면 기준을 충족한 과목은 개설, 기준 미달 과목은 미정으로 본다(확정 스냅샷과 같은 기준).
     function aggregateClosureDecision(closures, key, atRisk) {
       return Object.hasOwn(closures || {}, key) ? closures[key] : atRisk ? "" : "open";

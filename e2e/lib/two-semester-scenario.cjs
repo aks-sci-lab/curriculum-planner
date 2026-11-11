@@ -92,13 +92,16 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
     await sleep(800);
     return text("#roundConfirmState");
   };
-  const hoursCell = (semester) => page.locator(`#workflowStep7Panel input[aria-label="3학년 ${semester}학기 ${COURSE} 개설반"]`).first();
+  // 5단계 2·3학년 선택과목 개설반 = 4단계 연동 값 단추(입력 상자 아님, 이름표 '3학년 2학기 심화 영어 개설반 6 — 4단계에서 고치기').
+  const hoursCell = (semester) => page.locator(`#workflowStep7Panel .hours-form [aria-label^="3학년 ${semester}학기 ${COURSE} 개설반"]`).first();
   const read5 = async () => {
     await gotoStep(7, "#workflowStep7Panel"); await sleep(900);
     const out = {};
     for (const semester of ["1", "2"]) {
       const cell = hoursCell(semester);
-      out[semester] = (await cell.count()) ? { classes: Number(await cell.inputValue()), title: await cell.getAttribute("title") } : null;
+      if (!(await cell.count())) { out[semester] = null; continue; }
+      const tag = await cell.evaluate((element) => element.tagName);
+      out[semester] = { classes: Number(tag === "INPUT" ? await cell.inputValue() : (await cell.innerText()).trim()), tag, title: await cell.getAttribute("title") };
     }
     return out;
   };
@@ -126,6 +129,7 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
     console.log(`[${tag}] 5단계:`, JSON.stringify(five));
     check(classes > 0 && five[semester]?.classes === classes, `[${tag}] 5단계 3학년 ${semester}학기 ${COURSE} 개설반 = 4단계 ${classes}`, JSON.stringify(five));
     check(!five[other] || five[other].classes === 0, `[${tag}] 5단계 3학년 ${other}학기 ${COURSE}는 0(줄 없음)`, JSON.stringify(five));
+    check(five[semester]?.tag === "BUTTON" && /4단계 연동/.test(five[semester]?.title || ""), `[${tag}] 5단계 선택과목 개설반은 입력 상자가 아니라 4단계 연동 값`, JSON.stringify(five));
     await shot(`${tag}-hours.png`);
     const six = await read6();
     console.log(`[${tag}] 6단계:`, JSON.stringify(six));
@@ -154,6 +158,20 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
     console.log("진단:", JSON.stringify(diag));
   }
   await compare("2", "A");
+
+  // 5단계에서 선택과목 칸을 누르면 4단계 그 과목 칸으로 · 학교 지정 과목은 직접 입력 ----------------------------------
+  {
+    await read5();
+    const designated = page.locator('#workflowStep7Panel .hours-form input[aria-label^="2학년 1학기 "][aria-label$=" 개설반"]').first();
+    const designatedLabel = (await designated.count()) ? await designated.getAttribute("aria-label") : "";
+    check(Boolean(designatedLabel) && await designated.isEditable(), `학교 지정·1학년 과목 개설반은 직접 입력 상자(${designatedLabel})`, designatedLabel);
+    await hoursCell("2").click(); await sleep(900);
+    const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") || "");
+    // 확정된 차수는 개설 학급수 칸이 잠겨 있어 그 과목 이름 단추(개설/폐강 메뉴)에 초점이 간다.
+    check(await page.locator("#aggregatePanel").isVisible() && (new RegExp(`^3학년 2학기 ${COURSE}.* 개설 학급수`).test(focused) || new RegExp(`^${COURSE}.* — 개설/폐강/미정 결정`).test(focused)),
+      "5단계 선택과목 칸을 누르면 4단계 그 과목 칸으로 감", focused);
+    await shot("05b-goto4.png");
+  }
 
   // 4단계에서 학기 바꾸기 ------------------------------------------------------------
   await open4();

@@ -1902,6 +1902,9 @@
 .result-semester-pick-state.is-picked { color: #287956; font-weight: 700; }
 .result-semester-pick-basis { flex-basis: 100%; color: #65738a; font-size: 12px; }
 .hours-form .hf-input.is-differ { box-shadow: inset 0 0 0 2px #e07a16; }
+.hf-link { width: 100%; min-height: 22px; padding: 0 2px; border: 0; border-bottom: 1px dotted currentColor; background: none; color: inherit; font: inherit; text-align: center; cursor: pointer; }
+.hf-link:hover, .hf-link:focus-visible { background: #fff3c4; outline: 1px solid #b8c4dc; }
+.aggregate-form td.is-flash { box-shadow: inset 0 0 0 3px #3b68e8; transition: box-shadow .3s; }
 .hours-detail-table tr.is-differ td { color: #9a4a00; }
 .aggregate-course-menu-prereq { width: 100%; min-height: 30px; margin-top: 8px; font-size: 12px; }
 .aggregate-fold-panel { padding-top: 4px; padding-bottom: 4px; }

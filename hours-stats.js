@@ -848,6 +848,7 @@ function computeHoursStats(year = hoursTargetYear()) {
   const grades = [];
   const items = [];
   const seen = new Set();
+  const ignoredOverrides = [];
   for (const grade of ["1", "2", "3"]) {
     const cohortYear = String(Number(year) - Number(grade) + 1);
     const layout = curriculumCohortLayout(cohortYear);
@@ -948,7 +949,9 @@ function computeHoursStats(year = hoursTargetYear()) {
         const matched = exact.length ? exact : semesterless && !alreadyUsed ? candidates : [];
         const otherOnly = plannedBoth && !exact.length && candidates.some((row) => row.semester && row.semester !== entry.semester);
         const undecidedRows = plannedBoth && !exact.length ? candidates.filter((row) => !row.semester) : [];
+        // 4단계 집계에 있는 과목(아래 네 경우)은 개설반이 4단계 값과 연동된다(5단계에서 고치지 않음).
         if (otherOnly || undecidedRows.length) {
+          item.linked = true;
           item.autoClasses = 0;
           undecidedRows.forEach((row) => usedResults.add(row));
           const opened = [...new Set(candidates.filter((row) => row.semester).map((row) => row.semester))].sort();
@@ -959,10 +962,12 @@ function computeHoursStats(year = hoursTargetYear()) {
             issues.push({ level: "warning", action: "4", text: `${grade}학년 ${entry.subject}: 편제표 1·2학기에 모두 편성됐는데 현 ${currentGrade}학년 ${info.source.round}차 결과에 학기 미정 신청 ${undecidedRows.reduce((sum, row) => sum + (Number(row.enrollment) || 0), 0)}명이 있어 개설반에 넣지 않았습니다. 4단계 과목 메뉴 '개설 학기 바꾸기'에서 학기를 정하세요.` });
           }
         } else if (alreadyUsed) {
+          item.linked = true;
           item.autoClasses = 0;
           item.basis = "학기 표시 없는 결과 · 앞 학기에만 반영";
           issues.push({ level: "warning", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 신청 결과에 학기 표시가 없어 앞 학기에만 반영했습니다. 이 학기에도 개설하면 상세 표에서 개설반을 입력하세요.` });
         } else if (matched.length) {
+          item.linked = true;
           matched.forEach((row) => usedResults.add(row));
           item.autoClasses = matched.reduce((sum, row) => sum + (Number(row.classCount) || 0), 0);
           item.enrollment = matched.reduce((sum, row) => sum + (Number(row.enrollment) || 0), 0);
@@ -972,6 +977,7 @@ function computeHoursStats(year = hoursTargetYear()) {
           item.autoClasses = 0;
           const earlier = info.source?.earlierClosed?.get(normalizeResultCourseName(entry.subject));
           const closedBefore = earlier && (earlier.semesters.has(entry.semester) || earlier.semesters.has(""));
+          if (closedBefore) item.linked = true;
           item.basis = closedBefore ? `현 ${currentGrade}학년 ${earlier.round}차 폐강`
             : info.source ? "신청 결과에서 찾지 못함" : "신청 결과 없음";
           if (closedBefore) {
@@ -985,11 +991,18 @@ function computeHoursStats(year = hoursTargetYear()) {
         issues.push({ level: "info", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 학기 칸에 숫자가 없어 운영학점 ${entry.credit}을(를) 학기 시수로 썼습니다.` });
       }
       const override = hoursNumber(settings.classOverrides[item.key], { integer: true, max: 99 });
-      item.classes = override ?? item.autoClasses;
-      item.manual = override !== null;
-      // 직접 입력이 우선이지만, 4단계(신청 결과) 값과 다르면 칸에 표시한다(학교 지정 과목은 학급 수 기준이라 표시하지 않음).
-      item.differs = item.manual && item.kind !== "지정" && grade !== "1" && Boolean(info.source) && item.classes !== item.autoClasses;
-      if (item.manual) item.basis = item.differs ? `직접 입력 ${item.classes}반 · 4단계 ${item.autoClasses}반과 다름(${item.basis})` : `직접 입력 (자동 ${item.autoClasses})`;
+      if (item.linked) {
+        // 2·3학년 선택과목(사용자 결정): 개설반 = 4단계 개설 학급 수, 5단계에서 고치지 않는다. 예전 직접 입력은 지우지 않고 쓰지 않는다.
+        item.classes = item.autoClasses;
+        item.manual = false;
+        if (override !== null && override !== item.autoClasses) ignoredOverrides.push({ item, override });
+      } else {
+        item.classes = override ?? item.autoClasses;
+        item.manual = override !== null;
+        // 선택과목인데 4단계 집계에 없는 과목(과목명 불일치 등)만 직접 입력을 쓴다.
+        item.missingStage4 = item.kind !== "지정" && grade !== "1" && Boolean(info.source);
+        if (item.manual) item.basis = item.missingStage4 ? `4단계에 없는 과목 · 직접 입력 ${item.classes}반` : `직접 입력 (자동 ${item.autoClasses})`;
+      }
       const departmentOverride = settings.departmentOverrides[normalizeResultCourseName(item.subject)];
       item.defaultDepartment = hoursDefaultDepartment(item.subject, item.area);
       item.department = HOURS_DEPARTMENTS.some((department) => department.id === departmentOverride) || hoursNonTeachingId(departmentOverride)
@@ -1001,6 +1014,10 @@ function computeHoursStats(year = hoursTargetYear()) {
     if (unused.length) {
       issues.push({ level: "warning", text: `현 ${currentGrade}학년 ${info.source.round}차 결과 중 ${cohortYear}학년도 입학생 편제표의 ${grade}학년 과목과 맞지 않는 과목이 있습니다(시수 미반영): ${resultExampleList(unused.map((row) => `${row.displayName || row.name}${row.semester ? `(${row.semester}학기)` : ""}`))}` });
     }
+  }
+  if (ignoredOverrides.length) {
+    issues.push({ level: "info", text: `4단계와 다른 직접 입력 ${ignoredOverrides.length}개를 4단계 값으로 바꿨습니다: ${resultExampleList(ignoredOverrides.map(({ item, override }) =>
+      `${item.grade}학년 ${item.semester}학기 ${item.subject} ${override} → ${item.autoClasses}`), 8)}. 선택과목 개설반은 4단계 개설 학급 수를 따릅니다(저장된 직접 입력은 지우지 않았고, 4단계에 그 과목이 없을 때만 씁니다).` });
   }
   for (const info of grades) info.label = hoursGradeLabel(info);
   for (const item of items) {
@@ -1532,13 +1549,15 @@ function renderHoursStatsView() {
   const detailOpen = content.querySelector('details[data-hours-details="detail"]')?.open ?? stats.items.some((item) => item.department === "기타");
   const detailRows = !detailOpen ? "" : stats.items.slice().sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) ||
     hoursDepartmentOrder(a.department) - hoursDepartmentOrder(b.department) ||
-    a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}${item.differs ? " is-differ" : ""}">
+    a.subject.localeCompare(b.subject, "ko")).map((item) => `<tr class="${item.classes === 0 ? "is-zero" : ""}${item.manual ? " is-manual" : ""}${item.missingStage4 && item.manual ? " is-differ" : ""}">
       <td>${item.grade}</td><td>${item.cohortYear}</td><td>${item.currentGrade ? `현 ${item.currentGrade}` : "신입"}</td><td>${item.semester}</td><th scope="row" class="closure-subject">${escapeHtml(item.subject)}</th>
       <td>${item.kind}</td>
       <td><select data-hours-department="${escapeHtml(normalizeResultCourseName(item.subject))}" data-default-department="${item.defaultDepartment}" data-focus-key="dept-${escapeHtml(item.key)}" aria-label="${escapeHtml(item.subject)} 담당 교과">${departmentOptions(item.department)}</select></td>
       <td>${hoursFormat(item.credit)}</td>
       <td>${item.enrollment ?? ""}</td>
-      <td><input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-hours-auto="${item.autoClasses}" data-focus-key="detail-item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반"></td>
+      <td>${item.linked
+        ? `<button class="hf-link" type="button" data-hours-goto4="${escapeHtml(`${item.currentGrade}|${item.semester}|${item.subject}`)}" title="${escapeHtml(`4단계 연동 · ${item.basis} · 누르면 4단계에서 고칩니다`)}" aria-label="${escapeHtml(item.subject)} 개설반 ${item.classes} — 4단계에서 고치기">${item.classes}</button>`
+        : `<input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-hours-auto="${item.autoClasses}" data-focus-key="detail-item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반">`}</td>
       <td>${item.hours}</td>
       <td>${escapeHtml(item.sourceRound)}</td>
       <td class="closure-subject hours-note">${escapeHtml(item.basis)}</td>
@@ -2035,7 +2054,10 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
             put(row, column + 1, { v: item.credit, k: "cell" });
             put(row, column + 2, {
               v: item.classes, k: item.kind !== "지정" && item.grade !== "1" ? "cellRed" : "cell", item,
-              input: { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.differs ? " is-differ" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
+              // 4단계 연동 칸은 입력 상자가 아니라 값 단추(누르면 4단계 그 과목 칸으로).
+              ...(item.linked ? { link: { value: item.classes, title: `4단계 연동 · ${item.basis} · 누르면 4단계에서 고칩니다`, grade: item.currentGrade, semester: item.semester, subject: item.subject,
+                label: `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반 ${item.classes} — 4단계에서 고치기` } } : {}),
+              input: item.linked ? null : { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.missingStage4 && item.manual ? " is-differ" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
                 attrs: { "data-hours-item-classes": item.key, "data-hours-auto": item.autoClasses, "data-focus-key": `item-${item.key}`, min: 0, max: 99, step: 1,
                   "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반` } }
             });
@@ -2268,6 +2290,8 @@ function hoursFormHtml(model) {
         content = `<div class="hf-memo-fixed">${escapeHtml(cell.memo.fixed)}</div>
           <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="예시) ◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 — 전년도·올해 교사 수를 넣으면 자동으로 적습니다">${escapeHtml(cell.memo.changes)}</textarea>
           ${cell.memo.edited ? '<button class="button button-quiet hf-memo-reset" type="button" data-hours-action="reset-memo">자동 문구로</button>' : ""}`;
+      } else if (cell?.link) {
+        content = `<button class="hf-link" type="button" data-hours-goto4="${escapeHtml(`${cell.link.grade}|${cell.link.semester}|${cell.link.subject}`)}" title="${escapeHtml(cell.link.title || "")}" aria-label="${escapeHtml(cell.link.label)}">${escapeHtml(String(cell.link.value ?? ""))}</button>`;
       } else if (cell?.input) content = input(cell.input);
       else content = escapeHtml(hoursFormDisplay(cell));
       html += `<td${span} class="hf-${kind}${sides.l || sides.r || sides.t || sides.b ? ` ${sideClass(sides)}` : ""}">${content}</td>`;
@@ -2603,6 +2627,14 @@ function initHoursStats() {
     else renderWorkspaceContext();
   };
   const openCohort = (event) => {
+    // 4단계 연동 개설반 칸: 4단계 집계표의 그 과목 개설 학급수 칸으로 간다(app.js focusAggregateCourse).
+    const goto4 = event.target.closest("[data-hours-goto4]");
+    if (goto4) {
+      const [grade, semester, ...subject] = goto4.dataset.hoursGoto4.split("|");
+      if (typeof focusAggregateCourse === "function") focusAggregateCourse(grade, semester, subject.join("|"));
+      else switchWorkflowStep("4");
+      return;
+    }
     const thresholds = event.target.closest("[data-hours-thresholds]");
     if (thresholds) {
       thresholds.closest("dialog")?.close?.();

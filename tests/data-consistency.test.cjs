@@ -337,17 +337,76 @@ test("5·6단계가 읽는 차수는 같은 규칙(courseOpeningRound): 최근 �
   assert.equal(ctx.courseOpeningRound("1"), "", "현 1학년 결과 없음");
 });
 
-test("5단계 직접 입력 개설반은 우선하되 4단계 값과 다르면 표시(is-differ)", () => {
+test("직접 입력이 있어도 2·3학년 선택과목 개설반은 4단계 값(4단계 연동) — 예전 직접 입력은 지우지 않고 안내만", () => {
   const env = context();
   const { ctx, state } = env;
   load(env, { pick: "2" });
-  const auto = stages(env).five.get(`2|${ctx.normalizeResultCourseName(COURSE)}`);
-  state.hoursStats["2027"].classOverrides = { [`3|2|${ctx.normalizeResultCourseName(COURSE)}`]: auto + 1 };
+  const key = ctx.normalizeResultCourseName(COURSE);
+  const before = stages(env);
+  const auto = before.five.get(`2|${key}`);
+  // 예전 버전에서 넣은 값(사용자 화면: 주제 탐구 독서 10 · 독서 토론과 글쓰기 1 처럼 4단계와 다른 값)
+  state.hoursStats["2027"].classOverrides = { [`3|2|${key}`]: auto + 3, [`3|1|${ctx.normalizeResultCourseName("화학 반응의 세계")}`]: 10 };
   ctx.bump();
-  const item = ctx.computeHoursStats("2027").items.find((entry) => entry.grade === "3" && entry.semester === "2" && entry.subject === COURSE);
-  assert.equal(item.classes, auto + 1);
-  assert.equal(item.differs, true);
-  assert.match(item.basis, new RegExp(`직접 입력 ${auto + 1}반 · 4단계 ${auto}반과 다름`));
+  const result = stages(env);
+  assertSame(result, "직접 입력 있음");
+  const item = result.stats.items.find((entry) => entry.grade === "3" && entry.semester === "2" && entry.subject === COURSE);
+  assert.deepEqual([item.classes, item.autoClasses, item.manual, item.linked], [auto, auto, false, true]);
+  assert.equal(state.hoursStats["2027"].classOverrides[`3|2|${key}`], auto + 3, "저장 자료는 그대로(되돌릴 수 있게)");
+  const notice = result.stats.issues.find((issue) => /^4단계와 다른 직접 입력 2개를 4단계 값으로 바꿨습니다/.test(issue.text));
+  assert.ok(notice && notice.level === "info", result.stats.issues.map((issue) => issue.text).join("\n"));
+  assert.match(notice.text, new RegExp(`3학년 2학기 ${COURSE} ${auto + 3} → ${auto}`));
+  // 시수표 칸: 연동 칸은 입력 상자가 아니라 값 단추(4단계에서 고치기)
+  const model = ctx.hoursFormModel(result.stats, { schoolName: "가상고", date: new Date(2026, 10, 11) });
+  const cell = [...model.cells.values()].find((entry) => entry.item === item);
+  assert.equal(cell.input, null);
+  assert.equal(cell.link.value, auto);
+});
+
+test("4단계에 없는 선택과목(과목명 불일치 등)만 직접 입력을 쓰고 '4단계에 없는 과목 · 직접 입력' 표시", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  // 4단계 결과에서 한 과목을 빼서(과목명이 달라 집계에 없음) 직접 입력만 남긴다.
+  const name = "행성우주과학";
+  state.courses = state.courses.filter((course) => !course.name.startsWith(name));
+  for (const student of state.students) student.selections = student.selections.filter((selection) => !selection.name.startsWith(name));
+  state.hoursStats["2027"].classOverrides = { [`3|2|${ctx.normalizeResultCourseName(name)}`]: 4 };
+  ctx.bump();
+  const item = ctx.computeHoursStats("2027").items.find((entry) => entry.grade === "3" && entry.semester === "2" && entry.subject === name);
+  assert.deepEqual([item.linked || false, item.manual, item.classes, item.missingStage4], [false, true, 4, true]);
+  assert.match(item.basis, /^4단계에 없는 과목 · 직접 입력 4반/);
+});
+
+// 원인 재현(사용자 화면 v2026.11.23, 사용자가 '선택과목 근거'를 '자동'으로 바꾸자 해결됨): 5단계 시수 설정의 '선택과목 근거' 고정값
+// (settings.sourceRounds, 예전에 한 번 고른 1차)이 자동 규칙(courseOpeningRound)보다 먼저라, 4단계가 2차(확정)여도 5단계는 미확정 1차를 읽는다.
+test("원인 재현: 선택과목 근거를 1차로 고정해 두면 4단계 2차(확정)와 달리 5단계는 미확정 1차를 읽는다 · 자동이면 2차", () => {
+  const env = context();
+  const { ctx, state } = env;
+  state.currentRound = "1";
+  load(env, { pick: "1" });
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {} } };
+  state.currentRound = "2";
+  load(env, { pick: "2" });
+  state.rounds["2"] = { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {} };
+  state.roundStatuses = { "2": { status: "confirmed", snapshot: ctx.buildRoundSnapshot("2") } };
+  const key = ctx.normalizeResultCourseName(COURSE);
+  const read = () => {
+    ctx.bump();
+    const stats = ctx.computeHoursStats("2027");
+    const info = stats.grades.find((item) => item.grade === "3");
+    const classes = (semester) => stats.items.find((item) => item.grade === "3" && item.semester === semester && ctx.normalizeResultCourseName(item.subject) === key).classes;
+    return { round: info.source.round, confirmed: info.source.confirmed, label: info.label, first: classes("1"), second: classes("2"), issues: stats.issues.map((issue) => issue.text) };
+  };
+  state.hoursStats["2027"].sourceRounds = { "3": "1" };
+  const pinned = read();
+  assert.deepEqual([pinned.round, pinned.confirmed], ["1", false], "고정값 1차가 이김(사용자 화면과 같음)");
+  assert.match(pinned.label, /현 2학년 1차 미확정/);
+  assert.ok(pinned.issues.some((text) => /현 2학년 1차 결과가 확정되지 않아 현재 집계로 임시 계산했습니다/.test(text)));
+  assert.ok(pinned.first > 0 && pinned.second === 0, "1차 값(1학기)");
+  state.hoursStats["2027"].sourceRounds = {};
+  const auto = read();
+  assert.deepEqual([auto.round, auto.confirmed], ["2", true], "자동이면 4단계 2차 확정");
+  assert.ok(auto.second > 0 && auto.first === 0, "2차 값(2학기) = 4단계");
 });
 
 test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기화에 연결, 스크립트는 result-import.js 뒤", () => {
