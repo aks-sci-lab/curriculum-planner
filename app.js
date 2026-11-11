@@ -2086,8 +2086,117 @@
       return String(text ?? "").replace(/[ⅠⅡⅢⅣⅤⅰⅱⅲⅳⅴ]/g, (char) => digits[char]);
     }
 
+    // 학기 꼬리표 없이 결과에 적힌 두 학기 과목('과학의 역사와 문화' — 편제표 1·2학기 묶음에 모두 있음)을 학생마다 학기를 정해
+    // 'X (1학기)'·'X (2학기)' 과목으로 나눈다(학기제: 같은 과목은 한 학기만). 근거는 그 학생이 택n보다 모자란 학기 그룹이고,
+    // 이런 과목을 여럿 고른 학생은 학기 조합을 모두 따져 그룹별 선택 수가 맞는 하나를 고른다. 정할 수 없는 학생은 기본 과목에 남기고
+    // semesterUndecided(4단계 '학기 미정')로 표시한다. 나눈 뒤(또는 처음부터) 고른 학생이 없는 기본 과목은 지운다. 웹 결과(online)는 손대지 않는다.
+    function splitUntaggedTwoSemesterCourses(data, groups) {
+      const undecided = [];
+      if (!data?.courses?.length || !Array.isArray(groups) || !groups.length) return { undecided, split: 0 };
+      const key = (name) => normalizeRomanNumerals(String(name ?? "").replace(/\s*\((?:[23]학년|[12]학기|일반|진로|융합)(?:선택)?\)/g, "")).replace(/\s+/g, "");
+      const tagged = (course) => Boolean(course.semesterKey) || Boolean(parseSemesterFromCourseName(course.name));
+      const gradesOf = (course) => course.applicationCurrentGrade ? [String(course.applicationCurrentGrade)]
+        : [...new Set(data.students.map((student) => String(student.grade)))];
+      const candidatesOf = (course, grade) => {
+        const list = groups.filter((group) => String(group.grade) === String(Number(grade) + 1) && ["1", "2"].includes(String(group.semester)) &&
+          Number.isInteger(group.count) && group.count > 0 && group.courses.some((name) => key(name) === key(course.name)));
+        const bySemester = new Map();
+        for (const group of list) if (!bySemester.has(String(group.semester))) bySemester.set(String(group.semester), group);
+        return bySemester.size === 2 ? bySemester : null;
+      };
+      const twoSemester = new Map();
+      for (const course of data.courses) {
+        if (course.applicationGroupSource === "online" || tagged(course)) continue;
+        for (const grade of gradesOf(course)) {
+          const candidates = candidatesOf(course, grade);
+          if (candidates) { if (!twoSemester.has(course)) twoSemester.set(course, new Map()); twoSemester.get(course).set(grade, candidates); }
+        }
+      }
+      if (!twoSemester.size) return { undecided, split: 0 };
+      const sameGroup = (a, b) => a && b && a.name === b.name && String(a.semester) === String(b.semester);
+      const variants = new Map();
+      const variantFor = (base, semester) => {
+        const id = `${base.column}|${semester}`;
+        if (variants.has(id)) return variants.get(id);
+        let variant = data.courses.find((course) => course !== base && key(course.name) === key(base.name) &&
+          String(course.semesterKey || parseSemesterFromCourseName(course.name)) === semester &&
+          (course.applicationCurrentGrade || "") === (base.applicationCurrentGrade || ""));
+        if (!variant) {
+          const gradeTail = String(base.name).match(/\s*\([23]학년\)$/)?.[0] || "";
+          const subject = base.applicationSubject;
+          const credit = subject?.semesterCredits?.[semester] || base.credits;
+          variant = { ...base, column: `${base.column}-${semester}`, name: `${String(base.name).replace(/\s*\([23]학년\)$/, "")} (${semester}학기)${gradeTail}`,
+            semesterKey: semester, credits: credit,
+            ...(subject ? { applicationSubject: { ...subject, subject: `${subject.subject} (${semester}학기)`, semester, credit } } : {}) };
+          data.courses.splice(data.courses.indexOf(base) + 1 + [...variants.keys()].filter((item) => item.startsWith(`${base.column}|`)).length, 0, variant);
+        }
+        variants.set(id, variant);
+        return variant;
+      };
+      let split = 0;
+      for (const student of data.students) {
+        const grade = String(student.grade);
+        const picked = (student.selections || []).filter((selection) => {
+          const course = data.courses.find((item) => item.column === selection.column);
+          return course && twoSemester.get(course)?.has(grade);
+        });
+        if (!picked.length) continue;
+        // 꼬리표 없는 두 학기 과목 말고 이미 그룹이 정해진 선택 수(학기 그룹별).
+        const groupsOfStudent = new Map();
+        for (const course of picked) for (const group of twoSemester.get(data.courses.find((item) => item.column === course.column)).get(grade).values()) {
+          groupsOfStudent.set(`${group.name}|${group.semester}`, { group, have: 0 });
+        }
+        for (const selection of student.selections) {
+          if (picked.includes(selection)) continue;
+          const owner = applicationGroupForCourse(selection, grade, groups);
+          for (const entry of groupsOfStudent.values()) if (sameGroup(owner, entry.group)) entry.have++;
+        }
+        const options = [];
+        const total = 2 ** Math.min(picked.length, 10);
+        for (let mask = 0; mask < total; mask++) {
+          const counts = new Map([...groupsOfStudent].map(([id, entry]) => [id, entry.have]));
+          const semesters = picked.map((selection, index) => {
+            const semester = (mask >> index) & 1 ? "2" : "1";
+            const group = twoSemester.get(data.courses.find((item) => item.column === selection.column)).get(grade).get(semester);
+            counts.set(`${group.name}|${group.semester}`, counts.get(`${group.name}|${group.semester}`) + 1);
+            return semester;
+          });
+          const error = [...groupsOfStudent].reduce((sum, [id, entry]) => sum + Math.abs(counts.get(id) - entry.group.count), 0);
+          options.push({ semesters, error });
+        }
+        const best = Math.min(...options.map((option) => option.error));
+        const winners = options.filter((option) => option.error === best);
+        if (winners.length !== 1) {
+          for (const selection of picked) {
+            const base = data.courses.find((item) => item.column === selection.column);
+            base.semesterUndecided = true;
+            undecided.push({ student, course: base.name });
+          }
+          continue;
+        }
+        picked.forEach((selection, index) => {
+          const base = data.courses.find((item) => item.column === selection.column);
+          const variant = variantFor(base, winners[0].semesters[index]);
+          const at = student.selections.indexOf(selection);
+          student.selections[at] = selection === base ? variant : { ...selection, column: variant.column, name: variant.name, semesterKey: variant.semesterKey,
+            credits: variant.credits, ...(variant.applicationSubject ? { applicationSubject: variant.applicationSubject } : {}) };
+          split++;
+        });
+      }
+      // 고른 학생이 없는 기본 과목(나눈 뒤 남은 학생 없음, 처음부터 0명)은 지운다.
+      for (const base of twoSemester.keys()) {
+        if (data.students.some((student) => (student.selections || []).some((selection) => selection.column === base.column))) continue;
+        data.courses.splice(data.courses.indexOf(base), 1);
+      }
+      for (const student of data.students) {
+        student.totalCredits = (student.selections || []).reduce((sum, course) => sum + (Number(course.credits) || 0), 0);
+      }
+      return { undecided, split };
+    }
+
     function classifyApplicationRecords(data) {
       const groups = typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+      const splitResult = splitUntaggedTwoSemesterCourses(data, groups);
       const warnings = new Set();
       const unresolved = [];
       for (const course of data.courses) {
@@ -2110,11 +2219,14 @@
         }
         if (unresolved.length === before) break;
       }
-      for (const { course, grade } of unresolved) warnings.add(`${Number(grade)+1}학년 ${course.name}`);
+      for (const { course, grade } of unresolved) if (!course.semesterUndecided) warnings.add(`${Number(grade)+1}학년 ${course.name}`);
       for (const student of data.students) for (const course of student.selections) {
         course.applicationGroups = data.courses.find((item) => item.column === course.column)?.applicationGroups || {};
       }
-      return [...warnings];
+      const result = [...warnings];
+      // 학기를 정할 수 없는 선택(학생·과목): 결과 검증이 따로 경고한다(배열 속성 — 부르는 곳은 그대로 배열로 씀).
+      result.undecidedSemester = splitResult.undecided;
+      return result;
     }
 
     // classifyApplicationRecords의 "2학년 물리학" 목록을 "2학년 과목(현 1학년 신청) 물리학, …"처럼 학년별로 묶는다.
@@ -3748,9 +3860,10 @@
             ? forcedSemester
             : (applicationGroup?.semester || parsedAssignedGroup.semesterKey || course.semesterKey || "");
           const displayGrade = Number(grade) + 1;
+          // 꼬리표 없는 두 학기 과목 중 학기를 정하지 못한 학생만 남은 과목은 '미분류'가 아니라 '학기 미정'.
           const semesterName = semesterKey
             ? `${displayGrade}학년 ${semesterKey}학기`
-            : `${displayGrade}학년 미분류`;
+            : course.semesterUndecided ? `${displayGrade}학년 학기 미정` : `${displayGrade}학년 미분류`;
           const category = applicationGroup?.name ||
             (course.applicationGroupSource === "online" ? "" : parsedAssignedGroup.category) || UNASSIGNED_GROUP;
           let semester = semesters.find((item) => item.name === semesterName);
@@ -4617,6 +4730,7 @@
         ? `<span class="aggregate-total-line">합계 ${shownStats.reduce((sum, stat) => sum + stat.students, 0)}명 · ${shownStats.reduce((sum, stat) => sum + stat.courses, 0)}과목 · 개설 ${shownStats.reduce((sum, stat) => sum + stat.classes, 0)}학급 · ${aggregateRiskText(riskCounts)}</span>` : "";
       if (gradeBar) {
         gradeBar.innerHTML = `<div class="aggregate-grade-tabs" role="group" aria-label="학년 선택">${tabs}</div>${missingNote}${totalLine}
+          ${aggregateUntaggedNotice(locked)}
           <button type="button" class="button aggregate-risk-filter" data-aggregate-risk-filter aria-pressed="${aggregateAttentionOnly}" title="결정이 미정인 기준 미달 과목, 학급당 인원이 최대 인원·분반 기준을 넘는 과목, 위계(선이수) 경고 학생이 있는 과목, 목표 학급수와 맞지 않는 그룹만 봅니다.">처리할 것만(${attentionCount})</button>`;
       }
       const canUndo = !!aggregateAdjustUndo && aggregateAdjustUndo.round === round;
@@ -4629,6 +4743,48 @@
       $("#aggregateDescription").textContent =
         `${round}차${locked ? " · 확정됨(수정 잠금)" : ""} · ${scope ? `${gradeLabel(scope)} 신청` : `${aggregate.reports.length}개 학년`} · ${aggregateRiskText(riskCounts)}`;
       $("#downloadAggregate").disabled = false;
+    }
+
+    // 예전에 반영한 결과에 학기 꼬리표 없는 두 학기 과목이 남아 있으면(4단계 '미분류'), 같은 규칙(splitUntaggedTwoSemesterCourses)으로
+    // 학생마다 학기를 다시 정할 수 있다고 알린다. 저장 자료는 '학기 다시 정하기'(확인 창)를 눌렀을 때만 바꾼다.
+    function aggregateUntaggedPreview() {
+      const compute = () => {
+        if (!state.students?.length || typeof splitUntaggedTwoSemesterCourses !== "function") return null;
+        const groups = typeof getApplicationGroupSettings === "function" ? getApplicationGroupSettings() : [];
+        const data = JSON.parse(JSON.stringify({ courses: state.courses, students: state.students }));
+        const before = data.courses.length;
+        const result = splitUntaggedTwoSemesterCourses(data, groups);
+        if (!result.split && data.courses.length === before && !result.undecided.length) return null;
+        return { split: result.split, undecided: result.undecided.length, changed: result.split > 0 || data.courses.length !== before };
+      };
+      return typeof cachedByStateRevision === "function"
+        ? cachedByStateRevision("aggregateUntaggedPreview", String(state.currentRound), compute) : compute();
+    }
+
+    function aggregateUntaggedNotice(locked) {
+      const preview = aggregateUntaggedPreview();
+      if (!preview?.changed) return "";
+      return `<span class="aggregate-missing-note" role="status" id="aggregateUntaggedNote">학기 표시 없는 두 학기 과목 선택 ${preview.split}건${preview.undecided ? ` · 학기를 정할 수 없는 선택 ${preview.undecided}건` : ""}
+        <button type="button" class="button button-quiet" data-aggregate-resplit${locked ? " disabled" : ""}>학기 다시 정하기</button></span>`;
+    }
+
+    async function resplitAggregateSemesters() {
+      if (typeof isRoundLocked === "function" && isRoundLocked(state.currentRound)) return;
+      const preview = aggregateUntaggedPreview();
+      if (!preview?.changed) return;
+      const text = `결과에 학기 표시 없이 적힌 두 학기 과목 선택 ${preview.split}건을 학생마다 택n이 모자란 학기로 나눠 'X (1학기)'·'X (2학기)' 과목으로 바꿉니다.` +
+        (preview.undecided ? ` 학기를 정할 수 없는 ${preview.undecided}건은 '학기 미정'으로 둡니다.` : "") + "\n\n이 차수의 결과 자료가 바뀝니다. 진행할까요?";
+      const ok = typeof appConfirm === "function" ? await appConfirm(text, { title: "학기 다시 정하기", ok: "다시 정하기", cancel: "취소" }) : window.confirm(text);
+      if (!ok) return;
+      const data = JSON.parse(JSON.stringify({ courses: state.courses, students: state.students }));
+      classifyApplicationRecords(data);
+      state.courses = data.courses;
+      state.students = data.students;
+      persistState();
+      if (typeof renderRoster === "function") renderRoster();
+      if (typeof renderPreview === "function") renderPreview();
+      if (typeof renderSemesterClassifier === "function") renderSemesterClassifier();
+      renderAggregate();
     }
 
     // 학급수 자동 조정: 그룹 하나 또는 학년 전체의 택n 그룹을 목표(n × 학급 수)에 맞춰 개설 학급수 수동 입력으로 저장한다.
@@ -5601,8 +5757,8 @@
             courseByGradeName.set(`${grade}:${subject}`,semesterCourse);
             semesterVariants++;
           }
-          // 학기별로 나눠 신청받았고 학기 없이 고른 학생이 없으면, 학기 없는 0명 과목을 집계에 남기지 않는다.
-          if (semesterVariants && !entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(item.subject))) {
+          // 두 학기 과목을 학기 없이 고른 학생이 없으면(학기별로 나눠 받았든, 아무도 고르지 않았든) 학기 없는 0명 과목을 집계에 남기지 않는다.
+          if (semesters.length > 1 && !entries.some((entry) => String(Number(entry.grade)+1)===grade && entry.selections?.includes(item.subject))) {
             courses.splice(courses.indexOf(course), 1);
             courseByGradeName.delete(`${grade}:${item.subject}`);
           }
@@ -8478,6 +8634,7 @@
     $("#aggregateGradeBar").addEventListener("click", (event) => {
       const tab = event.target.closest("[data-aggregate-grade]");
       const filter = event.target.closest("[data-aggregate-risk-filter]");
+      if (event.target.closest("[data-aggregate-resplit]")) { resplitAggregateSemesters(); return; }
       if (filter) {
         aggregateAttentionOnly = !aggregateAttentionOnly;
         renderAggregate();
