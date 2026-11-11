@@ -540,7 +540,7 @@ function classSectionsTimetableSemesterHtml(model) {
   const grid = model.grid ? `<table class="cs-tt-grid"><thead><tr><th></th>${model.days.map((day) => `<th scope="col">${esc(day)}</th>`).join("")}</tr></thead><tbody>
     ${model.grid.map((row, p) => `<tr><th scope="row">${p + 1}</th>${row.map((cell) => `<td data-kind="${cell.kind}">${cell.block ? `<small>${esc(cell.block)}</small>` : ""}${cell.lines.map((line) => `<span>${esc(line)}</span>`).join("")}</td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
   const list = model.untimed.length ? `<ul class="cs-tt-list">${model.untimed.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
-  const unit = model.unitCourses.length ? `<p class="cs-tt-unit">학급 단위 과목: ${model.unitCourses.map(esc).join(", ")}</p>` : "";
+  const unit = model.unitCourses.length ? `<p class="cs-tt-unit">반 수업(시간표에서 배치) · 학급 단위 과목: ${model.unitCourses.map(esc).join(", ")}</p>` : "";
   const empty = !model.grid && !model.untimed.length ? '<p class="cs-tt-unit">이 학기 이동 수업 배정이 없습니다.</p>' : "";
   return `${grid}${list}${unit}${empty}`;
 }
@@ -560,7 +560,7 @@ function classSectionsTimetableHtml(model) {
   const grid = model.grid ? `<table class="cs-tt-grid"><thead><tr><th></th>${model.days.map((day) => `<th scope="col">${esc(day)}</th>`).join("")}</tr></thead><tbody>
     ${model.grid.map((row, p) => `<tr><th scope="row">${p + 1}</th>${row.map((cell) => `<td data-kind="${cell.kind}">${cell.block ? `<small>${esc(cell.block)}</small>` : ""}${cell.lines.map((line) => `<span>${esc(line)}</span>`).join("")}</td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
   const list = model.untimed.length ? `<ul class="cs-tt-list">${model.untimed.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
-  const unit = model.unitCourses.length ? `<p class="cs-tt-unit">학급 단위 과목: ${model.unitCourses.map(esc).join(", ")}</p>` : "";
+  const unit = model.unitCourses.length ? `<p class="cs-tt-unit">반 수업(시간표에서 배치) · 학급 단위 과목: ${model.unitCourses.map(esc).join(", ")}</p>` : "";
   const empty = !model.grid && !model.untimed.length ? '<p class="cs-tt-unit">이 학기 이동 수업 배정이 없습니다.</p>' : "";
   return `<article class="cs-tt" data-student="${esc(model.student.split(" ")[0])}"><header><h4>${esc(model.title)}</h4><p>${esc(model.student)}</p></header>${retake}${grid}${list}${unit}${empty}</article>`;
 }
@@ -587,7 +587,7 @@ function classSectionsTimetableSheet(name, models) {
         });
       }
       for (const line of model.untimed) { rows.push([{ v: line, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
-      if (model.unitCourses.length) { rows.push([{ v: `학급 단위 과목: ${model.unitCourses.join(", ")}`, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
+      if (model.unitCourses.length) { rows.push([{ v: `반 수업(시간표에서 배치) · 학급 단위 과목: ${model.unitCourses.join(", ")}`, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
       if (!model.grid && !model.untimed.length) { rows.push([{ v: "이 학기 이동 수업 배정이 없습니다.", s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
     }
     rows.push([]);
@@ -604,7 +604,7 @@ function classSectionsTimetableSheet(name, models) {
       });
     }
     for (const line of model.untimed) { rows.push([{ v: line, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
-    if (model.unitCourses.length) { rows.push([{ v: `학급 단위 과목: ${model.unitCourses.join(", ")}`, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
+    if (model.unitCourses.length) { rows.push([{ v: `반 수업(시간표에서 배치) · 학급 단위 과목: ${model.unitCourses.join(", ")}`, s: 3 }]); merges.push(`A${rows.length}:${last}${rows.length}`); }
     rows.push([]);
   }
   return { name, rows, merges, heights, widths: [6, ...Array(width - 1).fill(18)], orientation: "portrait" };
@@ -648,7 +648,8 @@ function classSectionsHandoutSlips(semesters, options = {}) {
         slip.rows.push({ semester: String(semester), kind: "section", blockLetter: col.blockLetter || "", block: `${groupLabel.get(col.groupKey) ? `${groupLabel.get(col.groupKey)} ` : ""}${col.blockLetter || ""}블록 · ${classSectionsPrintTimesText(col.times) || "시간 미정"}`,
           courseName: cell.courseName, roomName: cell.roomName, roomLabel: cell.roomLabel || "미정", teacher: cell.teacher || "", order: col.order || 0 });
       }
-      for (const name of student.unit || []) slip.rows.push({ semester: String(semester), kind: "unit", blockLetter: "~", block: "학급 단위", courseName: name, order: 900 });
+      // 학급 단위 과목은 반마다 따로 하는 반 수업: 블록 시간 대신 '반 수업'(시간은 전체 시간표에서 반마다)
+      for (const name of student.unit || []) slip.rows.push({ semester: String(semester), kind: "unit", blockLetter: "~", block: "반 수업", courseName: name, order: 900 });
       for (const item of student.retake || []) slip.rows.push({ semester: String(semester), kind: "retake", blockLetter: "~~", block: "—", courseName: item.courseName, reason: item.reason || "", order: 999 });
     }
   }

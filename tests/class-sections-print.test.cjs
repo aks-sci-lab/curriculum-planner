@@ -204,7 +204,7 @@ test("학생 시간표: 요일×교시 격자(이동 칸 = 과목·분반·교�
   assert.deepEqual(model.untimed, ["c블록: 경제 · 교실 미정"]);
   const html = pr.classSectionsTimetableHtml(model);
   assert.match(html, /재신청 필요: 화학\(정원 부족\)/);
-  assert.match(html, /학급 단위 과목: 정보/);
+  assert.match(html, /반 수업\(시간표에서 배치\) · 학급 단위 과목: 정보/);
   // 블록 시간이 하나도 없으면 'a블록: 물리학 ② · 교실 · 교사' 목록만.
   const listOnly = pr.classSectionsStudentTimetable({ ...info, fill: "", entries: info.entries.map((entry) => ({ ...entry, times: [] })) });
   assert.equal(listOnly.grid, null);
@@ -842,6 +842,7 @@ test("학생 배부용 쪽지: 1·2학기 한 쪽지, 표(학기·블록·과목
   assert.equal((html.match(/<col style/g) || []).length, 5);
   assert.match(html, /rowspan="3">1학기<\/th><td>A블록 · 월3, 수5<\/td><td class="cs-ho-course">물리학<small class="cs-ho-room">A물리학1<\/small><\/td><td>2학년 1반<\/td><td>김교사<\/td>/);
   assert.match(html, /<td>정보<\/td><td colspan="2">학급 단위\(우리 반 교실\)<\/td>/);
+  assert.match(html, /<td>반 수업<\/td><td>정보<\/td>/, "학급 단위 과목은 블록 시간 대신 '반 수업'");
   assert.match(html, /<td>지구과학<\/td><td colspan="2"><strong>재신청 필요\(정원 부족\)<\/strong><\/td>/);
   // 한 학기 그룹 하나 → 블록에 그룹 표시 없음
   assert.doesNotMatch(html, /택\d A블록/);
