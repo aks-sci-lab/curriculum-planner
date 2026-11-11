@@ -1512,6 +1512,9 @@ test("untagged two-semester course in a result file is split per student so 4단
   const count = (semesterName, name) => semesters.find((semester) => semester.name === semesterName).groups.flatMap((group) => group.courses).find((course) => course.name === name)?.enrollment;
   assert.equal(count("3학년 1학기", "심화 영어 (1학기)"), 2, "1·3번");
   assert.equal(count("3학년 2학기", "심화 영어 (2학기)"), 1, "2번");
+  // 표시: 학기별 구역 안이라 과목명에 '(n학기)'를 붙이지 않는다(안쪽 키 name은 변형 과목 그대로).
+  const shown = semesters.flatMap((semester) => semester.groups.flatMap((group) => group.courses)).filter((course) => /^심화 영어/.test(course.name));
+  assert.deepEqual(plain(shown.map((course) => course.displayName)), ["심화 영어", "심화 영어"]);
   // 택n 수: 나눈 뒤 학생마다 그룹별 선택 수가 맞는다.
   for (const target of data.students) for (const group of groups) {
     const have = target.selections.filter((selection) => {

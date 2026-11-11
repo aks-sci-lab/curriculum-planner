@@ -3910,7 +3910,7 @@
             semesterKey: semesterKey === "1" || semesterKey === "2" ? semesterKey : "",
             displayName: applicationSubject
               ? (typeof aggregateCourseDisplayName === "function" ? aggregateCourseDisplayName(applicationSubject, semesterKey) : applicationCourseLabel(applicationSubject))
-              : course.name,
+              : semesterKey ? String(course.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/, "") : course.name,
             enrollment,
             enrollmentPerDivision: summary.divisionLimit > 0 ? enrollment / summary.divisionLimit : 0,
             recommendedClasses,
@@ -4027,11 +4027,12 @@
 
     // 4단계 집계표(화면·엑셀 같은 표기) 과목명: '과학의 역사와 문화 (1학기)(융합)'처럼 괄호가 두 번 붙지 않게 한다.
     // 두 학기에 나눠 신청받은 과목은 학기를 구분해야 하므로(같은 이름 두 행) '(1학기)' 하나만 남기고 과목 구분(융합 등)은 뺀다.
+    // 4단계 집계표는 이미 학기별 구역('3학년 1학기')으로 나뉘므로 과목명에 '(n학기)'를 붙이지 않는다(사용자 결정 · 안쪽 키는 변형 과목 그대로).
     function aggregateCourseDisplayName(subject, semesterKey) {
       const name = String(subject?.subject ?? "");
       const tag = name.match(/\s*[（(]\s*([12])\s*학기\s*[)）]\s*$/);
       if (!tag) return applicationCourseLabel(subject);
-      return `${name.slice(0, tag.index).trim()} (${tag[1]}학기)`;
+      return applicationCourseLabel({ ...subject, subject: name.slice(0, tag.index).trim() });
     }
 
     function currentStudent() {
@@ -5709,6 +5710,24 @@
 
     function mergeApplications(entries, applicationSubjects = null) {
       const subjects = applicationSubjects || collectApplicationSubjects({ includeExcluded: true }) || { "1": [], "2": [], "3": [] };
+      // 목록형 결과(한 칸에 선택 과목을 쉼표로 나열)에서 두 학기 과목이 꼬리표 없이 한 줄에 두 번 나오면 왼쪽 것이 1학기, 오른쪽 것이 2학기다
+      // (가로형 결과표의 같은 이름 두 열과 같은 규칙 · labelRepeatedCourseColumns). 한 번만 나오면 classifyApplicationRecords가 학생별로 정한다.
+      const twoSemesterNames = new Map(["1", "2", "3"].map((grade) => [grade, new Set((subjects[grade] || [])
+        .filter((item) => String(item.semester || "").split("·").filter(Boolean).length > 1).map((item) => item.subject))]));
+      entries = (entries || []).map((entry) => {
+        const names = twoSemesterNames.get(String(Number(entry?.grade) + 1));
+        if (!names?.size || !Array.isArray(entry?.selections)) return entry;
+        const seen = new Map();
+        const repeated = new Set(entry.selections.map((name) => String(name).trim()).filter((name, index, list) => names.has(name) && list.indexOf(name) !== index));
+        if (!repeated.size) return entry;
+        return { ...entry, selections: entry.selections.map((raw) => {
+          const name = String(raw).trim();
+          if (!repeated.has(name)) return raw;
+          const order = (seen.get(name) || 0) + 1;
+          seen.set(name, order);
+          return order <= 2 ? `${name} (${order}학기)` : raw;
+        }) };
+      });
       const nameCount = new Map();
       for (const grade of ["1", "2", "3"]) {
         for (const item of subjects[grade] || []) {
