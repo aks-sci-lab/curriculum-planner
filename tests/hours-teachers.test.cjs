@@ -496,3 +496,49 @@ test("전년도 교사시수표 왕복: 앱이 내보낸 교사시수표(병합�
     "교양 칸을 함께 쓰는 진로와 직업은 비고 '합계·평균 제외'로 진로");
   assert.equal(parsed.subjectTeachers, stats.totals.teachers, "요약 상자 교과 교사 수");
 });
+
+test("전년도 값 보완: 교과군 평균도 같은 우선 규칙(파일 값 그대로), 0명 교과는 '-'(다른 출처로 안 채움), 채우는 출처는 교사 수가 있을 때만", () => {
+  const settings = { "2027": { classCounts: { "1": 10, "2": 0, "3": 0 }, creativeHours: 2, teachers: { "국어": 2, "과학-물리": 1, "과학-화학": 1, "진로": 1, "기술가정": 1 } } };
+  const ctx = statsContext(settings, plan);
+  const blocks = SCHOOL_BLOCKS.map((block) => block.group === "과학" ? { ...block, u: 16.545 } : block);
+  settings["2027"].previousUpload = ctx.hoursPreviousUploadRecord(ctx.hoursPreviousParseSheet(schoolSheet("2026 교과별 시수표 (최종)", 2026, { blocks })), {}, { fileName: "school.xlsx" });
+  settings["2026"] = { teachers: { "국어": 7, "과학-물리": 3, "과학-생명": 3 }, lastAverages: { "국어": 17, "과학": 16.55, "기술가정": 6 } };
+  let stats = ctx.computeHoursStats("2027");
+  const science = () => stats.departments.find((department) => department.common && department.group === "과학");
+  const tech = () => stats.departments.find((department) => department.id === "기술가정");
+  assert.equal(science().groupPrevious, 16.55, "이관 자료 먼저");
+  assert.equal(tech().previous, null, "파일이 0명이라고 하면 이관 자료 값(6)이 있어도 비움");
+  assert.ok(!stats.yearChange.rows.some((row) => row.id === "기술가정" && row.rank !== null), "순위에서 뺌");
+  settings["2027"].previousPrefer = "upload";
+  stats = ctx.computeHoursStats("2027");
+  assert.equal(science().groupPrevious, 16.545, "'올린 파일로 바꾸기' 뒤에는 교과군 평균도 파일 값(반올림하지 않음)");
+  assert.equal(ctx.hoursFormat(science().groupPrevious, 1), "16.5");
+  // 채우는 출처(두 번째)는 교사 수가 있을 때만: 파일에 없는 교과를 이관 자료로 채우려면 이관 자료에 교사 수가 있어야 한다.
+  settings["2026"].lastAverages["미술"] = 12;
+  stats = ctx.computeHoursStats("2027");
+  assert.equal(stats.departments.find((department) => department.id === "미술").previous, null, "이관 자료에 미술 교사 수가 없어 채우지 않음");
+  settings["2026"].teachers["미술"] = 2;
+  stats = ctx.computeHoursStats("2027");
+  assert.equal(stats.departments.find((department) => department.id === "미술").previous, 12);
+});
+
+test("전년도 교사시수표 시트 학년도: 시트명의 4자리·2자리 연도가 먼저, 없으면 A1 제목 — 배정표도 같은 규칙, 배정표는 따로 셈", () => {
+  const ctx = pureContext();
+  const year = (name, title) => plain(ctx.hoursPreviousSheetYear(name, title));
+  assert.deepEqual(year("2026 교과별 시수표 (최종)", "2025학년도 …"), { year: 2026, basis: "시트명" });
+  assert.deepEqual(year("(1) 25교과시수(24.9월)", "2025학년도 교과별 시수 통계"), { year: 2025, basis: "시트명" }, "괄호 번호·'24.9'는 연도로 보지 않음");
+  assert.deepEqual(year("26 창체 및 교양시수 (2)", "2025학년도 교과 시수 배정표"), { year: 2026, basis: "시트명" });
+  assert.deepEqual(year("(3) 2024 교과시수", ""), { year: 2024, basis: "시트명" });
+  assert.deepEqual(year("교과시수", "2023학년도 교과별 시수 통계"), { year: 2023, basis: "제목" });
+  assert.deepEqual(year("(7) 조정1", ""), { year: null, basis: "" });
+  // 배정표도 머리글 '교과군'·'교사수'가 있지만 교과별 시수표 후보로 세지 않는다.
+  const allocation = (name) => ({ name, rows: [["2025학년도 교과 시수 배정표"], ["교과군", "1학기", "", "", "교사수"], ["국어", "128", "10", "8", "8"]] });
+  const sheets = [schoolSheet("2026 교과별 시수표 (최종)", 2026, { blocks: SCHOOL_BLOCKS }), schoolSheet("(1) 25교과시수(24.9월)", 2025, { blocks: SCHOOL_BLOCKS }),
+    allocation("26 창체 및 교양시수"), allocation("26 창체 및 교양시수 (2)"), allocation("(5) 25 창체 및 교양시수(1)")];
+  sheets[2].rows.push(["", "", "1", "", "3"]);
+  const picked = plain(ctx.hoursPreviousPickSheets(sheets, "2026"));
+  assert.deepEqual(picked.stats.map((item) => [item.name, item.year, item.yearBasis]), [["2026 교과별 시수표 (최종)", 2026, "시트명"], ["(1) 25교과시수(24.9월)", 2025, "시트명"]]);
+  assert.deepEqual(picked.allocations.map((item) => [item.name, item.year]), [["26 창체 및 교양시수", 2026], ["26 창체 및 교양시수 (2)", 2026], ["(5) 25 창체 및 교양시수(1)", 2025]]);
+  assert.equal(picked.allocation, "26 창체 및 교양시수");
+  assert.match(hoursStats, /교과별 시수표 \$\{picked\.stats\.length\}개\$\{picked\.allocations\.length \? ` · 교과 시수 배정표 \$\{picked\.allocations\.length\}개`/);
+});
