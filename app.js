@@ -7082,7 +7082,8 @@
         }
         if (!course) return value;
         const status = statusOf(course);
-        const name = course.displayName || course.name;
+        // 화면 글자는 학기 꼬리표 없이(학기 구역 안), 단추 이름표·읽어 주기에는 학기를 붙여 두 학기 과목을 구분한다.
+        const name = (course.displayName || course.name) + (course.semesterKey && /[（(]\s*[12]\s*학기\s*[)）]/.test(course.name) && !/학기/.test(course.displayName || "") ? ` (${course.semesterKey}학기)` : "");
         if (status.focus === true) classes.push("is-attention");
         else if (status.focus === false) classes.push("is-dimmed");
         if (course.closed) classes.push("is-closed");
