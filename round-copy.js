@@ -24,6 +24,19 @@ function roundCopySeat(student) {
   return `${part(student?.grade)}-${part(student?.classroom)}-${part(student?.number)}`;
 }
 
+// 과목 신원(차수·파일이 달라도 같은 과목인지): 과목명(학기·구분 꼬리표, 띄어쓰기 없앰) + 학기.
+// 학기는 웹 과목 정보(applicationSubject.semester) → 학기 칸(semesterKey) → 이름·과목 이름의 '(n학기)' 꼬리표 순으로 읽고, 모르면 "".
+function roundCourseIdentity(course) {
+  const tag = (text) => String(text || "").match(/[（(]\s*([12])\s*학기\s*[)）]/)?.[1] || "";
+  const listed = String(course?.applicationSubject?.semester ?? "");
+  const semester = /^[12]$/.test(listed) ? listed
+    : ["1", "2"].includes(String(course?.semesterKey || "")) ? String(course.semesterKey)
+      : tag(course?.name) || tag(course?.applicationSubject?.subject);
+  const raw = course?.applicationSubject?.subject || course?.name || "";
+  const name = String(raw).replace(/\s*[（(]\s*(?:[123]\s*학년|[12]\s*학기|공통|일반|진로|융합)(?:선택)?\s*[)）]/g, "").replace(/[·ㆍ•‧⋅]/g, "").replace(/\s+/g, "");
+  return { name, semester, key: `${name}|${semester}` };
+}
+
 // 현 grade학년 몫: 그 학년 학생·과목 열·학급수 입력·학기/그룹 지정·개설 결정.
 function roundGradeSlice(data, closures, grade) {
   grade = String(grade);
@@ -104,25 +117,32 @@ function roundMergeGradeStudents(data, closures, grade, overlay) {
   grade = String(grade);
   const slice = roundCopyClone(roundGradeSlice(data, closures, grade));
   const compact = (text) => String(text || "").replace(/\s+/g, "");
-  const courseId = (course) => `${compact(course.name)}|${course.semesterKey || ""}`;
-  const byId = new Map(slice.courses.map((course) => [courseId(course), course]));
-  // 학기 표시가 한쪽에만 있으면(예전 결과 열은 semesterKey 없이 그룹으로 학기를 정함) 이름이 하나뿐일 때 이름으로 맞춘다.
+  const byId = new Map();
   const byName = new Map();
   for (const course of slice.courses) {
-    const name = compact(String(course.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, ""));
-    byName.set(name, byName.has(name) ? null : course);
+    const id = roundCourseIdentity(course);
+    byId.set(id.key, byId.has(id.key) ? null : course);
+    byName.set(id.name, byName.has(id.name) ? null : course);
   }
+  // 학기를 한쪽에서만 알 때(예전 결과 열은 학기 칸 없이 그룹으로 학기를 정함)만 이름으로 맞춘다(그 이름 과목이 하나뿐일 때).
+  const existingFor = (course) => {
+    const id = roundCourseIdentity(course);
+    const exact = byId.get(id.key);
+    if (exact) return exact;
+    const named = byName.get(id.name);
+    return named && (!id.semester || !roundCourseIdentity(named).semester) ? named : null;
+  };
   const occupied = new Set([...(data?.courses || []).map((course) => String(course.column))]);
   const columnOf = new Map();
   for (const course of overlay.courses || []) {
-    const existing = byId.get(courseId(course)) || byName.get(compact(String(course.name).replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, ""))) || null;
+    const existing = existingFor(course);
     if (existing) { columnOf.set(String(course.column), existing); continue; }
     let column = `result-${grade}-${slice.courses.length}`;
     while (occupied.has(column)) column += "+";
     occupied.add(column);
     const added = { ...roundCopyClone(course), column, applicationCurrentGrade: grade };
     slice.courses.push(added);
-    byId.set(courseId(added), added);
+    byId.set(roundCourseIdentity(added).key, added);
     columnOf.set(String(course.column), added);
   }
   const counts = { changed: 0, same: 0, added: 0, kept: 0 };
@@ -139,7 +159,7 @@ function roundMergeGradeStudents(data, closures, grade, overlay) {
     touched.add(seat);
     if (seats.has(seat)) {
       const before = slice.students[seats.get(seat)];
-      const key = (list) => (list || []).map((item) => `${compact(item.name)}|${item.semesterKey || ""}`).sort().join(",");
+      const key = (list) => (list || []).map((item) => roundCourseIdentity(item).key).sort().join(",");
       if (key(before.selections) === key(selections)) counts.same++;
       else counts.changed++;
       slice.students[seats.get(seat)] = { ...next, id: before.id || next.id };
@@ -182,7 +202,7 @@ function roundMigrationPlan(rounds, locked) {
 // 같은 이름·학기 과목이 한쪽에 여럿이면 옮기지 않는다. source = { "현학년:열": 값 } → 그 학년 키만 새 열로.
 function roundRemapKeysByName(fromCourses, toCourses, source, grade) {
   grade = String(grade);
-  const compact = (course) => `${String(course.applicationSubject?.subject || course.name || "").replace(/\s*[（(]\s*[12]\s*학기\s*[)）]/g, "").replace(/\s+/g, "")}|${course.semesterKey || String(course.name || "").match(/([12])\s*학기/)?.[1] || ""}`;
+  const compact = (course) => `${roundCourseIdentity(course).key}|${String(course.applicationSubject?.groupName || "").replace(/\s+/g, "")}`;
   const index = (courses) => {
     const map = new Map();
     for (const course of courses || []) {

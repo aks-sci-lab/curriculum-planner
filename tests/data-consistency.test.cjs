@@ -595,3 +595,20 @@ test("예전 자료 옮기기: '그대로 두기'면 그 학년은 그대로이�
   await ctx.migrateRoundGrades();
   assert.equal(count, 1, "확정 차수는 묻지 않음");
 });
+
+test("하네스 회귀: 웹 과목 열 번호가 밀려도 폐강이 다른 과목(중국어)에 붙지 않고, '재신청 학생만' 파일의 'X (2학기)'는 2학기 열에 들어간다", () => {
+  const { ctx } = context();
+  const web = (column, subject, semester, group) => ({ column, name: subject, applicationCurrentGrade: "2", applicationGroupSource: "online",
+    applicationSubject: { subject: semester ? `${subject} (${semester}학기)` : subject, semester: semester || "1", groupName: group } });
+  // 1차(복사해 온 열): app17 = 심화 영어 2학기(폐강), 2차 웹 결과: 폐강 과목을 빼서 app17 = 중국어
+  const before = [web("app16", "심화 영어", "1", "3-1 택5"), web("app17", "심화 영어", "2", "3-2 택5"), web("app18", "중국어", "", "3-1 택1")];
+  const after = [web("app16", "심화 영어", "1", "3-1 택5"), web("app17", "중국어", "", "3-1 택1")];
+  assert.deepEqual(plain(ctx.roundRemapKeysByName(before, after, { "2:app17": "closed", "2:app18": "open" }, "2")), { "2:app17": "open" }, "중국어는 앞 차수 중국어 결정(개설)");
+  // '재신청 학생만': 학기 칸 없이 웹 과목 정보로 학기를 아는 두 열 → 파일의 '심화 영어 (2학기)'는 2학기 열
+  const data = { students: [{ grade: "2", classroom: "1", number: "1", selections: [before[0]] }], courses: before };
+  const overlay = { courses: [{ column: 9, name: "심화 영어 (2학기)", semesterKey: "2" }],
+    students: [{ grade: "2", classroom: "1", number: "1", selections: [{ column: 9, name: "심화 영어 (2학기)", semesterKey: "2" }] }] };
+  const { slice } = ctx.roundMergeGradeStudents(data, {}, "2", overlay);
+  assert.equal(slice.students[0].selections[0].column, "app17");
+  assert.deepEqual(plain(ctx.roundCourseIdentity(before[1])), { name: "심화영어", semester: "2", key: "심화영어|2" });
+});

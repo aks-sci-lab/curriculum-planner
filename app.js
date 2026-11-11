@@ -6474,10 +6474,16 @@
         for (const grade of ["1", "2"]) {
           if (covered.has(grade)) {
             sources[grade] = { kind: "online", round, at: new Date().toISOString() };
-            // 새로 생긴 차수(직전 차수 복사가 없음): 직전 차수의 그 학년 개설 결정·학급수 입력을 이름·학기로 옮겨 온다(새 차수 = 직전 차수 복사).
-            if (!previous?.students?.some((student) => String(student.grade) === grade) && prior && state.rounds[prior]) {
-              closures = { ...roundRemapKeysByName(state.rounds[prior].courses, merged.courses, state.roundClosures[prior], grade), ...closures };
-              data.classOverrides = { ...roundRemapKeysByName(state.rounds[prior].courses, merged.courses, state.rounds[prior].classOverrides, grade), ...data.classOverrides };
+            // 웹 결과는 과목 목록이 바뀌면(재신청은 폐강 과목을 뺌) 열 번호가 밀린다: 그 학년 개설 결정·학급수 입력은 이 차수에 있던 과목
+            // (직전 차수 복사 포함), 없으면 직전 차수 과목에서 이름·학기·그룹으로 새 열에 옮긴다(열 번호를 그대로 쓰면 다른 과목에 붙음).
+            const ownGrade = previous?.courses?.some((course) => String(course.applicationCurrentGrade || "") === grade);
+            const fromRound = ownGrade ? round : prior;
+            const fromData = ownGrade ? previous : prior ? state.rounds[prior] : null;
+            const isGradeKey = (key) => String(key).startsWith(`${grade}:`);
+            const keep = (source) => Object.fromEntries(Object.entries(source || {}).filter(([key]) => !isGradeKey(key)));
+            if (fromData?.courses?.length) {
+              closures = { ...keep(closures), ...roundRemapKeysByName(fromData.courses, merged.courses, state.roundClosures?.[fromRound] || {}, grade) };
+              data.classOverrides = { ...keep(data.classOverrides), ...roundRemapKeysByName(fromData.courses, merged.courses, fromData.classOverrides, grade) };
             }
             continue;
           }
