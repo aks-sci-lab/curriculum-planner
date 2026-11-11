@@ -979,7 +979,7 @@ function hoursStaffSettings(stats) {
   </section>`;
 }
 
-// 교과별 교사 수 추천(시수 균형, '교사 수 추천' 팝업): 추천만 보이고, '추천 적용'을 눌러야 교사 수가 바뀐다.
+// 교과별 교사 수 추천(학교 규칙: 19 초과 증·13 이하 순회·가장 작은 교과 감, '교사 수 추천' 팝업): 추천만 보이고, '추천 적용'을 눌러야 교사 수가 바뀐다.
 // 전년도 대비 증감 순위표(교사 수 추천 팝업 위쪽). 전년 자료가 없으면 안내만.
 function hoursYearChangeSection(stats) {
   const change = stats.yearChange || { rows: [], hasPrevious: false };
