@@ -436,6 +436,27 @@ test("근거 줄: 복사한 학년은 '2차에서 복사', 앞 차수가 복사 
   assert.doesNotMatch(ctx.roundBasisHtml("2"), /복사 뒤 바뀜/);
 });
 
+test("차수 비교(buildRoundCompare): 복사한 학년은 머리글에 '1차에서 복사', 재신청 학생만 바꾼 학년은 '재신청 학생만 바꿈'", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  state.rounds = { "1": { students: state.students, courses: state.courses, classOverrides: {}, semesterAssignments: {}, groupAssignments: {}, customGroupNames: [] } };
+  state.roundClosures = { "1": {} };
+  ctx.bump();
+  ctx.addApplicationRound();
+  ctx.bump();
+  let compare = ctx.buildRoundCompare();
+  assert.deepEqual(plain(compare.rounds), ["1", "2"]);
+  const grade2 = compare.grades.find((entry) => entry.grade === "2");
+  assert.deepEqual(plain(grade2.sources), { "2": "1차에서 복사" }, "1차는 직접 올린 결과라 꼬리표 없음");
+  state.rounds["2"].gradeSources["2"] = { kind: "partial", round: "2" };
+  ctx.bump();
+  compare = ctx.buildRoundCompare();
+  assert.equal(compare.grades.find((entry) => entry.grade === "2").sources["2"], "재신청 학생만 바꿈");
+  assert.match(read("round-status.js"), /\$\{round\}차\$\{sources\[round\] \? `<small class="round-compare-source">/, "화면 머리글");
+  assert.match(read("round-status.js"), /roundStatusLabel\(round\)\}\$\{sources\[round\] \? ` · \$\{sources\[round\]\}` : ""\}\)`/, "엑셀 머리글");
+});
+
 test("개설 학기 선택 저장: 작업 자료·백업·복원·전체 초기화에 연결, 스크립트는 result-import.js 뒤", () => {
   assert.match(app, /courseSemesterPicks: \{\},/, "state 기본값");
   assert.match(between(app, "function workspacePayload(", "function workspaceBackupCompact("), /courseSemesterPicks: state\.courseSemesterPicks,/);
