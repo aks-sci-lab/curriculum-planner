@@ -311,8 +311,11 @@ async function stepAggregate({ page, h, report }, round) {
     // 화면 튐: 아래쪽 개설 학급수 칸에 값을 넣었다 지우는 동안 창 스크롤 위치가 유지되는지.
     const input = page.locator("#aggregatePanel .aggregate-class-input").nth(8);
     if (await input.count()) {
-      await input.scrollIntoViewIfNeeded();
-      const before = await page.evaluate(() => ({ y: window.scrollY }));
+      // 칸을 화면 가운데로(Tab이 옮겨 갈 다음 칸도 화면 안에 있게: 시작 스크롤 위치에 따라 브라우저가 다음 칸을 보이려고 굴리는 것은 튐이 아님).
+      await input.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await sleep(200);
+      const before = await page.evaluate(() => ({ y: window.scrollY, label: document.querySelectorAll("#aggregatePanel .aggregate-class-input")[8]?.getAttribute("aria-label") || "",
+        layout: [...document.querySelectorAll("#aggregatePanel > *, #aggregateContent > *")].map((el) => [el.id || el.className, Math.round(el.getBoundingClientRect().top + scrollY), Math.round(el.getBoundingClientRect().height)]) }));
       const original = await input.inputValue();
       await input.fill(String((Number(original) || 1) + 1));
       await input.press("Tab");
@@ -323,7 +326,8 @@ async function stepAggregate({ page, h, report }, round) {
       await sleep(400);
       const after = await page.evaluate(() => ({ y: window.scrollY, focus: document.activeElement?.className || document.activeElement?.tagName }));
       result.scroll = { start: before.y, mid, after: after.y, focus: after.focus };
-      h.check(Math.abs(mid - before.y) < 40 && Math.abs(after.y - before.y) < 40, "중요", "4단계", "개설 학급수 입력 후 화면 스크롤 위치가 튐", { expected: before.y, actual: [mid, after.y] });
+      const layout = await page.evaluate(() => [...document.querySelectorAll("#aggregatePanel > *, #aggregateContent > *")].map((el) => [el.id || el.className, Math.round(el.getBoundingClientRect().top + scrollY), Math.round(el.getBoundingClientRect().height)]));
+      h.check(Math.abs(mid - before.y) < 40 && Math.abs(after.y - before.y) < 40, "중요", "4단계", "개설 학급수 입력 후 화면 스크롤 위치가 튐", { expected: before.y, actual: [mid, after.y], before: before.layout, after: layout, label: before.label });
     }
     // 개설/폐강: 그룹마다 (과목 수 − 택n − 1)개까지, 개설기준(학급당 인원 × 90%) 미만인 과목부터 폐강, 나머지 위험 과목은 개설.
     const perClass = (grade) => totals[grade] / NEXT_CLASSES;
