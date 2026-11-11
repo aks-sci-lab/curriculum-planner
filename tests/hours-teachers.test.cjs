@@ -52,71 +52,125 @@ const plan = {
   "2026": [], "2025": []
 };
 
-test("교사 수 추천: 1인당 시수가 학교 평균에서 가장 덜 벗어나게 정수로 나누고, 같으면 지금 교사 수에 가깝게", () => {
+// 학교 규칙(사용자 결정): 총 교원 수 확정 → 1인당 시수(두 학기 중 큰 값) 비교 → 19 초과면 증(증해서 13 이하면 순회교사 지원)
+// → 증할 사람은 1인당 시수가 가장 작은 교과에서 감(1명이거나 감하면 19 초과면 다음 교과).
+const SCHOOL_2027 = [["국어", 132, 128, 8], ["수학", 120, 152, 10], ["영어", 112, 116, 7], ["물리", 45, 42, 3], ["화학", 46, 42, 3], ["생명", 46, 42, 3],
+  ["지구", 33, 28, 2], ["한국사·역사", 50, 46, 3], ["지리", 35, 32, 2], ["일반사회", 52, 48, 3], ["윤리", 53, 48, 3], ["체육", 53, 53, 3],
+  ["음악", 25, 28, 2], ["미술", 28, 25, 2], ["정보", 40, 36, 2], ["기술·가정", 16, 20, 0], ["제2외국어", 21, 21, 1]]
+  .map(([id, h1, h2, current]) => ({ id, hours: { 1: h1, 2: h2 }, current }));
+const changes = (result) => result.rows.filter((row) => row.diff).map((row) => `${row.id} ${row.current}→${row.recommended}`);
+
+test("교사 수 추천(학교 2027 3차 자료): 단계 기록·결과 고정 — 기술·가정 0명은 지금 규칙(최소 1명)으로 1명 받은 뒤 순회교사", () => {
   const ctx = pureContext();
-  const run = (units, options) => plain(ctx.hoursRecommendTeachers(units, options));
-  const counts = (result) => result.rows.map((row) => row.recommended);
-  // 평균 12.5: A3·B1(13.3/10, 최대 편차 2.5)이 A2·B2(20/2.5)보다 고르다.
-  const basic = run([{ id: "A", hours: { 1: 40, 2: 40 }, current: 2 }, { id: "B", hours: { 1: 10, 2: 10 }, current: 2 }], { total: 4 });
-  assert.equal(basic.ok, true);
-  assert.deepEqual(counts(basic), [3, 1]);
-  assert.deepEqual(basic.rows.map((row) => row.diff), [1, -1]);
-  assert.deepEqual(basic.range, { current: [5, 20], recommended: [10, 40 / 3] });
-  // 편차가 같으면 지금 교사 수와 차이가 적은 쪽.
-  assert.deepEqual(counts(run([{ id: "A", hours: { 1: 12, 2: 12 }, current: 1 }, { id: "B", hours: { 1: 12, 2: 12 }, current: 2 }], { total: 3 })), [1, 2]);
-  // 고정한 교과는 그대로, 나머지 교사로 나눈다.
-  const locked = run([{ id: "A", hours: { 1: 40, 2: 40 }, current: 2 }, { id: "B", hours: { 1: 10, 2: 10 }, current: 2, locked: true }], { total: 4 });
-  assert.deepEqual(counts(locked), [2, 2]);
-  assert.equal(locked.rows[1].locked, true);
-  // 두 학기를 함께 본다: 1학기만 많은 교과와 2학기만 많은 교과.
-  const semesters = run([{ id: "A", hours: { 1: 30, 2: 10 }, current: 1 }, { id: "B", hours: { 1: 10, 2: 30 }, current: 3 }], { total: 4 });
-  assert.deepEqual(counts(semesters), [2, 2]);
-  // 혼자서는 고르게 할 수 없는 교과(시수 2시간도 최소 1명)가 최대 편차를 정해도 나머지는 다시 고르게 나눈다(B 2·C 4가 아니라 3·3).
-  assert.deepEqual(counts(run([{ id: "A", hours: { 1: 2, 2: 2 }, current: 0 }, { id: "B", hours: { 1: 40, 2: 40 }, current: 1 }, { id: "C", hours: { 1: 40, 2: 40 }, current: 5 }], { total: 7 })), [1, 3, 3]);
-  // 한도를 넘는 교과는 표시한다.
-  assert.equal(run([{ id: "A", hours: { 1: 21, 2: 21 }, current: 1, locked: true }, { id: "B", hours: { 1: 10, 2: 10 }, current: 1 }], { total: 2 }).rows[0].overCap, true);
-  // 시수가 있으면 최소 1명, 시수가 없으면 0명(감원 추천).
-  assert.deepEqual(counts(run([{ id: "A", hours: { 1: 100, 2: 100 }, current: 4 }, { id: "B", hours: { 1: 2, 2: 2 }, current: 0 }, { id: "C", hours: { 1: 0, 2: 0 }, current: 1 }], { total: 6 })), [5, 1, 0]);
-  // 한 학기 최대 시수: 42시간이면 20시간 한도로 3명 이상이어야 하니 3명으로는 둘 다 못 맞춘다.
-  const capped = run([{ id: "A", hours: { 1: 42, 2: 42 }, current: 2 }, { id: "B", hours: { 1: 18, 2: 18 }, current: 1 }], { total: 3 });
-  // 그래도 3명 안에서 가장 고른 배치를 보여 주고(적용 가능) 한도를 넘는 교과를 표시한다.
-  assert.equal(capped.ok, true);
-  assert.equal(capped.capExceeded, true);
-  assert.match(capped.reason, /20시간을 넘지 않으려면 교과 교사가 최소 4명/);
-  assert.equal(capped.rows.reduce((sum, row) => sum + row.recommended, 0), 3);
-  assert.deepEqual(counts(run([{ id: "A", hours: { 1: 42, 2: 42 }, current: 2 }, { id: "B", hours: { 1: 18, 2: 18 }, current: 1 }], { total: 3, maxHours: 25 })), [2, 1]);
-  assert.match(run([{ id: "A", hours: { 1: 4, 2: 4 } }, { id: "B", hours: { 1: 4, 2: 4 } }, { id: "C", hours: { 1: 4, 2: 4 } }], { total: 2 }).reason, /최소 3명/);
-  assert.match(run([{ id: "A", hours: { 1: 4, 2: 4 } }], { total: 0 }).reason, /교과 교사 수를 입력/);
+  const result = plain(ctx.hoursRecommendTeachers(SCHOOL_2027, { total: 57 }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.steps, [
+    "1. 기술·가정 +1 (교사 0명 → 20) ← 수학 −1 (15.2 → 16.9) · 건너뜀: 음악(감하면 28시간), 미술(감하면 28시간), 물리(감하면 22.5시간)",
+    "제2외국어: 순회교사 지원(증하면 10.5시간 · 13 이하)",
+    "2. 정보 +1 (20 → 13.3) ← 국어 −1 (16.5 → 18.9) · 건너뜀: 음악(감하면 28시간), 미술(감하면 28시간), 물리(감하면 22.5시간), 화학(감하면 23시간), 생명(감하면 23시간), 지구(감하면 33시간)",
+    "기술·가정: 순회교사 지원(증하면 10시간 · 13 이하)"
+  ]);
+  assert.deepEqual(changes(result), ["국어 8→7", "수학 10→9", "정보 2→3", "기술·가정 0→1"]);
+  assert.equal(result.assigned, 57, "총 교원 수는 그대로");
+  assert.deepEqual(result.roaming, ["제2외국어", "기술·가정"]);
+  assert.ok(result.rows.every((row) => row.roaming || !row.recommendedOverUp), "순회교사 지원 교과 말고는 19시간 이하");
+  // 기술·가정도 교양처럼 타교과 담당(추천에서 뺌)이면: 정보만 수학에서 1명.
+  const other = plain(ctx.hoursRecommendTeachers(SCHOOL_2027.filter((unit) => unit.id !== "기술·가정"), { total: 57 }));
+  assert.deepEqual(other.steps, [
+    "제2외국어: 순회교사 지원(증하면 10.5시간 · 13 이하)",
+    "1. 정보 +1 (20 → 13.3) ← 수학 −1 (15.2 → 16.9) · 건너뜀: 음악(감하면 28시간), 미술(감하면 28시간), 물리(감하면 22.5시간)"
+  ]);
+  assert.deepEqual(changes(other), ["수학 10→9", "정보 2→3"]);
 });
 
-test("교사 수 추천: 작은 경우를 모두 따져 본 최대 편차와 같고, 합은 기준 교사 수와 같다", () => {
+test("교사 수 추천 규칙: 19 초과 증·13 이하 순회·감 건너뛰기·고정·감할 교과 없음·총 교원 수 맞춤·기준값 설정", () => {
+  const ctx = pureContext();
+  const run = (units, options) => plain(ctx.hoursRecommendTeachers(units, options));
+  const unit = (id, h, current, extra = {}) => ({ id, hours: { 1: h, 2: h }, current, ...extra });
+  // 19 초과 → 감은 1인당 시수가 가장 작은 교과에서.
+  let result = run([unit("A", 40, 2), unit("B", 30, 3), unit("C", 36, 3)], { total: 8 });
+  assert.deepEqual(changes(result), ["A 2→3", "B 3→2"]);
+  // 가장 작은 교과가 1명이면 건너뜀, 감하면 19 초과여도 건너뜀.
+  result = run([unit("A", 40, 2), unit("B", 5, 1), unit("C", 20, 2), unit("D", 45, 4)], { total: 9 });
+  assert.deepEqual(changes(result), ["A 2→3", "D 4→3"]);
+  assert.match(result.steps[0], /건너뜀: B\(1명\), C\(감하면 20시간\)/);
+  // 증해서 13 이하면 순회교사 지원(교사 수 그대로, 총수에서 빼지 않음).
+  result = run([unit("A", 21, 1), unit("B", 30, 3)], { total: 4 });
+  assert.deepEqual(changes(result), []);
+  assert.deepEqual(result.roaming, ["A"]);
+  assert.equal(result.rows[0].roaming, true);
+  // 감할 교과가 없으면 표시.
+  result = run([unit("A", 40, 2), unit("B", 19, 1)], { total: 3 });
+  assert.deepEqual(result.unresolved, ["A"]);
+  assert.match(result.steps.join("\n"), /A: 감할 교과 없음 — 총 교원 수 늘리기 검토/);
+  // 고정한 교과는 증·감하지 않는다.
+  result = run([unit("A", 40, 2, { locked: true }), unit("B", 30, 3)], { total: 5 });
+  assert.deepEqual(changes(result), []);
+  assert.match(result.steps.join("\n"), /A: 고정이라 증하지 않음/);
+  result = run([unit("A", 40, 2), unit("B", 10, 2, { locked: true }), unit("C", 30, 3)], { total: 7 });
+  assert.deepEqual(changes(result), ["A 2→3", "C 3→2"], "1인당 가장 작은 B는 고정이라 건너뜀");
+  // 증한 교과는 다시 감하지 않는다(늘렸다 줄였다 없음): 19 초과 교과가 여럿이면 시수가 큰 교과부터.
+  result = run([unit("A", 44, 2), unit("B", 42, 2), unit("C", 30, 4)], { total: 8 });
+  assert.deepEqual(changes(result), ["A 2→3", "B 2→3", "C 4→2"]);
+  assert.match(result.steps[0], /^1\. A \+1/);
+  // 1인당 시수가 같은 감 후보는 학교 평균과의 편차가 작아지는 쪽.
+  result = run([unit("A", 40, 2), unit("B", 24, 2), unit("C", 36, 3)], { total: 7 });
+  assert.deepEqual(changes(result), ["A 2→3", "C 3→2"], "B(12)·C(12) 중 감한 뒤 편차가 작은 C(18)");
+  // 총 교원 수가 지금 합과 다르면 먼저 맞춘다.
+  result = run([unit("A", 18, 1), unit("B", 10, 2)], { total: 4 });
+  assert.equal(result.assigned, 4);
+  assert.match(result.steps[0], /기준 교원 수에 맞춤/);
+  result = run([unit("A", 18, 2), unit("B", 10, 3)], { total: 4 });
+  assert.deepEqual(changes(result), ["B 3→2"]);
+  // 시수가 있는데 0명이면 먼저 1명(최소 1명 규칙).
+  result = run([unit("A", 10, 0), unit("B", 30, 3)], { total: 3 });
+  assert.deepEqual(changes(result), ["A 0→1", "B 3→2"]);
+  // 기준값은 설정으로(19·13 대신 20·12).
+  result = run([unit("A", 20, 1), unit("B", 30, 3)], { total: 4, upHours: 20 });
+  assert.deepEqual(changes(result), []);
+  result = run([unit("A", 26, 1), unit("B", 30, 3)], { total: 4, roamingHours: 12 });
+  assert.deepEqual(changes(result), ["A 1→2", "B 3→2"]);
+  // 계산할 수 없는 경우.
+  assert.match(run([unit("A", 4, 0), unit("B", 4, 0), unit("C", 4, 0)], { total: 2 }).reason, /최소 3명/);
+  assert.match(run([unit("A", 4, 0)], { total: 0 }).reason, /교과 교사 수를 입력/);
+});
+
+test("교사 수 추천: 합은 늘 기준 교원 수, 순회·감할 교과 없음이 아니면 19시간 이하", () => {
   const ctx = pureContext();
   let seed = 7;
   const random = (max) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % max; };
-  for (let trial = 0; trial < 150; trial++) {
-    const size = 2 + random(3);
-    const units = Array.from({ length: size }, (_, index) => ({ id: `U${index}`, hours: { 1: random(40), 2: random(40) }, current: random(4) }));
-    if (units.every((unit) => !unit.hours["1"] && !unit.hours["2"])) units[0].hours["1"] = 8;
+  for (let trial = 0; trial < 300; trial++) {
+    const size = 2 + random(6);
+    const units = Array.from({ length: size }, (_, index) => ({ id: `U${index}`, hours: { 1: random(80), 2: random(80) }, current: random(5) }));
     const busy = units.filter((unit) => unit.hours["1"] || unit.hours["2"]).length;
-    const total = busy + random(6);
-    const result = ctx.hoursRecommendTeachers(units, { total, maxHours: 0 });
-    assert.equal(result.ok, true);
-    const counts = result.rows.map((row) => row.recommended);
-    assert.equal(counts.reduce((a, b) => a + b, 0), total);
-    const average = { 1: units.reduce((a, u) => a + u.hours["1"], 0) / total, 2: units.reduce((a, u) => a + u.hours["2"], 0) / total };
-    const deviation = (list) => Math.max(...units.map((unit, index) => {
-      const n = list[index];
-      if (!n) return unit.hours["1"] || unit.hours["2"] ? Infinity : 0;
-      return Math.max(Math.abs(unit.hours["1"] / n - average["1"]), Math.abs(unit.hours["2"] / n - average["2"]));
-    }));
-    let best = Infinity;
-    const walk = (index, left, list) => {
-      if (index === size) { if (!left) best = Math.min(best, deviation(list)); return; }
-      for (let n = 0; n <= left; n++) walk(index + 1, left - n, [...list, n]);
-    };
-    walk(0, total, []);
-    assert.ok(Math.abs(deviation(counts) - best) < 1e-6, `trial ${trial}: ${deviation(counts)} vs ${best}`);
+    const total = Math.max(1, busy + random(8));
+    const result = ctx.hoursRecommendTeachers(units, { total });
+    if (!result.ok) { assert.ok(busy > total); continue; }
+    assert.equal(result.rows.reduce((sum, row) => sum + row.recommended, 0), total, `trial ${trial}`);
+    for (const row of result.rows) {
+      if (row.hours["1"] || row.hours["2"]) assert.ok(row.recommended >= 1, `trial ${trial} 최소 1명`);
+      if (row.recommendedOverUp) assert.ok(row.roaming || row.unresolved, `trial ${trial} ${row.id}: 19 초과면 순회 또는 감할 교과 없음으로 표시`);
+    }
   }
+});
+
+test("전년도 대비 증감 순위: 많이 늘어난 순, 과학·사회는 교과군, 교사 수 전년 → 올해, 자료 없으면 hasPrevious false", () => {
+  const ctx = pureContext();
+  const dep = (id, group, yearAverage, previous, teachers, previousTeachers, extra = {}) => ({ id, group, hours: { 1: 10, 2: 10 }, teachers, previousTeachers,
+    averages: { 1: yearAverage, 2: yearAverage }, yearAverage, previous, ...extra });
+  const result = plain(ctx.hoursYearChange([
+    dep("국어", "국어", 16.5, 15, 8, 8), dep("수학", "수학", 15, 16, 10, 9), dep("정보", "생활·교양", 20, 17, 2, 2),
+    dep("과학-공통", "과학", 0, null, 0, null, { common: true, groupAverage: 15.2, groupPrevious: 14, groupSemester: { 1: 15, 2: 15.4 }, groupTeachers: 11 }),
+    dep("과학-물리", "과학", 15, null, 3, 3), dep("과학-화학", "과학", 15, null, 3, 4),
+    dep("교양", "생활·교양", null, null, null, null, { otherTeachers: true }),
+    dep("진로", "생활·교양", 10, 10, 1, 1, { excluded: true }),
+    dep("미술", "체육·예술", 14, null, 2, null)
+  ]));
+  assert.equal(result.hasPrevious, true);
+  assert.deepEqual(result.rows.map((row) => [row.label, row.change, row.rank]), [["정보", 3, 1], ["국어", 1.5, 2], ["과학(교과군)", 1.2, 3], ["수학", -1, 4], ["미술", null, null]]);
+  const science = result.rows.find((row) => row.group);
+  assert.deepEqual([science.teachers, science.previousTeachers], [11, 7]);
+  assert.equal(plain(ctx.hoursYearChange([dep("국어", "국어", 16, null, 8, null)])).hasPrevious, false);
 });
 
 test("공통 시수 자동 배분: 반 단위로 나눠 세부 교과 1인당 시수를 맞춘다", () => {
@@ -251,29 +305,46 @@ test("시수 화면: 교원 구성 줄·추천 칸·비교과 담당 선택·되
   assert.match(hoursStats, /details\[data-hours-details\]/);
   // 전년도 설정 불러오기는 총 교사 수·비교과·고정도 가져온다.
   assert.match(hoursStats, /settings\.nonTeaching = \{ \.\.\.source\.nonTeaching \}/);
-  assert.match(hoursStats, /\["creativeHours", "totalTeachers", "maxTeacherHours"\]/);
+  assert.match(hoursStats, /\["creativeHours", "totalTeachers", "maxTeacherHours", "roamingTeacherHours"\]/);
 });
 
-test("교사 수 추천: 정원으로 1인당 최대 시간을 지킬 수 없어도 정해진 교사 수 안의 가장 고른 배치를 보여 주고(적용 가능), 최대 시간을 지키는 교사 수 안도 함께", () => {
-  const ctx = pureContext();
-  // 시수 합 1학기 1220·2학기 1180, 20시간 상한이면 61명 이상 필요
-  const units = [
-    { id: "국어", hours: { "1": 300, "2": 290 }, current: 14 },
-    { id: "수학", hours: { "1": 320, "2": 310 }, current: 15 },
-    { id: "영어", hours: { "1": 300, "2": 290 }, current: 14 },
-    { id: "과학-물리", hours: { "1": 300, "2": 290 }, current: 14 }
-  ];
-  const result = plain(ctx.hoursRecommendTeachers(units, { total: 57, maxHours: 20 }));
-  assert.equal(result.ok, true, "표를 보여 주고 적용할 수 있다");
-  assert.equal(result.capExceeded, true);
-  assert.equal(result.needed, 61);
-  assert.match(result.reason, /최소 61명 필요합니다\(지금 57명\)\. 57명 안에서 가장 고른 배치/);
-  assert.equal(result.rows.reduce((sum, row) => sum + row.recommended, 0), 57);
-  assert.ok(result.rows.some((row) => row.recommendedOverCap), "최대 시간을 넘는 교과 표시");
-  assert.ok(result.alternative && result.alternative.rows.reduce((sum, row) => sum + row.recommended, 0) === 61, "최대 시간을 지키는 61명 안");
-  assert.ok(result.alternative.rows.every((row) => Math.max(row.recommendedPerTeacher["1"], row.recommendedPerTeacher["2"]) <= 20));
-  // 시수가 있는 교과 수보다 교사가 적으면 예전처럼 거절
-  const tooFew = plain(ctx.hoursRecommendTeachers(units, { total: 3, maxHours: 20 }));
-  assert.equal(tooFew.ok, false);
-  assert.match(tooFew.reason, /최소 4명이 필요한데 3명뿐/);
+test("교양은 다른 교과 교사가 맡음: 0명이 기본, '타교과 담당(미지정)' 표시, 평균·추천·교사 수 경고에서 뺌, 담당 교과를 고르면 그 교과 시수", () => {
+  const teachers = { "국어": 2, "과학-물리": 1, "과학-화학": 1, "진로": 1 };
+  const settings = { "2027": { classCounts: { "1": 10, "2": 0, "3": 0 }, creativeHours: 2, teachers } };
+  const ctx = statsContext(settings, plan);
+  const stats = ctx.computeHoursStats("2027");
+  const culture = stats.departments.find((department) => department.id === "교양");
+  assert.equal(culture.otherUnassigned, true);
+  assert.equal(culture.averages, null);
+  assert.ok(!stats.issues.some((issue) => issue.level === "warning" && /교사 수가 비어 있는 교과: .*교양/.test(issue.text)), "교양은 교사 수 경고 없음");
+  assert.ok(stats.issues.some((issue) => issue.level === "info" && issue.text.includes("타교과 담당(미지정)")));
+  assert.ok(!stats.recommendation.rows.some((row) => row.id === "교양"), "추천에서 뺌(최소 1명 규칙 없음)");
+  assert.ok(stats.recommendation.notes.some((note) => note.includes("타교과 담당(미지정)")));
+  const model = ctx.hoursFormModel(stats, { schoolName: "천상고등학교", date: new Date(2026, 9, 1) });
+  const cells = [...model.cells.values()];
+  assert.ok(cells.some((cell) => cell.v === "타교과 담당\n(미지정)"), "시수표 비고");
+  assert.ok(!cells.some((cell) => typeof cell.v === "number" && !Number.isFinite(cell.v)), "NaN·Infinity 칸 없음");
+  assert.ok(cells.every((cell) => !cell.f || /IF\(N\(S\d+\)>0|IF\(.*>0|SUM|PRODUCT|AVERAGE|^[A-Z]+\d+[-+]/.test(cell.f) || !/\//.test(cell.f)), "나눗셈 수식은 0 교사 가드");
+  // 과목별 상세에서 담당 교과를 고르면 그 교과 시수에 더해진다.
+  settings["2027"].departmentOverrides = { "보건": "국어" };
+  const assigned = ctx.computeHoursStats("2027");
+  const korean = assigned.departments.find((department) => department.id === "국어");
+  assert.equal(korean.hours["1"], stats.departments.find((department) => department.id === "국어").hours["1"] + 10);
+  assert.equal(assigned.departments.find((department) => department.id === "교양").otherUnassigned, false);
+  // 엑셀 '교사 수 추천' 시트: 규칙·단계 기록·증감 순위(전년 자료 없으면 안내).
+  const sheet = ctx.buildHoursWorkbookSheets(stats, { schoolName: "천상고등학교", date: new Date(2026, 9, 1) }).find((item) => item.name === "교사 수 추천");
+  const texts = sheet.rows.flat().map((cell) => cell?.v);
+  assert.match(texts[0], /19시간 초과면 증, 증해서 13시간 이하면 순회교사 지원/);
+  assert.ok(texts.includes("추천 단계 기록"));
+  assert.ok(texts.some((value) => /^전년도 자료 없음/.test(value)));
+  settings["2027"].previousAverages = { "국어": 10 };
+  settings["2027"].previousTeachers = { "국어": 1 };
+  const withPrevious = ctx.computeHoursStats("2027");
+  assert.equal(withPrevious.yearChange.hasPrevious, true);
+  const rows = ctx.buildHoursWorkbookSheets(withPrevious, { schoolName: "천상고등학교", date: new Date(2026, 9, 1) }).find((item) => item.name === "교사 수 추천").rows;
+  const header = rows.findIndex((row) => row[0]?.v === "교과" && row[1]?.v === "전년 1인당(1년)");
+  assert.ok(header > 0);
+  assert.equal(rows[header + 1][0].v, "국어");
+  assert.equal(rows[header + 1][6].v, 1, "순위");
+  assert.deepEqual([rows[header + 1][7].v, rows[header + 1][8].v], [1, 2], "교사 수 전년 → 올해");
 });

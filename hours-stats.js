@@ -22,7 +22,8 @@ var HOURS_DEPARTMENTS = [
   { id: "정보", group: "생활·교양", label: "정보", staff: "정보과" },
   { id: "기술가정", group: "생활·교양", label: "기술·가정", form: "기술가정", staff: "기술가정과" },
   { id: "제2외국어", group: "생활·교양", label: "제2외국어", staff: "제2외국어과" },
-  { id: "교양", group: "생활·교양", label: "교양", staff: "교양" },
+  // 교양은 다른 교과 교사가 맡는다(사용자 결정): 교사 0명이 기본, 최소 1명 규칙·추천에서 빼고, 과목별 상세 '담당 교과'로 맡을 교과를 고른다.
+  { id: "교양", group: "생활·교양", label: "교양", staff: "교양", otherTeachers: true },
   { id: "진로", group: "생활·교양", label: "진로", form: "교양", excluded: true, staff: "진로" },
   { id: "기타", group: "기타", label: "", staff: "기타" }
 ];
@@ -36,7 +37,10 @@ var HOURS_NON_TEACHING = [
   { id: "상담", label: "전문상담교사" }
 ];
 var HOURS_NON_TEACHING_PREFIX = "비교과:";
-var HOURS_DEFAULT_MAX_TEACHER_HOURS = 20;
+// 교사 수 추천 기준(사용자 결정): 1인당 한 학기 19시간 초과면 증, 증해서 13시간 이하가 되면 순회교사 지원.
+// 예전 '한 학기 1인당 최대(20)' 칸(settings.maxTeacherHours)을 증 기준 칸으로 그대로 쓴다(비워 두면 19).
+var HOURS_DEFAULT_MAX_TEACHER_HOURS = 19;
+var HOURS_DEFAULT_ROAMING_HOURS = 13;
 var hoursRenderTimer = null;
 
 function hoursTargetYear() {
@@ -261,11 +265,14 @@ function hoursDesignatedShare(total, entry) {
 }
 
 // ---- 교사 수 추천·공통 시수 배분 (순수 계산) ----
-// 교과(세부 교과)별 학기 시수로 교과 교사 total명을 정수로 나눠, 1인당 시수가 학교 평균(학기별 전체 시수 ÷ total)에서
-// 가장 덜 벗어나게 한다(두 학기 중 더 많이 벗어난 쪽의 최댓값을 최소화). 동률이면 현재 교사 수와 차이가 적은 쪽을 고른다.
-// 시수가 있는 교과는 최소 1명, 한 학기 1인당 maxHours를 넘지 않게 한다. 고정(locked)한 교과는 현재 교사 수 그대로다.
-function hoursRecommendTeachers(units, { total, maxHours = HOURS_DEFAULT_MAX_TEACHER_HOURS } = {}) {
+// 학교 규칙(사용자 결정): 총 교원 수를 먼저 확정하고(기준 교과 교사 수 total) 교과별 1인당 시수(두 학기 중 큰 값)를 비교한다.
+// 1인당 시수가 upHours(기본 19) 초과인 교과는 1명 증 — 단, 증했을 때 roamingHours(기본 13) 이하가 되면 증하지 않고 '순회교사 지원'.
+// 증할 사람은 1인당 시수가 가장 작은 교과에서 1명 감 — 그 교과가 1명이거나, 감하면 upHours를 넘거나, 고정했거나, 이번에 증한 교과면
+// 그다음으로 작은 교과에서 감한다(1인당 시수가 같으면 학교 평균 대비 편차가 작아지는 쪽). 19 초과 교과가 여럿이면 시수가 큰 교과부터,
+// 19 초과 교과가 없어질 때까지 반복한다. 시수가 있는 교과는 최소 1명(0명이면 먼저 1명). 결과는 단계 기록(steps)으로 남기고, 추천만 한다.
+function hoursRecommendTeachers(units, { total, upHours = HOURS_DEFAULT_MAX_TEACHER_HOURS, roamingHours = HOURS_DEFAULT_ROAMING_HOURS, name = (id) => id } = {}) {
   const round = (value) => Math.round(value * 1000) / 1000;
+  const fmt = (value) => Number.isFinite(value) ? String(Math.round(value * 10) / 10) : "교사 0명";
   const list = (units || []).map((unit) => {
     const current = Number.isFinite(unit.current) && unit.current >= 0 ? unit.current : null;
     return {
@@ -274,144 +281,158 @@ function hoursRecommendTeachers(units, { total, maxHours = HOURS_DEFAULT_MAX_TEA
     };
   });
   const totalTeachers = Number(total);
-  const result = { ok: false, reason: "", total: totalTeachers, rows: [], average: null, cap: maxHours > 0 ? maxHours : null };
+  const up = upHours > 0 ? upHours : HOURS_DEFAULT_MAX_TEACHER_HOURS;
+  const roaming = roamingHours >= 0 ? roamingHours : HOURS_DEFAULT_ROAMING_HOURS;
+  const result = { ok: false, reason: "", total: totalTeachers, rows: [], average: null, upHours: up, roamingHours: roaming, steps: [], roaming: [], unresolved: [] };
   if (!(totalTeachers > 0)) return { ...result, reason: "교과 교사 수를 입력하세요." };
   const sum = { "1": list.reduce((acc, unit) => acc + unit.h1, 0), "2": list.reduce((acc, unit) => acc + unit.h2, 0) };
   const average = { "1": sum["1"] / totalTeachers, "2": sum["2"] / totalTeachers };
   result.average = average;
+  const busy = (unit) => unit.h1 > 0 || unit.h2 > 0;
   const lockedTeachers = list.filter((unit) => unit.locked).reduce((acc, unit) => acc + unit.current, 0);
   const free = list.filter((unit) => !unit.locked);
-  const remaining = Math.round(totalTeachers - lockedTeachers);
-  result.remaining = remaining;
-  const cap = result.cap ?? Infinity;
-  const deviation = (unit, count) => count === 0
-    ? (unit.h1 || unit.h2 ? Infinity : 0)
-    : Math.max(Math.abs(unit.h1 / count - average["1"]), Math.abs(unit.h2 / count - average["2"]));
-  for (const unit of free) {
-    const busy = unit.h1 > 0 || unit.h2 > 0;
-    unit.lo = busy ? Math.max(1, Math.ceil(Math.max(unit.h1, unit.h2) / cap - 1e-9)) : 0;
-    unit.hi = busy ? Math.max(unit.lo, remaining) : 0;
+  const minimum = free.filter(busy).length;
+  if (Math.round(totalTeachers - lockedTeachers) < minimum) {
+    return { ...result, reason: `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, Math.round(totalTeachers - lockedTeachers))}명뿐입니다.` };
   }
-  const needed = free.reduce((acc, unit) => acc + unit.lo, 0);
-  if (remaining < 0 || needed > remaining) {
-    const minimum = free.reduce((acc, unit) => acc + (unit.h1 || unit.h2 ? 1 : 0), 0);
-    if (minimum > remaining || !(cap < Infinity)) {
-      return { ...result, needed: needed + lockedTeachers,
-        reason: `시수가 있는 교과가 ${minimum}개라 고정하지 않은 교과에 최소 ${minimum}명이 필요한데 ${Math.max(0, remaining)}명뿐입니다.` };
+  const count = new Map(list.map((unit) => [unit.id, unit.locked ? unit.current : Math.max(0, Math.round(unit.current ?? 0))]));
+  const per = (unit, n = count.get(unit.id)) => n > 0 ? Math.max(unit.h1, unit.h2) / n : busy(unit) ? Infinity : 0;
+  const deviationWith = (changes) => Math.max(0, ...list.filter(busy).map((unit) => {
+    const n = changes.get(unit.id) ?? count.get(unit.id);
+    if (!(n > 0)) return Infinity;
+    return Math.max(Math.abs(unit.h1 / n - average["1"]), Math.abs(unit.h2 / n - average["2"]));
+  }));
+  const raised = new Set();
+  const lowered = new Set();
+  // 감할 교과: 1인당 시수가 작은 순. 1명(시수 있는 교과의 마지막 1명)·감하면 up 초과·고정·이번에 증한 교과는 건너뛴다.
+  const pickDown = (exceptId, skipped, force = false) => {
+    const candidates = free.filter((unit) => unit.id !== exceptId && count.get(unit.id) > 0)
+      .sort((a, b) => per(a) - per(b));
+    let best = null;
+    for (const unit of candidates) {
+      const n = count.get(unit.id);
+      if (best && per(unit) > per(best.unit) + 1e-9) break;
+      const reason = raised.has(unit.id) ? "이번에 증한 교과"
+        : busy(unit) && n <= 1 ? "1명"
+        : !force && busy(unit) && per(unit, n - 1) > up + 1e-9 ? `감하면 ${fmt(per(unit, n - 1))}시간` : "";
+      if (reason) { if (skipped && !raised.has(unit.id)) skipped.push(`${name(unit.id)}(${reason})`); continue; }
+      const deviation = deviationWith(new Map([[unit.id, n - 1]]));
+      if (!best || deviation < best.deviation - 1e-9) best = { unit, deviation };
     }
-    // 정원 안에서는 1인당 최대 시간을 지킬 수 없다: 그래도 정해진 교사 수 안에서 가장 고른 배치를 보여 주고(적용 가능),
-    // 최대 시간을 넘는 교과를 표시한다. 최대 시간을 지키는 교사 수(needed) 안도 함께 계산해 둔다.
-    const relaxed = hoursRecommendTeachers(units, { total: totalTeachers, maxHours: 0 });
-    const required = needed + lockedTeachers;
-    const alternative = hoursRecommendTeachers(units, { total: required, maxHours });
-    if (!relaxed.ok) return { ...result, needed: required, reason: relaxed.reason };
-    for (const row of relaxed.rows) {
-      row.recommendedOverCap = Boolean(row.recommendedPerTeacher) && Math.max(row.recommendedPerTeacher["1"], row.recommendedPerTeacher["2"]) > cap + 1e-9;
-      row.overCap = row.current > 0 && Math.max(row.hours["1"], row.hours["2"]) / row.current > cap;
-    }
-    return { ...relaxed, cap, needed: required, capExceeded: true, alternative: alternative.ok ? alternative : null,
-      reason: `한 학기 1인당 ${maxHours}시간을 넘지 않으려면 교과 교사가 최소 ${required}명 필요합니다(지금 ${totalTeachers}명). ` +
-        `${totalTeachers}명 안에서 가장 고른 배치를 보여 드립니다(${maxHours}시간 넘는 교과 ${relaxed.rows.filter((row) => row.recommendedOverCap).length}개 표시).` };
-  }
-  // 편차 기준값 후보(교과·교사 수마다 나오는 편차) 중, 모든 교과가 그 안에 들면서 합이 맞는 가장 작은 값을 찾는다.
-  const windowOf = (unit, limit) => {
-    let low = null, high = null;
-    for (let count = unit.lo; count <= unit.hi; count++) {
-      if (round(deviation(unit, count)) <= limit) {
-        if (low === null) low = count;
-        high = count;
-      }
-    }
-    return low === null ? null : [low, high];
+    return best?.unit || null;
   };
-  const minimax = (active, left) => {
-    const ranges = (limit) => {
-      const bounds = active.map((unit) => windowOf(unit, limit));
-      if (bounds.some((bound) => !bound)) return null;
-      const min = bounds.reduce((acc, [low]) => acc + low, 0), max = bounds.reduce((acc, [, high]) => acc + high, 0);
-      return min <= left && left <= max ? bounds : null;
-    };
-    const candidates = [...new Set(active.flatMap((unit) => {
-      const values = [];
-      for (let count = unit.lo; count <= unit.hi; count++) values.push(round(deviation(unit, count)));
-      return values;
-    }))].filter(Number.isFinite).sort((a, b) => a - b);
-    if (!candidates.length || !ranges(candidates.at(-1))) return null;
-    let lowIndex = 0, highIndex = candidates.length - 1, limit = candidates.at(-1);
-    while (lowIndex <= highIndex) {
-      const middle = Math.floor((lowIndex + highIndex) / 2);
-      if (ranges(candidates[middle])) { limit = candidates[middle]; highIndex = middle - 1; } else lowIndex = middle + 1;
+  let changes = 0;
+  const stepText = (upUnit, before, downUnit, downBefore) =>
+    `${++changes}. ${name(upUnit.id)} +1 (${fmt(before)} → ${fmt(per(upUnit))})` +
+    (downUnit ? ` ← ${name(downUnit.id)} −1 (${fmt(downBefore)} → ${fmt(per(downUnit))})` : "");
+  // 1) 총 교원 수 확정: 지금 교사 수 합이 기준과 다르면 먼저 맞춘다(모자라면 1인당 시수가 큰 교과에, 남으면 작은 교과에서).
+  let assigned = [...count.values()].reduce((acc, n) => acc + n, 0);
+  while (assigned < totalTeachers - 1e-9) {
+    const target = free.filter(busy).sort((a, b) => per(b) - per(a))[0];
+    if (!target) break;
+    const before = per(target);
+    count.set(target.id, count.get(target.id) + 1);
+    raised.add(target.id);
+    assigned += 1;
+    result.steps.push(`${stepText(target, before)} · 기준 교원 수에 맞춤`);
+  }
+  while (assigned > totalTeachers + 1e-9) {
+    // 남는 교원은 19시간을 넘지 않는 교과에서 먼저 빼고, 그런 교과가 없을 때만 넘더라도 뺀다(넘은 교과는 아래에서 다시 증).
+    const target = pickDown(null, null) || pickDown(null, null, true);
+    if (!target) break;
+    const before = per(target);
+    count.set(target.id, count.get(target.id) - 1);
+    lowered.add(target.id);
+    assigned -= 1;
+    result.steps.push(`${++changes}. ${name(target.id)} −1 (${fmt(before)} → ${fmt(per(target))}) · 기준 교원 수에 맞춤`);
+  }
+  // 2)~5) 19 초과 교과를 시수가 큰 교과부터 증, 감할 교과에서 1명.
+  const done = new Set();
+  for (let guard = 0; guard < 1000; guard++) {
+    const over = free.filter((unit) => busy(unit) && !done.has(unit.id) && per(unit) > up + 1e-9).sort((a, b) => per(b) - per(a))[0];
+    if (!over) break;
+    const n = count.get(over.id);
+    const before = per(over);
+    if (n > 0 && per(over, n + 1) <= roaming + 1e-9) {
+      done.add(over.id);
+      result.roaming.push(over.id);
+      result.steps.push(`${name(over.id)}: 순회교사 지원(증하면 ${fmt(per(over, n + 1))}시간 · ${roaming} 이하)`);
+      continue;
     }
-    return { limit, bounds: ranges(limit) };
-  };
-  // 혼자서는 더 고르게 할 수 없는 교과(예: 시수가 적어도 최소 1명, 한도 때문에 2명)가 최대 편차를 정하면 나머지는 그 큰 편차 안에서
-  // 아무렇게나 남는다. 그런 교과는 가장 나은 교사 수로 정해 두고 나머지로 다시 최대 편차를 줄인다(차례로 고르게).
-  const pinned = new Map();
-  let active = free.slice(), left = remaining;
-  let solved = minimax(active, left);
-  let limit = solved?.limit ?? 0;
-  while (solved && active.length > 1) {
-    const bestOf = (unit) => {
-      let best = null;
-      for (let count = unit.lo; count <= unit.hi; count++) {
-        const value = round(deviation(unit, count));
-        const distance = Math.abs(count - (unit.current ?? 0));
-        if (!best || value < best.value || (value === best.value && distance < best.distance)) best = { count, value, distance };
-      }
-      return best;
-    };
-    const stuck = active.map((unit) => [unit, bestOf(unit)]).filter(([, best]) => best && best.value >= solved.limit && solved.limit > 0);
-    if (!stuck.length || stuck.length === active.length) break;
-    const rest = active.filter((unit) => !stuck.some(([item]) => item === unit));
-    const restLeft = left - stuck.reduce((acc, [, best]) => acc + best.count, 0);
-    const next = minimax(rest, restLeft);
-    if (!next) break;
-    for (const [unit, best] of stuck) pinned.set(unit.id, best.count);
-    active = rest;
-    left = restLeft;
-    solved = next;
+    const skipped = [];
+    // 0명 교과는 최소 1명이 먼저라, 19시간을 넘게 되는 교과에서라도 1명을 데려온다.
+    const down = pickDown(over.id, skipped) || (n === 0 ? pickDown(over.id, null, true) : null);
+    if (!down) {
+      done.add(over.id);
+      result.unresolved.push(over.id);
+      result.steps.push(`${name(over.id)}: 감할 교과 없음 — 총 교원 수 늘리기 검토(지금 ${fmt(before)}시간)`);
+      continue;
+    }
+    const downBefore = per(down);
+    count.set(over.id, n + 1);
+    count.set(down.id, count.get(down.id) - 1);
+    raised.add(over.id);
+    lowered.add(down.id);
+    result.steps.push(stepText(over, before, down, downBefore) + (skipped.length ? ` · 건너뜀: ${skipped.join(", ")}` : ""));
   }
-  const chosen = solved ? solved.bounds : active.map((unit) => [unit.lo, unit.hi]);
-  // 범위 안에서 현재 교사 수에 가장 가깝게 두고, 합이 맞을 때까지 현재와의 차이가 가장 적게 느는 교과를 한 명씩 옮긴다
-  // (차이가 같으면 옮긴 뒤 편차가 작은 교과).
-  const counts = active.map((unit, index) => Math.min(chosen[index][1], Math.max(chosen[index][0], Math.round(unit.current ?? 0))));
-  const cost = (unit, count) => Math.abs(count - (unit.current ?? 0));
-  let assigned = counts.reduce((acc, count) => acc + count, 0);
-  while (assigned !== left) {
-    const step = assigned > left ? -1 : 1;
-    let best = -1, bestKey = null;
-    active.forEach((unit, index) => {
-      const next = counts[index] + step;
-      if (next < chosen[index][0] || next > chosen[index][1]) return;
-      const key = [round(cost(unit, next) - cost(unit, counts[index])), round(deviation(unit, next))];
-      if (!bestKey || key[0] < bestKey[0] || (key[0] === bestKey[0] && key[1] < bestKey[1])) { best = index; bestKey = key; }
-    });
-    if (best < 0) break;
-    counts[best] += step;
-    assigned += step;
+  for (const unit of list.filter((item) => item.locked && busy(item) && per(item) > up + 1e-9)) {
+    result.steps.push(`${name(unit.id)}: 고정이라 증하지 않음(${fmt(per(unit))}시간)`);
   }
-  const recommended = new Map([...pinned, ...active.map((unit, index) => [unit.id, counts[index]])]);
-  assigned += remaining - left;
-  const perTeacher = (unit, count) => count > 0 ? { "1": unit.h1 / count, "2": unit.h2 / count } : null;
+  const perTeacher = (unit, n) => n > 0 ? { "1": unit.h1 / n, "2": unit.h2 / n } : null;
   result.rows = list.map((unit) => {
-    const count = unit.locked ? unit.current : recommended.get(unit.id);
+    const recommended = count.get(unit.id);
     return {
-      id: unit.id, hours: { "1": unit.h1, "2": unit.h2 }, current: unit.current, locked: unit.locked, recommended: count,
-      diff: unit.current === null ? count : round(count - unit.current),
+      id: unit.id, hours: { "1": unit.h1, "2": unit.h2 }, current: unit.current, locked: unit.locked, recommended,
+      diff: unit.current === null ? recommended : round(recommended - unit.current),
       currentPerTeacher: unit.current > 0 ? perTeacher(unit, unit.current) : null,
-      recommendedPerTeacher: perTeacher(unit, count),
-      overCap: unit.current > 0 && Math.max(unit.h1, unit.h2) / unit.current > cap
+      recommendedPerTeacher: perTeacher(unit, recommended),
+      overUp: unit.current > 0 ? Math.max(unit.h1, unit.h2) / unit.current > up + 1e-9 : busy(unit),
+      recommendedOverUp: busy(unit) && per(unit, recommended) > up + 1e-9,
+      roaming: result.roaming.includes(unit.id),
+      unresolved: result.unresolved.includes(unit.id)
     };
   });
   result.ok = true;
-  result.assigned = assigned + lockedTeachers;
-  result.maxDeviation = limit;
+  result.assigned = [...count.values()].reduce((acc, n) => acc + n, 0);
+  result.maxDeviation = deviationWith(new Map());
   result.range = {
     current: hoursPerTeacherRange(result.rows.map((row) => row.currentPerTeacher)),
     recommended: hoursPerTeacherRange(result.rows.map((row) => row.recommendedPerTeacher))
   };
   result.changed = result.rows.filter((row) => row.diff !== 0).length;
+  if (!result.steps.length) result.steps.push(`1인당 시수가 ${up}시간을 넘는 교과가 없어 지금 교사 수 그대로입니다.`);
   return result;
+}
+
+// 전년도 대비 증감 순위: 교과(세부)별 올해 1인당 시수(학기별·1년, 지금 교사 수 기준)를 전년도 평균(시수표 W 열)과 비교한다.
+// 과학·사회는 시수표처럼 교과군 하나(교과군 이름 키)로 비교한다. 순위는 많이 늘어난 순, 전년 값이 없으면 순위 없음.
+function hoursYearChange(departments) {
+  const round = (value) => Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
+  const pooled = new Set(["과학", "사회"]);
+  const rows = [];
+  for (const department of departments || []) {
+    if (department.excluded || department.id === "기타") continue;
+    const busy = (department.hours?.["1"] || 0) + (department.hours?.["2"] || 0) > 0 || department.teachers > 0;
+    if (pooled.has(department.group)) {
+      if (!department.common) continue;
+      const members = departments.filter((item) => item.group === department.group);
+      const previousTeachers = members.some((item) => Number.isFinite(item.previousTeachers))
+        ? members.reduce((sum, item) => sum + (item.previousTeachers || 0), 0) : null;
+      if (!members.some((item) => (item.hours?.["1"] || 0) + (item.hours?.["2"] || 0) > 0 || item.teachers > 0) && department.groupPrevious == null) continue;
+      rows.push({ id: department.group, group: true, label: `${department.group}(교과군)`, current: department.groupSemester ? { ...department.groupSemester } : null,
+        year: round(department.groupAverage), previous: department.groupPrevious ?? null, teachers: department.groupTeachers || 0, previousTeachers });
+      continue;
+    }
+    if (department.otherTeachers && !(department.teachers > 0)) continue;
+    if (!busy && department.previous == null) continue;
+    rows.push({ id: department.id, group: false, label: department.id, current: department.averages ? { ...department.averages } : null,
+      year: round(department.yearAverage), previous: department.previous ?? null, teachers: department.teachers ?? null, previousTeachers: department.previousTeachers ?? null });
+  }
+  for (const row of rows) row.change = row.year !== null && row.previous !== null ? round(row.year - row.previous) : null;
+  const ranked = rows.filter((row) => row.change !== null).sort((a, b) => b.change - a.change);
+  ranked.forEach((row, index) => { row.rank = index && ranked[index - 1].change === row.change ? ranked[index - 1].rank : index + 1; });
+  for (const row of rows) if (!row.rank) row.rank = null;
+  return { rows: [...ranked, ...rows.filter((row) => row.change === null)], hasPrevious: ranked.length > 0 };
 }
 
 // 1인당 시수 목록(학기별)에서 가장 적은 값과 가장 많은 값.
@@ -647,6 +668,8 @@ function computeHoursStats(year = hoursTargetYear()) {
     const averages = teachers > 0 ? { "1": totals["1"] / teachers, "2": totals["2"] / teachers } : null;
     return {
       ...definition, items: own, hours, allocation, totals, teachers, averages,
+      // 맡을 교과를 고르지 않은 교양 시수: '타교과 담당(미지정)'으로 표시하고 1인당 평균은 내지 않는다.
+      otherUnassigned: Boolean(definition.otherTeachers) && !(teachers > 0) && (hours["1"] > 0 || hours["2"] > 0),
       yearAverage: averages ? (averages["1"] + averages["2"]) / 2 : null,
       previous: hoursNumber(settings.previousAverages[definition.id], { max: 100 }),
       previousTeachers: hoursNumber(settings.previousTeachers[definition.id], { max: 200 }),
@@ -692,7 +715,10 @@ function computeHoursStats(year = hoursTargetYear()) {
     creativeYear: (totals["1"] + totals["2"] + 2 * totals.creative) / totals.teachers / 2
   } : null;
   // 빈칸(아직 안 넣음)과 0명(넣었는데 0)은 따로 알린다.
-  const needsTeachers = included.filter((department) => department.items.length && !department.common && !(department.teachers > 0));
+  const needsTeachers = included.filter((department) => department.items.length && !department.common && !department.otherTeachers && !(department.teachers > 0));
+  for (const department of departments.filter((item) => item.otherUnassigned)) {
+    issues.push({ level: "info", text: `${hoursDepartmentName(department.id)} ${department.hours["1"]}/${department.hours["2"]}시간: 타교과 담당(미지정) — 다른 교과 교사가 맡습니다. 과목별 상세의 '담당 교과'에서 맡을 교과를 고르면 그 교과 시수에 더해집니다(고르기 전에는 교과별 평균·교사 수 추천에서 뺌).` });
+  }
   const missingTeachers = needsTeachers.filter((department) => department.teachers === null || department.teachers === undefined);
   const zeroTeachers = needsTeachers.filter((department) => department.teachers === 0);
   if (missingTeachers.length) {
@@ -716,7 +742,8 @@ function computeHoursStats(year = hoursTargetYear()) {
   const nonTeaching = hoursNonTeachingStats(items, settings, issues);
   const staff = hoursStaffStats(departments, totals, nonTeaching, settings, issues);
   const recommendation = hoursTeacherRecommendation(departments, staff, settings);
-  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, issues };
+  const yearChange = hoursYearChange(departments);
+  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, yearChange, issues };
 }
 
 // 비교과 교사(보건·영양·사서·상담): 교사 수, 맡은 수업 시수(상세 표에서 담당을 비교과로 지정한 과목 + 직접 입력), 1인당 시수.
@@ -801,6 +828,7 @@ function hoursTeacherRecommendation(departments, staff, settings) {
     notes.push(`${common.group} 공통 과목 시수 중 세부 교과에 배분하지 않은 ${left["1"]}/${left["2"]}시간은 세부 교과 시수 비율대로 나눠 계산했습니다. '${common.group} 공통 시수 자동 배분'으로 반 단위로 나누면 더 정확합니다.`);
   }
   const units = departments.filter((department) => !department.excluded && department.id !== "기타")
+    .filter((department) => !(department.otherTeachers && !(department.teachers > 0)))
     .filter((department) => !(department.common && !(department.teachers > 0)))
     .map((department) => {
       const extra = spread.get(department.id) || { "1": 0, "2": 0 };
@@ -814,10 +842,13 @@ function hoursTeacherRecommendation(departments, staff, settings) {
   const entered = hoursNumber(settings.recommendTeachers, { max: 500 });
   const basis = staff.entered !== null ? Math.max(0, Math.round((staff.entered - staff.career - staff.nonTeaching) * 100) / 100) : staff.subject;
   const target = entered ?? basis;
-  const maxHours = hoursNumber(settings.maxTeacherHours, { max: 40 }) || HOURS_DEFAULT_MAX_TEACHER_HOURS;
-  const result = hoursRecommendTeachers(units, { total: target, maxHours });
+  const upHours = hoursNumber(settings.maxTeacherHours, { max: 40 }) || HOURS_DEFAULT_MAX_TEACHER_HOURS;
+  const roamingHours = hoursNumber(settings.roamingTeacherHours, { max: 40 }) ?? HOURS_DEFAULT_ROAMING_HOURS;
+  const result = hoursRecommendTeachers(units, { total: target, upHours, roamingHours, name: hoursDepartmentName });
+  const other = departments.filter((department) => department.otherUnassigned);
+  if (other.length) notes.push(`${other.map((department) => hoursDepartmentName(department.id)).join(", ")}은(는) 타교과 담당(미지정)이라 추천에서 뺐습니다.`);
   return {
-    ...result, target, entered, basis, maxHours, notes,
+    ...result, target, entered, basis, upHours, roamingHours, notes,
     basisText: entered !== null ? "직접 입력"
       : staff.entered !== null ? `총 ${hoursFormat(staff.entered, 1)}${staff.career ? ` − 진로 ${hoursFormat(staff.career, 1)}` : ""} − 비교과 ${hoursFormat(staff.nonTeaching, 1)}`
         : "지금 교과 교사 수 합"
@@ -949,47 +980,78 @@ function hoursStaffSettings(stats) {
 }
 
 // 교과별 교사 수 추천(시수 균형, '교사 수 추천' 팝업): 추천만 보이고, '추천 적용'을 눌러야 교사 수가 바뀐다.
+// 전년도 대비 증감 순위표(교사 수 추천 팝업 위쪽). 전년 자료가 없으면 안내만.
+function hoursYearChangeSection(stats) {
+  const change = stats.yearChange || { rows: [], hasPrevious: false };
+  const pair = (value) => value ? `${hoursFormat(value["1"], 1)} / ${hoursFormat(value["2"], 1)}` : "-";
+  const teachers = (row) => row.previousTeachers === null || row.previousTeachers === undefined
+    ? `${hoursFormat(row.teachers, 1)}` : `${hoursFormat(row.previousTeachers, 1)} → ${hoursFormat(row.teachers, 1)}${row.teachers !== row.previousTeachers ? ` (${row.teachers > row.previousTeachers ? "+" : ""}${hoursFormat(row.teachers - row.previousTeachers, 1)})` : ""}`;
+  if (!change.hasPrevious) {
+    return `<section class="hours-year-change" aria-label="전년도 대비 증감 순위"><h4>전년도 대비 1인당 시수 증감 순위</h4>
+      <p class="note" id="hoursYearChangeEmpty">전년도 자료 없음 — 시수표 W 열 '전년도 평균'을 입력하거나 '전년도 설정 불러오기'를 하면 교과별 증감 순위를 보여 드립니다.</p></section>`;
+  }
+  const body = change.rows.map((row) => `<tr>
+      <th scope="row" class="closure-subject">${escapeHtml(row.group ? row.label : hoursDepartmentName(row.id))}</th>
+      <td>${row.previous === null ? "-" : hoursFormat(row.previous, 1)}</td>
+      <td>${pair(row.current)}</td><td>${row.year === null ? "-" : hoursFormat(row.year, 1)}</td>
+      <td class="${row.change > 0 ? "hours-up" : row.change < 0 ? "hours-down" : ""}">${row.change === null ? "-" : `${row.change > 0 ? "+" : ""}${hoursFormat(row.change, 1)}`}</td>
+      <td>${row.rank ?? "-"}</td><td>${escapeHtml(teachers(row))}</td></tr>`).join("");
+  return `<section class="hours-year-change" aria-label="전년도 대비 증감 순위"><h4>전년도 대비 1인당 시수 증감 순위 <small>많이 늘어난 순 · 지금 교사 수 기준</small></h4>
+    <div class="aggregate-sheet-wrap"><table class="closure-table hours-year-change-table">
+      <thead><tr><th scope="col">교과</th><th scope="col">전년 1인당<br>(1년)</th><th scope="col">올해 1인당<br>(1학기 / 2학기)</th><th scope="col">올해 1인당<br>(1년)</th><th scope="col">증감</th><th scope="col">순위</th><th scope="col">교사 수<br>(전년 → 올해)</th></tr></thead>
+      <tbody>${body}</tbody></table></div></section>`;
+}
+
 function hoursRecommendationSection(stats) {
   const recommendation = stats.recommendation;
   const settings = stats.settings;
   const range = (value) => value ? `${hoursFormat(value[0], 1)}~${hoursFormat(value[1], 1)}` : "-";
   const pair = (value) => value ? `${hoursFormat(value["1"], 1)} / ${hoursFormat(value["2"], 1)}` : "-";
+  const up = recommendation.upHours ?? HOURS_DEFAULT_MAX_TEACHER_HOURS;
+  const roaming = recommendation.roamingHours ?? HOURS_DEFAULT_ROAMING_HOURS;
+  const extra = recommendation.ok ? [
+    recommendation.roaming?.length ? `순회교사 지원 ${recommendation.roaming.map(hoursDepartmentName).join("·")}` : "",
+    recommendation.unresolved?.length ? `감할 교과 없음 ${recommendation.unresolved.map(hoursDepartmentName).join("·")} — 총 교원 수 늘리기 검토` : ""
+  ].filter(Boolean).join(" · ") : "";
   const headline = recommendation.ok
-    ? `${recommendation.capExceeded ? `${recommendation.reason} ` : ""}추천대로 하면 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)}${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}`
+    ? `추천대로 하면 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)}${recommendation.changed ? ` · 바뀌는 교과 ${recommendation.changed}개` : " · 지금과 같음"}${extra ? ` · ${extra}` : ""}`
     : recommendation.reason;
-  // 최대 시간을 지키려면 더 필요한 교사 수 안(예: 61명안): 어느 교과에 몇 명이 더 필요한지 한 줄로.
-  const alternative = recommendation.capExceeded && recommendation.alternative
-    ? recommendation.alternative.rows.filter((row) => row.recommended !== recommendation.rows.find((item) => item.id === row.id)?.recommended)
-      .map((row) => `${hoursDepartmentName(row.id)} ${row.recommended}명`).join(", ") : "";
   const rows = recommendation.rows.map((row) => {
     const diff = row.diff;
     // 지금 교사 수가 빈칸이면 '+1 충원'(0→1처럼 보임)이 아니라 '빈칸→n'.
     const diffText = row.current === null || row.current === undefined ? (row.recommended ? `빈칸→${hoursFormat(row.recommended, 1)}` : "")
-      : !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 충원` : `${hoursFormat(diff, 1)} 감원`;
+      : !diff ? "" : diff > 0 ? `+${hoursFormat(diff, 1)} 증` : `${hoursFormat(diff, 1)} 감`;
+    const notes = [
+      row.roaming ? `<span class="hours-note">순회교사 지원</span>` : "",
+      row.unresolved ? `<span class="hours-note is-warn">감할 교과 없음 — 총 교원 수 늘리기 검토</span>` : "",
+      row.recommendedOverUp && !row.roaming && !row.unresolved ? `<span class="hours-note is-warn">${up}시간 초과${row.locked ? "(고정)" : ""}</span>` : ""
+    ].filter(Boolean);
     return `<tr class="${row.locked ? "is-locked" : ""}${diff ? " is-changed" : ""}">
       <th scope="row" class="closure-subject">${escapeHtml(hoursDepartmentName(row.id))}</th>
       <td>${hoursFormat(row.hours["1"], 1)}</td><td>${hoursFormat(row.hours["2"], 1)}</td>
       <td><input type="checkbox" data-hours-lock="${row.id}" data-focus-key="lock-${row.id}"${row.locked ? " checked" : ""}${row.current === null ? " disabled" : ""} aria-label="${escapeHtml(hoursDepartmentName(row.id))} 교사 수 고정"></td>
       <td>${row.current === null ? "-" : hoursFormat(row.current, 1)}</td>
       <td><b>${row.recommended}</b></td>
-      <td class="${diff > 0 ? "hours-up" : diff < 0 ? "hours-down" : ""}">${diffText}${row.overCap ? `${diffText ? "<br>" : ""}<span class="hours-note">지금 한 학기 ${recommendation.maxHours}시간 초과${row.locked ? "(고정)" : ""}</span>` : ""}${row.recommendedOverCap ? `${diffText || row.overCap ? "<br>" : ""}<span class="hours-note is-warn">추천해도 ${recommendation.maxHours}시간 초과</span>` : ""}</td>
+      <td class="${diff > 0 ? "hours-up" : diff < 0 ? "hours-down" : ""}">${[diffText, ...notes].filter(Boolean).join("<br>")}</td>
       <td>${pair(row.currentPerTeacher)}</td>
       <td>${pair(row.recommendedPerTeacher)}</td>
     </tr>`;
   }).join("");
+  const steps = recommendation.ok ? (recommendation.steps || []) : [];
   const undo = hoursPlainObject(settings.undo) ? settings.undo : null;
-  return `<section class="hours-recommend">
+  return `${hoursYearChangeSection(stats)}<section class="hours-recommend">
     <p class="hours-staff-line"><b>${escapeHtml(headline)}</b></p>
     <div class="hours-settings-row hours-recommend-tools">
       <label class="hours-classes">기준 교과 교사 수 <input id="hoursRecommendTotal" data-hours-recommend-total="1" data-focus-key="recommend-total" type="number" min="0" max="500" step="1" value="${settings.recommendTeachers ?? ""}" placeholder="${hoursFormat(recommendation.basis, 1)}"></label>
       <span class="hours-note">비우면 ${escapeHtml(recommendation.basisText)} = ${hoursFormat(recommendation.basis, 1)}명</span>
-      <label class="hours-classes">한 학기 1인당 최대 <input id="hoursMaxHours" data-hours-max-hours="1" data-focus-key="max-hours" type="number" min="1" max="40" step="1" value="${settings.maxTeacherHours ?? ""}" placeholder="${HOURS_DEFAULT_MAX_TEACHER_HOURS}">시간</label>
+      <label class="hours-classes">증 기준: 1인당 한 학기 <input id="hoursMaxHours" data-hours-max-hours="1" data-focus-key="max-hours" type="number" min="1" max="40" step="1" value="${settings.maxTeacherHours ?? ""}" placeholder="${HOURS_DEFAULT_MAX_TEACHER_HOURS}">시간 초과</label>
+      <label class="hours-classes">순회교사 기준: 증하면 <input id="hoursRoamingHours" data-hours-roaming-hours="1" data-focus-key="roaming-hours" type="number" min="0" max="40" step="1" value="${settings.roamingTeacherHours ?? ""}" placeholder="${HOURS_DEFAULT_ROAMING_HOURS}">시간 이하</label>
       <button class="button" type="button" data-hours-action="apply-recommendation"${recommendation.ok && recommendation.changed ? "" : " disabled"}>추천 적용</button>
       ${undo ? `<button class="button button-quiet" type="button" data-hours-action="undo">되돌리기 (${escapeHtml(undo.label)})</button>` : ""}
     </div>
-    <p class="note">교사 수는 정원·표시과목에 따라 학교가 정하므로 <b>추천만</b> 합니다. 1인당 시수가 학교 평균(1학기 ${recommendation.average ? hoursFormat(recommendation.average["1"], 1) : "-"} · 2학기 ${recommendation.average ? hoursFormat(recommendation.average["2"], 1) : "-"}시간)에서 가장 덜 벗어나도록 두 학기를 함께 보고 나누며, 같으면 지금 교사 수와 차이가 적은 쪽을 고릅니다. 시수가 있는 교과는 최소 1명입니다. '고정'한 교과는 바꾸지 않고 나머지 교사로 나눕니다. 진로(합계 제외) 교사는 추천에서 뺍니다.</p>
+    <p class="note">교사 수는 정원·표시과목에 따라 학교가 정하므로 <b>추천만</b> 합니다. 기준 교과 교사 수(총 교원 수)를 먼저 정하고, 1인당 시수(두 학기 중 큰 값)가 <b>${up}시간을 넘는</b> 교과를 시수가 큰 교과부터 1명 증합니다. 증했을 때 <b>${roaming}시간 이하</b>가 되면 증하지 않고 순회교사 지원으로 둡니다. 증할 사람은 1인당 시수가 가장 작은 교과에서 1명 감하고, 그 교과가 1명이거나 감하면 ${up}시간을 넘으면 그다음 교과에서 감합니다(같으면 학교 평균과의 편차가 작아지는 쪽). 시수가 있는 교과는 최소 1명, '고정'한 교과는 바꾸지 않습니다. 진로(합계 제외)·타교과 담당 교양은 추천에서 뺍니다.</p>
     ${recommendation.notes.map((note) => `<p class="note">${escapeHtml(note)}</p>`).join("")}
-    ${alternative ? `<p class="note" id="hoursRecommendAlternative">${hoursFormat(recommendation.needed, 1)}명이면 모든 교과가 ${recommendation.maxHours}시간 안: ${escapeHtml(alternative)} (나머지는 위와 같음). 기준 교과 교사 수를 ${hoursFormat(recommendation.needed, 1)}으로 바꾸면 그 안을 적용할 수 있습니다.</p>` : ""}
+    ${steps.length ? `<ul class="hours-recommend-steps" aria-label="추천 단계 기록">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ul>` : ""}
     ${rows ? `<div class="aggregate-sheet-wrap"><table class="closure-table hours-recommend-table">
       <thead><tr><th scope="col">교과</th><th scope="col">1학기 시수</th><th scope="col">2학기 시수</th><th scope="col">고정</th><th scope="col">현재 교사 수</th><th scope="col">추천</th><th scope="col">차이</th><th scope="col">현재 1인당<br>(1학기 / 2학기)</th><th scope="col">추천 시 1인당<br>(1학기 / 2학기)</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -1221,6 +1283,7 @@ function updateHoursSetting(target) {
   } else if (target.dataset.hoursLock) set(settings.teacherLocks, target.dataset.hoursLock, target.checked ? true : null);
   else if (target.dataset.hoursRecommendTotal) set(settings, "recommendTeachers", hoursNumber(target.value, { max: 500 }));
   else if (target.dataset.hoursMaxHours) set(settings, "maxTeacherHours", hoursNumber(target.value, { max: 40 }));
+  else if (target.dataset.hoursRoamingHours) set(settings, "roamingTeacherHours", hoursNumber(target.value, { max: 40 }));
   else if (target.dataset.hoursSource) set(settings.sourceRounds, target.dataset.hoursSource, target.value || null);
   else if (target.dataset.hoursTeachers) set(settings.teachers, target.dataset.hoursTeachers, hoursNumber(target.value, { max: 200 }));
   else if (target.dataset.hoursPrevious) set(settings.previousAverages, target.dataset.hoursPrevious, hoursNumber(target.value, { max: 100 }));
@@ -1271,7 +1334,7 @@ function loadPreviousHoursSettings() {
   settings.departmentOverrides = { ...source.departmentOverrides };
   settings.nonTeaching = { ...source.nonTeaching };
   settings.teacherLocks = { ...source.teacherLocks };
-  for (const key of ["creativeHours", "totalTeachers", "maxTeacherHours"]) {
+  for (const key of ["creativeHours", "totalTeachers", "maxTeacherHours", "roamingTeacherHours"]) {
     if (source[key] !== undefined) settings[key] = source[key];
   }
   settings.previousAverages = { ...source.lastAverages };
@@ -1594,7 +1657,7 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
       if (!group.pooled) {
         put(start, 20, { v: number(department.yearAverage), f: `IF(N(S${start})>0,AVERAGE(T${blocks["1"].start},T${blocks["2"].start}),"")`, k: "u" });
         merge(start, 20, end, 20);
-        put(start, 21, { v: department.excluded ? "합계·평균\n제외" : department.id === "기타" ? "담당 교과\n미정" : "", k: "v" });
+        put(start, 21, { v: department.excluded ? "합계·평균\n제외" : department.id === "기타" ? "담당 교과\n미정" : department.otherUnassigned ? "타교과 담당\n(미지정)" : "", k: "v" });
         merge(start, 21, end, 21);
         put(start, 22, { v: number(department.previous), k: "w", input: previousInput(department.id, hoursDepartmentName(department.id), department.previous) });
         merge(start, 22, end, 22);
@@ -1925,31 +1988,43 @@ function buildHoursWorkbookSheets(stats, { schoolName = typeof $ === "function" 
   const staffSheet = { name: "교원 구성", rows: staffRows, merges: ["A1:F1"], widths: [34, 9, 10, 10, 10, 60], freeze: "A3" };
   const sheets = [form, detail, staffSheet];
   const recommendation = stats.recommendation;
+  const change = stats.yearChange || { rows: [], hasPrevious: false };
   if (recommendation?.ok && recommendation.rows.length) {
     const range = (value) => value ? `${hoursFormat(value[0], 1)}~${hoursFormat(value[1], 1)}` : "-";
-    sheets.push({
-      name: "교사 수 추천",
-      freeze: "A4",
-      widths: [18, 9, 9, 6, 10, 8, 10, 10, 10, 10, 10],
-      merges: ["A1:K1", "A2:K2"],
-      rows: [
-        [{ v: `교과별 교사 수 추천 (시수 균형) · 기준 교과 교사 ${hoursFormat(recommendation.target, 1)}명(${recommendation.basisText}) · 한 학기 1인당 최대 ${recommendation.maxHours}시간`, s: 6 }],
-        [{ v: `추천만 합니다(교사 수는 정원·표시과목에 따라 학교가 정함). 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)} · 학교 평균 1학기 ${hoursFormat(recommendation.average["1"], 1)} · 2학기 ${hoursFormat(recommendation.average["2"], 1)}시간`, s: 8 }],
-        ["교과", "1학기 시수", "2학기 시수", "고정", "현재 교사 수", "추천", "차이", "현재 1인당\n1학기", "현재 1인당\n2학기", "추천 1인당\n1학기", "추천 1인당\n2학기"].map((value) => ({ v: value, s: 2 })),
-        ...recommendation.rows.map((row, index) => {
-          const line = index + 4;
-          return [
-            { v: hoursDepartmentName(row.id), s: 3 }, { v: Math.round(row.hours["1"] * 100) / 100, s: 4 }, { v: Math.round(row.hours["2"] * 100) / 100, s: 4 },
-            { v: row.locked ? "고정" : "", s: 4 }, { v: row.current ?? "", s: 4 }, { v: row.recommended, s: 9 },
-            { f: `F${line}-E${line}`, v: row.current === null ? row.recommended : row.recommended - row.current, s: 4 },
-            { f: `IF(E${line}>0,B${line}/E${line},"")`, v: row.currentPerTeacher ? row.currentPerTeacher["1"] : "", s: 10 },
-            { f: `IF(E${line}>0,C${line}/E${line},"")`, v: row.currentPerTeacher ? row.currentPerTeacher["2"] : "", s: 10 },
-            { f: `IF(F${line}>0,B${line}/F${line},"")`, v: row.recommendedPerTeacher ? row.recommendedPerTeacher["1"] : "", s: 10 },
-            { f: `IF(F${line}>0,C${line}/F${line},"")`, v: row.recommendedPerTeacher ? row.recommendedPerTeacher["2"] : "", s: 10 }
-          ];
-        })
-      ]
-    });
+    const note = (row) => [row.roaming ? "순회교사 지원" : "", row.unresolved ? "감할 교과 없음 — 총 교원 수 늘리기 검토" : "",
+      row.recommendedOverUp && !row.roaming && !row.unresolved ? `${recommendation.upHours}시간 초과` : ""].filter(Boolean).join(" · ");
+    const rows = [
+      [{ v: `교과별 교사 수 추천 · 기준 교과 교사 ${hoursFormat(recommendation.target, 1)}명(${recommendation.basisText}) · 1인당 한 학기 ${recommendation.upHours}시간 초과면 증, 증해서 ${recommendation.roamingHours}시간 이하면 순회교사 지원`, s: 6 }],
+      [{ v: `추천만 합니다(교사 수는 정원·표시과목에 따라 학교가 정함). 1인당 시수 범위 ${range(recommendation.range.current)} → ${range(recommendation.range.recommended)} · 학교 평균 1학기 ${hoursFormat(recommendation.average["1"], 1)} · 2학기 ${hoursFormat(recommendation.average["2"], 1)}시간`, s: 8 }],
+      ["교과", "1학기 시수", "2학기 시수", "고정", "현재 교사 수", "추천", "차이", "현재 1인당\n1학기", "현재 1인당\n2학기", "추천 1인당\n1학기", "추천 1인당\n2학기", "비고"].map((value) => ({ v: value, s: 2 })),
+      ...recommendation.rows.map((row, index) => {
+        const line = index + 4;
+        return [
+          { v: hoursDepartmentName(row.id), s: 3 }, { v: Math.round(row.hours["1"] * 100) / 100, s: 4 }, { v: Math.round(row.hours["2"] * 100) / 100, s: 4 },
+          { v: row.locked ? "고정" : "", s: 4 }, { v: row.current ?? "", s: 4 }, { v: row.recommended, s: 9 },
+          { f: `F${line}-E${line}`, v: row.current === null ? row.recommended : row.recommended - row.current, s: 4 },
+          { f: `IF(E${line}>0,B${line}/E${line},"")`, v: row.currentPerTeacher ? row.currentPerTeacher["1"] : "", s: 10 },
+          { f: `IF(E${line}>0,C${line}/E${line},"")`, v: row.currentPerTeacher ? row.currentPerTeacher["2"] : "", s: 10 },
+          { f: `IF(F${line}>0,B${line}/F${line},"")`, v: row.recommendedPerTeacher ? row.recommendedPerTeacher["1"] : "", s: 10 },
+          { f: `IF(F${line}>0,C${line}/F${line},"")`, v: row.recommendedPerTeacher ? row.recommendedPerTeacher["2"] : "", s: 10 },
+          { v: note(row), s: 3 }
+        ];
+      }),
+      [],
+      [{ v: "추천 단계 기록", s: 2 }],
+      ...(recommendation.steps || []).map((step) => [{ v: step, s: 3 }]),
+      [],
+      [{ v: "전년도 대비 1인당 시수 증감 순위 (많이 늘어난 순 · 지금 교사 수 기준)", s: 2 }]
+    ];
+    if (change.hasPrevious) {
+      rows.push(["교과", "전년 1인당(1년)", "올해 1인당 1학기", "올해 1인당 2학기", "올해 1인당(1년)", "증감", "순위", "전년 교사 수", "올해 교사 수"].map((value) => ({ v: value, s: 2 })));
+      for (const row of change.rows) {
+        rows.push([{ v: row.group ? row.label : hoursDepartmentName(row.id), s: 3 }, { v: row.previous ?? "", s: 10 },
+          { v: row.current ? row.current["1"] : "", s: 10 }, { v: row.current ? row.current["2"] : "", s: 10 }, { v: row.year ?? "", s: 10 },
+          { v: row.change ?? "", s: 10 }, { v: row.rank ?? "", s: 4 }, { v: row.previousTeachers ?? "", s: 4 }, { v: row.teachers ?? "", s: 4 }]);
+      }
+    } else rows.push([{ v: "전년도 자료 없음 — 시수표 W 열 '전년도 평균'을 입력하거나 '전년도 설정 불러오기'를 하면 증감 순위를 함께 냅니다.", s: 3 }]);
+    sheets.push({ name: "교사 수 추천", freeze: "A4", widths: [18, 11, 11, 11, 11, 8, 10, 10, 10, 10, 10, 30], merges: ["A1:L1", "A2:L2"], rows });
   }
   if (stats.issues.length) {
     const labels = { error: "필수", warning: "확인", info: "참고" };
