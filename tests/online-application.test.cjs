@@ -1715,6 +1715,10 @@ test("a one-row two-semester course carries per-semester credits; split lines an
   assert.equal(first.totalCredits, 6);
   const second = merged.students.find((student) => student.number === "2");
   assert.equal(second.selections[0].credits, 3, "학기 없이 고른 경우도 학기 칸 값이 같으면 그 값(한 학기만 듣는다)");
+  // 두 학기 과목을 아무도 고르지 않으면 학기 없는 0명 과목(4단계 '미분류')을 남기지 않는다.
+  const nobody = ctx.mergeApplications([{ grade: "2", classroom: "1", number: "3", name: "가상셋", selections: ["기하"] }], subjects);
+  assert.ok(!nobody.courses.some((course) => /^한 행 두 학기/.test(course.name)), plain(nobody.courses.map((course) => course.name)).join(","));
+  assert.ok(!nobody.courses.some((course) => course.name === "융합과학 탐구"));
 });
 
 test("choice-block (택n) semesters keep the row credit; only free semesters take the semester cell value", () => {

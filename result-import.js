@@ -226,7 +226,7 @@ function analyzeResultCandidate(candidate, options) {
   stripSeparateResultCourses(candidate.data, options.subjects?.[targetGrade]);
   const plan = options.cohortYear ? `${options.cohortYear}학년도 입학생 편제표(${targetGrade}학년 열)` : `${targetGrade}학년 편제표`;
   const students = candidate.data.students;
-  const courses = candidate.data.courses.filter((course) =>
+  let courses = candidate.data.courses.filter((course) =>
     !course.applicationCurrentGrade || course.applicationCurrentGrade === grade);
 
   const seats = new Map();
@@ -278,8 +278,20 @@ function analyzeResultCandidate(candidate, options) {
   let unclassified = [];
   try {
     unclassified = classifyApplicationRecords(candidate.data);
+    // 학기 표시 없는 두 학기 과목을 학생마다 'X (n학기)'로 나눴으면 과목 목록이 바뀌었으니 다시 읽는다.
+    courses = candidate.data.courses.filter((course) => !course.applicationCurrentGrade || course.applicationCurrentGrade === grade);
   } catch (error) {
     issues.info.push(`과목 그룹 분류를 건너뛰었습니다(${error instanceof Error ? error.message : "설정 확인 필요"}).`);
+  }
+  const undecidedSemester = unclassified.undecidedSemester || [];
+  if (undecidedSemester.length) {
+    const students = new Map();
+    for (const item of undecidedSemester) {
+      const label = `${item.student.classroom}-${item.student.number} ${item.student.name || ""}`.trim();
+      if (!students.has(label)) students.set(label, []);
+      students.get(label).push(item.course);
+    }
+    issues.warnings.push(`학기를 정할 수 없는 선택 ${students.size}명: ${resultExampleList([...students].map(([label, names]) => `${label}(${names.join(", ")})`))}. 학기 표시 없는 두 학기 과목이라 택n 수로 학기를 정하지 못해 '학기 미정'으로 둡니다.`);
   }
   if (unclassified.length) {
     // 분류 경고는 "2학년 물리학"처럼 신청 학년을 앞에 붙여 오므로, 학년은 문장 앞에 한 번만 적는다.
