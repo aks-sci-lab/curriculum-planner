@@ -5217,31 +5217,29 @@
     }
 
     // grade를 주면 그 학년(현 학년) 학생과 폐강 과목만 센다. 비우면 두 학년 전체.
+    // 기준 = 맨 위에서 고른 차수 하나(차수별 흐름 분리 · 사용자 결정 2026-11): 그 차수 결과와 그 차수 개설/폐강 결정만 본다
+    // (앞 차수 결정은 새 차수를 만들 때 복사되므로 이름으로 모으지 않는다).
     function retakeTargets(grade = "") {
-      const rounds = applicationRoundNumbers();
-      const sourceRound = [...rounds].reverse().find((round) => state.rounds?.[round]) || "1";
-      const data = state.rounds?.[sourceRound] || null;
+      const sourceRound = String(state.currentRound || "1");
+      const data = (typeof roundStatusData === "function" ? roundStatusData(sourceRound) : null) || state.rounds?.[sourceRound] || null;
       const decisions = new Map();
-      for (const round of rounds) {
-        const roundData = state.rounds?.[round];
-        for (const [key, verdict] of Object.entries(state.roundClosures?.[round] || {})) {
-          if (verdict !== "open" && verdict !== "closed") continue;
-          const separator = key.indexOf(":");
-          if (separator < 1 || !roundData) continue;
-          const grade = key.slice(0, separator);
-          const column = key.slice(separator + 1);
-          const course = roundData.courses.find((item) =>
-            String(item.column) === column &&
-            (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === grade));
-          if (course) decisions.set(`${grade}:${course.name}`, verdict);
-        }
+      for (const [key, verdict] of Object.entries(state.roundClosures?.[sourceRound] || {})) {
+        if (verdict !== "open" && verdict !== "closed") continue;
+        const separator = key.indexOf(":");
+        if (separator < 1 || !data) continue;
+        const keyGrade = key.slice(0, separator);
+        const column = key.slice(separator + 1);
+        const course = (data.courses || []).find((item) =>
+          String(item.column) === column &&
+          (!item.applicationCurrentGrade || String(item.applicationCurrentGrade) === keyGrade));
+        if (course) decisions.set(`${keyGrade}:${course.name}`, verdict);
       }
       const closedKeys = new Set([...decisions]
         .filter(([key, value]) => value === "closed" && (!grade || key.startsWith(`${grade}:`)))
         .map(([key]) => key));
       const rows = [];
       if (data) {
-        for (const student of data.students) {
+        for (const student of data.students || []) {
           if (grade && String(student.grade) !== String(grade)) continue;
           const closedCourses = student.selections.filter((selection) =>
             closedKeys.has(`${student.grade}:${selection.name}`));
@@ -7286,8 +7284,6 @@
         if (overDivision) lines.push(`분반기준 초과: 학급당 ${average}명이 분반기준 ${Number(summary.divisionLimit || 0).toFixed(2)}명을 넘습니다. 학급수를 늘리는 것을 검토하세요.`);
         if (prereqCount) lines.push(`위계 경고 ${prereqCount}명: 선이수 과목 없이 신청한 학생이 있습니다.`);
         if (!course.closed && decision === "") lines.push("교사 결정이 미정입니다. 개설 또는 폐강을 고르세요.");
-        const inheritedFrom = closures?.inherited?.get?.(key);
-        if (inheritedFrom) lines.push(`${inheritedFrom}차에서 정한 결정(${decision === "closed" ? "폐강" : "개설"})을 이어받았습니다. 바꾸려면 아래에서 고르세요.`);
         if (!lines.length) lines.push("충족: 개설기준 이상이고 학급당 인원이 기준 안에 있습니다.");
         const status = { key, decision, over, overDivision, prereqCount, lines, focus: attention ? attention.courses.has(key) : null };
         statuses.set(course, status);

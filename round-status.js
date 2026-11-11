@@ -39,13 +39,12 @@ function buildRoundSnapshot(round) {
   if (!data?.students?.length) return null;
   const { openingPercent, divisionPercent } = aggregateThresholds();
   const classBases = typeof nextYearClassBases === "function" ? nextYearClassBases() : {};
+  // 이 차수의 개설/폐강 결정(앞 차수 결정은 새 차수를 만들 때 복사돼 이미 이 안에 있다).
+  const closures = typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {};
   const aggregate = aggregateRecords(
     data.students, data.courses, openingPercent, divisionPercent,
-    data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases,
-    typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {}
+    data.classOverrides || {}, data.semesterAssignments || {}, data.groupAssignments || {}, classBases, closures
   );
-  // 앞 차수에서 정한 개설/폐강(이 차수에 직접 정하지 않은 과목)도 이어받아 확정 스냅샷에 넣는다.
-  const closures = typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {};
   const rows = [];
   for (const { summary, semesters } of aggregate.reports) {
     for (const semester of semesters) {
@@ -379,9 +378,11 @@ function buildRoundCompare() {
     );
     for (const { summary, semesters } of aggregate.reports) {
       const grade = String(summary.grade);
-      if (!grades.has(grade)) grades.set(grade, { students: {}, courses: new Map() });
+      if (!grades.has(grade)) grades.set(grade, { students: {}, sources: {}, courses: new Map() });
       const entry = grades.get(grade);
       entry.students[round] = summary.students;
+      const sourceNote = roundCompareSourceNote(round, grade);
+      if (sourceNote) entry.sources[round] = sourceNote;
       for (const semester of semesters) {
         for (const group of semester.groups) {
           for (const item of group.courses) {
@@ -400,10 +401,20 @@ function buildRoundCompare() {
     grades: [...grades.entries()].sort(([a], [b]) => Number(a) - Number(b)).map(([grade, entry]) => ({
       grade,
       students: entry.students,
+      sources: entry.sources,
       courses: [...entry.courses.values()].sort((a, b) =>
         (a.semester || "9").localeCompare(b.semester || "9") || a.name.localeCompare(b.name, "ko"))
     }))
   };
+}
+
+// 차수 비교 머리글의 학년별 출처 꼬리표: 앞 차수에서 복사한 학년은 '2차에서 복사'(그 차수에 새로 올린 결과가 아님),
+// 재신청 학생만 바꾼 학년은 '재신청 학생만'. 직접 올린 결과·웹 결과는 꼬리표 없음(round-copy.js gradeSources).
+function roundCompareSourceNote(round, grade) {
+  const source = state.rounds?.[String(round)]?.gradeSources?.[String(grade)];
+  if (source?.kind === "copy" && source.round) return `${source.round}차에서 복사`;
+  if (source?.kind === "partial") return "재신청 학생만 바꿈";
+  return "";
 }
 
 // 4단계 학년 탭을 고르면 그 학년만 비교한다. 학년 탭만 바꿀 때는 신청 인원이 그대로이므로
@@ -439,8 +450,8 @@ function renderRoundCompare(reuse = false) {
   const first = compare.rounds[0];
   const last = compare.rounds.at(-1);
   description.textContent = `${compare.rounds.map((round) => `${round}차(${roundStatusLabel(round)})`).join(" · ")} · 변화는 ${first}차 대비 ${last}차입니다.`;
-  const headers = compare.rounds.map((round) => `<th scope="col">${round}차</th>`).join("");
-  content.innerHTML = compare.grades.map(({ grade, students, courses }) => {
+  content.innerHTML = compare.grades.map(({ grade, students, courses, sources = {} }) => {
+    const headers = compare.rounds.map((round) => `<th scope="col">${round}차${sources[round] ? `<small class="round-compare-source">${escapeHtml(sources[round])}</small>` : ""}</th>`).join("");
     const rows = courses.map((course) => {
       const cells = compare.rounds.map((round) => `<td>${course.counts[round] || 0}</td>`).join("");
       const delta = (course.counts[last] || 0) - (course.counts[first] || 0);
@@ -458,14 +469,14 @@ function downloadRoundCompare() {
   if (compare.rounds.length < 2) return;
   const first = compare.rounds[0];
   const last = compare.rounds.at(-1);
-  const sheets = compare.grades.map(({ grade, students, courses }) => ({
+  const sheets = compare.grades.map(({ grade, students, courses, sources = {} }) => ({
     name: `${Number(grade) + 1}학년(현${grade}학년)`,
     widths: [28, 8, ...compare.rounds.map(() => 9), 9],
     freeze: "A3",
     merges: [`A1:${columnName(compare.rounds.length + 2)}1`],
     rows: [
       [{ v: `${$("#schoolYear").value}학년도 ${Number(grade) + 1}학년 차수별 신청 인원 비교`, s: 1 }],
-      [{ v: "과목", s: 2 }, { v: "학기", s: 2 }, ...compare.rounds.map((round) => ({ v: `${round}차(${roundStatusLabel(round)})`, s: 2 })), { v: `변화(${first}→${last}차)`, s: 2 }],
+      [{ v: "과목", s: 2 }, { v: "학기", s: 2 }, ...compare.rounds.map((round) => ({ v: `${round}차(${roundStatusLabel(round)}${sources[round] ? ` · ${sources[round]}` : ""})`, s: 2 })), { v: `변화(${first}→${last}차)`, s: 2 }],
       [{ v: "재적 학생", s: 6 }, { v: "", s: 6 }, ...compare.rounds.map((round) => ({ v: students[round] || 0, s: 6 })), { v: (students[last] || 0) - (students[first] || 0), s: 6 }],
       ...courses.map((course) => {
         const delta = (course.counts[last] || 0) - (course.counts[first] || 0);

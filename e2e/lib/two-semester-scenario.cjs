@@ -162,7 +162,7 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
     const basis6 = await text("#workflowStep8Panel .round-basis-line");
     check(basis6.replace(/\s+/g, " ") === basis5.replace(/\s+/g, " "), "6단계 맨 위 근거 줄도 같은 차수", `${basis6} | ${basis5}`);
     await open4();
-  }  // 앞 차수(2차)에서 폐강한 2학기 과목이라 결정을 이어받음 → 교사가 개설로 바꿈
+  }  // 새 차수는 직전 차수(2차)를 복사하므로 그 차수에서 폐강한 2학기 과목 결정도 복사돼 있음 → 교사가 개설로 바꿈
   console.log("3차 확정:", await confirmRound());
   if (DIAGNOSE) {
     const diag = await page.evaluate((course) => {
