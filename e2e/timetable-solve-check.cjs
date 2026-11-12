@@ -3,6 +3,7 @@
 // 사용: node e2e/timetable-solve-check.cjs <출력 폴더> <백업 .json.gz> [--seeds 1,2,3] [--iterations 600000] [--modes each,frame] [--set blockTimes=keep,creative=byGroup] [--inputs <저장해 둔 inputs.json>]
 //   --set         = 시간표 조건을 바꿔서 계산(백업의 조건 위에 덮어씀, 쉼표로 여러 개):
 //                   blockTimes=free|keep(시간표가 블록 자리를 정함 = 기본 | 6단계 블록 시간 그대로), creative=fixed|grade|byGroup(전교 동시 6단계 고정 시간 | 학년별 | 학년별 + 반군별),
+//                   creativeFrom=<n>(시간을 정하지 않은 창체는 n교시 이후, 기본 5 · 1 = 제한 없음), double=<과목>+<과목>(2시간 연속 수업 허용 과목),
 //                   rules.<이름>=<값>(예: rules.gap=soft, rules.run=4, rules.semesterFrame=soft). --inputs 와 함께면 blockTimes=free 와 rules.* 만 쓸 수 있다.
 //   --modes each  = 학기마다 따로, frame = 두 학기 함께(뼈대: 이어지는 수업·블록·창체는 같은 칸). 기본 둘 다.
 //   --show 3-1,2-4 = 그 반의 요일별 배치를 출력([블록 글자] · 과목 앞 두 글자(× = 담당 교사 없음) · 창 · -- 빈칸). 블록이 1교시부터 이어지는지 볼 때.
@@ -57,6 +58,8 @@ async function readInputs() {
     const settings = timetableSettingsEdit();
     for (const [key, text] of Object.entries(set)) {
       if (key === "blockTimes") { if (text === "keep") settings.keepBlockTimes = true; else delete settings.keepBlockTimes; }
+      else if (key === "creativeFrom") { if (Number(text) === 5) delete settings.creativeFrom; else settings.creativeFrom = Number(text); }
+      else if (key === "double") settings.doubleSubjects = String(text).split("+").filter(Boolean);
       else if (key === "creative") {
         if (text === "fixed") delete settings.creative;
         else settings.creative = { school: 0, schoolTimes: [], grade: Number(timetableInput(round, "1").creativeTotal) || 0, gradeTimes: {}, byGroup: text === "byGroup" };

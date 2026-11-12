@@ -11,7 +11,7 @@ var TIMETABLE_SOLVE_VERSION = 1;
 // '반드시' 조건끼리 부딪칠 때의 순서: 반 공강(3000) > 같은 교사 하루 두 번(2000) > 교사 연강·하루 최대·점심(1000).
 // (블록을 빈틈없이 붙이면 블록 교사의 연강이 늘고, 연강을 줄이려 블록을 흩으면 그 칸은 반 전체의 공강이 된다 — 학생 공강을 먼저 막는다.)
 var TIMETABLE_HARD_WEIGHTS = { gap: 3000, oncePerDay: 2000 };
-var TIMETABLE_SOFT_WEIGHTS = { gap: 30, oncePerDay: 20, run: 12, maxPerDay: 12, lunch: 25, lunchSide: 2, sameSubjectDay: 1 };
+var TIMETABLE_SOFT_WEIGHTS = { gap: 30, oncePerDay: 20, run: 12, maxPerDay: 12, lunch: 25, lunchSide: 2, sameSubjectDay: 1, shortDay: 8 };
 var TIMETABLE_UNPLACED_WEIGHT = 20000;
 var TIMETABLE_DEFAULT_ROUNDS = 12; // 흔들기 최대 횟수(한 번 = 기본 횟수의 절반)
 var TIMETABLE_DEFAULT_ITERATIONS = 600000; // 학기 층마다(두 학기 함께면 2배). 실제 크기 학교에서 한 학기 약 3초·두 학기 약 10초
@@ -169,7 +169,7 @@ function timetableProblem(inputs) {
     const toSlots = (times, hours) => { const list = [...new Set(times.map((time) => slotIndex.get(`${time.day}${time.period}`)).filter((index) => index !== undefined))]; return hours > 0 && list.length >= hours ? list.slice(0, hours) : null; };
     if (creative.school > 0) {
       const fixedSlots = toSlots(creative.schoolTimes, creative.school);
-      acts.push({ kind: 2, layers, classes: classIds.map((_, ci) => ci), gi: -1, hours: creative.school, scope: "school", fixedSlots, everyone: true, premarked: Boolean(fixedSlots) });
+      acts.push({ kind: 2, layers, classes: classIds.map((_, ci) => ci), gi: -1, hours: creative.school, scope: "school", fixedSlots, everyone: true, premarked: Boolean(fixedSlots), minPeriod: fixedSlots ? 1 : creative.fromPeriod });
     }
     base.grades.forEach((grade, gi) => {
       const own = creative.byGrade[grade.grade];
@@ -177,9 +177,10 @@ function timetableProblem(inputs) {
       const classes = grade.classes.map((id) => classIndex.get(id));
       if (creative.byGroup) {
         for (const ci of classes) acts.push({ kind: 0, creative: true, layers, classes: [ci], gi, hours: own.grade, ids: layers.map(() => `창체@${classIds[ci]}`), subject: layers.map(() => subjectOf("창체")), subjectName: layers.map(() => "창체"),
-          department: "창체", cands: [], fixed: -1, teacher: homeroomOf.has(ci) ? homeroomOf.get(ci) : -1, venue: layers.map(() => -1), double: false });
+          department: "창체", cands: [], fixed: -1, teacher: homeroomOf.has(ci) ? homeroomOf.get(ci) : -1, venue: layers.map(() => -1), double: false, minPeriod: creative.fromPeriod });
       } else {
-        acts.push({ kind: 2, layers, classes, gi, hours: own.grade, scope: "grade", fixedSlots: toSlots(own.times, own.grade), homerooms: classes.map((ci) => homeroomOf.get(ci)).filter((ti) => ti !== undefined) });
+        const gradeFixed = toSlots(own.times, own.grade);
+        acts.push({ kind: 2, layers, classes, gi, hours: own.grade, scope: "grade", fixedSlots: gradeFixed, minPeriod: gradeFixed ? 1 : creative.fromPeriod, homerooms: classes.map((ci) => homeroomOf.get(ci)).filter((ti) => ti !== undefined) });
       }
     });
   }
@@ -230,7 +231,8 @@ function timetableProblem(inputs) {
   return { version: TIMETABLE_SOLVE_VERSION, keys, models, rules, days, D, positions, ABS, S, L, T, C: classIds.length, slotKey, slotDay, slotPeriod, slotsByDay, slotIndex, grades, absOf, classIds, classGrade,
     teacherIds, teacherName, blocked, capacity, venueNames, venueCap, frame, subjects, acts, notes, noTeacher, lunchPositions: base.lunchPositions.slice(),
     weights: { gap: timetableRuleWeight(rules, "gap"), once: timetableRuleWeight(rules, "oncePerDay"), run: timetableRuleWeight(rules, "run") || (rules.run ? 1000 : 0), maxPerDay: timetableRuleWeight(rules, "maxPerDay") || (rules.maxPerDay ? 1000 : 0),
-      lunch: timetableRuleWeight(rules, "lunch"), lunchSide: timetableRuleWeight(rules, "lunchSide"), sameSubject: timetableRuleWeight(rules, "sameSubjectDay") },
+      lunch: timetableRuleWeight(rules, "lunch"), lunchSide: timetableRuleWeight(rules, "lunchSide"), sameSubject: timetableRuleWeight(rules, "sameSubjectDay"), shortDay: Number(rules.minPerDay) > 1 ? timetableRuleWeight(rules, "shortDay") : 0 },
+    minPerDay: Number(rules.minPerDay) > 1 ? Number(rules.minPerDay) : 0,
     runLimit: Number(rules.run) > 0 ? Number(rules.run) : 99, dayLimit: Number(rules.maxPerDay) > 0 ? Number(rules.maxPerDay) : 99 };
 }
 
@@ -248,6 +250,7 @@ function timetableState(P) {
 // 활동 a를 칸 s에 놓을 수 있는가(절대 조건). bare = 교사·장소 없이 반 칸만.
 function timetableCanPlace(state, act, s, bare) {
   const P = state.P;
+  if (act.minPeriod > 1 && P.slotPeriod[s] < act.minPeriod) return false; // 시간이 정해지지 않은 창체는 n교시 이후에만
   for (let at = 0; at < act.layers.length; at += 1) {
     const layer = act.layers[at];
     const grid = state.grid[layer];
@@ -317,7 +320,9 @@ function timetableClassDayCost(state, layer, ci, d) {
       break;
     }
   }
-  return gaps * P.weights.gap + twice * P.weights.once;
+  // 하루 최소 교시: 수업이 있는 날인데 n교시보다 일찍 끝나면 모자란 교시만큼
+  const short = P.weights.shortDay && last + 1 < Math.min(P.minPerDay, slots.length) ? Math.min(P.minPerDay, slots.length) - last - 1 : 0;
+  return gaps * P.weights.gap + twice * P.weights.once + short * P.weights.shortDay;
 }
 
 // 교사 하루 비용: 연강 초과, 하루 최대 초과, 점심 칸을 모두 수업, 점심 앞뒤 공강, 같은 날 같은 과목.
@@ -498,6 +503,8 @@ function timetableConstruct(state, rng) {
         syncPerDay.set(dayKey(act, d), (syncPerDay.get(dayKey(act, d)) || 0) + 1);
       });
     }
+    // 모두 빈틈없이 놓였으면 탐색에서도 이 학년 블록은 그 모양을 지키는 이동만 한다(같은 날 순서 바꾸기, 다른 요일 블록 끝으로 옮기기)
+    if ([...remaining.values()].every((left) => left === 0)) (P.frontGrades || (P.frontGrades = new Set())).add(gi);
   }
   // 3) 나머지 블록·창체
   for (const act of syncActs) if (!act.fixedSlots) placeSync(act);
@@ -589,8 +596,26 @@ function timetableTryMove(state, rng, temperature) {
     if (from < 0) return false;
     // 절반은 같은 날 안에서 옮긴다(빈틈없이 놓인 블록을 흩지 않고 순서만 바꿔 교사 연강·점심을 고친다)
     const sameDay = P.slotsByDay[P.slotDay[from]];
-    const to = rng() < 0.5 ? sameDay[Math.floor(rng() * sameDay.length)] : Math.floor(rng() * P.S);
+    let to = rng() < 0.5 ? sameDay[Math.floor(rng() * sameDay.length)] : Math.floor(rng() * P.S);
     if (from === to) return false;
+    if (act.kind === 1 && P.frontGrades && P.frontGrades.has(act.gi)) {
+      // 1교시부터 빈틈없이 놓은 학년의 블록: 사이에 낀 칸이 생기지 않는 이동만
+      const cell = act.classes[0] * P.S;
+      const grid0 = state.grid[act.layers[0]];
+      const blockAt = (slot) => { const a = grid0[cell + slot]; return a !== -1 && P.acts[a].kind === 1; };
+      if (P.slotDay[to] === P.slotDay[from]) { if (!blockAt(to)) return false; } // 같은 날: 블록끼리 순서만 바꾼다
+      else {
+        let last = -1;
+        for (const slot of sameDay) if (blockAt(slot)) last = slot;
+        if (last !== from) return false; // 그날 마지막 블록만 다른 요일로
+        const target = P.slotsByDay[P.slotDay[to]];
+        let run = 0;
+        while (run < target.length && blockAt(target[run])) run += 1;
+        if (run >= target.length) return false;
+        to = target[run]; // 그 요일 블록 바로 뒤 칸으로
+        for (const slot of state.slotOf[act.index]) if (slot >= 0 && P.slotDay[slot] === P.slotDay[to]) return false; // 한 블록은 요일마다 한 번
+      }
+    }
     const riders = new Set();
     let partner = -1; // 그 칸에 같은 반들의 다른 블록·창체가 있으면 둘이 자리를 맞바꾼다
     for (let layer = 0; layer < P.L; layer += 1) for (const ci of act.classes) {
@@ -927,7 +952,10 @@ function timetableSolveFinish(run) {
       const slots = [...[...state.slotOf[act.index]].filter((s) => s >= 0).map((s) => P.slotKey[s]), ...apart];
       while (slots.length < act.hours) slots.push("");
       const framed = act.layers.length > 1 && !apart.length;
-      if (act.kind === 0 && act.creative) creative.push({ scope: "class", classId: P.classIds[act.classes[0]], slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null });
+      // 시간이 정해지지 않은 창체를 n교시 이후에 놓을 자리가 끝내 없어 앞 교시에 놓았으면 표시(검증기는 이 표시가 있으면 교시 범위를 따지지 않는다)
+      const early = act.minPeriod > 1 && slots.some((key) => key && Number(key.slice(1)) < act.minPeriod);
+      if (early && (act.kind === 2 || act.creative)) notes.push(`${key}학기 ${act.gi >= 0 ? `${P.grades[act.gi]}학년 ` : "전교 "}창체: ${act.minPeriod}교시 이후에 놓을 자리가 없어 앞 교시에 놓았습니다.`);
+      if (act.kind === 0 && act.creative) creative.push({ scope: "class", classId: P.classIds[act.classes[0]], slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(early ? { anyPeriod: true } : {}) });
       else if (act.kind === 0) {
         const bare = [...[...state.slotOf[act.index]].filter((s, k) => s >= 0 && state.bare[act.index][k] === 1).map((s) => P.slotKey[s]), ...apart];
         lessons[act.ids[at]] = { slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(bare.length ? { bareSlots: bare } : {}), ...(framed ? { frame: true } : {}) };
@@ -941,7 +969,7 @@ function timetableSolveFinish(run) {
         blocks[act.ids[at]] = { slots, teachers: Object.fromEntries(act.sections[at].map((section) => [section.id, section.teacher >= 0 ? P.teacherIds[section.teacher] : null])), ...(bare.length ? { bareSlots: bare } : {}), ...(framed ? { frame: true } : {}),
           ...(moved ? { timesOverridden: true } : {}) };
         if (bare.length) for (const section of act.sections[at]) if (section.teacher >= 0) noTeacher.push({ semester: key, kind: "section", grade: P.grades[act.gi], classId: act.labels[at], subject: section.subject, hours: bare.length, reason: "clash" });
-      } else creative.push({ scope: act.scope, grade: act.gi >= 0 ? P.grades[act.gi] : "", slots });
+      } else creative.push({ scope: act.scope, grade: act.gi >= 0 ? P.grades[act.gi] : "", slots, ...(early ? { anyPeriod: true } : {}) });
     }
     layers[key] = { lessons, blocks, creative };
   });
@@ -985,6 +1013,8 @@ function timetableViolations(state) {
           break;
         }
       }
+      if (P.weights.shortDay && last + 1 < Math.min(P.minPerDay, slots.length)) out.push({ semester, rule: "shortDay", level: levelOf("shortDay"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: Math.min(P.minPerDay, slots.length) - last - 1,
+        cause: `${P.classIds[ci]}반 ${P.days[d]}요일은 ${P.slotPeriod[slots[last]]}교시에 끝납니다(하루 최소 ${P.minPerDay}교시).` });
       if (empty.length && levelOf("gap") !== "off") out.push({ semester, rule: "gap", level: levelOf("gap"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: empty.length,
         cause: `${P.classIds[ci]}반 ${P.days[d]}요일 ${empty.join("·")}교시가 비었습니다(공강 ${empty.length}칸).` });
       if (twice.length && levelOf("oncePerDay") !== "off") out.push({ semester, rule: "oncePerDay", level: levelOf("oncePerDay"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: twice.length,
@@ -1142,7 +1172,11 @@ function timetableValidate(inputs, result) {
       }
     }
     const creativeHours = new Map();
+    const creativeFrom = model.creative.fromPeriod || 1;
     for (const item of layer.creative || []) {
+      // 시간이 정해지지 않은 창체는 n교시 이후에만(전교 동시·학년별 시간이 적혀 있으면 그 시간 그대로)
+      const given = item.scope === "school" ? model.creative.schoolTimes.length >= model.creative.school : item.scope === "grade" ? (model.creative.byGrade[item.grade]?.times.length || 0) >= (model.creative.byGrade[item.grade]?.grade || 1) : false;
+      if (creativeFrom > 1 && !given && !item.anyPeriod) for (const key of item.slots.filter(Boolean)) if (Number(key.slice(1)) < creativeFrom) fail("creativePeriod", `${item.scope === "class" ? `${item.classId}반` : item.scope === "grade" ? `${item.grade}학년` : "전교"} 창체 ${key}: 시간이 정해지지 않은 창체는 ${creativeFrom}교시 이후에만 놓습니다.`);
       const targets = item.scope === "class" ? [[item.classId, item.classId.split("-")[0]]] : model.grades.filter((grade) => item.scope === "school" || grade.grade === item.grade).flatMap((grade) => grade.classes.map((classId) => [classId, grade.grade]));
       for (const key of item.slots.filter(Boolean)) for (const [classId, grade] of targets) {
         const slot = occupy(classId, grade, key, "창체");

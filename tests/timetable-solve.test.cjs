@@ -206,6 +206,34 @@ test("두 학기 뼈대 + 학기마다 다른 6단계 블록 시간: 앞 학기 
   assert.equal(check.hours["1"], check.hours["2"]);
 });
 
+test("창체 교시 범위·하루 최소 교시: 시간을 정하지 않은 창체는 n교시 이후에만(검증기도 확인), 일찍 끝나는 날은 '최대한' 위반으로", () => {
+  const ctx = context();
+  // 학년별 창체 2시간(시간 미정) + 전교 동시 없음, 4교시 이후에만
+  const inputs = { 1: small((input) => { input.creative = { school: 0, grade: 2, fromPeriod: 4 }; }) };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 4, iterations: 60000, rounds: 2 }));
+  assert.equal(plain(ctx.timetableValidate(inputs, result)).ok, true);
+  const creative = result.layers["1"].creative;
+  assert.equal(creative.length, 3);
+  assert.ok(creative.every((item) => item.scope === "grade" && item.slots.length === 2 && item.slots.every((key) => Number(key.slice(1)) >= 4)), JSON.stringify(creative));
+  // 검증기: 앞 교시에 놓인 창체는 오류(자리가 없어 앞에 놓았다는 표시 anyPeriod가 있으면 넘어감)
+  const moved = plain(result);
+  const firstKey = moved.layers["1"].creative[0].slots[0];
+  const lessonsAt = Object.values(moved.layers["1"].lessons);
+  const early = ["월", "화", "수", "목", "금"].flatMap((day) => [1, 2, 3].map((period) => `${day}${period}`));
+  moved.layers["1"].creative[0].slots[0] = early[0];
+  const errors = plain(ctx.timetableValidate(inputs, moved)).errors.map((item) => item.type);
+  assert.ok(errors.includes("creativePeriod"), errors.join(","));
+  moved.layers["1"].creative[0].anyPeriod = true;
+  assert.equal(plain(ctx.timetableValidate(inputs, moved)).errors.some((item) => item.type === "creativePeriod"), false);
+  assert.ok(firstKey && lessonsAt.length > 0);
+  // 하루 최소 교시(기본 4교시, '최대한'): 수업이 있는데 일찍 끝나는 날은 위반 목록에(끄면 안 나옴)
+  const shortDays = result.violations.filter((item) => item.rule === "shortDay");
+  assert.ok(shortDays.every((item) => item.level === "soft" && /교시에 끝납니다\(하루 최소 4교시\)/.test(item.cause)));
+  const off = { 1: small((input) => { input.rules = { shortDay: "off" }; }) };
+  assert.equal(plain(ctx.timetableSolve(off, { seed: 4, iterations: 20000, rounds: 0 })).violations.some((item) => item.rule === "shortDay"), false);
+  assert.deepEqual([vm.runInContext("TIMETABLE_DEFAULT_RULES.minPerDay", ctx), vm.runInContext("TIMETABLE_DEFAULT_RULES.shortDay", ctx)], [4, "soft"]);
+});
+
 test("창체: 학년별(시간은 계산이 정함)·반군별 허용(반마다 따로)·전교 동시 시간 미정", () => {
   const ctx = context();
   const grade = { 1: small((input) => { input.creative = { school: 1, grade: 1 }; }) };

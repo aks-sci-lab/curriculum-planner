@@ -336,6 +336,7 @@ function timetableSettings() {
   return store && store.settings && typeof store.settings === "object" ? store.settings : {};
 }
 
+var TIMETABLE_CREATIVE_FROM = 5; // 시간을 정하지 않은 창체(학년별·반군별·전교 동시)는 기본 5교시 이후에만 놓는다(낮 시간에 창체가 끼지 않게)
 var TIMETABLE_DEFAULT_LUNCH = { 1: 4, 2: 4, 3: 3 }; // 사용자 학교: 3학년은 3교시 뒤, 1·2학년은 4교시 뒤
 var TIMETABLE_CREATIVE_LABEL = /창체|창의적|동아리|자율|진로/;
 
@@ -390,6 +391,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
     if (creativeTotal) assume("creative", `창체 ${creativeTotal}시간: 전교 동시 ${school}시간(동아리) + 학년별 ${creativeTotal - school}시간으로 나누고 시간은 정하지 않음`, "time", "창체");
   }
   creative.expected = Object.fromEntries(grades.map((item) => [item.grade, creativeTotal]));
+  creative.fromPeriod = Number(tt.creativeFrom) >= 1 ? Math.floor(Number(tt.creativeFrom)) : TIMETABLE_CREATIVE_FROM; // 시간이 정해지지 않은 창체를 놓을 수 있는 첫 교시
 
   // ---- 교사 ----
   const departmentName = (id) => (typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id);
@@ -652,7 +654,7 @@ function timetablePrecheckFor(round, semester = "1") {
 var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
-var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대" };
+var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
 var TIMETABLE_NO_TEACHER_REASONS = { none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
 var TIMETABLE_RESULT_CHOICES = { gap: ["releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules"], maxPerDay: ["teacherRules"] };;
@@ -668,6 +670,8 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "lunchSide", label: "교사 점심 앞뒤 한 시간씩 공강", level: true, later: true },
   { key: "sameSubjectDay", label: "교사 같은 날 같은 과목 줄이기", level: true, later: true },
   { key: "homeroom", label: "담임이 그 학년 반 수업을 맡으면 담임반 포함", level: true, later: true },
+  { key: "minPerDay", label: "반 하루 최소 교시(수업이 있는 날)", min: 1, max: 9, unit: "교시" },
+  { key: "shortDay", label: "반 하루 최소 교시 지키기(반마다 끝나는 시간이 들쭉날쭉하지 않게)", level: true, later: true },
   { key: "semesterFrame", label: "2학기는 1학기와 같은 뼈대(블록 자리 · 교사–반 짝 · 요일·교시)", level: true, later: true },
   { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true }
 ];
@@ -873,6 +877,7 @@ function timetableConditionsHtml(prepared) {
       <span>학년별 <strong id="timetableCreativeGrade">${["1", "2", "3"].map((grade) => gradeHours(grade)).join("·")}</strong>시간(1·2·3학년)</span>
       <span class="tt-sub">학년별 창체 시간 ${gradeTimeInputs}</span>
       <label><input type="checkbox" data-tt-field="creative.byGroup" ${creative.byGroup ? "checked" : ""}> 같은 학년 안에서 반 묶음마다 다른 시간 허용(반군별)</label>
+      <label>시간을 정하지 않은 창체는 <input class="cs-num" type="number" min="1" max="12" value="${timetableEsc(creative.fromPeriod ?? TIMETABLE_CREATIVE_FROM)}" data-tt-field="creativeFrom" data-focus-key="tt-creative-from" aria-label="시간을 정하지 않은 창체를 놓을 수 있는 첫 교시"> 교시 이후에만(1 = 제한 없음)</label>
     </span></div>
     <div class="tt-row"><span class="tt-label">장소</span><span class="tt-fields">
       <label>체육 동시 수업 <input class="cs-num" type="number" min="0" max="20" value="${timetableEsc(tt.venues?.체육 ?? "")}" data-tt-field="venue:체육" data-focus-key="tt-venue-pe" aria-label="체육 동시 수업 가능 반 수"> 반(비우면 점검 안 함)</label>
@@ -1422,6 +1427,12 @@ function timetableApplyField(field, target) {
     else rules[rule] = value;
     settings.rules = rules;
     return `${spec.label} → ${spec.level ? (spec.levels || TIMETABLE_LEVELS).find(([level]) => level === value)[1] : value}`;
+  }
+  if (name === "creativeFrom") {
+    const value = whole(1, 12);
+    if (value === null) return fail("창체를 놓을 수 있는 첫 교시는 1~12 사이 숫자로 넣어 주세요.");
+    if (value === TIMETABLE_CREATIVE_FROM) delete settings.creativeFrom; else settings.creativeFrom = value;
+    return `시간을 정하지 않은 창체는 ${value}교시 이후에만`;
   }
   if (name.startsWith("creative.")) {
     const current = TIMETABLE_VIEW.prepared?.input.creative || { school: 0, schoolTimes: [], grade: 0, gradeTimes: {}, byGroup: false };

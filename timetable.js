@@ -15,6 +15,8 @@ const TIMETABLE_DEFAULT_RULES = {
   sameSubjectDay: "soft", // 교사 기준 같은 날 같은 과목 최소화
   homeroom: "off",     // 담임이 그 학년 반 수업을 맡으면 담임반 포함(담임 명단이 있을 때만)
   semesterFrame: "hard", // 2학기는 1학기와 같은 뼈대(블록 자리, 이어지는 과목의 교사–반 짝과 요일·교시)
+  minPerDay: 4, // 반 하루 최소 교시(수업이 있는 날) — shortDay 규칙의 기준
+  shortDay: "soft", // 하루 최소 교시를 지킬지(반마다 하루 길이가 들쭉날쭉하지 않게)
   cover: "hard" // 교사를 세우는 것과 공강·하루 두 번 없애기가 부딪칠 때: hard = 교사 먼저(위반이 남을 수 있음), soft = 공강 먼저(그 수업은 담당 교사 없음으로)
 };
 
@@ -221,7 +223,8 @@ function timetableModel(input = {}) {
   const creativeInput = input.creative || {};
   const schoolTimes = timetableTimes(creativeInput.schoolTimes);
   const creative = {
-    school: timetableNumber(creativeInput.school, 0), schoolTimes, byGroup: Boolean(creativeInput.byGroup), byGrade: {}
+    school: timetableNumber(creativeInput.school, 0), schoolTimes, byGroup: Boolean(creativeInput.byGroup), byGrade: {},
+    fromPeriod: Math.max(1, timetableNumber(creativeInput.fromPeriod, 1)) // 시간이 정해지지 않은 창체를 놓을 수 있는 첫 교시(1 = 제한 없음)
   };
   for (const item of grades) {
     const own = typeof creativeInput.grade === "object" && creativeInput.grade ? timetableNumber(creativeInput.grade[item.grade], 0) : timetableNumber(creativeInput.grade, 0);

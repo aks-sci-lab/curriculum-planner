@@ -91,7 +91,7 @@ test("5·6단계 자료를 시간표 입력으로 모은다: 학교 지정 과�
   assert.deepEqual([year, round, semester], ["2027", "1", "1"]);
   assert.deepEqual([input.days, input.periods, input.lunchAfter, input.grades], ["월,화,수,목,금", 7, { 1: 4, 2: 4, 3: 3 }, [{ grade: "1", classes: 2 }, { grade: "2", classes: 3 }, { grade: "3", classes: 3 }]]);
   // 6단계 고정 시간 가운데 '창체'는 창체(전교 동시)로, 나머지만 고정 시간으로
-  assert.deepEqual(input.creative, { school: 2, schoolTimes: ["금6", "금7"], grade: 0, gradeTimes: {}, byGroup: false, expected: { 1: 2, 2: 2, 3: 2 } });
+  assert.deepEqual(input.creative, { school: 2, schoolTimes: ["금6", "금7"], grade: 0, gradeTimes: {}, byGroup: false, expected: { 1: 2, 2: 2, 3: 2 }, fromPeriod: 5 });
   assert.deepEqual(input.fixedSlots, [{ label: "교직원 회의", times: "월7", allTeachers: true }]);
   // 교사: 6단계 명단(상한·불가 시간·자리 이름 표시)
   assert.deepEqual(input.teachers.slice(0, 2), [
@@ -149,7 +149,7 @@ test("자료가 없을 때: 막는 것(분반 결과·학급 수·5단계 오류
   const prepared = plain(bare.timetableInput("1", "1"));
   assert.deepEqual(prepared.input.teachers.map((teacher) => teacher.id), ["t-국어-1", "t-국어-2", "t-과학-물리-1", "t-과학-화학-1", "t-체육-1"]);
   assert.ok(prepared.input.teachers.every((teacher) => teacher.placeholder));
-  assert.deepEqual(prepared.input.creative, { school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: false, expected: { 1: 2, 2: 2, 3: 2 } });
+  assert.deepEqual(prepared.input.creative, { school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: false, expected: { 1: 2, 2: 2, 3: 2 }, fromPeriod: 5 });
   assert.deepEqual(prepared.assumptions.filter((entry) => ["teachers", "creative"].includes(entry.key)).map((entry) => entry.text), [
     "창체 2시간: 전교 동시 1시간(동아리) + 학년별 1시간으로 나누고 시간은 정하지 않음",
     "교사 명단 없음 → 5단계 교과별 교사 수(5명)로 자리 교사를 만들어 계산(불가 시간·출근 요일 모름)"]);
@@ -177,7 +177,7 @@ test("시간표 조건(state.timetable.settings)이 있으면 그 값을 쓰고 
   assert.deepEqual([input.periodsByDay, input.lunchAfter, input.rules, input.venues], [{ 수: 6 }, { 1: 4, 2: 4, 3: 4 }, { maxHours: 20, gap: "soft", homeroom: "soft" }, { 과학실: 1, 체육: 2 }]);
   assert.deepEqual([prepared.homeroomCount, prepared.openDepartments, input.teachers.find((teacher) => teacher.id === "p1").homeroom], [1, ["교양", "정보"], ""]);
   assert.deepEqual(input.notes.homerooms, ["담임이 정해지지 않은 반 7개(1-1, 1-2, 2-2, 2-3, 3-1, 3-2 …) — 그 반은 담임 규칙을 적용하지 않습니다."]);
-  assert.deepEqual(input.creative, { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, gradeTimes: {}, byGroup: true, expected: { 1: 2, 2: 2, 3: 2 } });
+  assert.deepEqual(input.creative, { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, gradeTimes: {}, byGroup: true, expected: { 1: 2, 2: 2, 3: 2 }, fromPeriod: 5 });
   assert.equal(input.teachers.find((teacher) => teacher.id === "k2").homeroom, "2-1");
   assert.deepEqual([input.notes.undecided, input.notes.staleSections, input.notes.expandedClasses], [["2학년 심화 영어"], ["현1 → 2학년 1학기 · 2-1 택2"], true]);
   assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "체육").classes, undefined, "확대학급은 반영하지 않고 편제표 값(전체 반)");
@@ -340,6 +340,19 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   assert.equal(ctx.timetableUndoChoice(), "되돌림 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
   assert.deepEqual(plain(ctx.state.timetable.settings), { rules: { run: 4 } });
   assert.equal(ctx.timetableUndoChoice(), "");
+});
+
+test("시간을 정하지 않은 창체를 놓을 수 있는 첫 교시: 기본 5교시 이후, 조건 칸으로 바꾸면 입력에 실린다(기본값이면 저장하지 않음)", () => {
+  const ctx = world();
+  assert.equal(plain(ctx.timetableInput("1", "1")).input.creative.fromPeriod, 5);
+  ctx.state.timetable = { settings: {} };
+  assert.equal(ctx.timetableApplyField("creativeFrom", { value: "3" }), "시간을 정하지 않은 창체는 3교시 이후에만");
+  assert.equal(ctx.state.timetable.settings.creativeFrom, 3);
+  assert.equal(ctx.timetableApplyField("creativeFrom", { value: "5" }), "시간을 정하지 않은 창체는 5교시 이후에만");
+  assert.equal(ctx.state.timetable.settings.creativeFrom, undefined);
+  assert.equal(ctx.timetableApplyField("creativeFrom", { value: "0" }), "");
+  const custom = world({ timetable: { settings: { creativeFrom: 1 } } });
+  assert.equal(plain(custom.timetableInput("1", "1")).input.creative.fromPeriod, 1);
 });
 
 test("2시간 연속 수업 허용 과목: 고른 과목의 반 수업에만 double 표시(과목명 표기 차이는 맞춰 봄), 조건 칸으로 넣고 뺀다", () => {
