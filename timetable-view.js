@@ -198,8 +198,9 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
       days: Array.isArray(raw.days) && raw.days.length ? raw.days : undefined, homeroom: homeroomValue(raw.homeroom),
       placeholder: typeof classSectionsTeacherPlaceholder === "function" && classSectionsTeacherPlaceholder(raw, departmentName) };
   });
+  const timetableCounts = typeof hoursTimetableTeacherCounts === "function" ? hoursTimetableTeacherCounts(year) : { counts: stats?.settings?.teachers || {}, assumed: (stats?.assumedTeachers || []).map((item) => item.id) };
   if (!teachers.length) {
-    const counts = stats?.settings?.teachers || {};
+    const counts = timetableCounts.counts;
     for (const [department, value] of Object.entries(counts)) {
       for (let n = 1; n <= Math.floor(Number(value) || 0); n += 1) teachers.push({ id: `t-${department}-${n}`, name: `${departmentName(department)} ${n}`, departments: [department], courses: [], unavailable: [], homeroom: "", placeholder: true });
     }
@@ -240,6 +241,20 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
     if (commonGroup(department)) commonFallback.add(commonGroup(department));
     return teachers.filter((teacher) => qualified(teacher, department, subject)).map((teacher) => teacher.id);
   };
+  // 교사 0명인데 수업이 있는 교과(5단계 assumedTeachers, 교양·공통 제외): 그 교과 과목을 맡을 교사가 명단에 없을 때만 자리 교사 1명을 둔다(사용자 결정).
+  // 자리 이름은 6단계 '5단계 교사 수로 명단 만들기'와 같은 t-교과-1 — 전공은 그 교과뿐이다.
+  for (const department of timetableCounts.assumed) {
+    const id = `t-${department}-1`;
+    if (teachers.some((teacher) => teacher.id === id)) {
+      assume(`assumed:${department}`, `${departmentName(department)}: 교사 0명 → 1명 배치로 계산(5단계 교사 수에 넣으면 사라짐)`, "hours", "교사 수");
+      continue;
+    }
+    const subjectsOf = [...new Set((stats?.items || []).filter((item) => item.department === department && Number(item.hours) > 0).map((item) => item.subject))];
+    if (!subjectsOf.some((subject) => !teachers.some((teacher) => qualified(teacher, department, subject)))) continue;
+    teachers.push({ id, name: `${departmentName(department)} 1`, departments: [department], courses: [], unavailable: [], homeroom: "", placeholder: true });
+    coursesOf.set(id, new Set());
+    assume(`assumed:${department}`, `${departmentName(department)}: 교사 0명 → 1명 배치로 계산(5단계 교사 수에 넣으면 사라짐, 6단계 '5단계 교사 수로 명단 만들기'를 누르면 명단에도 생깁니다)`, "hours", "교사 수");
+  }
   const teacherById = new Map(teachers.map((teacher) => [teacher.id, teacher]));
   const mismatchOf = (teacherId, department, subject) => {
     const teacher = teacherById.get(String(teacherId));

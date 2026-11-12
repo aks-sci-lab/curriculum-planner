@@ -397,7 +397,8 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
   const teachers = classSectionsTeacherList(settings);
   let departmentTeachers = null;
   if (!teachers.length && settings.useHoursTeachers && typeof hoursSettings === "function" && typeof hoursTargetYear === "function") {
-    const counts = hoursSettings(hoursTargetYear()).teachers || {};
+    // 교사 0명인데 수업이 있는 교과는 1명으로 본다(hoursTimetableTeacherCounts, 7단계 시간표와 같은 값).
+    const counts = typeof hoursTimetableTeacherCounts === "function" ? hoursTimetableTeacherCounts().counts : hoursSettings(hoursTargetYear()).teachers || {};
     const used = Object.entries(counts).filter(([, value]) => Number(value) > 0);
     if (used.length) departmentTeachers = Object.fromEntries(used.map(([key, value]) => [key, Number(value)]));
   }
@@ -837,7 +838,7 @@ function classSectionsTimetablePrecheckFor(source, group, round = CLASS_SECTIONS
       teachers[lesson.department] = Math.max(teachers[lesson.department] || 0, list.filter((teacher) => teacher.departments.includes(lesson.department) || teacher.courses.includes(name)).length);
     }
   } else if (settings.useHoursTeachers && typeof hoursSettings === "function" && typeof hoursTargetYear === "function") {
-    const counts = hoursSettings(hoursTargetYear()).teachers || {};
+    const counts = typeof hoursTimetableTeacherCounts === "function" ? hoursTimetableTeacherCounts().counts : hoursSettings(hoursTargetYear()).teachers || {};
     teachers = Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, Number(value) || 0]));
   }
   return { ...classSectionsTimetablePrecheck({ slots, fixed, blockHours, lessons, teachers, label: `${group.targetGrade}학년 ${group.semester}학기` }),
@@ -1449,7 +1450,9 @@ function classSectionsHandleTeacherEvent(event) {
     if (!button) return;
     if (button.id === "classSectionsTeacherAdd") settings.teachers.push({ id: `t${Date.now().toString(36)}${settings.teachers.length}`, name: "", department: "", unavailable: [] });
     else if (button.id === "classSectionsTeacherFromHours") {
-      const counts = typeof hoursSettings === "function" && typeof hoursTargetYear === "function" ? hoursSettings(hoursTargetYear()).teachers || {} : {};
+      // 교사 0명인데 수업이 있는 교과는 1명을 만든다(사용자 결정, hoursTimetableTeacherCounts — 7단계 시간표와 같은 자리 이름 t-교과-1).
+      const counts = typeof hoursTimetableTeacherCounts === "function" ? hoursTimetableTeacherCounts().counts
+        : typeof hoursSettings === "function" && typeof hoursTargetYear === "function" ? hoursSettings(hoursTargetYear()).teachers || {} : {};
       let made = 0;
       for (const [department, value] of Object.entries(counts)) {
         const label = typeof hoursDepartmentName === "function" ? hoursDepartmentName(department) : department;

@@ -496,3 +496,26 @@ test("5단계 증감 안내: 빈 이유(전년도/올해 교사 수)를 바로 �
   assert.match(source, /`빈칸→\$\{hoursFormat\(row\.recommended, 1\)\}`/);
   assert.match(source, /\$\{row\.current \?\? "빈칸"\}→\$\{row\.recommended\}/);
 });
+
+test("교사 0명인데 수업이 있는 교과: 시간표용 교사 수는 1명(교사 수 칸은 그대로), 확인 항목에 한 줄 — 교양·공통 교과는 제외", () => {
+  const settings = baseSettings();
+  delete settings["2027"].teachers["국어"];          // 빈칸
+  settings["2027"].teachers["제2외국어"] = 0;        // 0명
+  const ctx = statsContext(settings, plan, results);
+  const stats = ctx.computeHoursStats("2027");
+  const assumed = plain(stats.assumedTeachers);
+  const ids = assumed.map((item) => item.id);
+  assert.ok(ids.includes("국어") && assumed.every((item) => item.hours["1"] + item.hours["2"] > 0), JSON.stringify(assumed));
+  assert.ok(!ids.some((id) => /공통$/.test(id) || id === "교양"), "공통 교과·교양은 대상이 아니다");
+  for (const id of ids) assert.ok(!(Number(settings["2027"].teachers[id]) > 0), `${id}: 교사 수 칸은 바꾸지 않는다`);
+  const issue = stats.issues.find((entry) => /^교사 0명 교과에 수업이 있습니다/.test(entry.text));
+  assert.equal(issue.level, "info");
+  assert.match(issue.text, /국어 1학기 \d+·2학기 \d+시간/);
+  assert.match(issue.text, /시간표\(6단계 명단 만들기·7단계\)는 그 교과에 교사 1명을 두고 계산합니다\. 교사 수 칸은 그대로이고, 교사 수를 넣으면 이 안내가 사라집니다\.$/);
+  ctx.hoursStatsCached = () => stats;
+  const counts = plain(ctx.hoursTimetableTeacherCounts("2027"));
+  assert.deepEqual([counts.counts["국어"], counts.counts["과학-물리"], counts.assumed.includes("국어")], [1, 1, true]);
+  // 교사 수를 넣으면 사라진다
+  settings["2027"].teachers["국어"] = 3;
+  assert.ok(!plain(ctx.computeHoursStats("2027").assumedTeachers).some((item) => item.id === "국어"));
+});

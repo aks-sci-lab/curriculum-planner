@@ -52,6 +52,8 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(whereCount >= first.length, `항목마다 '고칠 곳' 단추(${whereCount}개)`);
   const assumptions = await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts();
   check(assumptions.length >= 5 && assumptions.some((text) => /점심/.test(text)), `가정 목록 ${assumptions.length}건`, assumptions);
+  check(assumptions.some((text) => /교사 0명 → 1명 배치로 계산\(5단계 교사 수에 넣으면 사라짐/.test(text)) && !first.some((item) => /^진로: .*담당 교사 없음/.test(item.text)),
+    "교사 0명인데 수업이 있는 교과(진로)는 1명 배치로 계산(가정 표시), '담당 교사 없음'으로 나오지 않음", assumptions);
   const grades = await panel.locator("#timetableGrades tbody tr").evaluateAll((rows) => rows.map((row) => [...row.children].map((cell) => cell.textContent.trim())));
   check(grades.length === 3 && grades.every((row) => Number(row[2]) === 35), "학년 표 3줄(주 35칸)", grades);
   await page.screenshot({ path: path.join(OUT, "01-timetable-precheck.png"), fullPage: true });

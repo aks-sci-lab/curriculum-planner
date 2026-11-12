@@ -321,3 +321,29 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   assert.deepEqual(plain(ctx.state.timetable.settings), { rules: { run: 4 } });
   assert.equal(ctx.timetableUndoChoice(), "");
 });
+
+test("교사 0명인데 수업이 있는 교과는 자리 교사 1명을 두고 계산한다(사용자 결정) — 맡을 교사가 명단에 없을 때만, 가정으로 표시", () => {
+  const items = [item("3", "1", "지식 재산 일반", 4, 3, { department: "기술가정" }), item("3", "1", "생태와 환경", 1, 3, { department: "교양" }), item("2", "1", "문학", 4, 3, { department: "국어" })];
+  const assumed = [{ id: "기술가정", hours: { 1: 12, 2: 0 } }];
+  // 1) 명단에 기술·가정을 맡을 교사가 없다 → t-기술가정-1(6단계 명단 만들기와 같은 자리 이름), 전공은 그 교과뿐
+  const ctx = world({ groups: [], stats: { items, assumedTeachers: assumed } });
+  const prepared = plain(ctx.timetableInput("1", "1"));
+  const added = prepared.input.teachers.find((teacher) => teacher.id === "t-기술가정-1");
+  assert.deepEqual(added, { id: "t-기술가정-1", name: "기술가정 1", departments: ["기술가정"], courses: [], unavailable: [], homeroom: "", placeholder: true });
+  assert.deepEqual(prepared.input.lessons.find((lesson) => lesson.subject === "지식 재산 일반").teacherIds, ["t-기술가정-1"]);
+  assert.deepEqual(prepared.input.lessons.find((lesson) => lesson.subject === "생태와 환경").teacherIds, [], "교양은 대상이 아니다(다른 교과 교사가 맡음)");
+  const note = prepared.assumptions.find((entry) => entry.key === "assumed:기술가정");
+  assert.match(note.text, /^기술가정: 교사 0명 → 1명 배치로 계산\(5단계 교사 수에 넣으면 사라짐/);
+  assert.equal(note.where.step, 7);
+  const causes = plain(ctx.timetablePrecheck(prepared.input)).issues.map((issue) => issue.cause);
+  assert.ok(!causes.some((cause) => /^기술가정: .*담당 교사 없음/.test(cause)) && causes.some((cause) => /^교양: .*담당 교사 없음/.test(cause)), causes.join("\n"));
+  // 2) 다른 교사가 담당 과목으로 이미 맡고 있으면(정보 교사가 지식 재산 일반) 더하지 않는다
+  const covered = world({ groups: [], stats: { items, assumedTeachers: assumed },
+    settings: { teachers: [{ id: "info", name: "정보쌤", department: "정보", courses: "지식 재산 일반" }, { id: "kor", name: "국어쌤", department: "국어" }], fixedSlots: [] } });
+  const second = plain(covered.timetableInput("1", "1"));
+  assert.equal(second.input.teachers.some((teacher) => teacher.id === "t-기술가정-1"), false);
+  assert.equal(second.assumptions.some((entry) => entry.key === "assumed:기술가정"), false);
+  // 3) 교사 명단이 없으면(5단계 교사 수로 자리 교사) 그 교과도 1명
+  const bare = world({ groups: [], stats: { items, assumedTeachers: assumed }, settings: { teachers: [], fixedSlots: [] } });
+  assert.ok(plain(bare.timetableInput("1", "1")).input.teachers.some((teacher) => teacher.id === "t-기술가정-1"));
+});

@@ -1216,6 +1216,14 @@ function computeHoursStats(year = hoursTargetYear()) {
   if (zeroTeachers.length) {
     issues.push({ level: "warning", text: `시수가 있는데 교사 수를 0명으로 넣은 교과(1인당 평균 계산 안 함): ${zeroTeachers.map((department) => hoursDepartmentName(department.id)).join(", ")}`, action: "focus:hoursTeachers-" + zeroTeachers[0].id });
   }
+  // 시간표(6단계 명단 만들기·7단계)는 수업이 있는데 교사가 0명(빈칸 포함)인 교과에 자리 교사 1명을 두고 계산한다(사용자 결정: 증이 확실한 경우).
+  // 교양(다른 교과 교사가 맡음)·공통 교과(세부 교과 교사가 맡음)는 빼고, 교사 수 칸 자체는 바꾸지 않는다.
+  const assumedTeachers = departments.filter((department) => !department.common && !department.otherTeachers && !(department.teachers > 0) && department.hours["1"] + department.hours["2"] > 0)
+    .map((department) => ({ id: department.id, hours: { ...department.hours } }));
+  if (assumedTeachers.length) {
+    issues.push({ level: "info", action: "focus:hoursTeachers-" + assumedTeachers[0].id, text: `교사 0명 교과에 수업이 있습니다(${assumedTeachers.map((item) =>
+      `${hoursDepartmentName(item.id)} 1학기 ${item.hours["1"]}·2학기 ${item.hours["2"]}시간`).join(", ")}) — 시간표(6단계 명단 만들기·7단계)는 그 교과에 교사 1명을 두고 계산합니다. 교사 수 칸은 그대로이고, 교사 수를 넣으면 이 안내가 사라집니다.` });
+  }
   for (const common of departments.filter((department) => department.common)) {
     const over = ["1", "2"].filter((semester) => common.unallocated[semester] < 0);
     if (over.length) {
@@ -1236,10 +1244,20 @@ function computeHoursStats(year = hoursTargetYear()) {
   yearChange.differences = previousSources.differences.map((item) => ({ ...item, name: HOURS_DEPARTMENTS.some((department) => department.id === item.key) ? hoursDepartmentName(item.key) : `${item.key}(교과군)` }));
   yearChange.upload = previousSources.upload ? { sheetName: previousSources.upload.sheetName, fileName: previousSources.upload.fileName, year: previousSources.upload.year, allocation: previousSources.upload.allocation } : null;
   yearChange.preferUpload = previousSources.preferUpload;
-  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, yearChange, issues };
+  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, yearChange, assumedTeachers, issues };
 }
 
 // 비교과 교사(보건·영양·사서·상담): 교사 수, 맡은 수업 시수(상세 표에서 담당을 비교과로 지정한 과목 + 직접 입력), 1인당 시수.
+// 시간표용 교과별 교사 수: 5단계 교사 수 + 교사 0명인데 수업이 있는 교과는 1명(computeHoursStats의 assumedTeachers).
+function hoursTimetableTeacherCounts(year = hoursTargetYear()) {
+  const settings = hoursSettings(year);
+  const counts = Object.fromEntries(Object.entries(settings.teachers || {}).map(([id, value]) => [id, Number(value) || 0]));
+  let assumed = [];
+  try { assumed = (typeof hoursStatsCached === "function" ? hoursStatsCached(year) : computeHoursStats(year)).assumedTeachers || []; } catch { assumed = []; }
+  for (const item of assumed) counts[item.id] = 1;
+  return { counts, assumed: assumed.map((item) => item.id) };
+}
+
 function hoursNonTeachingStats(items, settings, issues = []) {
   const rows = HOURS_NON_TEACHING.map((definition) => {
     const key = HOURS_NON_TEACHING_PREFIX + definition.id;
