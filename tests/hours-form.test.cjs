@@ -179,6 +179,71 @@ test("학교 지정 과목 개설반 = 편제표 × 학급 수(연동): 예전 �
   assert.equal(infoCell.input.attrs["data-hours-item-classes"], "1|2|정보", "1학년 선택과목은 직접 입력 그대로");
 });
 
+test("확대학급(수준별 이동수업): 꺼짐이면 완전 연동, 켜면 확대 값, 작은 값 거절, 학급 수가 바뀌면 무효, 끄면 보존, 엑셀 = 화면", () => {
+  const englishPlan = { ...plan, "2026": [...plan["2026"], entry("2", "1", "영어독해", "영어", 4)] };
+  const settings = baseSettings();
+  settings["2027"].expandedClasses = { "2|1|영어독해": 13 };
+  const ctx = statsContext(settings, englishPlan, results);
+  const english = (stats) => stats.items.find((row) => row.key === "2|1|영어독해");
+  const issue = (stats, pattern) => stats.issues.find((entry) => pattern.test(entry.text));
+  // 1) 꺼짐(기본): 편제표 × 학급 수 11, 저장된 확대 값은 쓰지 않고 참고 한 줄.
+  let stats = ctx.computeHoursStats("2027");
+  assert.deepEqual(plain([english(stats).classes, english(stats).expanded ?? null]), [11, null]);
+  assert.equal(issue(stats, /^확대학급 운영 꺼짐/).text, "확대학급 운영 꺼짐 · 저장된 확대 값 1개는 쓰지 않음(시수 설정에서 켜면 다시 씁니다).");
+  assert.ok(!issue(stats, /6단계 분반·시간표에는 아직 반영되지 않습니다/));
+  // 2) 켜기(시수 설정 체크 상자): 확대 13 → 시수 52, 값 단추에 '확대' 표시와 근거.
+  const target = (dataset, value, checked = false) => ({ dataset, value, checked });
+  assert.equal(ctx.updateHoursSetting(target({ hoursExpandedOn: "1" }, "on", true)), true);
+  assert.equal(settings["2027"].expandedClassesOn, true);
+  stats = ctx.computeHoursStats("2027");
+  const item = english(stats);
+  assert.deepEqual(plain([item.classes, item.autoClasses, item.expanded, item.hours]), [13, 11, 13, 52]);
+  assert.match(item.basis, /확대학급 13반\(편제표 11반\)$/);
+  assert.match(issue(stats, /^확대학급 1과목은 5단계 시수에만 반영됩니다\. 6단계 분반·시간표에는 아직 반영되지 않습니다/).text, /2학년 1학기 영어독해 11 → 13반/);
+  assert.ok(!issue(stats, /^확대학급 운영 꺼짐/));
+  const model = ctx.hoursFormModel(stats, { schoolName: "천상고등학교" });
+  const cell = [...model.cells.values()].find((entry) => entry.item === item);
+  assert.equal(cell.v, 13);
+  assert.equal(cell.input, null, "시수표 칸은 그대로 값 단추");
+  assert.equal(cell.link.cls, "is-expanded");
+  assert.match(cell.link.title, /^확대학급 · 편제표 11반 → 확대 13반/);
+  assert.match(ctx.hoursFormHtml(model), /<button class="hf-link is-expanded" type="button" data-hours-goto-classes="2"/);
+  const sheets = ctx.buildHoursWorkbookSheets(stats, { schoolName: "천상고등학교" });
+  const row = findRow(sheets.model, 7, "영어독해");
+  assert.deepEqual(plain([sheets[0].rows[row - 1][9].v, sheets[0].rows[row - 1][10].v]), [13, 52], "엑셀 개설반·시수 = 화면");
+  // 3) 칸 입력: 작은 값은 받지 않음(저장 그대로 + 안내), 같은 값은 지움, 큰 값은 저장.
+  const input = (value) => target({ hoursExpanded: "2|1|영어독해", hoursPlan: "11", hoursPlanClasses: "11" }, value);
+  ctx.updateHoursSetting(input("10"));
+  assert.equal(settings["2027"].expandedClasses["2|1|영어독해"], 13, "작은 값은 받지 않음");
+  assert.equal(ctx.hoursExpandedRejected.text, "확대학급은 학급 수(11)보다 커야 합니다");
+  ctx.updateHoursSetting(input("14"));
+  assert.equal(settings["2027"].expandedClasses["2|1|영어독해"], 14);
+  assert.equal(ctx.hoursExpandedRejected, null);
+  ctx.updateHoursSetting(input("11"));
+  assert.equal(settings["2027"].expandedClasses["2|1|영어독해"], undefined, "학급 수와 같으면 지움");
+  ctx.updateHoursSetting(input("13"));
+  // 4) 학급 수가 나중에 13 이상으로 바뀌면 확대 값은 쓰지 않고 경고.
+  settings["2027"].classCounts["2"] = 13;
+  stats = ctx.computeHoursStats("2027");
+  assert.deepEqual(plain([english(stats).classes, english(stats).expanded ?? null]), [13, null]);
+  assert.match(issue(stats, /^확대학급 값 1개를 쓰지 않았습니다/).text, /2학년 1학기 영어독해 13 — 확대학급은 학급 수\(13\)보다 커야 합니다/);
+  assert.equal(issue(stats, /^확대학급 값/).level, "warning");
+  settings["2027"].classCounts["2"] = 11;
+  // 선택과목(4단계 연동)은 확대 값이 있어도 읽지 않는다.
+  settings["2027"].expandedClasses["2|1|물리학"] = 9;
+  assert.equal(ctx.computeHoursStats("2027").items.find((row) => row.key === "2|1|물리학").classes, 4);
+  delete settings["2027"].expandedClasses["2|1|물리학"];
+  // 5) 끄면 저장된 값은 그대로, 계산은 11, 다시 켜면 13.
+  ctx.updateHoursSetting(target({ hoursExpandedOn: "1" }, "on", false));
+  assert.equal(settings["2027"].expandedClassesOn, undefined);
+  assert.equal(settings["2027"].expandedClasses["2|1|영어독해"], 13);
+  assert.equal(english(ctx.computeHoursStats("2027")).classes, 11);
+  ctx.updateHoursSetting(target({ hoursExpandedOn: "1" }, "on", true));
+  assert.equal(english(ctx.computeHoursStats("2027")).classes, 13);
+  // 분할·교차집중 과목의 하한 문구는 그 과목의 편제표 값.
+  assert.equal(ctx.hoursExpandedMinimumText({ autoClasses: 5, planClasses: 11 }), "확대학급은 편제표 값(5반, 학급 수 11)보다 커야 합니다");
+});
+
 test("시수표 양식: 창체 행(자율·진로 × 학년별 학급 수)과 요약 상자(교과·전체 평균·창체 포함 평균) 수식", () => {
   const settings = baseSettings();
   const ctx = statsContext(settings, plan, results);
