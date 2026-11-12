@@ -1,6 +1,7 @@
 // 7단계 시간표 화면 확인(사용자처럼 클릭): 하네스 백업(가상 학생) 복원 → 메뉴 '7. 시간표'
-// ① 사전 점검 결과(판정·원인·고칠 곳 단추·가정 목록·학년 표) ② 조건을 바꾸면 바로 다시 점검하고 '풀림/달라짐/새로 생김'을 보여 줌(교사 상한·창체 방식)
-// ③ 교사 추가(강사) → 6단계 교사 명단에도 보임 ④ 반 일부만 듣는 과목(교차집중)의 반 배정 → 2학기는 맞바꿈, 틀린 값은 안내
+// ① 사전 점검 결과(판정·원인·고칠 곳 단추·가정 목록·학년 표) ② 조건을 바꾸면 바로 다시 점검하고 '풀림/달라짐/새로 생김'을 보여 줌(참고 상한·창체 방식)
+// ③ 선택형 해결: 조건 위반 항목마다 선택지 + 예상 효과 → 고르면 다시 점검, 고른 내역·되돌리기(교사를 늘리는 선택지·입력은 없음)
+// ④ 반 일부만 듣는 과목(교차집중)의 반 배정 → 2학기는 맞바꿈, 틀린 값은 안내
 // ⑤ '고칠 곳' 단추로 다른 단계 이동 ⑥ 새로고침 뒤에도 조건 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-ui.cjs /tmp/tt-ui /tmp/e2e/downloads/workspace-backup.json.gz
 const path = require("path"), fs = require("fs");
@@ -56,14 +57,14 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await page.screenshot({ path: path.join(OUT, "01-timetable-precheck.png"), fullPage: true });
 
   console.log("▶ 조건을 바꾸면 바로 다시 점검");
-  const music = first.find((item) => /음악: 교사 2명 × 22 = 44시간 < 이번 학기 수업 45시간/.test(item.text));
-  check(Boolean(music), "처음: 음악 44시간 < 45시간(교사 상한 22)", first.map((item) => item.text));
+  const music = first.find((item) => item.level === "warn" && /음악: 교사 2명 × 22 = 44시간 < 이번 학기 수업 45시간 — 참고 상한을 1시간 넘습니다/.test(item.text));
+  check(Boolean(music), "처음: 음악 44시간 < 45시간은 '확인'(참고 상한 22, 필수 조건 아님)", first.map((item) => `${item.level} ${item.text}`));
   await openSection("rules");
   const max = panel.locator('[data-tt-field="rules.maxHours"]');
   await max.fill("23"); await max.press("Tab"); await sleep(400);
   const change = panel.locator("#timetableChange");
   const changeText = clean(await change.innerText());
-  check(/방금 바꾼 조건: 교사 주당 시수 상한\(학기별\) → 23/.test(changeText) && /풀림/.test(changeText) && /음악/.test(changeText), "상한 23 → '풀림'에 음악", changeText.slice(0, 300));
+  check(/방금 바꾼 조건: 교사 주당 시수 참고 상한\(넘어도 편성 · 알림만\) → 23/.test(changeText) && /풀림/.test(changeText) && /음악/.test(changeText), "참고 상한 23 → '풀림'에 음악", changeText.slice(0, 300));
   check(!(await issues()).some((item) => /^음악:/.test(item.text)), "점검 목록에서 음악 항목이 사라짐");
   check(/기본값 22에서 바꿈/.test(clean(await panel.locator('[data-tt-rule="maxHours"]').innerText())), "규칙 줄에 '기본값 22에서 바꿈'");
   await page.screenshot({ path: path.join(OUT, "02-rule-change.png"), fullPage: true });
@@ -81,31 +82,29 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await panel.getByRole("button", { name: /전교 동시\(6단계 고정 시간\)/ }).click(); await sleep(300);
   check((await panel.locator('[data-tt-field="creative.schoolTimes"]').inputValue()) === "금6,금7", "창체 '전교 동시' → 6단계 고정 시간 금6,금7");
 
-  console.log("▶ 교사 추가(강사) → 6단계 명단과 한 곳");
-  const liberal = (await issues()).find((item) => /^교양: 교사 1명 × 22 = 22시간 < 이번 학기 수업 33시간/.test(item.text));
-  check(Boolean(liberal), "처음: 교양 1명 22시간 < 33시간");
+  console.log("▶ 선택형 해결(무엇을 양보할지 고르기)");
+  const liberalText = /^교양: 맡을 수 있는 교사가 설 수 있는 시간 1명 × \d+ = \d+시간 < 이번 학기 수업 33시간/;
+  check((await issues()).some((item) => item.level === "fail" && liberalText.test(item.text)), "처음: 교양 교사 1명이 설 수 있는 시간 < 33시간(조건 위반)", (await issues()).map((item) => item.text));
+  const liberalItem = panel.locator("#timetablePrecheck > ul .tt-issue", { hasText: "교양: 맡을 수 있는 교사가 설 수 있는 시간" }).first();
+  const rows = await liberalItem.locator("[data-tt-choice-row]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.ttChoiceRow, kind: el.dataset.kind, text: el.textContent.replace(/\s+/g, " ").trim() })));
+  report.checks.choices = rows;
+  check(rows.map((row) => row.key).join(",") === "teacherRules,otherDepartment,noTeacher", `교양 항목의 선택지 3개: ${rows.map((row) => row.key).join(", ")}`, rows);
+  check(/이 항목 풀림 · 조건 위반 \d+ → \d+건/.test(rows[0]?.text || ""), `'교사 규칙 양보' 예상 효과: ${(rows[0]?.text || "").slice(0, 70)}`);
+  check(/다른 교과 교사가 맡기\(교양 과목만\)/.test(rows[1]?.text || "") && /담당 교사 없음/.test(rows[2]?.text || ""), "교양 과목이라 '다른 교과 교사가 맡기' 안내 + '담당 교사 없음'으로 두기");
+  const panelText = clean(await panel.innerText());
+  check(!/증원|강사|순회|명 필요/.test(panelText) && (await panel.locator("#timetableTeacherAdd").count()) === 0, "교사를 늘리는 문구·입력이 없음", (panelText.match(/.{20}(증원|강사|순회|명 필요).{20}/) || [])[0]);
+  await page.screenshot({ path: path.join(OUT, "03-choices.png"), fullPage: true });
+  await liberalItem.locator('[data-tt-choice="teacherRules"]').click(); await sleep(500);
+  check(!(await issues()).some((item) => item.level === "fail" && /^교양: 맡을 수 있는 교사가 설 수 있는 시간/.test(item.text)), "선택 적용 → 교양 '설 수 있는 시간' 위반이 사라짐");
+  check(/방금 바꾼 조건: 선택 — 교사 규칙 양보/.test(clean(await change.innerText())) && /풀림|달라짐/.test(clean(await change.innerText())), "변경 요약: 선택 — 교사 규칙 양보", clean(await change.innerText()).slice(0, 200));
+  check(/고른 선택 1개/.test(clean(await panel.locator("#timetableChosen").innerText())) && /교사 규칙 양보: 연강 4시간 · 하루 7시간까지/.test(clean(await panel.locator("#timetableChosen").innerText())), "고른 선택 1개가 남음");
+  await openSection("rules");
+  check((await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "4" && (await panel.locator('[data-tt-field="rules.maxPerDay"]').inputValue()) === "7", "규칙 칸도 연강 4 · 하루 7로 바뀜");
+  await panel.locator("#timetableChoiceUndo").click(); await sleep(500);
+  check((await panel.locator("#timetableChosen").count()) === 0 && (await issues()).some((item) => liberalText.test(item.text)) && (await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "3", "마지막 선택 되돌리기 → 조건·점검이 원래대로");
   await openSection("teachers");
-  await panel.locator("#timetableTeacherAdd").click(); await sleep(300);
-  check(/이름을 넣어 주세요/.test(clean(await panel.locator("#timetableStatus").innerText())), "이름 없이 추가 → 안내");
-  await panel.locator("#timetableTeacherName").fill("환경 강사");
-  await panel.locator("#timetableTeacherKind").selectOption("강사");
-  await panel.locator("#timetableTeacherDepartment").selectOption("교양");
-  await panel.locator("#timetableTeacherDays").fill("화,목");
-  await panel.locator("#timetableTeacherMax").fill("12");
-  await panel.locator("#timetableTeacherAdd").click(); await sleep(500);
-  const addedText = clean(await panel.locator("#timetableAddedTeachers").innerText());
-  check(/환경 강사 · 강사 · .*출근 화·목 · 상한 12시간/.test(addedText), `추가한 교사 목록: ${addedText.slice(0, 80)}`);
-  const afterAdd = await issues();
-  const liberalNow = afterAdd.find((item) => /^교양:/.test(item.text));
-  check(/교양: 교사 2명 합 34시간 ≥|^$/.test(liberalNow?.text || "") || !liberalNow, "교양 시수 부족이 풀림(22 + 12 = 34 ≥ 33)", liberalNow);
-  check(/풀림|달라짐/.test(clean(await change.innerText())), "변경 요약에 풀림·달라짐");
-  await page.screenshot({ path: path.join(OUT, "03-teacher-added.png"), fullPage: true });
-  await page.getByRole("button", { name: /6\. 분반 편성/ }).click(); await page.locator("#workflowStep8Panel").waitFor({ state: "visible" }); await sleep(500);
-  await page.locator("#classSectionsTeachersOpen").click(); await sleep(500);
-  const dialogText = await page.locator("#classSectionsTeacherDialog").evaluate((el) => [...el.querySelectorAll("input")].map((input) => input.value).join("|"));
-  check(/환경 강사/.test(dialogText), "6단계 '교사·시간 설정' 명단에 환경 강사가 보임");
-  await page.keyboard.press("Escape"); await sleep(300);
-  await page.locator("#classSectionsTeacherDialog[open] button", { hasText: /닫기|완료/ }).first().click({ timeout: 1500 }).catch(() => {});
+  check(/주어진 교사 명단 안에서만/.test(clean(await panel.locator('[data-tt-section="teachers"]').innerText())) && /6단계 명단 \d+명/.test(clean(await panel.locator("#timetableTeacherCount").innerText())), "교사 영역: 주어진 명단·전공 일치 안내 + 명단 인원");
+  check((await panel.locator('[data-tt-field="rules.departmentMax.진로"]').inputValue()) === "10", "진로 교사 주당 상한 기본 10시간");
 
   console.log("▶ 반 일부만 듣는 과목(교차집중) 반 배정");
   await openStep();
@@ -144,11 +143,8 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await sleep(600);
   await page.reload(); await page.waitForLoadState("networkidle"); await sleep(2500);
   await openStep();
-  await openSection("split"); await openSection("teachers");
+  await openSection("split");
   check((await panel.locator("[data-tt-split]").first().locator("input").first().inputValue()) === "7-11", "새로고침 뒤에도 반 배정(7-11) 유지");
-  check(/환경 강사/.test(clean(await panel.locator("#timetableAddedTeachers").innerText())), "새로고침 뒤에도 추가한 교사 유지");
-  await panel.locator("[data-tt-teacher-remove]").first().click(); await sleep(400);
-  check((await panel.locator("#timetableAddedTeachers").count()) === 0 && (await issues()).some((item) => /^교양: 교사 1명/.test(item.text)), "교사 삭제 → 교양 시수 부족이 다시 나옴");
 
   console.log("▶ 백업 → 전체 초기화 → 복원");
   await openSection("rules");

@@ -100,7 +100,8 @@ test("모형: 학년별 점심으로 실제 시각 축을 만들고, 반·조각
   // 불가 시간 '월4'는 학년마다 실제 시각이 달라 A·B 둘 다 막는다. 출근 요일이 화요일뿐이면 월요일 전부.
   assert.deepEqual([...model.teacherOf.get("a").blocked].sort((x, y) => x - y), [3, 4, 8]);
   assert.equal([...model.teacherOf.get("b").blocked].filter((value) => value < 8).length, 8);
-  assert.deepEqual([model.teacherOf.get("c").maxHours, model.teacherOf.get("a").maxHours, model.rules.maxHours], [16, 22, 22]);
+  // 교사별 상한은 필수 상한, 없으면 필수 상한 없음(참고 상한 22는 알림만)
+  assert.deepEqual([model.teacherOf.get("c").maxHours, model.teacherOf.get("a").maxHours, model.teacherOf.get("a").softHours, model.rules.maxHours], [16, Infinity, 22, 22]);
 });
 
 test("교사 하루 최대 수업 수: 연강 3 이하·점심 한 칸·하루 최대", () => {
@@ -156,41 +157,53 @@ test("P1: 주간 수업 수가 칸 수를 넘으면 실패, 반마다 다르면 
   assert.match(issuesOf(result, "P1", "warn")[0].cause, /^1학년: 반마다 주간 수업 수가 다릅니다\(32~33시간\)/);
 });
 
-test("P2: 학기별 교사 시수 — 맡을 수 있는 교사 상한 합보다 수업이 많으면 실패(교과 묶음), 교사가 없으면 '교사 미정'", () => {
+test("P2: 학기별 교사 시수 — 맡을 수 있는 교사가 설 수 있는 시간보다 수업이 많으면 실패, 참고 상한(22)은 알림만, 교사가 없으면 '담당 교사 없음'", () => {
   const ctx = context();
-  const input = school({ staff: { 한문: 1 } }); // 한문 2학년 11반 × 3 = 33시간 > 22
+  const input = school({ staff: { 한문: 1 } }); // 한문 2학년 11반 × 3 = 33시간, 교사 1명이 설 수 있는 시간은 주 28시간(하루 6시간·연강 3, 금 6·7 창체)
   input.lessons.push({ id: "3발명", grade: "3", classes: ["1"], subject: "발명", department: "기술", hours: 1 });
   const result = plain(ctx.timetablePrecheck(input));
   const p2 = issuesOf(result, "P2", "fail");
   assert.deepEqual(p2.map((issue) => issue.cause), [
-    "기술: 3학년 발명 1시간을 맡을 교사가 명단에 없습니다 → '교사 미정' 1시간.",
-    "한문: 교사 1명 × 22 = 22시간 < 이번 학기 수업 33시간(11시간 초과)."]);
-  assert.deepEqual(p2[1].data, { departments: ["한문"], teachers: ["t-한문-1"], demand: 33, capacity: 22, shortage: 11 });
-  assert.deepEqual(p2[1].where.map((where) => where.step), [7, 8, 6]);
-  // 조건은 설정값: 상한만 40으로 올리면 '쓸 수 있는 칸'(하루 6시간·연강 3, 금 6·7 창체)이 한계가 되고, 하루 7시간·연강 4까지 풀면 통과
-  input.rules = { maxHours: 40 };
-  assert.equal(issuesOf(plain(ctx.timetablePrecheck(input)), "P2").find((issue) => /한문/.test(issue.cause)).cause, "한문: 교사 1명 × 28 = 28시간 < 이번 학기 수업 33시간(5시간 초과).");
-  input.rules = { maxHours: 40, maxPerDay: 7, run: 4 };
+    "기술: 3학년 발명 1시간을 맡을 수 있는 교사가 명단에 없습니다 → '담당 교사 없음' 1시간(교사 명단의 담당 교과·담당 과목, 5단계 담당 교과를 확인하세요).",
+    "한문: 맡을 수 있는 교사가 설 수 있는 시간 1명 × 28 = 28시간 < 이번 학기 수업 33시간(5시간은 넣을 수 없음)."]);
+  assert.deepEqual(p2[1].data, { departments: ["한문"], teachers: ["t-한문-1"], demand: 33, capacity: 28, shortage: 5 });
+  assert.deepEqual([p2[0].relax, p2[1].relax], [["otherDepartment", "noTeacher"], ["teacherRules", "otherDepartment", "noTeacher"]]);
+  assert.ok(!result.issues.some((issue) => /명 필요|증원|강사|순회/.test(issue.cause)), "교사를 늘리라는 문구는 쓰지 않는다");
+  // 조건은 설정값: 하루 7시간·연강 4까지 풀면 설 수 있는 시간이 33 → 실패가 아니라 참고 상한 알림(22시간 초과)
+  input.rules = { maxPerDay: 7, run: 4 };
+  const relaxed = plain(ctx.timetablePrecheck(input));
+  assert.equal(issuesOf(relaxed, "P2", "fail").filter((issue) => /한문/.test(issue.cause)).length, 0);
+  assert.deepEqual(issuesOf(relaxed, "P2", "warn").map((issue) => issue.cause), ["한문: 교사 1명 × 22 = 22시간 < 이번 학기 수업 33시간 — 참고 상한을 11시간 넘습니다(1인당 약 33시간, 필수 조건은 아니어서 편성은 됩니다)."]);
+  input.rules = { maxPerDay: 7, run: 4, maxHours: 33 };
   assert.equal(issuesOf(plain(ctx.timetablePrecheck(input)), "P2").filter((issue) => /한문/.test(issue.cause)).length, 0);
-  // 교사 후보가 겹치는 묶음(지리·역사를 함께 맡는 교사)은 합쳐서 본다
+  // 교사 후보가 겹치는 묶음(지리·역사를 함께 맡는 교사)은 합쳐서 본다 — 참고 상한 알림
   const shared = ctx.timetablePrecheck({ grades: [{ grade: "1", classes: 10 }], teachers: [{ id: "a", departments: ["지리", "역사"] }, { id: "b", departments: ["지리"] }, { id: "x", departments: ["기타"] }],
     lessons: [{ grade: "1", subject: "지리", department: "지리", hours: 3 }, { grade: "1", subject: "역사", department: "역사", hours: 2 }, { grade: "1", subject: "기타", department: "기타", hours: 1 }] });
-  assert.deepEqual(plain(issuesOf(shared, "P2").map((issue) => issue.cause)), ["지리, 역사: 교사 2명 × 22 = 44시간 < 이번 학기 수업 50시간(6시간 초과)."]);
+  assert.deepEqual(plain(issuesOf(shared, "P2").map((issue) => `${issue.level} ${issue.cause}`)), ["warn 지리, 역사: 교사 2명 × 22 = 44시간 < 이번 학기 수업 50시간 — 참고 상한을 6시간 넘습니다(1인당 약 25시간, 필수 조건은 아니어서 편성은 됩니다)."]);
+  // 전공 일치(절대): 담당 교과·과목에 없는 수업을 맡은 교사
+  const wrong = ctx.timetablePrecheck({ grades: [{ grade: "1", classes: 1 }], teachers: [{ id: "a", name: "가", departments: ["지리"] }],
+    lessons: [{ grade: "1", subject: "물리학", department: "물리", hours: 3, teacherId: "a", teacherMismatch: true }] });
+  assert.deepEqual(plain(issuesOf(wrong, "P2", "fail").map((issue) => issue.cause)), ["가 교사: 1학년 물리학 3시간은 이 교사의 담당 교과·담당 과목에 없는 수업입니다(교양 과목만 다른 교과 교사가 맡을 수 있습니다)."]);
 });
 
-test("P3: 교사가 쓸 수 있는 칸(불가 시간·출근 요일·점심·연강)보다 배정이 많으면 실패", () => {
+test("P3: 교사가 설 수 있는 칸(불가 시간·출근 요일·점심·연강)·필수 상한(진로 10시간)보다 배정이 많으면 실패, 참고 상한(22)은 알림", () => {
   const ctx = context();
   const input = school();
-  input.teachers.push({ id: "강사", name: "한문 강사", departments: [], days: ["화", "목"] }, { id: "많음", name: "많음", departments: [] });
+  input.teachers.push({ id: "강사", name: "한문 겸임", departments: [], days: ["화", "목"] }, { id: "많음", name: "많음", departments: [] }, { id: "진로", name: "진로쌤", departments: ["진로"] });
   input.lessons.find((lesson) => lesson.id === "2한문").teacherByClass = { 1: "강사", 2: "강사", 3: "강사", 4: "강사", 5: "강사" }; // 15시간, 이틀 × 6 = 12
-  input.lessons.find((lesson) => lesson.id === "2문학").teacherByClass = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [n, "많음"])); // 24시간 > 22
+  input.lessons.find((lesson) => lesson.id === "2문학").teacherByClass = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [n, "많음"])); // 24시간 > 참고 22
+  input.lessons.push({ id: "3진로", grade: "3", subject: "진로와 직업", department: "진로", hours: 1, teacherId: "진로" }); // 11반 × 1 = 11시간 > 진로 교사 필수 상한 10
   const result = plain(ctx.timetablePrecheck(input));
-  const p3 = issuesOf(result, "P3", "fail");
-  assert.deepEqual(p3.map((issue) => issue.cause), [
-    "한문 강사 교사: 배정 15시간(2학년 한문 15)인데 불가 시간·출근 요일·점심·연강을 빼면 주 12시간까지만 수업할 수 있습니다.",
-    "많음 교사: 배정 24시간(2학년 문학 24)이 상한 22시간을 넘습니다."]);
-  assert.deepEqual(result.teachers.find((row) => row.id === "강사"), { id: "강사", name: "한문 강사", maxHours: 22, slotCapacity: 12, capacity: 12, fixedHours: 15 });
+  assert.deepEqual(issuesOf(result, "P3").map((issue) => `${issue.level} ${issue.cause}`), [
+    "fail 한문 겸임 교사: 배정 15시간(2학년 한문 15)인데 불가 시간·출근 요일·점심·연강을 빼면 주 12시간까지만 수업할 수 있습니다.",
+    "fail 진로쌤 교사: 배정 11시간(3학년 진로와 직업 11)이 필수 상한 10시간을 넘습니다.",
+    "warn 많음 교사: 배정 24시간(2학년 문학 24)이 참고 상한 22시간을 넘습니다(필수 조건은 아니어서 편성은 됩니다)."]);
+  assert.deepEqual(result.teachers.find((row) => row.id === "강사"), { id: "강사", name: "한문 겸임", maxHours: null, softHours: 22, slotCapacity: 12, capacity: 12, fixedHours: 15 });
+  assert.deepEqual([result.teachers.find((row) => row.id === "진로").maxHours, result.teachers.find((row) => row.id === "진로").capacity], [10, 10]);
   assert.equal(issuesOf(result, "P2").length, 0, "한 교사에 몰린 것은 P3에서만 알린다");
+  // 진로 상한도 설정값
+  input.rules = { departmentMax: { 진로: 12 } };
+  assert.equal(issuesOf(plain(ctx.timetablePrecheck(input)), "P3", "fail").length, 1);
 });
 
 test("P4: 블록 안 동시 분반 ≤ 맡을 수 있는 교사, 같은 시각에 놓인 다른 학년 블록까지", () => {
@@ -222,7 +235,7 @@ test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같�
     "fail 2학년 b블록: 금6은 전교 고정 시간(창체·회의)과 겹칩니다.",
     "fail 2학년 a블록과 b블록이 같은 시간(화1)입니다.",
     "warn 2학년 a블록: 블록 시간 3칸 ≠ 시수 4시간(시간표에서 다시 놓습니다).",
-    "warn 2학년 b블록: 같은 날 두 번 들어 있습니다(하루 1번 규칙)."]);
+    "warn 2학년 b블록: 같은 날 두 번 들어 있습니다(같은 교사 하루 한 번 규칙)."]);
   // 블록 8개가 모두 같은 확정 교사를 쓰면 서로 다른 시간이어야 한다: 12 + 20 = 32칸 ≤ 33칸(35 − 창체 2)은 통과, 블록 시수가 늘면 실패
   const shared = school();
   shared.teachers.push({ id: "공동", name: "공동", departments: [], maxHours: 40 });
@@ -230,7 +243,7 @@ test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같�
   assert.equal(issuesOf(ctx.timetablePrecheck(shared), "P5").length, 0);
   shared.blocks[0].hours = 6;
   assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail")).map((issue) => issue.cause).join("\n"), /블록 8개\(.*\)가 같은 교사를 써서 서로 다른 시간이어야 하는데, 모두 34칸이 필요합니다\(주 33칸\)\./);
-  assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail"))[0].cause, /^2학년 a블록: 주 6시간인데 요일은 5일 — 하루 1번 규칙을 지킬 수 없습니다\./);
+  assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail"))[0].cause, /^2학년 a블록: 주 6시간인데 요일은 5일 — 같은 교사가 같은 분반에 하루 두 번 들어갈 수밖에 없습니다\./);
 });
 
 test("P6: 학년 반 수업 동시성(13칸 문제) — 같은 시간에 가르칠 교사가 반 수보다 적으면 반 수업은 하루 끝 쪽에만 올 수 있다", () => {
@@ -241,9 +254,9 @@ test("P6: 학년 반 수업 동시성(13칸 문제) — 같은 시간에 가르�
   const result = plain(ctx.timetablePrecheck(input));
   const p6 = issuesOf(result, "P6");
   assert.equal(p6.length, 1);
-  assert.equal(p6[0].cause, "3학년: 반 수업 칸 13개(주 35칸 − 블록 20 − 창체 2)에 11반이 6시간씩(모두 66시간) 들어가야 하는데, 같은 시간에 가르칠 수 있는 교사는 7명뿐이라 최대 56시간만 들어갑니다(한 반은 하루 2시간까지, 하루 끝 쪽 8칸 × 7명).");
+  assert.equal(p6[0].cause, "3학년: 반 수업 칸 13개(주 35칸 − 블록 20 − 창체 2)에 11반이 6시간씩(모두 66시간) 들어가야 하는데, 같은 시간에 가르칠 수 있는 교사는 7명뿐이라 최대 56시간만 들어갑니다(한 반은 하루 2시간까지 — 같은 교사는 하루 한 번, 하루 끝 쪽 8칸 × 7명).");
   assert.deepEqual(p6[0].data, { grade: "3", classes: 11, free: 13, need: 66, simultaneous: 7, perDay: 2, tailTotal: 8, capacity: 56 });
-  assert.deepEqual(p6[0].relax, ["creativeGroup", "stagger", "gaps", "teacherless"]);
+  assert.deepEqual(p6[0].relax, ["creativeFree", "creativeGroup", "blockTimes", "oncePerDay", "gaps", "stagger"]);
   assert.equal(result.ok, false);
   // 창체를 학년별로 풀면(시간 미정) 닷새 × 2칸 × 7명 = 70 ≥ 66 → 이 점검은 통과
   const freed = school({ pe3: 3, info3: 4 });
@@ -291,24 +304,39 @@ test("P6: 블록·창체 시간이 정해져 있어 반 수업 칸이 하루 가
   assert.equal(issuesOf(ctx.timetablePrecheck(byGroup), "P6").length, 1);
 });
 
-test("P7: 교사 한 명에 몰린 반 수업 — 한 학년 반 수업 시수는 그 학년 반 수업 칸 수를 넘을 수 없다", () => {
+test("P7: 교사 한 명에 몰린 반 수업 — 한 학년 반 수업 시수는 그 학년 반 수업 칸 수를 넘을 수 없다, 같은 교사가 한 반에 하루 두 번은 안 됨", () => {
   const ctx = context();
   const input = school();
-  input.teachers.push({ id: "증원", name: "증원", departments: [] });
-  input.lessons.push({ id: "3발명", grade: "3", classes: ["1", "2", "3", "4", "5"], subject: "발명", department: "기술", hours: 4, teacherId: "증원" });
+  input.teachers.push({ id: "겸", name: "정보·기술", departments: [] });
+  input.lessons.push({ id: "3발명", grade: "3", classes: ["1", "2", "3", "4", "5"], subject: "발명", department: "기술", hours: 4, teacherId: "겸" });
   input.lessons.find((lesson) => lesson.id === "3인공").classes = ["6", "7", "8", "9", "10", "11"];
   const result = plain(ctx.timetablePrecheck(input));
   const p7 = issuesOf(result, "P7", "fail");
-  assert.deepEqual(p7.map((issue) => issue.cause), ["증원 교사: 3학년 반 수업 발명 20시간인데 3학년 반 수업 칸은 13개입니다(한 칸에 한 반만 가르칠 수 있음) → 7시간은 다른 교사가 맡아야 합니다."]);
-  assert.deepEqual(p7[0].data, { grade: "3", teachers: ["증원"], demand: 20, free: 13, shortage: 7, need: 2 });
-  assert.equal(issuesOf(result, "P3").length, 0, "시수 상한(22)은 넘지 않는다");
-  // 교과 단위: 정보 교사 3명이 인공지능 기초 11반 × 4 = 44시간 → 14.7 > 13칸 → 최소 4명
+  assert.deepEqual(p7.map((issue) => issue.cause), ["정보·기술 교사: 3학년 반 수업 발명 20시간인데 3학년 반 수업 칸은 13개입니다(한 칸에 한 반만 가르칠 수 있음) → 7시간은 넣을 수 없습니다."]);
+  assert.deepEqual(p7[0].data, { grade: "3", teachers: ["겸"], demand: 20, free: 13, shortage: 7, capacity: 13 });
+  assert.equal(issuesOf(result, "P3").length, 0, "설 수 있는 칸·참고 상한(22)은 넘지 않는다");
+  // 교과 단위: 정보 교사 3명이 인공지능 기초 11반 × 4 = 44시간 → 3명 × 13칸 = 39시간
   const few = plain(issuesOf(ctx.timetablePrecheck(school({ info3: 3, pe3: 8 })), "P7"));
-  assert.deepEqual(few.map((issue) => issue.cause), ["3학년 정보3: 반 수업 인공지능 기초 44시간 ÷ 교사 3명 = 14.7시간이 반 수업 칸 13칸보다 많습니다 → 최소 4명 필요."]);
-  // 주 6시간 과목은 하루 1번을 지킬 수 없다(경고)
+  assert.deepEqual(few.map((issue) => issue.cause), ["3학년 정보3: 교사 3명으로는 반 수업 칸 13개에 인공지능 기초 44시간을 넣을 수 없습니다(한 칸에 한 반, 3명 × 13칸 = 39시간) → 5시간이 남습니다."]);
+  assert.deepEqual(few[0].relax, ["creativeGroup", "stagger", "sectionsMove", "noTeacher"]);
+  // 반군별 창체를 허용하면 반 수업 칸이 15개 → 3명 × 15 = 45 ≥ 44로 풀린다(학년별로만 풀면 13칸 그대로)
+  const freed = school({ info3: 3, pe3: 8 });
+  freed.creative = { grade: 2 };
+  assert.equal(issuesOf(ctx.timetablePrecheck(freed), "P7").length, 1);
+  freed.creative = { grade: 2, byGroup: true };
+  assert.equal(issuesOf(ctx.timetablePrecheck(freed), "P7").length, 0);
+  // 같은 교사가 한 반에 주 6시간(요일 5일)이면 같은 날 두 번이 불가피 — 과목이 달라도 같은 교사면 합쳐서 본다
   const long = school();
   long.lessons.find((lesson) => lesson.id === "3인공").hours = 6;
-  assert.deepEqual(plain(issuesOf(ctx.timetablePrecheck(long), "P7", "warn")).map((issue) => issue.cause), ["3학년 인공지능 기초: 주 6시간이라 하루 1번 규칙을 지킬 수 없습니다(이 과목만 하루 2번 허용)."]);
+  assert.deepEqual(plain(issuesOf(ctx.timetablePrecheck(long), "P7", "fail")).map((issue) => issue.cause), ["3학년 인공지능 기초: 한 반에 주 6시간이라 같은 교사가 같은 날 두 번 들어갈 수밖에 없습니다(요일 5일)."]);
+  const pair = school();
+  pair.teachers.push({ id: "둘", name: "둘", departments: [] });
+  pair.lessons.push({ id: "1가", grade: "1", classes: ["1"], subject: "진로", department: "x", hours: 1, teacherId: "둘" }, { id: "1나", grade: "1", classes: ["1"], subject: "논술", department: "x", hours: 5, teacherId: "둘" });
+  pair.lessons = pair.lessons.filter((lesson) => !["1음악", "1미술", "1체육"].includes(lesson.id));
+  assert.deepEqual(plain(issuesOf(ctx.timetablePrecheck(pair), "P7", "fail")).map((issue) => issue.cause), ["1학년 둘 교사 진로·논술: 한 반에 주 6시간이라 같은 교사가 같은 날 두 번 들어갈 수밖에 없습니다(요일 5일)."]);
+  // 규칙을 '최대한'으로 낮추면 알리지 않는다
+  pair.rules = { oncePerDay: "soft" };
+  assert.equal(issuesOf(ctx.timetablePrecheck(pair), "P7").length, 0);
 });
 
 test("P8·P9·P10: 장소 수용, 창체 시수와 칸, 알림(블록 안 학점 차이·자리 이름 교사·확대학급·학기 미정)", () => {
@@ -358,8 +386,8 @@ test("6단계 시간표 미리 점검은 timetable.js 규칙 하나를 쓴다", 
   assert.match(view, /function classSectionsTimetablePrecheck\(spec\) \{\n  return timetablePrecheckDepartments\(spec\);\n\}/);
   const check = plain(ctx.timetablePrecheckDepartments({ slots: 35, fixed: 2, blockHours: 20, label: "3학년 1학기", lessons: [{ department: "정보", label: "인공지능 기초 7반 × 4시간", hours: 28 }], teachers: { 정보: 2 } }));
   assert.deepEqual([check.free, check.issues.length, check.issues[0].need, check.teachersKnown], [13, 1, 3, true]);
-  // 같은 상황을 7단계 사전 점검(P7)으로 보면 같은 결론(최소 3명)
+  // 같은 상황을 7단계 사전 점검(P7)으로 보면 같은 결론(2명 × 13칸 = 26시간 < 28시간)
   const input = { grades: [{ grade: "3", classes: 7 }], creative: { school: 2 }, teachers: [{ id: "a", departments: ["정보"] }, { id: "b", departments: ["정보"] }, { id: "z", departments: ["기타"] }],
     lessons: [{ grade: "3", subject: "인공지능 기초", department: "정보", hours: 4 }], blocks: ["a", "b", "c", "d", "e"].map((id) => ({ id, grade: "3", hours: 4, sections: [{ subject: "기타", department: "기타", credits: 4 }] })) };
-  assert.equal(plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.need, 3);
+  assert.deepEqual([plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.capacity, plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.shortage], [26, 2]);
 });

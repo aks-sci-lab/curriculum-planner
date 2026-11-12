@@ -110,11 +110,15 @@ test("5·6단계 자료를 시간표 입력으로 모은다: 학교 지정 과�
     { id: "1:1:2-1 택2|a", grade: "2", label: "2-1 택2 a블록", times: "월1,화2,수3", sections: [
       { id: "1:1:2-1 택2|물리학#1", subject: "물리학", department: "과학-물리", credits: 3, teacherId: "p1", venue: "과학실" },
       { id: "1:1:2-1 택2|화학#1", subject: "화학", department: "과학-화학", credits: 3, teacherId: "c1", venue: "" }] },
-    { id: "1:1:2-1 택2|b", grade: "2", label: "2-1 택2 b블록", times: "", sections: [{ id: "1:1:2-1 택2|물리학#2", subject: "물리학", department: "과학-물리", credits: 3, venue: "과학실" }] }]);
+    { id: "1:1:2-1 택2|b", grade: "2", label: "2-1 택2 b블록", times: "", sections: [{ id: "1:1:2-1 택2|물리학#2", subject: "물리학", department: "과학-물리", credits: 3, teacherIds: ["p1"], venue: "과학실" }] }]);
   assert.deepEqual(input.venues, { 과학실: 1 });
   assert.deepEqual(input.missing, []);
-  assert.deepEqual(input.notes, { undecided: [], staleSections: [], expandedClasses: false });
-  assert.deepEqual(assumptions.map((entry) => entry.key), ["periods", "lunch", "creative", "homeroom", "maxHours", "partial:2", "classUnit:2:1:3-1 택1"]);
+  // 5단계 교사 수와 6단계 명단이 다르면 알림만(시간표는 명단으로 계산)
+  assert.deepEqual(input.notes, { undecided: [], staleSections: [], expandedClasses: false, teacherCounts: ["5단계 교사 수와 6단계 교사 명단이 다른 교과: 미술 0 → 1명, 제2외국어 0 → 1명 — 시간표는 6단계 명단으로 계산합니다."] });
+  assert.deepEqual(assumptions.map((entry) => entry.key), ["periods", "lunch", "creative", "homeroom", "partial:2", "classUnit:2:1:3-1 택1"]);
+  // 교사 후보(전공 일치): 담당 교과가 같거나 담당 과목에 그 과목이 있는 교사만 — 일본어는 제2외국어 교사, 담당 과목 '일본어'도 같은 교사
+  assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "일본어").teacherIds, ["jp"]);
+  assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "문학").teacherIds, ["t-국어-1", "k2"]);
   assert.ok(assumptions.every((entry) => entry.text && entry.where.step && entry.where.label));
   // 5단계 시수 합 = 7단계(반 수업 + 블록 분반) 시수 합
   const model = ctx.timetableModel(input);
@@ -122,7 +126,7 @@ test("5·6단계 자료를 시간표 입력으로 모은다: 학교 지정 과�
   assert.equal(hours7, ctx.hoursStatsCached().items.filter((entry) => entry.semester === "1").reduce((sum, entry) => sum + entry.hours, 0));
   // 사전 점검까지: 가정 목록이 함께 온다
   const check = plain(ctx.timetablePrecheckFor("1", "1"));
-  assert.equal(check.assumptions.length, 7);
+  assert.equal(check.assumptions.length, 6);
   assert.equal(check.counts.block, 0);
   assert.deepEqual(check.grades.map((row) => [row.grade, row.lessonHours, row.blockHours, row.creative]), [["1", 6, 0, 2], ["2", 6, 6, 2], ["3", 4, 0, 2]]);
 });
@@ -168,7 +172,7 @@ test("시간표 조건(state.timetable.settings)이 있으면 그 값을 쓰고 
   assert.deepEqual([input.periodsByDay, input.lunchAfter, input.rules, input.venues], [{ 수: 6 }, { 1: 4, 2: 4, 3: 4 }, { maxHours: 20, gap: "soft" }, { 과학실: 1, 체육: 2 }]);
   assert.deepEqual(input.creative, { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, gradeTimes: {}, byGroup: true, expected: { 1: 2, 2: 2, 3: 2 } });
   assert.equal(input.teachers.find((teacher) => teacher.id === "k2").homeroom, "2-1");
-  assert.deepEqual(input.notes, { undecided: ["2학년 심화 영어"], staleSections: ["현1 → 2학년 1학기 · 2-1 택2"], expandedClasses: true });
+  assert.deepEqual([input.notes.undecided, input.notes.staleSections, input.notes.expandedClasses], [["2학년 심화 영어"], ["현1 → 2학년 1학기 · 2-1 택2"], true]);
   assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "체육").classes, undefined, "확대학급은 반영하지 않고 편제표 값(전체 반)");
   assert.deepEqual(assumptions.map((entry) => entry.key), ["common"]);
   // 사전 점검에 알림으로 나온다
@@ -248,4 +252,65 @@ test("조건을 바꾸기 전·후 사전 점검 비교(풀림·달라짐·새�
   assert.match(app, /if \(step === 6 && typeof renderTimetable === "function"\) renderTimetable\(\);/);
   const view = read("timetable-view.js");
   assert.match(view, /deferRenderUntilStepVisible\(6, "renderTimetable", renderTimetable\)\) return;\n  if \(typeof preserveViewDuring === "function"\) return preserveViewDuring\(\["#workflowStep6Panel"\], renderTimetableView\);/);
+});
+
+test("전공 일치: 담당 과목으로 두 교과를 함께 맡는 교사, 6단계가 다른 전공 교사를 붙였으면 표시, 교양만 다른 교과 교사 허용, 블록 시간 다시 놓기", () => {
+  const entries = { "1:1:2-1 택2": { classCounts: {}, classUnit: {}, blockTimes: { a: "월1,화2,수3" },
+    sectionResult: { signature: "sig", blocks: [{ id: "a", letter: "a", sectionIds: ["물리학#1", "화학#1"] }],
+      sections: [{ id: "물리학#1", courseKey: "물리학", blockId: "a", teacherId: "pe" }, { id: "화학#1", courseKey: "화학", blockId: "a", teacherId: "c1" }] } } };
+  const ctx = world({ entries, groups: [{ key: "1:1:2-1 택2", grade: "1", targetGrade: "2", semester: "1", category: "2-1 택2", label: "현1 → 2학년 1학기 · 2-1 택2", classes: 3,
+    courses: [{ key: "물리학", name: "물리학", credits: 3, department: "과학-물리", classCount: 1 }, { key: "화학", name: "화학", credits: 3, department: "과학-화학", classCount: 1 }] }],
+  settings: { teachers: [{ id: "c1", name: "최화학", department: "과학-화학" }, { id: "pe", name: "체육쌤", department: "체육" }, { id: "info", name: "정보쌤", department: "정보", courses: "지식 재산 일반, 발명" }],
+    fixedSlots: [] },
+  stats: { items: [item("3", "1", "지식 재산 일반", 4, 3, { department: "기술가정" }), item("3", "1", "생태와 환경", 1, 3, { department: "교양" }), item("2", "1", "물리학", 3, 1, { kind: "선택", designated: false }), item("2", "1", "화학", 3, 1, { kind: "선택", designated: false })] } });
+  const { input } = plain(ctx.timetableInput("1", "1"));
+  // 정보 교사가 담당 과목으로 기술·가정 과목을 함께 맡는다
+  assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "지식 재산 일반").teacherIds, ["info"]);
+  // 교양 과목은 담당 교과(5단계)가 교양이면 교양 교사만 후보(여기서는 없음 → '담당 교사 없음')
+  assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "생태와 환경").teacherIds, []);
+  // 6단계가 체육 교사를 물리학 분반에 붙였으면 전공 불일치 표시
+  assert.deepEqual(input.blocks[0].sections.map((section) => [section.subject, section.teacherId, section.teacherMismatch || false]), [["물리학", "pe", true], ["화학", "c1", false]]);
+  const causes = plain(ctx.timetablePrecheck(input)).issues.filter((issue) => issue.level === "fail").map((issue) => issue.cause);
+  assert.ok(causes.some((cause) => /^교양: 3학년 생태와 환경 3시간을 맡을 수 있는 교사가 명단에 없습니다 → '담당 교사 없음' 3시간/.test(cause)), causes.join("\n"));
+  assert.ok(causes.some((cause) => /^체육쌤 교사: 2학년 물리학\(2-1 택2 a블록\) 3시간은 이 교사의 담당 교과·담당 과목에 없는 수업입니다/.test(cause)), causes.join("\n"));
+  // 블록 시간 다시 놓기를 켜면 6단계 블록 시간을 넘기지 않는다
+  assert.equal(input.blocks[0].times, "월1,화2,수3");
+  const free = world({ entries, timetable: { settings: { freeBlockTimes: true } }, groups: ctx.classSectionsSource().groups });
+  assert.equal(plain(free.timetableInput("1", "1")).input.blocks[0].times, "");
+});
+
+test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효과, 적용하면 고른 내역이 남고 되돌릴 수 있다(교사를 늘리는 선택지는 없음)", () => {
+  const ctx = world();
+  const result = { counts: { block: 0, fail: 2, warn: 0, info: 0 }, issues: [
+    { id: "P6", level: "fail", cause: "3학년: 반 수업 칸 13개…", relax: ["creativeFree", "creativeGroup", "blockTimes", "oncePerDay", "gaps", "stagger"] },
+    { id: "P2", level: "fail", cause: "교양: 3학년 생태와 환경 10시간을 맡을 수 있는 교사가 명단에 없습니다", data: { department: "교양" }, relax: ["otherDepartment", "noTeacher"] },
+    { id: "P2", level: "fail", cause: "기술가정: 3학년 지식 재산 일반 16시간을 맡을 수 있는 교사가 명단에 없습니다", data: { department: "기술가정" }, relax: ["otherDepartment", "noTeacher"] },
+    { id: "P10", level: "warn", cause: "알림", relax: [] }] };
+  const prepared = { creativeTotal: 2, input: { creative: { school: 2, schoolTimes: ["금6", "금7"], grade: 0, gradeTimes: {}, byGroup: false }, blocks: [{ times: "월1" }] } };
+  const asked = [];
+  const preview = (key) => { asked.push(key); return key === "creativeGroup" ? { counts: { block: 0, fail: 1 }, issues: [result.issues[1]] } : { counts: { block: 0, fail: 2 }, issues: result.issues }; };
+  const choices = ctx.timetableChoicesFor(result, prepared, { rules: { gap: "soft" } }, preview);
+  const view = (key) => plain(choices.get(key)).map((choice) => [choice.key, choice.kind, choice.effect ? [choice.effect.solved, choice.effect.failBefore, choice.effect.failAfter] : choice.where.step]);
+  // P6: 추천 순서(양보가 작은 것부터), 이미 '최대한'인 공강은 빠짐, 반 묶음 나누기는 6단계 안내
+  assert.deepEqual(view("P6|3학년"), [["blockTimes", "setting", [false, 2, 2]], ["creativeFree", "setting", [false, 2, 2]], ["creativeGroup", "setting", [true, 2, 1]], ["oncePerDay", "setting", [false, 2, 2]], ["stagger", "link", 8]]);
+  // 교양 과목만 '다른 교과 교사가 맡기', 교양이 아닌 과목은 '담당 교사 없음'으로 두기뿐
+  assert.deepEqual(view("P2|교양"), [["otherDepartment", "link", 7], ["noTeacher", "accept", 4]]);
+  assert.deepEqual(view("P2|기술가정"), [["noTeacher", "accept", 4]]);
+  assert.equal(choices.size, 3);
+  assert.deepEqual([...new Set(asked)].sort(), ["blockTimes", "creativeFree", "creativeGroup", "oncePerDay"], "같은 선택은 한 번만 계산");
+  const labels = Object.values(vm.runInContext("TIMETABLE_CHOICES", ctx)).map((choice) => `${choice.label} ${choice.gives}`).join(" ");
+  assert.doesNotMatch(labels, /증원|강사|순회|교사를 늘/);
+  // 적용: 조건이 바뀌고 고른 내역(되돌릴 값)이 남는다 → 되돌리기
+  vm.runInContext("TIMETABLE_VIEW.prepared = " + JSON.stringify(prepared), ctx);
+  ctx.state.timetable = { settings: { rules: { run: 4 } } };
+  assert.equal(ctx.timetableApplyChoice("creativeGroup"), "선택 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
+  assert.equal(ctx.timetableApplyChoice("gaps"), "선택 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
+  const settings = plain(ctx.state.timetable.settings);
+  assert.deepEqual([settings.creative, settings.rules, settings.choices.map((entry) => [entry.key, entry.before.creative, entry.before.rules])],
+    [{ school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: true }, { run: 4, gap: "soft" }, [["creativeGroup", null, { run: 4 }], ["gaps", { school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: true }, { run: 4 }]]]);
+  assert.equal(ctx.timetableUndoChoice(), "되돌림 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
+  assert.deepEqual([plain(ctx.state.timetable.settings.rules), ctx.state.timetable.settings.choices.length], [{ run: 4 }, 1]);
+  assert.equal(ctx.timetableUndoChoice(), "되돌림 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
+  assert.deepEqual(plain(ctx.state.timetable.settings), { rules: { run: 4 } });
+  assert.equal(ctx.timetableUndoChoice(), "");
 });

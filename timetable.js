@@ -4,15 +4,17 @@
 
 // "hard" = 반드시(해가 없을 때만 완화 사다리에서 풂), "soft" = 최대한, "off" = 끔.
 const TIMETABLE_DEFAULT_RULES = {
-  maxHours: 22,        // 교사 주당 시수 상한(학기별). 교사별 maxHours가 있으면 그 값
+  maxHours: 22,        // 교사 주당 시수 '참고' 상한(학기별): 넘어도 편성하고 알림만(5단계 교사 수가 두 학기 평균 기준이라 필수가 아님)
+  departmentMax: { 진로: 10 }, // 교과별 필수 상한(진로 교사 10시간). 교사 명단에 교사별 상한이 있으면 그 값이 먼저
   run: 3,              // 연강 상한(실제 시각 축에서 연속 수업 수)
   maxPerDay: 6,        // 교사 하루 최대 수업 수
   gap: "hard",         // 반 공강 금지(하루 안 빈칸은 뒤쪽만)
-  oncePerDay: "hard",  // 한 반의 한 과목은 하루 1번
+  oncePerDay: "hard",  // 같은 교사가 같은 반(분반)에 하루 두 번 들어가지 않음(과목이 달라도, 교사가 다른 조각은 같은 날 가능)
   lunch: "hard",       // 교사 점심(학년별 점심 칸 중 하나는 비움)
   lunchSide: "soft",   // 점심 앞뒤 한 시간씩 공강
   sameSubjectDay: "soft", // 교사 기준 같은 날 같은 과목 최소화
-  homeroom: "off"      // 담임이 그 학년 반 수업을 맡으면 담임반 포함(담임 명단이 있을 때만)
+  homeroom: "off",     // 담임이 그 학년 반 수업을 맡으면 담임반 포함(담임 명단이 있을 때만)
+  semesterFrame: "hard" // 2학기는 1학기와 같은 뼈대(블록 자리, 이어지는 과목의 교사–반 짝과 요일·교시)
 };
 
 // 고칠 곳: step = 내부 단계 번호(1 편제표, 4 집계, 7 = 5단계 시수, 8 = 6단계 분반, 6 = 7단계 시간표).
@@ -185,6 +187,7 @@ function timetableDayCapacity(available, positions, rules, lunchPositions) {
 // }
 function timetableModel(input = {}) {
   const rules = { ...TIMETABLE_DEFAULT_RULES, ...(input.rules || {}) };
+  rules.departmentMax = { ...TIMETABLE_DEFAULT_RULES.departmentMax, ...(input.rules?.departmentMax || {}) };
   const days = (Array.isArray(input.days) ? input.days : String(input.days || "월,화,수,목,금").split(/[,\s]+/)).map(String).filter(Boolean);
   const basePeriods = Math.min(12, timetableNumber(input.periods, 7));
   const periodsOf = Object.fromEntries(days.map((day) => [day, Math.min(12, timetableNumber(input.periodsByDay?.[day], basePeriods))]));
@@ -239,7 +242,8 @@ function timetableModel(input = {}) {
     const attend = Array.isArray(teacher.days) && teacher.days.length ? new Set(teacher.days.map(String)) : null;
     if (attend) days.forEach((day, d) => { if (!attend.has(day)) for (let pos = 0; pos < positions; pos += 1) blocked.add(d * positions + pos); });
     return { id: String(teacher.id), name: String(teacher.name || teacher.id), departments: (teacher.departments || []).map(String), courses: (teacher.courses || []).map(String),
-      maxHours: timetableNumber(teacher.maxHours, rules.maxHours), blocked, placeholder: Boolean(teacher.placeholder), homeroom: teacher.homeroom ? String(teacher.homeroom) : "" };
+      maxHours: timetableNumber(teacher.maxHours, 0) || Math.min(Infinity, ...(teacher.departments || []).map((department) => timetableNumber(rules.departmentMax?.[department], Infinity))), // 필수 상한(없으면 Infinity)
+      softHours: timetableNumber(rules.maxHours, Infinity), ownMax: timetableNumber(teacher.maxHours, 0) > 0, blocked, placeholder: Boolean(teacher.placeholder), homeroom: teacher.homeroom ? String(teacher.homeroom) : "" };
   });
   const teacherOf = new Map(teachers.map((teacher) => [teacher.id, teacher]));
   const candidatesFor = (item, fixedId) => {
@@ -264,7 +268,7 @@ function timetableModel(input = {}) {
         const candidates = candidatesFor(merged, fixedId);
         lessons.push({ id: `${lesson.id || `L${index + 1}`}@${classId}${part ? `#${partIndex + 1}` : ""}`, grade: grade.grade, classId, subject: String(lesson.subject || ""),
           department: String(merged.department || ""), hours, candidates, fixedTeacher: fixedId && candidates.length === 1 ? candidates[0] : "", unknownTeacher: Boolean(fixedId) && !candidates.length,
-          venue: String(lesson.venue || ""), double: Boolean(lesson.double), part: part ? partIndex + 1 : 0 });
+          venue: String(lesson.venue || ""), double: Boolean(lesson.double), part: part ? partIndex + 1 : 0, mismatch: Boolean(lesson.teacherMismatch) && Boolean(fixedId) });
       });
     }
   });
@@ -278,7 +282,7 @@ function timetableModel(input = {}) {
     const sections = (block.sections || []).map((section, order) => {
       const candidates = candidatesFor(section);
       return { id: String(section.id || `${block.id || index + 1}-${order + 1}`), subject: String(section.subject || ""), department: String(section.department || ""),
-        credits: timetableNumber(section.credits, 0), candidates, fixedTeacher: section.teacherId && candidates.length === 1 ? candidates[0] : "", unknownTeacher: Boolean(section.teacherId) && !candidates.length, venue: String(section.venue || "") };
+        credits: timetableNumber(section.credits, 0), candidates, fixedTeacher: section.teacherId && candidates.length === 1 ? candidates[0] : "", unknownTeacher: Boolean(section.teacherId) && !candidates.length, venue: String(section.venue || ""), mismatch: Boolean(section.teacherMismatch) && Boolean(section.teacherId) };
     });
     const hours = timetableNumber(block.hours, Math.max(0, ...sections.map((section) => section.credits)) || times.length);
     for (const section of sections) section.hours = section.credits || hours;
@@ -386,16 +390,20 @@ function timetablePrecheck(source) {
       });
       slotCapacity = Math.max(0, slotCapacity - homeroomDuty(teacher));
     }
+    // 필수 한계 = 그 교사가 설 수 있는 칸 수(불가 시간·점심·연강)와 필수 상한(진로 교사 등). 참고 상한(22)은 넘어도 알림만.
     const capacity = Math.min(teacher.maxHours, slotCapacity);
     capacityOf.set(teacher.id, capacity);
     const fixed = fixedHours.get(teacher.id) || 0;
-    teacherRows.push({ id: teacher.id, name: teacher.name, maxHours: teacher.maxHours, slotCapacity, capacity, fixedHours: fixed });
+    teacherRows.push({ id: teacher.id, name: teacher.name, maxHours: Number.isFinite(teacher.maxHours) ? teacher.maxHours : null, softHours: Number.isFinite(teacher.softHours) ? teacher.softHours : null, slotCapacity, capacity, fixedHours: fixed });
+    const labels = () => [...(fixedLabels.get(teacher.id) || new Map()).entries()].map(([label, hours]) => `${label} ${hours}`);
     if (fixed > capacity) {
-      const labels = [...(fixedLabels.get(teacher.id) || new Map()).entries()].map(([label, hours]) => `${label} ${hours}`);
-      const byTime = slotCapacity < teacher.maxHours;
-      add("P3", "fail", byTime ? `${teacher.name} 교사: 배정 ${fixed}시간(${joinNames(labels)})인데 불가 시간·출근 요일·점심·연강을 빼면 주 ${slotCapacity}시간까지만 수업할 수 있습니다.`
-        : `${teacher.name} 교사: 배정 ${fixed}시간(${joinNames(labels)})이 상한 ${teacher.maxHours}시간을 넘습니다.`,
-      [timetableWhere("sections", "분반 교사"), byTime ? timetableWhere("teachers", "불가 시간") : timetableWhere("rules", "교사 시수 상한")], { data: { teacher: teacher.id, fixed, capacity }, relax: byTime ? ["teacherless"] : ["overHours", "teacherless"] });
+      const byTime = slotCapacity <= teacher.maxHours;
+      add("P3", "fail", byTime ? `${teacher.name} 교사: 배정 ${fixed}시간(${joinNames(labels())})인데 불가 시간·출근 요일·점심·연강을 빼면 주 ${slotCapacity}시간까지만 수업할 수 있습니다.`
+        : `${teacher.name} 교사: 배정 ${fixed}시간(${joinNames(labels())})이 필수 상한 ${teacher.maxHours}시간을 넘습니다.`,
+      [timetableWhere("sections", "분반 교사"), byTime ? timetableWhere("teachers", "불가 시간") : timetableWhere("rules", "교과별 필수 상한")], { data: { teacher: teacher.id, fixed, capacity }, relax: byTime ? ["teacherRules", "noTeacher"] : ["noTeacher"] });
+    } else if (fixed > teacher.softHours) {
+      add("P3", "warn", `${teacher.name} 교사: 배정 ${fixed}시간(${joinNames(labels())})이 참고 상한 ${teacher.softHours}시간을 넘습니다(필수 조건은 아니어서 편성은 됩니다).`,
+        [timetableWhere("sections", "분반 교사"), timetableWhere("rules", "참고 상한")], { data: { teacher: teacher.id, fixed, soft: teacher.softHours } });
     }
   }
 
@@ -419,20 +427,45 @@ function timetablePrecheck(source) {
   for (const lesson of model.lessons) demand(lesson, lesson.hours, `${lesson.grade}학년 ${lesson.subject}`, lesson.department);
   for (const block of model.blocks) for (const section of block.sections) demand(section, section.hours, `${block.grade}학년 ${section.subject}`, section.department);
   for (const [key, entry] of noTeacher) {
-    add("P2", "fail", `${key}: ${joinNames([...entry.labels])} ${entry.hours}시간을 맡을 교사가 명단에 없습니다 → '교사 미정' ${entry.hours}시간.`, [timetableWhere("teachers", "담당 교과·과목"), timetableWhere("hours", "교사 수")],
-      { data: { department: key, hours: entry.hours }, relax: ["teacherless"] });
+    add("P2", "fail", `${key}: ${joinNames([...entry.labels])} ${entry.hours}시간을 맡을 수 있는 교사가 명단에 없습니다 → '담당 교사 없음' ${entry.hours}시간(교사 명단의 담당 교과·담당 과목, 5단계 담당 교과를 확인하세요).`,
+      [timetableWhere("teachers", "담당 교과·과목"), timetableWhere("hours", "담당 교과")], { data: { department: key, hours: entry.hours }, relax: ["otherDepartment", "noTeacher"] });
   }
-  const coverage = timetableCoverage([...demandGroups.values()], (id) => capacityOf.get(id));
-  const overloaded = new Set(issues.filter((issue) => issue.id === "P3").map((issue) => issue.data.teacher));
-  for (const cluster of coverage.clusters) {
-    if (cluster.teachers.length === 1 && overloaded.has(cluster.teachers[0])) continue; // P3에서 이미 알림
-    const departments = [...new Set(cluster.groups.flatMap((group) => [...group.departments]))];
-    const capacities = cluster.teachers.map((id) => capacityOf.get(id));
+  // 전공 일치(절대): 담당 교과·담당 과목에 없는 수업을 맡은 교사(교양 과목만 다른 교과 교사가 맡을 수 있다)
+  const mismatched = new Map();
+  const noteMismatch = (item, label) => { if (item.mismatch && item.fixedTeacher) { const key = `${item.fixedTeacher}|${label}`; mismatched.set(key, { teacher: item.fixedTeacher, label, hours: (mismatched.get(key)?.hours || 0) + item.hours }); } };
+  for (const lesson of model.lessons) noteMismatch(lesson, `${lesson.grade}학년 ${lesson.subject}`);
+  for (const block of model.blocks) for (const section of block.sections) noteMismatch(section, `${block.grade}학년 ${section.subject}(${block.label})`);
+  for (const entry of mismatched.values()) {
+    add("P2", "fail", `${nameOf(entry.teacher)} 교사: ${entry.label} ${entry.hours}시간은 이 교사의 담당 교과·담당 과목에 없는 수업입니다(교양 과목만 다른 교과 교사가 맡을 수 있습니다).`,
+      [timetableWhere("sections", "분반 교사"), timetableWhere("teachers", "담당 과목")], { data: { teacher: entry.teacher, hours: entry.hours }, relax: ["noTeacher"] });
+  }
+  const supplyText = (cluster, capacityFor) => {
+    const capacities = cluster.teachers.map(capacityFor);
     const same = capacities.every((value) => value === capacities[0]);
-    const supply = same ? `${cluster.teachers.length}명 × ${capacities[0]} = ${cluster.capacity}시간` : `${cluster.teachers.length}명 합 ${cluster.capacity}시간`;
-    add("P2", "fail", `${joinNames(departments.length ? departments : ["교과 미정"])}: 교사 ${supply} < 이번 학기 수업 ${cluster.demand}시간(${cluster.shortage}시간 초과).`,
-      [timetableWhere("hours", "교사 수"), timetableWhere("teachers", "담당 교과·과목"), timetableWhere("rules", "교사 시수 상한")],
-      { data: { departments, teachers: cluster.teachers, demand: cluster.demand, capacity: cluster.capacity, shortage: cluster.shortage }, relax: ["overHours", "teacherless"] });
+    return same ? `${cluster.teachers.length}명 × ${capacities[0]} = ${cluster.capacity}시간` : `${cluster.teachers.length}명 합 ${cluster.capacity}시간`;
+  };
+  const departmentsOf = (cluster) => [...new Set(cluster.groups.flatMap((group) => [...group.departments]))];
+  const groupsList = [...demandGroups.values()];
+  const hardKeys = new Set();
+  const coverage = timetableCoverage(groupsList, (id) => capacityOf.get(id));
+  const overloaded = new Set(issues.filter((issue) => issue.id === "P3" && issue.level === "fail").map((issue) => issue.data.teacher));
+  for (const cluster of coverage.clusters) {
+    cluster.teachers.forEach((id) => hardKeys.add(id));
+    if (cluster.teachers.length === 1 && overloaded.has(cluster.teachers[0])) continue; // P3에서 이미 알림
+    const departments = departmentsOf(cluster);
+    add("P2", "fail", `${joinNames(departments.length ? departments : ["교과 미정"])}: 맡을 수 있는 교사가 설 수 있는 시간 ${supplyText(cluster, (id) => capacityOf.get(id))} < 이번 학기 수업 ${cluster.demand}시간(${cluster.shortage}시간은 넣을 수 없음).`,
+      [timetableWhere("teachers", "담당 교과·과목·불가 시간"), timetableWhere("hours", "담당 교과"), timetableWhere("rules", "교사 규칙")],
+      { data: { departments, teachers: cluster.teachers, demand: cluster.demand, capacity: cluster.capacity, shortage: cluster.shortage }, relax: ["teacherRules", "otherDepartment", "noTeacher"] });
+  }
+  // 참고 상한(기본 22시간): 넘어도 편성은 하지만 어느 교과가 얼마나 넘는지 알린다.
+  const softOf = (id) => Math.min(capacityOf.get(id), model.teacherOf.get(id)?.softHours ?? Infinity);
+  for (const cluster of timetableCoverage(groupsList, softOf).clusters) {
+    if (cluster.teachers.some((id) => hardKeys.has(id))) continue;
+    if (cluster.teachers.length === 1 && issues.some((issue) => issue.id === "P3" && issue.data?.teacher === cluster.teachers[0])) continue; // P3에서 이미 알림
+    const departments = departmentsOf(cluster);
+    add("P2", "warn", `${joinNames(departments.length ? departments : ["교과 미정"])}: 교사 ${supplyText(cluster, softOf)} < 이번 학기 수업 ${cluster.demand}시간 — 참고 상한을 ${cluster.shortage}시간 넘습니다(1인당 약 ${round1(cluster.demand / cluster.teachers.length)}시간, 필수 조건은 아니어서 편성은 됩니다).`,
+      [timetableWhere("hours", "교사 수·담당 교과"), timetableWhere("rules", "참고 상한")],
+      { data: { departments, teachers: cluster.teachers, demand: cluster.demand, capacity: cluster.capacity, shortage: cluster.shortage } });
   }
 
   // P4 블록 안 동시 분반 ≤ 맡을 수 있는 교사(이분 매칭), 같은 시각에 놓인 다른 학년 블록까지
@@ -449,7 +482,7 @@ function timetablePrecheck(source) {
     }
     const detail = [...bySubject.entries()].filter(([, entry]) => entry.count > entry.teachers.size).map(([subject, entry]) => `${subject} ${entry.count}분반인데 맡을 수 있는 교사 ${entry.teachers.size}명`);
     add("P4", "fail", `${block.grade}학년 ${block.label}: ${detail.length ? detail.join(", ") : `분반 ${block.sections.length}개 가운데 ${result.size}개만 서로 다른 교사를 붙일 수 있습니다`} — 같은 시간에 열 수 없습니다.`,
-      [timetableWhere("sections", "분반을 다른 블록으로"), timetableWhere("teachers", "담당 과목"), timetableWhere("hours", "교사 수")], { data: { block: block.id, short }, relax: ["teacherless"] });
+      [timetableWhere("sections", "분반을 다른 블록으로"), timetableWhere("teachers", "담당 과목")], { data: { block: block.id, short }, relax: ["sectionsMove", "noTeacher"] });
   }
   const blocksAt = new Map();
   for (const block of model.blocks) {
@@ -481,7 +514,7 @@ function timetablePrecheck(source) {
   const onceHard = rules.oncePerDay === "hard";
   for (const block of model.blocks) {
     const grade = model.gradeOf.get(block.grade);
-    if (onceHard && block.hours > days.length) add("P5", "fail", `${block.grade}학년 ${block.label}: 주 ${block.hours}시간인데 요일은 ${days.length}일 — 하루 1번 규칙을 지킬 수 없습니다.`, timetableWhere("rules", "하루 1번"), { relax: ["oncePerDay"] });
+    if (onceHard && block.hours > days.length) add("P5", "fail", `${block.grade}학년 ${block.label}: 주 ${block.hours}시간인데 요일은 ${days.length}일 — 같은 교사가 같은 분반에 하루 두 번 들어갈 수밖에 없습니다.`, timetableWhere("rules", "같은 교사 하루 한 번"), { relax: ["oncePerDay"] });
     if (!block.times.length) continue;
     if (block.times.length !== block.hours) add("P5", "warn", `${block.grade}학년 ${block.label}: 블록 시간 ${block.times.length}칸 ≠ 시수 ${block.hours}시간(시간표에서 다시 놓습니다).`, timetableWhere("sections", "블록 시간"));
     const outside = block.times.filter((time) => !grade.slotByKey.has(`${time.day}${time.period}`));
@@ -490,7 +523,7 @@ function timetablePrecheck(source) {
     if (busy.length) add("P5", "fail", `${block.grade}학년 ${block.label}: ${busy.map((time) => `${time.day}${time.period}`).join(", ")}은 전교 고정 시간(창체·회의)과 겹칩니다.`, [timetableWhere("sections", "블록 시간"), timetableWhere("time", "창체·고정 시간")], { relax: ["blockTimes"] });
     const perDay = new Map();
     for (const time of block.times) perDay.set(time.day, (perDay.get(time.day) || 0) + 1);
-    if (onceHard && [...perDay.values()].some((count) => count > 1)) add("P5", "warn", `${block.grade}학년 ${block.label}: 같은 날 두 번 들어 있습니다(하루 1번 규칙).`, timetableWhere("sections", "블록 시간"), { relax: ["blockTimes"] });
+    if (onceHard && [...perDay.values()].some((count) => count > 1)) add("P5", "warn", `${block.grade}학년 ${block.label}: 같은 날 두 번 들어 있습니다(같은 교사 하루 한 번 규칙).`, timetableWhere("sections", "블록 시간"), { relax: ["blockTimes"] });
   }
   for (const grade of model.grades) {
     const taken = new Map();
@@ -515,9 +548,21 @@ function timetablePrecheck(source) {
     }
     if (worst && worst.clique.length > 1 && worst.hours > week && new Set(worst.clique.map((item) => item.block.grade)).size > 1) {
       add("P5", "fail", `블록 ${worst.clique.length}개(${joinNames(worst.clique.map((item) => `${item.block.grade}학년 ${item.block.label}`))})가 같은 교사를 써서 서로 다른 시간이어야 하는데, 모두 ${worst.hours}칸이 필요합니다(주 ${week}칸).`,
-        [timetableWhere("sections", "분반 교사")], { data: { hours: worst.hours, week }, relax: ["teacherless"] });
+        [timetableWhere("sections", "분반 교사")], { data: { hours: worst.hours, week }, relax: ["sectionsMove", "noTeacher"] });
     }
   }
+
+  // 같은 교사가 같은 반에 들어가는 수업끼리 묶는다(교사가 정해진 수업은 그 교사로, 아니면 수업 하나씩).
+  const pairsOfClass = (classId) => {
+    const pairs = new Map();
+    for (const lesson of lessonsOfClass.get(classId) || []) {
+      const key = lesson.fixedTeacher ? `t:${lesson.fixedTeacher}` : `l:${lesson.id}`;
+      const entry = pairs.get(key) || { teacher: lesson.fixedTeacher, hours: 0, double: false, subjects: new Set() };
+      entry.hours += lesson.hours; entry.double = entry.double || lesson.double; entry.subjects.add(lesson.subject);
+      pairs.set(key, entry);
+    }
+    return [...pairs.values()];
+  };
 
   // P6·P7 학년(반군) 반 수업 동시성, 교사 한 명에 몰린 반 수업
   const gapHard = rules.gap === "hard";
@@ -546,14 +591,12 @@ function timetablePrecheck(source) {
       const row = gradeRows.find((item) => item.grade === grade.grade);
       if (row && row.free === undefined) Object.assign(row, { free, classTeachers: teacherSet.size, simultaneous });
       if (!simultaneous || simultaneous >= classIds.length) continue;
-      // 한 반이 하루에 받을 수 있는 반 수업 수(같은 과목 하루 1번이면 과목 수만큼)
+      // 한 반이 하루에 받을 수 있는 반 수업 수(같은 교사가 같은 반에 하루 한 번이면 교사 수만큼 — 교사가 정해지지 않은 수업은 서로 다른 교사로 본다)
       let perDay = Infinity;
       if (onceHard) {
         perDay = 0;
         for (const classId of classIds) {
-          const bySubject = new Map();
-          for (const lesson of lessonsOfClass.get(classId) || []) bySubject.set(lesson.subject, { hours: (bySubject.get(lesson.subject)?.hours || 0) + lesson.hours, double: lesson.double || bySubject.get(lesson.subject)?.double });
-          perDay = Math.max(perDay, sum([...bySubject.values()], (item) => Math.max(item.double ? 2 : 1, Math.ceil(item.hours / days.length))));
+          perDay = Math.max(perDay, sum(pairsOfClass(classId), (item) => Math.max(item.double ? 2 : 1, Math.ceil(item.hours / days.length))));
         }
       }
       // 반군별 창체가 허용돼 있으면 학년별 창체는 반마다 다른 시간에 둘 수 있다 → 동시 활동(블록·전교 창체)에서 빼고 반 수업 칸에 넣는다.
@@ -608,12 +651,12 @@ function timetablePrecheck(source) {
         const cause = (!plan.possible
           ? `${label}: ${span}가 하루 가운데에 생길 수밖에 없는데, 그 칸에 ${classIds.length}반을 동시에 가르칠 교사는 ${simultaneous}명뿐입니다 → 공강이 생깁니다.`
           : `${label}: ${span}에 ${classIds.length}반이 ${each}시간씩(모두 ${need}시간) 들어가야 하는데, 같은 시간에 가르칠 수 있는 교사는 ${simultaneous}명뿐이라 최대 ${plan.capacity}시간만 들어갑니다`
-            + `${tail !== null ? `(한 반은 하루 ${perDay}시간까지, 하루 끝 쪽 ${tail}칸 × ${simultaneous}명)` : ""}.`)
+            + `${tail !== null ? `(한 반은 하루 ${perDay}시간까지 — 같은 교사는 하루 한 번, 하루 끝 쪽 ${tail}칸 × ${simultaneous}명)` : ""}.`)
           + (movable ? " 블록 시간을 다시 놓으면 이 점검은 통과합니다." : "");
-        add("P6", "fail", cause, movable ? [timetableWhere("sections", "블록 시간"), timetableWhere("ladder", "블록 시간 다시 놓기")]
-          : [timetableWhere("ladder", "반군별 창체 · 반군 엇갈림 블록 · 공강 허용"), timetableWhere("teachers", "반 수업 담당 교사 늘리기"), timetableWhere("time", "창체 시간")],
+        add("P6", "fail", cause, movable ? [timetableWhere("sections", "블록 시간"), timetableWhere("time", "블록 시간 다시 놓기")]
+          : [timetableWhere("time", "창체 시간"), timetableWhere("rules", "공강·하루 한 번"), timetableWhere("teachers", "반 수업 과목의 담당 교과·과목")],
         { data: { grade: grade.grade, classes: classIds.length, free: lessonFree, need, simultaneous, perDay: Number.isFinite(perDay) ? perDay : null, tailTotal: tail, capacity: plan.capacity },
-          relax: movable ? ["blockTimes"] : ["creativeGroup", "stagger", "gaps", "teacherless"] });
+          relax: movable ? ["blockTimes"] : ["creativeFree", "creativeGroup", "blockTimes", "oncePerDay", "gaps", "stagger"] });
       }
     }
     // 반군이 여럿이면 교사는 다른 반군이 블록일 때도 반 수업을 할 수 있다 → 모든 반이 함께 듣는 블록만 뺀다.
@@ -635,20 +678,22 @@ function timetablePrecheck(source) {
         const subjects = [...new Set(cluster.groups.flatMap((group) => [...group.labels.keys()]))];
         const count = cluster.teachers.length;
         const cause = count === 1
-          ? `${nameOf(cluster.teachers[0])} 교사: ${grade.grade}학년 반 수업 ${joinNames(subjects)} ${cluster.demand}시간인데 ${grade.grade}학년 반 수업 칸은 ${widest}개입니다(한 칸에 한 반만 가르칠 수 있음) → ${cluster.shortage}시간은 다른 교사가 맡아야 합니다.`
-          : `${grade.grade}학년 ${joinNames([...new Set(cluster.groups.flatMap((group) => [...group.departments]))])}: 반 수업 ${joinNames(subjects)} ${cluster.demand}시간 ÷ 교사 ${count}명 = ${round1(cluster.demand / count)}시간이 반 수업 칸 ${widest}칸보다 많습니다 → 최소 ${Math.ceil(cluster.demand / widest)}명 필요.`;
-        add("P7", "fail", cause, [timetableWhere("sections", "교사 배정(나눠 맡기)"), timetableWhere("hours", "교사 수"), timetableWhere("ladder", "반군 엇갈림 블록")],
-          { data: { grade: grade.grade, teachers: cluster.teachers, demand: cluster.demand, free: widest, shortage: cluster.shortage, need: Math.ceil(cluster.demand / widest) }, relax: ["stagger", "teacherless"] });
+          ? `${nameOf(cluster.teachers[0])} 교사: ${grade.grade}학년 반 수업 ${joinNames(subjects)} ${cluster.demand}시간인데 ${grade.grade}학년 반 수업 칸은 ${widest}개입니다(한 칸에 한 반만 가르칠 수 있음) → ${cluster.shortage}시간은 넣을 수 없습니다.`
+          : `${grade.grade}학년 ${joinNames([...new Set(cluster.groups.flatMap((group) => [...group.departments]))])}: 교사 ${count}명으로는 반 수업 칸 ${widest}개에 ${joinNames(subjects)} ${cluster.demand}시간을 넣을 수 없습니다(한 칸에 한 반, ${count}명 × ${widest}칸 = ${count * widest}시간) → ${cluster.shortage}시간이 남습니다.`;
+        add("P7", "fail", cause, [timetableWhere("time", "창체·블록 시간(반 수업 칸 늘리기)"), timetableWhere("sections", "같은 전공 교사끼리 나눠 맡기"), timetableWhere("aggregate", "개설 학급 수·개설 학기")],
+          { data: { grade: grade.grade, teachers: cluster.teachers, demand: cluster.demand, free: widest, shortage: cluster.shortage, capacity: count * widest }, relax: ["creativeGroup", "stagger", "sectionsMove", "noTeacher"] });
       }
     }
     if (onceHard) {
+      // 같은 교사가 한 반에 주 (요일 수)시간보다 많이 들어가면 같은 날 두 번이 불가피하다.
       const long = new Map();
-      for (const classId of grade.classes) {
-        const bySubject = new Map();
-        for (const lesson of lessonsOfClass.get(classId) || []) if (!lesson.double) bySubject.set(lesson.subject, (bySubject.get(lesson.subject) || 0) + lesson.hours);
-        for (const [subject, hours] of bySubject) if (hours > days.length) long.set(subject, hours);
+      for (const classId of grade.classes) for (const pair of pairsOfClass(classId)) {
+        if (pair.double || pair.hours <= days.length) continue;
+        const label = `${pair.teacher ? `${nameOf(pair.teacher)} 교사 ` : ""}${[...pair.subjects].join("·")}`;
+        long.set(label, pair.hours);
       }
-      for (const [subject, hours] of long) add("P7", "warn", `${grade.grade}학년 ${subject}: 주 ${hours}시간이라 하루 1번 규칙을 지킬 수 없습니다(이 과목만 하루 2번 허용).`, timetableWhere("rules", "하루 1번"), { relax: ["oncePerDay"] });
+      for (const [label, hours] of long) add("P7", "fail", `${grade.grade}학년 ${label}: 한 반에 주 ${hours}시간이라 같은 교사가 같은 날 두 번 들어갈 수밖에 없습니다(요일 ${days.length}일).`,
+        [timetableWhere("rules", "같은 교사 하루 한 번"), timetableWhere("sections", "교사 나눠 맡기")], { data: { grade: grade.grade, hours }, relax: ["oncePerDay"] });
     }
   }
 
@@ -695,6 +740,7 @@ function timetablePrecheck(source) {
   }
   const placeholders = model.teachers.filter((teacher) => teacher.placeholder).length;
   if (placeholders) add("P10", "warn", `실제 이름이 아닌 교사 ${placeholders}명(5단계 교사 수로 만든 자리) — 불가 시간·출근 요일을 모릅니다.`, timetableWhere("teachers", "교사 명단"));
+  for (const item of model.notes.teacherCounts || []) add("P10", "warn", `${item}`, [timetableWhere("teachers", "교사 명단"), timetableWhere("hours", "교사 수")]);
   if (model.notes.expandedClasses) add("P10", "warn", "5단계 확대학급(수준별 이동수업)이 켜져 있습니다 — 시간표에는 아직 반영하지 않습니다(5단계 시수와 어긋날 수 있음).", timetableWhere("hours", "확대학급"));
   for (const item of model.notes.undecided || []) add("P10", "warn", `${item}: 개설 학기가 정해지지 않아 시간표에 넣지 않았습니다.`, timetableWhere("aggregate", "개설 학기"));
   for (const item of model.notes.staleSections || []) add("P10", "warn", `${item}: 분반 편성 입력이 바뀌었습니다(6단계에서 다시 계산).`, timetableWhere("sections"));
