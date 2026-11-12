@@ -116,6 +116,7 @@
 
 - 검사: 5단계 그 학기 시수 합 = 7단계(반 수업 + 블록 분반) 시수 합 — `tests/timetable-input.test.cjs`, 하네스 백업은 `e2e/timetable-input-check.cjs`. 선택과목은 학년마다 5단계 시수와 6단계 분반 시수를 대조해 다르면 사전 점검 경고(P0)로 알린다(예: 4단계 2반인 학급 단위 과목을 6단계가 6개 반에 배정).
 - 남은 한계: 한 그룹에서 일부 과목만 학급 단위이면 학급 단위 반이 빠지는 블록을 구분하지 못한다(경고로 알림).
+- 계산 결과: `state.timetable[차수] = { at, seconds, tried, stopped, signature, validation, result }` — `result.layers[학기]`의 `lessons[수업@반] = { slots, teacherId, bareSlots? }`·`blocks[블록] = { slots, teachers: { 분반: 교사 }, timesOverridden? }`·`creative`, `violations`(못 지킨 설정 조건), `noTeacher`(담당 교사 없음), `metrics`. `signature` = 계산 때의 두 학기 입력 서명(`timetableSignature`) — 지금 입력과 다르면 화면에 '바뀌기 전 결과'. 교사·반은 id만 저장하고 이름은 화면에서 6단계 명단으로 읽는다(학생 자료 없음).
 - 6단계 '시간표 미리 점검'(`sectionResult.timetableCheck`)의 규칙은 `timetable.js` `timetablePrecheckDepartments` 한 곳(6단계 화면은 부르기만).
 
 ## 남긴 것

@@ -2351,6 +2351,24 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-goto { padding:2px 8px; border:1px solid #c9d3e6; border-radius:999px; background:#fff; color:var(--blue); font-size:12px; cursor:pointer; }
     .tt-goto:hover { background:#eef3ff; }
     .tt-info { margin-top:8px; font-size:12px; }
+    .tt-run { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin:10px 0; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+    .tt-run[data-state="running"] { background:#f4f7ff; border-color:#c9d8f7; }
+    .tt-run-progress { display:flex; flex:1 1 320px; align-items:center; gap:10px; font-size:13px; }
+    .tt-run-progress progress { width:180px; height:10px; }
+    .tt-result .tt-verdict { margin-top:0; }
+    .tt-grid-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin:8px 0; font-size:13px; }
+    .tt-grid-tools .tt-presets { flex-basis:auto; }
+    .tt-grid { width:100%; table-layout:fixed; }
+    .tt-grid th:first-child { width:120px; background:#f5f7fb; font-size:12px; }
+    .tt-grid td { height:44px; vertical-align:middle; padding:3px 4px; }
+    .tt-grid td[data-clash] { outline:2px solid #d9534f; outline-offset:-2px; }
+    .tt-grid .tt-lunch th, .tt-grid .tt-lunch td { height:14px; padding:0; background:#f1f3f8; font-size:11px; color:#6a768c; }
+    .tt-cell-entry { display:block; line-height:1.25; font-size:12px; }
+    .tt-cell-entry strong { display:block; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tt-cell-entry small { display:block; color:#6a768c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tt-cell-entry[data-kind="block"] strong { color:#2c5fb8; }
+    .tt-cell-entry[data-kind="creative"] strong { color:#1f6a45; }
+    .tt-cell-entry[data-no-teacher] small { color:#a44939; font-weight:700; }
     .tt-table { border-collapse:collapse; font-size:13px; }
     .tt-table th, .tt-table td { padding:5px 10px; border:1px solid var(--line); text-align:center; }
     .tt-table thead th { background:#f5f7fb; font-size:12px; }

@@ -856,18 +856,41 @@ function timetableViolations(state) {
       if (twice.length && levelOf("oncePerDay") !== "off") out.push({ semester, rule: "oncePerDay", level: levelOf("oncePerDay"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: twice.length,
         cause: `${P.classIds[ci]}반 ${P.days[d]}요일: ${[...new Set(twice)].join(", ")} 수업이 하루에 두 번 있습니다.` });
     }
-    for (let ti = 0; ti < P.T; ti += 1) for (let d = 0; d < P.D; d += 1) {
+    for (let ti = 0; ti < P.T; ti += 1) {
+      const sideDays = []; // '최대한' 조건은 교사마다 한 줄로 모은다(점심 앞뒤 수업, 같은 날 같은 과목)
+      const sameDays = [];
+      const name = P.teacherName[ti];
+      for (let d = 0; d < P.D; d += 1) {
       const base = ti * P.ABS + d * P.positions;
       const busy = state.tAt[layer];
       let count = 0; let streak = 0; let over = 0; let longest = 0;
       for (let pos = 0; pos < P.positions; pos += 1) { if (busy[base + pos] !== -1) { count += 1; streak += 1; longest = Math.max(longest, streak); if (streak > P.runLimit) over += 1; } else streak = 0; }
       if (!count) continue;
-      const name = P.teacherName[ti];
+      if (P.weights.lunchSide && P.lunchPositions.length) {
+        let side = 99;
+        for (const pos of P.lunchPositions) { if (busy[base + pos] !== -1) continue; side = Math.min(side, (pos > 0 && busy[base + pos - 1] !== -1 ? 1 : 0) + (pos + 1 < P.positions && busy[base + pos + 1] !== -1 ? 1 : 0)); }
+        if (side === 2) sideDays.push(P.days[d]);
+      }
+      if (P.weights.sameSubject) {
+        const seen = new Set();
+        let same = false;
+        for (let pos = 0; pos < P.positions; pos += 1) {
+          const a = busy[base + pos];
+          if (a === -1 || P.acts[a].kind !== 0) continue;
+          const key = P.acts[a].subject[P.acts[a].layers.indexOf(layer)];
+          if (seen.has(key) && busy[base + pos - 1] !== a) same = true;
+          seen.add(key);
+        }
+        if (same) sameDays.push(P.days[d]);
+      }
       if (over) out.push({ semester, rule: "run", level: "hard", kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: over, cause: `${name} 교사 ${P.days[d]}요일 ${longest}시간 연강(상한 ${P.runLimit}).` });
       if (count > P.dayLimit) out.push({ semester, rule: "maxPerDay", level: "hard", kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: count - P.dayLimit, cause: `${name} 교사 ${P.days[d]}요일 ${count}시간(하루 최대 ${P.dayLimit}).` });
       if (P.lunchPositions.length && P.lunchPositions.every((pos) => busy[base + pos] !== -1) && levelOf("lunch") !== "off") {
         out.push({ semester, rule: "lunch", level: levelOf("lunch"), kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: 1, cause: `${name} 교사 ${P.days[d]}요일 점심 시간이 없습니다(학년별 점심 칸에 모두 수업).` });
       }
+      }
+      if (sideDays.length) out.push({ semester, rule: "lunchSide", level: levelOf("lunchSide") === "hard" ? "hard" : "soft", kind: "teacher", id: P.teacherIds[ti], day: sideDays.join("·"), amount: sideDays.length, cause: `${name} 교사 ${sideDays.join("·")}요일: 점심 바로 앞뒤로 모두 수업이 있습니다.` });
+      if (sameDays.length) out.push({ semester, rule: "sameSubjectDay", level: levelOf("sameSubjectDay") === "hard" ? "hard" : "soft", kind: "teacher", id: P.teacherIds[ti], day: sameDays.join("·"), amount: sameDays.length, cause: `${name} 교사 ${sameDays.join("·")}요일: 같은 과목 수업이 하루에 여러 번 있습니다.` });
     }
   });
   return out;
