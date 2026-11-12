@@ -397,7 +397,7 @@ state.timetable = {
 | T6a **(완료)** | 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(`timetableBlockTimeChanges`·`timetableWriteBlockTimes`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
 | T6b **(완료)** | 엑셀 내려받기: 학기마다 학급별·교사별 전체 시간표 + 못 지킨 조건 + 담당 교사 없음(`timetableResultSheets`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs`(파일 이름·시트) |
 | T6c **(완료)** | 낱장 인쇄: 지금 보는 학기의 반별·교사별 시간표를 A4 한 장에 2개씩(이 반/교사만, 전체) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
-| T6 | 남은 출력물: 6단계 학생 시간표에 요일·교시 채우기 | `tests/timetable-print.test.cjs`(화면 = 엑셀 칸), 클릭 확인 |
+| T6d **(완료)** | 6단계 학생 이동수업 시간표의 빈칸에 7단계 시간표의 반 수업(과목·교사) 채우기 — 결과가 지금 조건의 것이고 블록 시간을 6단계에 적어 넣은 뒤에만, 내년 반을 아는 학생만. 6단계 쪽은 `typeof timetableStudentLessons` 가드 한 군데 | `tests/class-sections-print.test.cjs`·`tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs`(337명·반 수업 칸 확인), 기존 `e2e/class-sections-print-ui.cjs` 통과 | `tests/timetable-print.test.cjs`(화면 = 엑셀 칸), 클릭 확인 |
 | T7 | 반군 엇갈림 견적 → 6단계 반군 재편성 연동, 반군별 창체 | 6단계 세션과 조율 필요(class-sections.js 입력에 반군) |
 | T8 | 장소(체육·특별실 반 수업), 연속 2시간, 확대학급 블록, 2학기 뼈대 유지, e2e 하네스 7단계, `data-flow.md`·CLAUDE.md | `tests/data-consistency.test.cjs`에 5단계 = 7단계 시수 |
 

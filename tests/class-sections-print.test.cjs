@@ -205,6 +205,12 @@ test("학생 시간표: 요일×교시 격자(이동 칸 = 과목·분반·교�
   const html = pr.classSectionsTimetableHtml(model);
   assert.match(html, /재신청 필요: 화학\(정원 부족\)/);
   assert.match(html, /반 수업\(시간표에서 배치\) · 학급 단위 과목: 정보/);
+  // 7단계 시간표의 반 수업(info.lessons)이 오면 빈칸에만 과목·교사를 채운다 — 이동수업·고정 칸은 그대로, 없는 칸은 빈칸 글자 그대로
+  const filled = pr.classSectionsStudentTimetable({ ...info, lessons: { 화1: { text: "문학", teacher: "박국어" }, 월1: { text: "덮으면 안 됨", teacher: "" }, 금6: { text: "덮으면 안 됨" }, 목2: { text: "체육", teacher: "" } } });
+  assert.deepEqual(plain(filled.grid[0][1]), { kind: "lesson", lines: ["문학", "박국어"] });
+  assert.deepEqual(plain(filled.grid[1][3]), { kind: "lesson", lines: ["체육"] });
+  assert.deepEqual([plain(filled.grid[0][0]), plain(filled.grid[5][4]), plain(filled.grid[0][2])], [{ kind: "move", lines: ["물리학 ②", "과학실1", "김교사"], block: "a" }, { kind: "fixed", lines: ["창체"] }, { kind: "empty", lines: ["학급 수업"] }]);
+  assert.match(pr.classSectionsTimetableHtml(filled), /<td data-kind="lesson"><span>문학<\/span><span>박국어<\/span><\/td>/);
   // 블록 시간이 하나도 없으면 'a블록: 물리학 ② · 교실 · 교사' 목록만.
   const listOnly = pr.classSectionsStudentTimetable({ ...info, fill: "", entries: info.entries.map((entry) => ({ ...entry, times: [] })) });
   assert.equal(listOnly.grid, null);

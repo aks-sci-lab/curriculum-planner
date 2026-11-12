@@ -256,3 +256,34 @@ test("낱장 인쇄: 반·교사 시간표를 한 장에 2개씩, 한 반·한 �
   assert.match(teachers.html, /<strong>국어<\/strong><small>1-[12]<\/small>/);
   assert.deepEqual(plain(ctx.timetablePrintHtml(tables, "teacher", { only: "없는 교사" })), { html: "", cards: 0, pages: 0 });
 });
+
+test("6단계 학생 시간표용 반 수업 칸: 결과가 지금 조건의 것이고 블록 자리가 6단계와 같을 때만, 내년 반마다 { 칸: 과목·교사 }", () => {
+  const input = tiny();
+  const base = context();
+  const result = plain(base.timetableSolve({ 1: input }, { seed: 1, iterations: 8000, rounds: 2 }));
+  const slots = result.layers["1"].blocks["3a"].slots;
+  const entries = { "그룹": { blockTimes: { a: slots.join(",") }, sectionResult: { blocks: [{ id: "a", letter: "a", times: slots.map((key) => `${key[0]}:${key.slice(1)}`) }] } } };
+  const make = (saved, pins) => {
+    const ctx = vm.createContext({ state: { currentRound: "1", timetable: { settings: pins ? { pins } : {}, 1: saved } }, classSectionsEntry: (round, key) => entries[key] || null });
+    for (const file of ["timetable.js", "timetable-solve.js", "timetable-view.js"]) vm.runInContext(read(file), ctx);
+    vm.runInContext("timetableInput = (round, semester) => ({ input: __input, year: '2027' }); timetableCurrentSignature = () => 'sig';", ctx);
+    ctx.__input = input;
+    return ctx;
+  };
+  const renamed = plain(result);
+  renamed.layers["1"].blocks = { "그룹|a": result.layers["1"].blocks["3a"] }; // 6단계 그룹 키 모양의 블록 id
+  const ok = make({ at: "t", signature: "sig", result: renamed });
+  const lessons = plain(ok.timetableStudentLessons("1", "1", "1"));
+  assert.deepEqual(Object.keys(lessons), ["1", "2"]);
+  assert.equal(Object.keys(lessons["1"]).length, 8, "1학년 1반: 반 수업 7 + 창체 1");
+  assert.deepEqual(lessons["1"]["월1"], { text: "창체", teacher: "" });
+  assert.ok(Object.values(lessons["1"]).some((cell) => cell.text === "국어" && cell.teacher === "김국어"));
+  assert.ok(Object.values(lessons["1"]).some((cell) => cell.text === "음악" && cell.teacher === ""), "담당 교사 없음은 교사 빈칸");
+  assert.deepEqual(Object.keys(plain(ok.timetableStudentLessons("1", "3", "1"))), ["1"]);
+  // 결과가 없거나, 바뀌기 전 것이거나, 블록 자리가 6단계 블록 시간과 다르면 null
+  assert.equal(make(undefined).timetableStudentLessons("1", "1", "1"), null);
+  assert.equal(make({ at: "t", signature: "옛 서명", result: renamed }).timetableStudentLessons("1", "1", "1"), null);
+  assert.equal(ok.timetableStudentLessons("1", "1", "2"), null, "그 학기 결과가 없음");
+  entries["그룹"].blockTimes.a = "금5,금6";
+  assert.equal(make({ at: "t", signature: "sig", result: renamed }).timetableStudentLessons("1", "1", "1"), null, "블록 시간을 아직 6단계에 적어 넣지 않음");
+});

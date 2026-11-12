@@ -1333,6 +1333,31 @@ function timetableEditUndo() {
   renderTimetable();
 }
 
+// 6단계 학생 시간표용: 내년 그 학년의 반마다 반 수업 칸 { 반 번호: { '월3': { text, teacher } } }.
+// 시간표 결과가 없거나 바뀌기 전 것이거나, 그 학기 블록 자리가 6단계 블록 시간과 다르면(아직 적어 넣지 않음) null — 6단계는 지금처럼 빈칸으로 둔다.
+function timetableStudentLessons(round, grade, semester) {
+  const compute = () => {
+    const saved = timetableSaved(round);
+    const layer = saved?.result?.layers?.[String(semester)];
+    if (!layer) return null;
+    if (timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, timetableSettings().pins)) return null;
+    if (timetableBlockTimeChanges(round).some((change) => String(change.semester) === String(semester))) return null;
+    const tables = timetableResultTables(timetableInput(round, String(semester)).input, layer);
+    const out = {};
+    for (const row of tables.classes) {
+      if (String(row.grade) !== String(grade)) continue;
+      const cells = {};
+      for (const [key, entries] of Object.entries(row.cells)) {
+        const lesson = entries.find((entry) => entry.kind === "lesson" || entry.kind === "creative");
+        if (lesson) cells[key] = { text: lesson.text, teacher: lesson.noTeacher ? "" : lesson.teacher || "" };
+      }
+      out[String(row.id).split("-")[1]] = cells;
+    }
+    return out;
+  };
+  return typeof cachedByStateRevision === "function" ? cachedByStateRevision("timetableStudentLessons", `${round}|${grade}|${semester}`, compute) : compute();
+}
+
 // 저장된 계산 결과(차수). 없으면 null.
 function timetableSaved(round = timetableRound()) {
   const saved = state.timetable?.[round];

@@ -195,6 +195,16 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const sixTimes = await page.locator("#workflowStep8Panel [data-cs-block-times]").evaluateAll((els) => els.map((el) => el.value));
   check(sixTimes.length > 0 && sixTimes.every((value) => /^[월화수목금]\d(,[월화수목금]\d)*$/.test(value)), `6단계 화면의 블록 시간 칸에 시간표 값(${sixTimes.slice(0, 3).join(" / ")})`, sixTimes);
   await page.screenshot({ path: path.join(OUT, "03b-six-block-times.png") });
+  // 6단계 학생 이동수업 시간표: 블록 시간을 적어 넣은 뒤에는 빈칸에 7단계 시간표의 반 수업(과목·교사)이 채워진다(내년 반을 아는 학생만)
+  if (await page.locator("#classSectionsTimetablePrint").count()) {
+    await page.locator("#classSectionsTimetablePrint").click(); await sleep(1500);
+    const sixPrint = await page.evaluate(() => { const cards = [...document.querySelectorAll("#printBatch .cs-tt")];
+      return { cards: cards.length, mapped: cards.filter((el) => /내년 \d학년 \d+반/.test(el.querySelector("header p")?.textContent || "")).length,
+        lessonCells: document.querySelectorAll('#printBatch .cs-tt td[data-kind="lesson"]').length, moveCells: document.querySelectorAll('#printBatch .cs-tt td[data-kind="move"]').length,
+        sample: [...document.querySelectorAll('#printBatch .cs-tt td[data-kind="lesson"]')].slice(0, 3).map((td) => td.textContent.trim()) }; });
+    report.checks.sixStudentTimetable = sixPrint;
+    check(sixPrint.cards > 0 && sixPrint.moveCells > 0 && (sixPrint.mapped === 0 || sixPrint.lessonCells > 0), `6단계 학생 시간표 ${sixPrint.cards}명: 이동수업 칸 ${sixPrint.moveCells}개, 반 수업 칸 ${sixPrint.lessonCells}개(내년 반을 아는 학생 ${sixPrint.mapped}명)${sixPrint.sample.length ? ` 예: ${sixPrint.sample[0]}` : ""}`, sixPrint);
+  }
   await openStep();
 
   console.log("▶ 못 지킨 조건·담당 교사 없음·학기 탭");
