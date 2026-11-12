@@ -364,6 +364,46 @@ test("직접 입력이 있어도 2·3학년 선택과목 개설반은 4단계 �
   assert.equal(cell.link.value, auto);
 });
 
+test("학교 지정 과목 개설반 = 편제표 × 내년 학급 수(4단계 기준 설정과 같은 값) — 예전 직접 입력은 무시하고 안내, 교차집중 홀수는 고른 과목이 1반 더", () => {
+  const env = context();
+  const { ctx, state } = env;
+  load(env, { pick: "2" });
+  const base = ctx.curriculumPlanEntries().entries;
+  const designated = (semester, subject, area, extra = {}) => ({ grade: "3", semester, subject, area, credit: 2, kind: "지정", names: 1, nameIndex: 0, rowIndex: 90, ...extra });
+  const cross = (semester, subject, nameIndex) => designated(semester, subject, "예술", { names: 2, nameIndex, crossed: true, crossSemesters: 2, crossExtra: 0 });
+  ctx.curriculumPlanEntries = () => ({ entries: [...base, designated("1", "영어 독해와 작문", "영어"), cross("1", "음악 연주와 창작", 0), cross("1", "미술 창작", 1),
+    cross("2", "음악 연주와 창작", 0), cross("2", "미술 창작", 1)], issues: [] });
+  const key = (subject, semester = "1") => `3|${semester}|${ctx.normalizeResultCourseName(subject)}`;
+  state.hoursStats["2027"].classOverrides = { [key("영어 독해와 작문")]: 7, [key("미술 창작")]: 5 };
+  ctx.bump();
+  const read = () => {
+    const stats = ctx.computeHoursStats("2027");
+    const at = (subject, semester = "1") => stats.items.find((item) => item.key === key(subject, semester));
+    return { stats, at };
+  };
+  let { stats, at } = read();
+  const english = at("영어 독해와 작문");
+  assert.deepEqual([english.classes, english.manual, english.linked, english.designated], [11, false, true, true]);
+  // 교차집중 11학급, 1반 더 = 음악(crossExtra 0): 1학기 음악 6·미술 5, 2학기 음악 5·미술 6 — 미술 1학기 직접 입력 5는 편제표 값과 같아 안내하지 않음.
+  assert.deepEqual([at("음악 연주와 창작").classes, at("미술 창작").classes, at("음악 연주와 창작", "2").classes, at("미술 창작", "2").classes], [6, 5, 5, 6]);
+  assert.ok(at("미술 창작").crossPick);
+  const notice = stats.issues.find((issue) => /^편제표와 다른 직접 입력 1개를 편제표 값으로 바꿨습니다/.test(issue.text));
+  assert.ok(notice && notice.level === "info", stats.issues.map((issue) => issue.text).join("\n"));
+  assert.match(notice.text, /3학년 1학기 영어 독해와 작문 7 → 11/);
+  assert.equal(state.hoursStats["2027"].classOverrides[key("영어 독해와 작문")], 7, "저장 자료는 그대로");
+  // 선택과목은 여전히 4단계 연동(학교 지정 항목을 더해도 4단계 = 5단계 = 6단계).
+  const selected = stats.items.filter((item) => !item.designated);
+  assert.ok(selected.length && selected.every((item) => item.linked || item.kind === "지정"));
+  // 내년 학급 수(4단계 기준 설정 nextYearClasses3 = 시수 설정 hoursClasses3 = settings.classCounts)를 바꾸면 따라 바뀐다.
+  state.hoursStats["2027"].classCounts["3"] = 12;
+  ctx.bump();
+  ({ stats, at } = read());
+  assert.equal(at("영어 독해와 작문").classes, 12);
+  assert.deepEqual([at("음악 연주와 창작").classes, at("미술 창작").classes], [6, 6]);
+  assert.ok(!at("미술 창작").crossPick, "짝수 학급이면 1반 더 받을 과목을 고르지 않음");
+  assert.match(stats.issues.find((issue) => /^편제표와 다른 직접 입력/.test(issue.text)).text, /^편제표와 다른 직접 입력 2개/);
+});
+
 test("4단계에 없는 선택과목(과목명 불일치 등)만 직접 입력을 쓰고 '4단계에 없는 과목 · 직접 입력' 표시", () => {
   const env = context();
   const { ctx, state } = env;

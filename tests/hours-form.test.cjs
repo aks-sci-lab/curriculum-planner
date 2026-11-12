@@ -96,11 +96,13 @@ test("시수표 양식: 머리 3~4행, 교과군 행, 빨간 개설반(2·3학�
   assert.equal(cellAt(model, 5, 5).k, "cell");
   const physics = findRow(model, 7, "물리학");
   assert.equal(cellAt(model, physics, 9).k, "cellRed");
-  // 2·3학년 선택과목 개설반은 4단계 연동(입력 상자가 아니라 누르면 4단계로 가는 값 단추), 학교 지정·1학년은 직접 입력.
+  // 2·3학년 선택과목 개설반은 4단계 연동(입력 상자가 아니라 누르면 4단계로 가는 값 단추), 학교 지정은 편제표 × 학급 수 연동.
   assert.equal(cellAt(model, physics, 9).input, null);
   assert.deepEqual(plain([cellAt(model, physics, 9).link.grade, cellAt(model, physics, 9).link.semester, cellAt(model, physics, 9).link.subject]), ["1", "1", "물리학"]);
   assert.match(ctx.hoursFormHtml(model), /<button class="hf-link" type="button" data-hours-goto4="1\|1\|물리학"/);
-  assert.equal(cellAt(model, 5, 5).input.attrs["data-hours-item-classes"], "1|1|공통국어1", "학교 지정 과목은 직접 입력");
+  assert.equal(cellAt(model, 5, 5).input, null, "학교 지정 과목은 입력 상자가 아니라 편제표 연동 값 단추");
+  assert.deepEqual(plain(cellAt(model, 5, 5).link.attrs), { "data-hours-goto-classes": "1" });
+  assert.match(cellAt(model, 5, 5).link.title, /^편제표 연동 · 학교 지정 · 전체 학급 10학급 · /);
   // 과학: 세부(공통·물리), 공통 배분은 오른쪽 메모(X~AA)와 합계(AB), 합계 R = P:Q + AB, 공통 행 R은 배분하고 남은 시수.
   const science = findRow(model, 0, "과학");
   assert.equal(cellAt(model, science, 1).v, "공통");
@@ -122,6 +124,59 @@ test("시수표 양식: 머리 3~4행, 교과군 행, 빨간 개설반(2·3학�
   const career = model.refs.career;
   assert.equal(cellAt(model, career.start, 1).v, "교양");
   assert.equal(cellAt(model, career.start, 21).v, "합계·평균\n제외");
+});
+
+test("학교 지정 과목 개설반 = 편제표 × 학급 수(연동): 예전 직접 입력은 지우지 않고 무시 + 확인 항목, 교차집중 홀수는 1단계 편제표로", () => {
+  const crossEntry = (semester, subject, nameIndex, crossExtra) => ({ ...entry("1", semester, subject, "예술", 2), names: 2, nameIndex, crossed: true, crossSemesters: 2, crossExtra });
+  const crossPlan = { ...plan, "2027": [...plan["2027"], crossEntry("1", "음악", 0, 1), crossEntry("1", "미술", 1, 1), crossEntry("2", "음악", 0, 1), crossEntry("2", "미술", 1, 1)] };
+  const settings = baseSettings();
+  settings["2027"].classCounts["1"] = 11;
+  settings["2027"].classOverrides = { "1|1|공통국어1": 9, "1|2|통합과학2": 11, "2|1|문학": 3 };
+  const ctx = statsContext(settings, crossPlan, results);
+  const stats = ctx.computeHoursStats("2027");
+  const item = (grade, semester, subject) => stats.items.find((row) => row.grade === grade && row.semester === semester && row.subject === subject);
+  const korean = item("1", "1", "공통국어1");
+  assert.deepEqual(plain([korean.classes, korean.autoClasses, korean.manual, korean.linked, korean.designated]), [11, 11, false, true, true]);
+  assert.equal(korean.basis, "학교 지정 · 전체 학급 11학급");
+  assert.equal(item("2", "1", "문학").classes, 11);
+  assert.deepEqual(plain(settings["2027"].classOverrides), { "1|1|공통국어1": 9, "1|2|통합과학2": 11, "2|1|문학": 3 }, "저장 자료는 그대로");
+  const notice = stats.issues.find((issue) => /^편제표와 다른 직접 입력 2개를 편제표 값으로 바꿨습니다/.test(issue.text));
+  assert.ok(notice && notice.level === "info", stats.issues.map((issue) => issue.text).join("\n"));
+  assert.match(notice.text, /1학년 1학기 공통국어1 9 → 11, 2학년 1학기 문학 3 → 11/);
+  assert.doesNotMatch(notice.text, /통합과학2/, "편제표 값과 같은 직접 입력은 세지 않음");
+  assert.ok(!stats.issues.some((issue) => /^4단계와 다른 직접 입력/.test(issue.text)));
+  // 교차집중 11학급: 1반 더 받을 과목(crossExtra = 미술)이 1학기 6반·2학기 5반, 누르면 1단계 편제표(그 입학생 편제표)로.
+  assert.deepEqual(plain(["1", "2"].flatMap((semester) => ["음악", "미술"].map((subject) => item("1", semester, subject).classes))), [5, 6, 6, 5]);
+  const art = item("1", "1", "미술");
+  assert.ok(art.crossPick && art.linked);
+  const model = ctx.hoursFormModel(stats, { schoolName: "천상고등학교" });
+  const artCell = [...model.cells.values()].find((cell) => cell.item === art);
+  assert.equal(artCell.input, null);
+  assert.deepEqual(plain(artCell.link.attrs), { "data-hours-cohort": "2027", "data-hours-cross": "1" });
+  assert.match(artCell.link.title, /교차집중 11학급/);
+  const html = ctx.hoursFormHtml(model);
+  assert.match(html, /<button class="hf-link" type="button" data-hours-goto-classes="1" title="편제표 연동 · 학교 지정 · 전체 학급 11학급 · [^"]*" aria-label="1학년 1학기 공통국어1 개설반 11 — 학급 수 고치기">11<\/button>/);
+  assert.match(html, /data-hours-cohort="2027" data-hours-cross="1"/);
+  assert.doesNotMatch(html, /data-hours-item-classes="1\|1\|공통국어1"/);
+  // 학급 수(4단계 기준 설정과 같은 값)를 바꾸면 따라 바뀐다. 엑셀 첫 시트 값도 같은 모델.
+  settings["2027"].classCounts["1"] = 12;
+  const next = ctx.computeHoursStats("2027");
+  assert.equal(next.items.find((row) => row.key === korean.key).classes, 12);
+  const sheets = ctx.buildHoursWorkbookSheets(next, { schoolName: "천상고등학교" });
+  const row = findRow(sheets.model, 3, "공통국어1");
+  assert.equal(sheets[0].rows[row - 1][5].v, 12);
+  assert.equal(sheets[0].rows[row - 1][5].s, sheets[0].rows[row - 1][4].s, "개설반 칸 서식 = 같은 줄 학점 칸(검은 글씨)");
+  // 1학년 선택과목은 그대로 직접 입력.
+  const electivePlan = { ...plan, "2027": [...plan["2027"], entry("1", "2", "정보", "정보", 2, "선택")] };
+  const electiveSettings = baseSettings();
+  electiveSettings["2027"].classOverrides = { "1|2|정보": 3 };
+  const elective = statsContext(electiveSettings, electivePlan, results);
+  const electiveStats = elective.computeHoursStats("2027");
+  const info = electiveStats.items.find((row) => row.subject === "정보");
+  assert.deepEqual(plain([info.classes, info.manual, info.linked || false]), [3, true, false]);
+  const infoCell = [...elective.hoursFormModel(electiveStats, {}).cells.values()].find((cell) => cell.item === info);
+  assert.equal(infoCell.link, undefined);
+  assert.equal(infoCell.input.attrs["data-hours-item-classes"], "1|2|정보", "1학년 선택과목은 직접 입력 그대로");
 });
 
 test("시수표 양식: 창체 행(자율·진로 × 학년별 학급 수)과 요약 상자(교과·전체 평균·창체 포함 평균) 수식", () => {
