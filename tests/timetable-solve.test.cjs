@@ -206,6 +206,38 @@ test("두 학기 뼈대 + 학기마다 다른 6단계 블록 시간: 앞 학기 
   assert.equal(check.hours["1"], check.hours["2"]);
 });
 
+test("칸 고정(input.pins.lessons): 고정한 반 수업 시간은 그 칸에 두고 탐색이 옮기지 않는다, 못 지키면 알림, 검증기도 확인", () => {
+  const ctx = context();
+  const pins = { "1국어@1-1": ["화3", "목5"], "2수학@2-2": ["수1"], "1음악@1-3": ["월1", "금6", "없는칸"] }; // 월1은 전교 창체 자리 → 못 지킴
+  const inputs = { 1: small((input) => { input.pins = { lessons: pins }; }) };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 3, iterations: 80000, rounds: 2 }));
+  const layer = result.layers["1"];
+  assert.equal(plain(ctx.timetableValidate(inputs, result)).ok, true);
+  assert.ok(["화3", "목5"].every((key) => layer.lessons["1국어@1-1"].slots.includes(key)), layer.lessons["1국어@1-1"].slots.join(","));
+  assert.ok(layer.lessons["2수학@2-2"].slots.includes("수1"));
+  assert.equal(layer.lessons["1국어@1-1"].slots.length, 4);
+  // 못 지킨 고정: 창체 자리(월1)는 표시 + 알림, 지킬 수 있는 금6은 지킴
+  assert.deepEqual([layer.lessons["1음악@1-3"].pinMissed, layer.lessons["1음악@1-3"].slots.includes("금6")], [["월1"], true]);
+  assert.ok(result.notes.some((note) => /1-3반 음악: 고정한 칸 월1에 놓지 못했습니다/.test(note)), result.notes.join(" / "));
+  // 씨앗을 바꿔도 고정은 그대로, 고정이 없는 수업은 달라질 수 있다
+  const other = plain(ctx.timetableSolve(inputs, { seed: 9, iterations: 40000, rounds: 0 })).layers["1"];
+  assert.ok(["화3", "목5"].every((key) => other.lessons["1국어@1-1"].slots.includes(key)));
+  // 검증기: 고정한 칸에서 벗어나면 오류
+  const moved = plain(result);
+  const free = ["월", "화", "수", "목", "금"].flatMap((day) => [1, 2, 3, 4, 5, 6].map((period) => `${day}${period}`)).find((key) => !Object.entries(moved.layers["1"].lessons).some(([id, item]) => id.endsWith("@2-2") && item.slots.includes(key))
+    && !Object.values(moved.layers["1"].blocks).some((item) => item.slots.includes(key)) && key !== "월1");
+  moved.layers["1"].lessons["2수학@2-2"].slots = moved.layers["1"].lessons["2수학@2-2"].slots.map((key) => (key === "수1" ? free : key));
+  assert.ok(plain(ctx.timetableValidate(inputs, moved)).errors.some((item) => item.type === "pin" && /2-2 수학Ⅱ: 고정한 칸 수1에 놓이지 않았습니다/.test(item.text)));
+  // 두 학기 뼈대: 한 학기에만 고정해도 묶음째 그 칸(두 학기 같은 자리), 학기마다 다른 칸에 고정하면 묶지 않고 따로
+  const both = { 1: small((input) => { input.pins = { lessons: { "1수학@1-1": ["수2"] } }; }), 2: small((input) => { input.semester = "2"; }) };
+  const framed = plain(ctx.timetableSolve(both, { seed: 3, iterations: 60000, rounds: 0 }));
+  assert.deepEqual([framed.layers["1"].lessons["1수학@1-1"].slots.includes("수2"), framed.layers["2"].lessons["1수학@1-1"].slots.includes("수2"), framed.layers["1"].lessons["1수학@1-1"].frame], [true, true, true]);
+  both[2].pins = { lessons: { "1수학@1-1": ["목4"] } };
+  const split = plain(ctx.timetableSolve(both, { seed: 3, iterations: 60000, rounds: 0 }));
+  assert.deepEqual([split.layers["1"].lessons["1수학@1-1"].slots.includes("수2"), split.layers["2"].lessons["1수학@1-1"].slots.includes("목4"), split.layers["1"].lessons["1수학@1-1"].frame], [true, true, undefined]);
+  assert.equal(plain(ctx.timetableValidate(both, split)).ok, true);
+});
+
 test("창체 교시 범위·하루 최소 교시: 시간을 정하지 않은 창체는 n교시 이후에만(검증기도 확인), 일찍 끝나는 날은 '최대한' 위반으로", () => {
   const ctx = context();
   // 학년별 창체 2시간(시간 미정) + 전교 동시 없음, 4교시 이후에만

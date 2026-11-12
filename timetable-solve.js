@@ -90,18 +90,21 @@ function timetableProblem(inputs) {
 
   // 반 수업: 층마다 모으고, 뼈대가 '반드시'면 같은 반의 이어지는 수업을 한 활동으로 묶는다.
   const rawLessons = models.map((model, layer) => model.lessons.map((lesson) => ({ layer, id: lesson.id, ci: classIndex.get(lesson.classId), gi: gradeIndex.get(lesson.grade), subject: lesson.subject, department: lesson.department,
-    hours: lesson.hours, cands: teachersOf(lesson.candidates), fixed: lesson.fixedTeacher ? teacherIndex.get(lesson.fixedTeacher) : -1, venue: lesson.venue, double: lesson.double, part: lesson.part })).filter((lesson) => lesson.ci !== undefined));
+    hours: lesson.hours, cands: teachersOf(lesson.candidates), fixed: lesson.fixedTeacher ? teacherIndex.get(lesson.fixedTeacher) : -1, venue: lesson.venue, double: lesson.double, part: lesson.part,
+    pins: (lesson.pins || []).map((key) => slotIndex.get(key)).filter((index) => index !== undefined) })).filter((lesson) => lesson.ci !== undefined));
   const lessonAct = (items) => {
     const first = items[0];
     const cands = items.length > 1 ? first.cands.filter((ti) => items[1].cands.includes(ti)) : first.cands.slice();
     const fixed = items.map((item) => item.fixed).find((ti) => ti >= 0) ?? -1;
     return { kind: 0, layers: items.map((item) => item.layer), classes: [first.ci], gi: first.gi, hours: first.hours, ids: items.map((item) => item.id), subject: items.map((item) => subjectOf(item.subject)),
-      subjectName: items.map((item) => item.subject), department: first.department, cands, fixed, teacher: -1, venue: items.map((item) => (item.venue && venueIndex.has(item.venue) ? venueIndex.get(item.venue) : -1)), double: items.some((item) => item.double) };
+      subjectName: items.map((item) => item.subject), department: first.department, cands, fixed, teacher: -1, venue: items.map((item) => (item.venue && venueIndex.has(item.venue) ? venueIndex.get(item.venue) : -1)), double: items.some((item) => item.double),
+      pins: (() => { const list = [...new Set(items.flatMap((item) => item.pins))].slice(0, first.hours); return list.length ? new Set(list) : null; })() };
   };
   if (frame) {
     const left = rawLessons[1].slice();
     const take = (lesson, same) => {
-      const at = left.findIndex((other) => other.ci === lesson.ci && other.hours === lesson.hours && same(other) && (lesson.fixed < 0 || other.fixed < 0 || lesson.fixed === other.fixed)
+      const pinsAgree = (other) => !lesson.pins.length || !other.pins.length || (lesson.pins.length === other.pins.length && lesson.pins.every((slot) => other.pins.includes(slot))); // 학기마다 다른 칸에 고정했으면 묶지 않는다
+      const at = left.findIndex((other) => other.ci === lesson.ci && other.hours === lesson.hours && same(other) && pinsAgree(other) && (lesson.fixed < 0 || other.fixed < 0 || lesson.fixed === other.fixed)
         && (lesson.cands.some((ti) => other.cands.includes(ti)) || (!lesson.cands.length && !other.cands.length)));
       return at >= 0 ? left.splice(at, 1)[0] : null;
     };
@@ -472,6 +475,15 @@ function timetableConstruct(state, rng) {
   };
   // 1) 시간이 정해진 블록·창체
   for (const act of syncActs) if (act.fixedSlots) placeSync(act);
+  // 1-2) 교사가 고정한 반 수업 칸: 다른 것보다 먼저 그 칸에(교사가 그 시간에 설 수 없으면 교사 없이, 반 칸이 이미 찼으면 못 지킨 고정으로 알림)
+  for (const act of P.acts) {
+    if (act.kind !== 0 || !act.pins) continue;
+    let k = 0;
+    for (const s of act.pins) {
+      if (timetableCanPlace(state, act, s, false)) { timetableMark(state, act, k, s, 1, false); k += 1; }
+      else if (timetableCanPlace(state, act, s, true)) { timetableMark(state, act, k, s, 1, true); k += 1; }
+    }
+  }
   // 2) 반 수업을 같은 시간에 맡을 교사가 반 수보다 적은 학년(반 수업이 하루 끝 쪽에만 올 수 있다 — 블록 사이에 낀 칸은 곧 공강):
   //    그 학년 블록을 먼저, 1교시부터 빈틈없이 놓는다. 정해진 창체가 있는 요일은 그 앞을 블록으로 채우고, 나머지는 요일마다 고르게. 한 블록은 요일마다 한 번.
   for (let gi = 0; gi < P.grades.length; gi += 1) {
@@ -483,7 +495,7 @@ function timetableConstruct(state, rng) {
     if (!tight) continue;
     const need = P.slotsByDay.map((slots) => { // 그날 정해진 활동(창체 등) 앞에 채워야 하는 칸 수, 없으면 -1
       let first = -1;
-      for (let i = 0; i < slots.length && first < 0; i += 1) if (blocks[0].layers.some((layer) => state.grid[layer][classes[0] * P.S + slots[i]] !== -1)) first = i;
+      for (let i = 0; i < slots.length && first < 0; i += 1) if (blocks[0].layers.some((layer) => { const a = state.grid[layer][classes[0] * P.S + slots[i]]; return a !== -1 && P.acts[a].kind !== 0; })) first = i;
       return first;
     });
     let left = blocks.reduce((sum, act) => sum + act.hours, 0);
@@ -515,6 +527,7 @@ function timetableConstruct(state, rng) {
     const ci = act.classes[0];
     const usedDays = new Set();
     for (let k = 0; k < act.hours; k += 1) {
+      if (state.slotOf[act.index][k] >= 0) { usedDays.add(P.slotDay[state.slotOf[act.index][k]]); continue; } // 고정해서 이미 놓은 시간
       let chosen = -1;
       let bestScore = Infinity;
       for (let s = 0; s < P.S; s += 1) {
@@ -568,7 +581,7 @@ function timetableTryMove(state, rng, temperature) {
     else if (act.kind === 0) {
       const out = new Set();
       for (let layer = 0; layer < P.L; layer += 1) { const a = state.grid[layer][act.classes[0] * P.S + s]; if (a !== -1) out.add(a); }
-      for (const a of out) if (P.acts[a].kind !== 0) return false;
+      for (const a of out) if (P.acts[a].kind !== 0 || (P.acts[a].pins && P.acts[a].pins.has(s))) return false;
       for (const a of out) lift(P.acts[a], s);
       if (!timetableCanPlace(state, act, s, false)) { undo(); return false; }
       timetableMark(state, act, k, s, 1, false); ops.push([act, k, -1, s]);
@@ -621,7 +634,7 @@ function timetableTryMove(state, rng, temperature) {
     for (let layer = 0; layer < P.L; layer += 1) for (const ci of act.classes) {
       const a = state.grid[layer][ci * P.S + to];
       if (a === -1) continue;
-      if (P.acts[a].kind === 0) riders.add(a);
+      if (P.acts[a].kind === 0) { if (P.acts[a].pins && P.acts[a].pins.has(to)) return false; riders.add(a); } // 고정한 칸의 수업은 밀어내지 않는다
       else if (partner === -1 || partner === a) partner = a;
       else return false;
     }
@@ -704,8 +717,8 @@ function timetableTryMove(state, rng, temperature) {
         if (b !== -1) at2.add(b);
       }
       if (!at1.size && !at2.size) return false;
-      for (const a of at1) if (P.acts[a].kind !== 0 || (single >= 0 && P.acts[a].layers.length > 1) || at2.has(a)) return false;
-      for (const b of at2) if (P.acts[b].kind !== 0 || (single >= 0 && P.acts[b].layers.length > 1)) return false;
+      for (const a of at1) if (P.acts[a].kind !== 0 || (single >= 0 && P.acts[a].layers.length > 1) || at2.has(a) || (P.acts[a].pins && P.acts[a].pins.has(s1))) return false;
+      for (const b of at2) if (P.acts[b].kind !== 0 || (single >= 0 && P.acts[b].layers.length > 1) || (P.acts[b].pins && P.acts[b].pins.has(s2))) return false;
       for (const a of at1) pending.push([P.acts[a], lift(P.acts[a], s1), s2]);
       for (const b of at2) pending.push([P.acts[b], lift(P.acts[b], s2), s1]);
       return true;
@@ -977,7 +990,9 @@ function timetableSolveFinish(run) {
       if (act.kind === 0 && act.creative) creative.push({ scope: "class", classId: P.classIds[act.classes[0]], slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(early ? { anyPeriod: true } : {}) });
       else if (act.kind === 0) {
         const bare = [...[...state.slotOf[act.index]].filter((s, k) => s >= 0 && state.bare[act.index][k] === 1).map((s) => P.slotKey[s]), ...apart];
-        lessons[act.ids[at]] = { slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(bare.length ? { bareSlots: bare } : {}), ...(framed ? { frame: true } : {}) };
+        const missed = act.pins ? [...act.pins].map((s) => P.slotKey[s]).filter((slot) => !slots.includes(slot)) : [];
+        if (missed.length) notes.push(`${key}학기 ${P.classIds[act.classes[0]]}반 ${act.subjectName[at]}: 고정한 칸 ${missed.join("·")}에 놓지 못했습니다(그 칸에 정해진 블록·창체나 다른 고정 수업이 있음).`);
+        lessons[act.ids[at]] = { slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(bare.length ? { bareSlots: bare } : {}), ...(framed ? { frame: true } : {}), ...(missed.length ? { pinMissed: missed } : {}) };
         if (bare.length && act.teacher >= 0) noTeacher.push({ semester: key, kind: "lesson", grade: P.grades[act.gi], classId: P.classIds[act.classes[0]], subject: act.subjectName[at], hours: bare.length, reason: "clash" });
       } else if (act.kind === 1) {
         const bare = [...[...state.slotOf[act.index]].filter((s, k) => s >= 0 && state.bare[act.index][k] === 1).map((s) => P.slotKey[s]), ...apart];
@@ -1143,6 +1158,7 @@ function timetableValidate(inputs, result) {
       const name = `${lesson.classId} ${lesson.subject}`;
       if (!item) { fail("hours", `${name}: 결과에 없습니다.`); continue; }
       if (item.slots.length !== lesson.hours || item.slots.some((key) => !key)) fail("hours", `${name}: ${lesson.hours}시간인데 ${item.slots.filter(Boolean).length}칸만 놓였습니다.`);
+      for (const pin of lesson.pins || []) if (!item.slots.includes(pin) && !(item.pinMissed || []).includes(pin)) fail("pin", `${name}: 고정한 칸 ${pin}에 놓이지 않았습니다.`);
       if (item.teacherId && !lesson.candidates.includes(item.teacherId)) fail("qualification", `${name}: ${item.teacherId} 교사는 이 수업의 후보(전공 일치)가 아닙니다.`);
       if (lesson.fixedTeacher && item.teacherId && item.teacherId !== lesson.fixedTeacher) fail("fixedTeacher", `${name}: 정해진 교사와 다른 교사가 배정됐습니다.`);
       const bare = new Set(item.bareSlots || []);

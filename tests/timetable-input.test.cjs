@@ -355,6 +355,17 @@ test("시간을 정하지 않은 창체를 놓을 수 있는 첫 교시: 기본 
   assert.equal(plain(custom.timetableInput("1", "1")).input.creative.fromPeriod, 1);
 });
 
+test("칸 고정: settings.pins[학기]가 그 학기 입력의 pins.lessons로 실리고, 없으면 입력에 pins 키가 없다(서명 그대로)", () => {
+  const plainCtx = world();
+  assert.equal("pins" in plain(plainCtx.timetableInput("1", "1")).input, false);
+  const ctx = world({ timetable: { settings: { pins: { 1: { "1|공통국어@1-1": ["월2"] }, 2: { "2|독서@2-1": ["화3"] } } } } });
+  assert.deepEqual(plain(ctx.timetableInput("1", "1")).input.pins, { lessons: { "1|공통국어@1-1": ["월2"] } });
+  assert.deepEqual(plain(ctx.timetableInput("1", "2")).input.pins, { lessons: { "2|독서@2-1": ["화3"] } });
+  // 모형: 그 반 수업에만 고정이 붙는다(격자에 없는 칸은 버림)
+  const model = ctx.timetableModel(ctx.timetableInput("1", "1").input);
+  assert.deepEqual(plain(model.lessons.filter((lesson) => lesson.pins.length).map((lesson) => [lesson.id, lesson.pins])), [["1|공통국어@1-1", ["월2"]]]);
+});
+
 test("2시간 연속 수업 허용 과목: 고른 과목의 반 수업에만 double 표시(과목명 표기 차이는 맞춰 봄), 조건 칸으로 넣고 뺀다", () => {
   const ctx = world({ timetable: { settings: { doubleSubjects: ["체 육"] } } });
   const { input } = plain(ctx.timetableInput("1", "1"));

@@ -270,7 +270,10 @@ function timetableModel(input = {}) {
         const merged = part ? { subject: lesson.subject, department: part.department ?? lesson.department, teacherId: part.teacherId, teacherIds: part.teacherIds } : lesson;
         const fixedId = part ? part.teacherId : lesson.teacherByClass?.[classId] || lesson.teacherByClass?.[classId.split("-")[1]] || lesson.teacherId;
         const candidates = candidatesFor(merged, fixedId);
-        lessons.push({ id: `${lesson.id || `L${index + 1}`}@${classId}${part ? `#${partIndex + 1}` : ""}`, grade: grade.grade, classId, subject: String(lesson.subject || ""),
+        const lessonId = `${lesson.id || `L${index + 1}`}@${classId}${part ? `#${partIndex + 1}` : ""}`;
+        // 고정한 칸(input.pins.lessons[수업 id] = ['월3', …]): 그 수업의 시간 가운데 그만큼은 그 칸에 둔다(격자에 없는 칸·시수보다 많은 것은 버림)
+        const pins = [...new Set((input.pins?.lessons?.[lessonId] || []).map(String))].filter((key) => grade.slotByKey.has(key)).slice(0, hours);
+        lessons.push({ id: lessonId, pins, grade: grade.grade, classId, subject: String(lesson.subject || ""),
           department: String(merged.department || ""), hours, candidates, fixedTeacher: fixedId && candidates.length === 1 ? candidates[0] : "", unknownTeacher: Boolean(fixedId) && !candidates.length,
           venue: String(lesson.venue || ""), double: Boolean(lesson.double), part: part ? partIndex + 1 : 0, mismatch: Boolean(lesson.teacherMismatch) && Boolean(fixedId) });
       });

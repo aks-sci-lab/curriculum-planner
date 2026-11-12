@@ -222,3 +222,15 @@ test("직접 고치기(두 학기 뼈대): 한 학기에서 옮긴 수업은 다
   assert.equal(done.result.layers["1"].lessons["1국어@1-1"].frame, true, "다른 수업의 묶음은 그대로");
   assert.equal(plain(ctx.timetableValidate(inputs, done.result)).ok, true);
 });
+
+test("칸 고정 도우미: 고정이 결과에서 지켜지는지, 그 칸의 반 수업 id", () => {
+  const ctx = context();
+  const result = { layers: { 1: { lessons: { "1|국어@1-1": { slots: ["월2", "수3"] }, "1|통합과학|1@1-1#2": { slots: ["화1"] }, "1|음악@1-2": { slots: ["금6"], pinMissed: ["월1"] } }, blocks: {}, creative: [] } } };
+  assert.equal(ctx.timetablePinsHeld(result, undefined), true);
+  assert.equal(ctx.timetablePinsHeld(result, { 1: { "1|국어@1-1": ["월2"] } }), true);
+  assert.equal(ctx.timetablePinsHeld(result, { 1: { "1|국어@1-1": ["월2", "목4"] } }), false, "결과에 없는 칸에 고정 → 다시 계산해야 함");
+  assert.equal(ctx.timetablePinsHeld(result, { 1: { "1|음악@1-2": ["월1", "금6"] } }), true, "못 지켰다고 표시된 칸은 따지지 않는다");
+  assert.equal(ctx.timetablePinsHeld(result, { 1: { "없는 수업@9-9": ["월1"] }, 2: { "1|국어@1-1": ["화5"] } }), true, "결과에 없는 수업·학기는 넘어간다");
+  assert.deepEqual([ctx.timetableLessonAt(result.layers[1], "1-1", "수3"), ctx.timetableLessonAt(result.layers[1], "1-1", "화1"), ctx.timetableLessonAt(result.layers[1], "1-2", "수3"), ctx.timetableLessonAt(result.layers[1], "1-1", "금6")],
+    ["1|국어@1-1", "1|통합과학|1@1-1#2", "", ""]);
+});
