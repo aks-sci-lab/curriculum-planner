@@ -99,7 +99,23 @@
 - 하지 않는 것(사용자 결정): 고른 학기로 택n 개수를 검사하는 기능(잘못 고르면 4단계 학년별 총 학급수 불일치로 드러남), 레이블 하나 과목을 두 학기로 나눠 여는 경우(그때는 편제표를 고침).
 
 ## 7단계 시간표(구현 중)
-- 설계 `docs/timetable-design.md`. 지금 있는 것은 순수 계산뿐(`timetable.js`: 입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck`). **앱 자료를 읽는 연결(`timetableInput`)은 아직 없다** — 화면 걸음(T3)에서 5단계 `computeHoursStats` 항목(과목·학점·반 수·공통 과목 배분)과 6단계 `sectionResult`(블록·분반·분반 교사)·`settings.teachers`를 읽기 전용으로 모으고, 같은 값을 다시 입력받지 않는다. 그때 이 표에 '7 시간표' 줄과 '5단계 시수 합 = 7단계 교사 시수 합' 검사를 더한다.
+설계 `docs/timetable-design.md`. 지금 있는 것: 순수 계산 `timetable.js`(입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck`)와 자료 모으기 `timetable-view.js` `timetableInput(차수, 학기)`(화면·저장 없음). **같은 값을 시간표에서 다시 입력받지 않는다.**
+
+| 시간표 입력 | 출처(읽기만) | 맞추는 기준 | 없을 때 |
+|---|---|---|---|
+| 학년·반 수 | 5단계 `stats.classCounts`(= 4단계 내년 학급 수) | 내년 학년 | 계산 막음(P0) |
+| 반 수업(학교 지정 과목) | 5단계 `computeHoursStats` 항목(그 학기, `designated`) — 반 수는 편제표 값 `autoClasses`(확대학급은 넣지 않고 알림) | 과목명·담당 교과 `item.department` | 신입생 편제표가 없으면 올해 1학년 편제표의 1학년 과목(가정) |
+| 반 일부만 듣는 지정 과목(교차집중·분할 편성) | 같은 항목의 반 수 | 앞 반부터 차례로 | 가정(실제 반 배정 자료 없음) |
+| 공통 과목 반별 담당(통합과학 조각) | 5단계 `hoursCommonClassAssignment(학년, 학기)` | 과목 → 반 → 교과별 시간 | 교과군 세부 교과 교사 모두 후보(가정) |
+| 이동수업 블록·분반·분반 교사·특별실 | 6단계 `sectionResult`(그룹 = 현학년:학기:택n), 블록 시간은 지금 6단계 입력 칸 `blockTimes` | 분반 id, 과목 키 | 계산 막음(P0), 입력이 바뀌었으면 알림 |
+| 학급 단위 과목(반 → 과목) | 6단계 `classSectionsClassUnitPlan` | 내년 반 번호 | 내년 반 배정표가 없으면 6단계 자동 배정(가정) |
+| 교사(담당 교과·과목·불가 시간) | 6단계 `settings.teachers` | 교사 id | 5단계 교과별 교사 수로 자리 교사(가정) |
+| 요일·교시 격자, 전교 고정 시간 | 6단계 `gridDays`·`gridPeriods`·`fixedSlots`('창체' 이름은 전교 동시 창체로) | — | 월~금 7교시 |
+| 창체 시수 | 5단계 `creativeHours`(자율 + 진로) | 학년 공통 | 0 |
+| 요일별 교시 수·점심·창체 나눔·담임·규칙·장소 | `state.timetable.settings`(시간표에만 있는 조건) | — | 기본값 + '가정' 목록 |
+
+- 검사: 5단계 그 학기 시수 합 = 7단계(반 수업 + 블록 분반) 시수 합 — `tests/timetable-input.test.cjs`, 하네스 백업은 `e2e/timetable-input-check.cjs`. 선택과목은 학년마다 5단계 시수와 6단계 분반 시수를 대조해 다르면 사전 점검 경고(P0)로 알린다(예: 4단계 2반인 학급 단위 과목을 6단계가 6개 반에 배정).
+- 남은 한계: 한 그룹에서 일부 과목만 학급 단위이면 학급 단위 반이 빠지는 블록을 구분하지 못한다(경고로 알림).
 - 6단계 '시간표 미리 점검'(`sectionResult.timetableCheck`)의 규칙은 `timetable.js` `timetablePrecheckDepartments` 한 곳(6단계 화면은 부르기만).
 
 ## 남긴 것

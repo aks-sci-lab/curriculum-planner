@@ -1,0 +1,177 @@
+// 7단계 시간표 자료 모으기(timetable-view.js timetableInput): 5단계 시수 항목·6단계 분반 결과 → 시간표 입력 + 가정 목록.
+// 5·6단계 함수는 흉내(stub)로 넣는다 — 실제 연결은 하네스 백업으로 e2e/timetable-input-check.cjs가 확인한다.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { test } = require("node:test");
+
+const root = path.join(__dirname, "..");
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
+function item(grade, semester, subject, credit, classes, extra = {}) {
+  return { grade, semester, subject, credit, classes, autoClasses: classes, kind: "지정", designated: true, linked: true, department: extra.department || subject, hours: credit * classes, key: `${grade}|${semester}|${subject}`, basis: "", ...extra };
+}
+
+function world(overrides = {}) {
+  const stats = {
+    classCounts: { 1: 2, 2: 3, 3: 3 }, creativeHours: 2,
+    settings: { teachers: { 국어: 2, "과학-물리": 1, "과학-화학": 1, 체육: 1 } },
+    issues: [],
+    items: [
+      item("1", "1", "공통국어", 4, 2, { department: "국어" }),
+      item("1", "1", "통합과학", 2, 2, { department: "과학-공통" }),
+      item("2", "1", "문학", 4, 3, { department: "국어" }),
+      item("2", "1", "미술", 2, 1, { department: "미술" }), item("2", "1", "연극", 2, 2, { department: "미술" }), // 교차집중: 3반을 1 + 2로
+      item("2", "1", "물리학", 3, 2, { kind: "선택", designated: false, department: "과학-물리" }),
+      item("2", "1", "화학", 3, 1, { kind: "선택", designated: false, department: "과학-화학" }),
+      item("3", "1", "체육", 2, 3, { department: "체육" }),
+      item("3", "1", "일본어", 2, 2, { kind: "선택", designated: false, department: "제2외국어" }),
+      item("3", "1", "중국어", 2, 1, { kind: "선택", designated: false, department: "제2외국어" }),
+      item("2", "2", "독서", 4, 3, { department: "국어" })
+    ],
+    ...(overrides.stats || {})
+  };
+  const settings = {
+    gridDays: "월,화,수,목,금", gridPeriods: 7, rooms: { 과학실: 1 },
+    fixedSlots: [{ label: "창체·진로", times: "금6,금7", allTeachers: true }, { label: "교직원 회의", times: "월7", allTeachers: true }],
+    teachers: [
+      { id: "t-국어-1", name: "국어 1", department: "국어", unavailable: [] }, { id: "k2", name: "김국어", department: "국어", unavailable: ["월1"], maxHours: 18 },
+      { id: "p1", name: "박물리", department: "과학-물리" }, { id: "c1", name: "최화학", department: "과학-화학" }, { id: "pe", name: "체육쌤", department: "체육" }, { id: "art", name: "미술쌤", department: "미술" },
+      { id: "jp", name: "일본어쌤", department: "제2외국어", courses: "일본어" }
+    ],
+    ...(overrides.settings || {})
+  };
+  const groups = overrides.groups || [
+    { key: "1:1:2-1 택2", grade: "1", targetGrade: "2", semester: "1", category: "2-1 택2", label: "현1 → 2학년 1학기 · 2-1 택2", classes: 3,
+      courses: [{ key: "물리학", name: "물리학", credits: 3, department: "과학-물리", classCount: 2 }, { key: "화학", name: "화학", credits: 3, department: "과학-화학", classCount: 1 }] },
+    { key: "2:1:3-1 택1", grade: "2", targetGrade: "3", semester: "1", category: "3-1 택1", label: "현2 → 3학년 1학기 · 3-1 택1", classes: 3, unitOnly: true,
+      courses: [{ key: "일본어", name: "일본어", credits: 2, department: "제2외국어", classCount: 2 }, { key: "중국어", name: "중국어", credits: 2, department: "제2외국어", classCount: 1 }] },
+    { key: "1:2:2-2 택2", grade: "1", targetGrade: "2", semester: "2", category: "2-2 택2", label: "현1 → 2학년 2학기 · 2-2 택2", classes: 3, courses: [] }
+  ];
+  const entries = overrides.entries || {
+    "1:1:2-1 택2": { classCounts: {}, classUnit: {}, blockTimes: { a: "월1,화2,수3", b: "" },
+      sectionResult: { signature: "sig", teacherOf: { "화학#1": "c1" },
+        blocks: [{ id: "a", letter: "a", times: ["목:1"], sectionIds: ["물리학#1", "화학#1"] }, { id: "b", letter: "b", times: [], sectionIds: ["물리학#2"] }],
+        sections: [{ id: "물리학#1", courseKey: "물리학", blockId: "a", teacherId: "p1" }, { id: "물리학#2", courseKey: "물리학", blockId: "b", teacherId: "" }, { id: "화학#1", courseKey: "화학", blockId: "a" }] } },
+    "2:1:3-1 택1": { classCounts: {}, classUnit: {} }
+  };
+  const ctx = vm.createContext({
+    state: { currentRound: "1", timetable: overrides.timetable },
+    hoursTargetYear: () => "2027",
+    hoursStatsCached: () => { if (overrides.statsError) throw new Error(overrides.statsError); return stats; },
+    hoursCommonClassAssignment: (grade) => Object.defineProperty(grade === "1" ? { 통합과학: { 1: { "과학-물리": 1, "과학-화학": 1 }, 2: { "과학-물리": 1, "과학-화학": 1 } } } : {}, "matchesSaved", { value: overrides.matchesSaved !== false }),
+    hoursDepartmentName: (id) => id,
+    hoursDesignatedShare: (total) => total,
+    hoursDefaultDepartment: (subject, area) => area,
+    classSectionsSettings: () => settings,
+    classSectionsTeacherList: (cs) => cs.teachers.filter((teacher) => teacher.name).map((teacher) => ({ id: teacher.id, name: teacher.name, departments: teacher.department ? [teacher.department] : [],
+      courses: String(teacher.courses || "").split(",").filter(Boolean), unavailable: (teacher.unavailable || []).map((slot) => ({ day: slot[0], period: Number(slot.slice(1)), reason: "" })) })),
+    classSectionsTeacherPlaceholder: (teacher) => /^t-/.test(String(teacher?.id || "")),
+    classSectionsSource: () => ({ groups }),
+    classSectionsEntry: (round, key) => entries[key] || null,
+    classSectionsCourseConf: (cs, kind, grade) => (kind === "courseModes" && grade === "2" ? { 일본어: "class", 중국어: "class" } : kind === "courseRooms" && grade === "1" ? { 물리학: "과학실" } : {}),
+    classSectionsClassUnitOnly: (group) => Boolean(group.unitOnly),
+    classSectionsClassUnitPlan: () => ({ assign: { 1: "일본어", 2: "일본어", 3: "중국어" }, mapped: Boolean(overrides.mapped) }),
+    classSectionsSignature: () => overrides.signature || "sig",
+    classSectionsBuildInput: () => ({}),
+    curriculumCohortLayout: (year) => (overrides.fallbackPlan && year === "2026" ? { planData: null } : null),
+    curriculumPlanEntries: () => ({ entries: [{ grade: "1", semester: "1", subject: "공통수학", area: "수학", credit: 4, kind: "지정", rowIndex: 1 }, { grade: "1", semester: "2", subject: "공통수학2", area: "수학", credit: 4, kind: "지정", rowIndex: 2 },
+      { grade: "2", semester: "1", subject: "대수", area: "수학", credit: 4, kind: "지정", rowIndex: 3 }] })
+  });
+  vm.runInContext(read("timetable.js"), ctx);
+  vm.runInContext(read("timetable-view.js"), ctx);
+  return ctx;
+}
+
+test("5·6단계 자료를 시간표 입력으로 모은다: 학교 지정 과목 = 반 수업, 선택과목 = 6단계 블록·학급 단위, 교사·격자·창체", () => {
+  const ctx = world();
+  const { input, assumptions, year, round, semester } = plain(ctx.timetableInput("1", "1"));
+  assert.deepEqual([year, round, semester], ["2027", "1", "1"]);
+  assert.deepEqual([input.days, input.periods, input.lunchAfter, input.grades], ["월,화,수,목,금", 7, { 1: 4, 2: 4, 3: 3 }, [{ grade: "1", classes: 2 }, { grade: "2", classes: 3 }, { grade: "3", classes: 3 }]]);
+  // 6단계 고정 시간 가운데 '창체'는 창체(전교 동시)로, 나머지만 고정 시간으로
+  assert.deepEqual(input.creative, { school: 2, schoolTimes: ["금6", "금7"], grade: 0, gradeTimes: {}, byGroup: false, expected: { 1: 2, 2: 2, 3: 2 } });
+  assert.deepEqual(input.fixedSlots, [{ label: "교직원 회의", times: "월7", allTeachers: true }]);
+  // 교사: 6단계 명단(상한·불가 시간·자리 이름 표시)
+  assert.deepEqual(input.teachers.slice(0, 2), [
+    { id: "t-국어-1", name: "국어 1", departments: ["국어"], courses: [], unavailable: [], homeroom: "", placeholder: true },
+    { id: "k2", name: "김국어", departments: ["국어"], courses: [], unavailable: [{ day: "월", period: 1 }], maxHours: 18, homeroom: "", placeholder: false }]);
+  // 반 수업: 지정 과목(전체 반), 공통 과목은 반마다 조각, 교차집중은 앞 반부터 차례로, 학급 단위 과목은 6단계 반 배정
+  const lessons = input.lessons.map((lesson) => [lesson.grade, lesson.subject, lesson.classes || "전체", lesson.hours, lesson.parts ? lesson.parts.map((part) => `${part.department}${part.hours}`).join("+") : lesson.department]);
+  assert.deepEqual(lessons, [
+    ["1", "공통국어", "전체", 4, "국어"],
+    ["1", "통합과학", ["1"], 2, "과학-물리1+과학-화학1"], ["1", "통합과학", ["2"], 2, "과학-물리1+과학-화학1"],
+    ["2", "문학", "전체", 4, "국어"], ["2", "미술", ["1"], 2, "미술"], ["2", "연극", ["2", "3"], 2, "미술"],
+    ["3", "체육", "전체", 2, "체육"],
+    ["3", "일본어", ["1"], 2, "제2외국어"], ["3", "일본어", ["2"], 2, "제2외국어"], ["3", "중국어", ["3"], 2, "제2외국어"]]);
+  // 블록: 6단계 결과의 분반·교사, 시간은 지금 6단계 입력 칸(없으면 결과), 특별실
+  assert.deepEqual(input.blocks, [
+    { id: "1:1:2-1 택2|a", grade: "2", label: "2-1 택2 a블록", times: "월1,화2,수3", sections: [
+      { id: "1:1:2-1 택2|물리학#1", subject: "물리학", department: "과학-물리", credits: 3, teacherId: "p1", venue: "과학실" },
+      { id: "1:1:2-1 택2|화학#1", subject: "화학", department: "과학-화학", credits: 3, teacherId: "c1", venue: "" }] },
+    { id: "1:1:2-1 택2|b", grade: "2", label: "2-1 택2 b블록", times: "", sections: [{ id: "1:1:2-1 택2|물리학#2", subject: "물리학", department: "과학-물리", credits: 3, venue: "과학실" }] }]);
+  assert.deepEqual(input.venues, { 과학실: 1 });
+  assert.deepEqual(input.missing, []);
+  assert.deepEqual(input.notes, { undecided: [], staleSections: [], expandedClasses: false });
+  assert.deepEqual(assumptions.map((entry) => entry.key), ["periods", "lunch", "creative", "homeroom", "maxHours", "partial:2", "classUnit:2:1:3-1 택1"]);
+  assert.ok(assumptions.every((entry) => entry.text && entry.where.step && entry.where.label));
+  // 5단계 시수 합 = 7단계(반 수업 + 블록 분반) 시수 합
+  const model = ctx.timetableModel(input);
+  const hours7 = model.lessons.reduce((sum, lesson) => sum + lesson.hours, 0) + model.blocks.reduce((sum, block) => sum + block.sections.reduce((x, section) => x + section.hours, 0), 0);
+  assert.equal(hours7, ctx.hoursStatsCached().items.filter((entry) => entry.semester === "1").reduce((sum, entry) => sum + entry.hours, 0));
+  // 사전 점검까지: 가정 목록이 함께 온다
+  const check = plain(ctx.timetablePrecheckFor("1", "1"));
+  assert.equal(check.assumptions.length, 7);
+  assert.equal(check.counts.block, 0);
+  assert.deepEqual(check.grades.map((row) => [row.grade, row.lessonHours, row.blockHours, row.creative]), [["1", 6, 0, 2], ["2", 6, 6, 2], ["3", 4, 0, 2]]);
+});
+
+test("자료가 없을 때: 막는 것(분반 결과·학급 수·5단계 오류)과 가정으로 채우는 것(교사 자리·신입생 편제표·창체 나눔)", () => {
+  const noResult = world({ entries: { "1:1:2-1 택2": { classCounts: {}, classUnit: {}, blockTimes: {} } }, stats: { classCounts: { 1: 2, 2: 3, 3: 0 } } });
+  const missing = plain(noResult.timetableInput("1", "1")).input.missing;
+  assert.deepEqual(missing.map((entry) => [entry.level, entry.cause, entry.where[0].step]), [
+    ["block", "3학년 내년 학급 수가 없습니다.", 4],
+    ["block", "현1 → 2학년 1학기 · 2-1 택2: 분반 편성 결과가 없습니다.", 8],
+    ["warn", "2학년 1학기 선택과목: 5단계 시수 9시간 ≠ 6단계 분반 0시간(분반 수·학점·학급 단위 과목을 확인하세요).", 8]]);
+  assert.equal(plain(noResult.timetablePrecheckFor("1", "1")).ok, false);
+  // 5단계 계산 오류·확인 항목(필수)은 그대로 막는 사유로
+  const broken = plain(world({ statsError: "학년도를 먼저 올바르게 입력하세요." }).timetableInput("1", "1")).input.missing;
+  assert.equal(broken[0].cause, "학년도를 먼저 올바르게 입력하세요.");
+  const errors = world({ stats: { issues: [{ level: "error", text: "2학년 선택과목: 1차에 현 1학년 수강신청 결과가 없어 개설반을 0으로 계산했습니다.", action: "results" }, { level: "warning", text: "참고" }] } });
+  assert.deepEqual(plain(errors.timetableInput("1", "1")).input.missing.map((entry) => [entry.level, entry.where[0].key]), [["block", "aggregate"]]);
+  // 교사 명단이 없으면 5단계 교사 수로 자리 교사(가정), 창체 고정 시간이 없으면 전교 동시 1 + 학년별 나머지(가정)
+  const bare = world({ settings: { teachers: [], fixedSlots: [] } });
+  const prepared = plain(bare.timetableInput("1", "1"));
+  assert.deepEqual(prepared.input.teachers.map((teacher) => teacher.id), ["t-국어-1", "t-국어-2", "t-과학-물리-1", "t-과학-화학-1", "t-체육-1"]);
+  assert.ok(prepared.input.teachers.every((teacher) => teacher.placeholder));
+  assert.deepEqual(prepared.input.creative, { school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: false, expected: { 1: 2, 2: 2, 3: 2 } });
+  assert.deepEqual(prepared.assumptions.filter((entry) => ["teachers", "creative"].includes(entry.key)).map((entry) => entry.text), [
+    "창체 2시간: 전교 동시 1시간(동아리) + 학년별 1시간으로 나누고 시간은 정하지 않음",
+    "교사 명단 없음 → 5단계 교과별 교사 수(5명)로 자리 교사를 만들어 계산(불가 시간·출근 요일 모름)"]);
+  // 신입생 편제표가 없으면(1학년 항목 없음 + 5단계 오류) 올해 1학년 편제표의 1학년 과목으로(가정), 그 오류는 막는 사유에서 뺀다
+  const fresh = world({ fallbackPlan: true, stats: { issues: [{ level: "error", text: "1학년: 2027학년도 입학생 편제표가 없습니다. 1단계에서 업로드하세요.", action: "cohort:2027" }],
+    items: [item("2", "1", "문학", 4, 3, { department: "국어" })] }, groups: [] });
+  const fallback = plain(fresh.timetableInput("1", "1"));
+  assert.deepEqual(fallback.input.lessons.map((lesson) => [lesson.grade, lesson.subject, lesson.department, lesson.hours]), [["2", "문학", "국어", 4], ["1", "공통수학", "수학", 4]]);
+  assert.deepEqual(fallback.input.missing, []);
+  assert.match(fallback.assumptions.find((entry) => entry.key === "plan1").text, /^1학년: 2027학년도 입학생 편제표가 없어 2026학년도 입학생 편제표의 1학년 과목으로 계산/);
+});
+
+test("시간표 조건(state.timetable.settings)이 있으면 그 값을 쓰고 가정에서 빠진다, 알림(입력 변경됨·확대학급·학기 미정·공통 배분)", () => {
+  const ctx = world({ signature: "changed", matchesSaved: false, mapped: true,
+    timetable: { settings: { periodsByDay: { 수: 6 }, lunchAfter: { 1: 4, 2: 4, 3: 4 }, creative: { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, byGroup: true },
+      homerooms: { "2-1": "k2" }, rules: { maxHours: 20, gap: "soft" }, venues: { 체육: 2 } } },
+    stats: { items: [item("1", "1", "통합과학", 2, 2, { department: "과학-공통" }), item("2", "1", "체육", 2, 4, { department: "체육", expanded: 4, autoClasses: 3 }),
+      item("2", "1", "심화 영어", 3, 0, { kind: "선택", designated: false, basis: "두 학기 편성 · 4단계 학기 미정" }), item("2", "1", "물리학", 3, 2, { kind: "선택", designated: false }), item("2", "1", "화학", 3, 1, { kind: "선택", designated: false })] } });
+  const { input, assumptions } = plain(ctx.timetableInput("1", "1"));
+  assert.deepEqual([input.periodsByDay, input.lunchAfter, input.rules, input.venues], [{ 수: 6 }, { 1: 4, 2: 4, 3: 4 }, { maxHours: 20, gap: "soft" }, { 과학실: 1, 체육: 2 }]);
+  assert.deepEqual(input.creative, { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, gradeTimes: {}, byGroup: true, expected: { 1: 2, 2: 2, 3: 2 } });
+  assert.equal(input.teachers.find((teacher) => teacher.id === "k2").homeroom, "2-1");
+  assert.deepEqual(input.notes, { undecided: ["2학년 심화 영어"], staleSections: ["현1 → 2학년 1학기 · 2-1 택2"], expandedClasses: true });
+  assert.deepEqual(input.lessons.find((lesson) => lesson.subject === "체육").classes, undefined, "확대학급은 반영하지 않고 편제표 값(전체 반)");
+  assert.deepEqual(assumptions.map((entry) => entry.key), ["common"]);
+  // 사전 점검에 알림으로 나온다
+  const causes = plain(ctx.timetablePrecheckFor("1", "1")).issues.filter((issue) => issue.id === "P10").map((issue) => issue.cause);
+  assert.ok(causes.some((cause) => /확대학급/.test(cause)) && causes.some((cause) => /2학년 심화 영어: 개설 학기/.test(cause)) && causes.some((cause) => /분반 편성 입력이 바뀌었습니다/.test(cause)));
+});

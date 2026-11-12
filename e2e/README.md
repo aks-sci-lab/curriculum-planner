@@ -22,6 +22,8 @@ node e2e/run.cjs --seed 1 --out /tmp/e2e-seed1
 
 - **두 학기 편성 과목 개설 학기·단계 간 일치**(2-7, `lib/two-semester-scenario.cjs`·`lib/two-semester-fixture.cjs`): 저장 단계 뒤 새 차수에 현2 가로형 결과(심화 영어 한 열, 학기 경계) → 미리보기 '개설 학기 선택'(고르지 않고 반영 → '개설 학기 확인' 창 → 돌아가서 고르기) 2학기 → 섞지 않고 한 줄 → 4단계 그 학기 구역에만 → 확정 → 5단계 시수표 칸 = 6단계 분반 수 = 4단계 → 확정 해제·과목 메뉴 '개설 학기 바꾸기' 1학기 → 다시 확정 → 따라감 → 다음 차수에 같은 파일(앞 차수 결과로 추천) → 머리글 '3-2 택5' 병합 파일(묻지 않음). 단독 실행: `node e2e/two-semester-consistency-ui.cjs <폴더> <백업.json.gz> [--diagnose]`.
 
+- **7단계 시간표 자료 모으기**(`node e2e/timetable-input-check.cjs <폴더> <하네스 백업 .json.gz>`): 백업을 복원한 앱에서 5·6단계 자료로 만든 시간표 입력·사전 점검을 읽어 두 학기 모두 막는 누락 없음·1초 안·5단계 시수 합 = 7단계 시수 합·가정 목록을 확인(시간표 화면이 생기면 클릭 확인으로 바꿈).
+
 ## 구성
 - `lib/mock-supabase.cjs` — `supabase/*.sql` 체인 + `proposed/01·02`(앱이 쓰는 학생 잠금 RPC)를 PGlite에 올리고 Playwright `context.route`로 RPC·REST(`course_events` 목록)·auth(구글 PKCE 흉내: authorize → `?code=` 되돌림 → token)를 처리. 실시간 websocket은 닫음(앱은 30초 동기화로 넘어감).
 - `lib/static-server.cjs` — 저장소를 `http://127.0.0.1`로 제공(file://는 앱이 오프라인으로 봄).

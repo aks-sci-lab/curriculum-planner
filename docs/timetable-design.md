@@ -345,6 +345,7 @@ state.timetable = {
 | 걸음 | 내용 | 검증 |
 |---|---|---|
 | T1 **(완료)** | `timetable.js` 모형(`timetableModel`) + **사전 점검**(`timetablePrecheck` P0~P10) + 6단계 미리 점검 연결(`timetablePrecheckDepartments`) | `tests/timetable-precheck.test.cjs`: 실제 크기 가상 학교(10·11·11반)로 P0~P10마다(13칸 사례, 교사 한 명 20시간 사례 포함), 1초 안 |
+| T1b **(완료)** | 자료 모으기 `timetable-view.js` `timetableInput(차수, 학기)`(화면 없이): 5·6단계 자료 → 입력 + '가정' 목록 + 막는 누락, `timetablePrecheckFor` | `tests/timetable-input.test.cjs`(5·6단계 함수 흉내), 하네스 백업 `e2e/timetable-input-check.cjs`(두 학기, 5단계 시수 합 = 7단계 시수 합, 1초 안) |
 | T2 | 풀이기 1차(블록·창체 → 어려운 학년 → 구성 → 지역 탐색, 필수만) + 검증기 | `tests/timetable-solve.test.cjs`: 작은 학교(3반)·실제 규모 합성(10·11·11반), 같은 씨앗 = 같은 결과, 검증기 위반 0, 쾨니그 조건 사례는 반드시 성공 |
 | T3 | 화면 1차: 메뉴·조건 설정(시간 구조·규칙)·계산(Worker·진행·중단)·반/교사 격자·저장·백업 | `tests/timetable-view.test.cjs`, 클릭 `e2e/timetable-ui.cjs`(하네스 백업으로 열어 계산 → 화면 글자 확인) |
 | T4 | 완화 사다리 + 푼 조건 표시 + 교사 미정 + '고치면' 견적 | 테스트: 일부러 불가능한 자료에서 항상 결과 + 사다리 기록, 실제 2학기 모양 합성 자료 |
