@@ -148,6 +148,21 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
     check(/^되돌렸습니다/.test(await editStatus()) && JSON.stringify(back.map((cell) => cell.text)) === JSON.stringify(original.map((cell) => cell.text)) && (await panel.locator("#timetableEdits").count()) === 0, "되돌리기 → 표가 처음과 같고 '직접 고침' 표시 없음");
   }
 
+  // 낱장 인쇄: 인쇄 창을 띄우지 않고(window.print 대신 기록) 인쇄 영역의 내용을 본다
+  await page.evaluate(() => { window.__ttPrints = 0; window.print = () => { window.__ttPrints += 1; }; });
+  await panel.locator("#timetablePrintOne").click(); await sleep(300);
+  const printOne = await page.evaluate(() => ({ prints: window.__ttPrints, cards: [...document.querySelectorAll("#printBatch .tt-print-card")].map((el) => el.querySelector("h3").textContent.trim()), pages: document.querySelectorAll("#printBatch .print-page").length }));
+  check(printOne.prints === 1 && printOne.cards.length === 1 && /^\d{4}학년도 1학기 \d-\d+반 시간표$/.test(printOne.cards[0]), `이 반 인쇄: ${printOne.cards[0]}`, printOne);
+  await panel.locator("#timetablePrintAll").click(); await sleep(500);
+  const printAll = await page.evaluate(() => ({ prints: window.__ttPrints, cards: document.querySelectorAll("#printBatch .tt-print-card").length, pages: document.querySelectorAll("#printBatch .print-page").length,
+    cells: document.querySelectorAll("#printBatch .tt-print-card:first-child td strong").length }));
+  check(printAll.prints === 2 && printAll.cards === classOptions.length && printAll.pages === Math.ceil(classOptions.length / 2) && printAll.cells >= 30, `반 전체 인쇄: ${printAll.cards}개 반 · ${printAll.pages}장(한 장에 2개)`, printAll);
+  await panel.locator('[data-tt-view="teacher"]').click(); await sleep(200);
+  await panel.locator("#timetablePrintOne").click(); await sleep(300);
+  const printTeacher = await page.evaluate(() => [...document.querySelectorAll("#printBatch .tt-print-card h3")].map((el) => el.textContent.replace(/\s+/g, " ").trim()));
+  check(printTeacher.length === 1 && /선생님 시간표 주 \d+시간$/.test(printTeacher[0]), `이 교사 인쇄: ${printTeacher[0]}`);
+  await panel.locator('[data-tt-view="class"]').click(); await sleep(200);
+
   // 엑셀 내려받기: 앱이 붙인 파일 이름(a.download)과 내용(시트 이름)
   await page.evaluate(() => { window.__ttNames = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) window.__ttNames.push(this.download); return click.call(this); }; });
   const [excel] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), panel.locator("#timetableDownload").click()]);

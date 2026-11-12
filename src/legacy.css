@@ -1286,6 +1286,19 @@
       /* A4 세로(273mm × 182mm 인쇄 영역) 한 장에 한 학생. 높이를 고정하지 않아 빈 장이 생기지 않는다. */
       .print-page { width: 182mm; min-height: 0; padding: 3mm 5mm 0; page-break-after: always; break-after: page; color: #111; }
       .print-page:last-child { page-break-after: auto; break-after: auto; }
+      /* 7단계 시간표 낱장: A4 세로 한 장에 2개 */
+      .tt-print-card { margin: 0 0 9mm; break-inside: avoid; page-break-inside: avoid; }
+      .tt-print-card h3 { margin: 0 0 2mm; font-size: 15px; }
+      .tt-print-card h3 small { font-weight: 400; font-size: 11px; }
+      .tt-print-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+      .tt-print-table th, .tt-print-table td { border: 1px solid #333; height: 13mm; padding: .5mm 1mm; text-align: center; vertical-align: middle; line-height: 1.25; }
+      .tt-print-table thead th { height: 6mm; background: #eee; }
+      .tt-print-table th:first-child { width: 22mm; background: #f4f4f4; font-size: 10px; }
+      .tt-print-table strong { display: block; font-size: 11px; }
+      .tt-print-table small { display: block; font-size: 9.5px; color: #333; }
+      .tt-print-table hr { border: 0; border-top: 1px dashed #999; margin: .5mm 0; }
+      .tt-print-table .tt-print-lunch th, .tt-print-table .tt-print-lunch td { height: 4mm; background: #f1f1f1; font-size: 9px; }
+      .tt-print-page[data-per="2"] .tt-print-table td { height: 12mm; }
       .print-page .paper { width: 100%; min-height: 0; padding: 0; box-shadow: none; }
       .print-page .paper-title { margin: 0 0 6mm; font-size: 24px; letter-spacing: 5px; }
       .print-page .paper-meta { margin-bottom: 2mm; font-size: 12px; }

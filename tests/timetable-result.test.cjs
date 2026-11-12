@@ -234,3 +234,25 @@ test("칸 고정 도우미: 고정이 결과에서 지켜지는지, 그 칸의 �
   assert.deepEqual([ctx.timetableLessonAt(result.layers[1], "1-1", "수3"), ctx.timetableLessonAt(result.layers[1], "1-1", "화1"), ctx.timetableLessonAt(result.layers[1], "1-2", "수3"), ctx.timetableLessonAt(result.layers[1], "1-1", "금6")],
     ["1|국어@1-1", "1|통합과학|1@1-1#2", "", ""]);
 });
+
+test("낱장 인쇄: 반·교사 시간표를 한 장에 2개씩, 한 반·한 교사만도", () => {
+  const ctx = context();
+  const input = tiny();
+  const result = plain(ctx.timetableSolve({ 1: input }, { seed: 1, iterations: 8000, rounds: 2 }));
+  const tables = ctx.timetableResultTables(input, result.layers["1"]);
+  const classes = plain(ctx.timetablePrintHtml(tables, "class", { title: "2027학년도 1학기", perPage: 2 }));
+  assert.deepEqual([classes.cards, classes.pages], [3, 2]);
+  assert.equal((classes.html.match(/class="print-page tt-print-page"/g) || []).length, 2);
+  assert.match(classes.html, /<h3>2027학년도 1학기 1-1반 시간표<\/h3>/);
+  assert.match(classes.html, /<strong>국어<\/strong><small>김국어<\/small>/);
+  assert.match(classes.html, /<strong>음악<\/strong><small>담당 교사 없음<\/small>/);
+  assert.equal((classes.html.match(/tt-print-lunch/g) || []).length, 3, "반마다 점심 줄");
+  const one = plain(ctx.timetablePrintHtml(tables, "class", { title: "t", only: "3-1" }));
+  assert.deepEqual([one.cards, one.pages, /data-id="3-1"/.test(one.html), /data-id="1-1"/.test(one.html)], [1, 1, true, false]);
+  const teachers = plain(ctx.timetablePrintHtml(tables, "teacher", { title: "2027학년도 1학기", perPage: 2 }));
+  assert.equal(teachers.cards, plain(tables).teachers.length);
+  assert.match(teachers.html, /김국어 선생님 시간표 <small>주 8시간<\/small>/);
+  assert.match(teachers.html, /<th>4교시\(1학년\)<\/th>/);
+  assert.match(teachers.html, /<strong>국어<\/strong><small>1-[12]<\/small>/);
+  assert.deepEqual(plain(ctx.timetablePrintHtml(tables, "teacher", { only: "없는 교사" })), { html: "", cards: 0, pages: 0 });
+});

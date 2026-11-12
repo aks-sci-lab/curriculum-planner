@@ -345,6 +345,27 @@ function timetableLessonAt(layer, classId, key) {
   return Object.keys(layer?.lessons || {}).find((id) => String(id.split("@")[1] || "").split("#")[0] === classId && (layer.lessons[id].slots || []).includes(key)) || "";
 }
 
+// 낱장 인쇄(순수): 반 시간표·교사 시간표를 한 장에 perPage개씩. tables = timetableResultTables 결과, kind = "class" | "teacher", only = 그 반/교사만(없으면 전체).
+// 돌려주는 값: { html, cards, pages } — html은 #printBatch에 넣는 .print-page 묶음.
+function timetablePrintHtml(tables, kind, options = {}) {
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  const perPage = Math.max(1, Math.min(4, Number(options.perPage) || 2));
+  const list = (kind === "teacher" ? tables.teachers : tables.classes).filter((row) => !options.only || row.id === options.only);
+  const head = `<thead><tr><th></th>${tables.days.map((day) => `<th>${esc(day)}</th>`).join("")}</tr></thead>`;
+  const cell = (entries, sub) => (entries || []).map((entry) => `<strong>${esc(entry.text)}</strong>${sub(entry) ? `<small>${esc(sub(entry))}</small>` : ""}`).join("<hr>");
+  const cards = list.map((row) => {
+    const body = kind === "teacher"
+      ? tables.teacherRows.map((slot) => `<tr><th>${esc(slot.label)}</th>${tables.days.map((day, d) => `<td>${cell(row.cells[`${d}|${slot.pos}`], (entry) => entry.where)}</td>`).join("")}</tr>`).join("")
+      : row.rows.map((slot) => (slot.lunch ? `<tr class="tt-print-lunch"><th>점심</th><td colspan="${tables.days.length}"></td></tr>`
+        : `<tr><th>${slot.period}</th>${tables.days.map((day) => `<td>${cell(row.cells[`${day}${slot.period}`], (entry) => (entry.noTeacher ? "담당 교사 없음" : entry.teacher))}</td>`).join("")}</tr>`)).join("");
+    const name = kind === "teacher" ? `${row.name} 선생님 시간표` : `${row.id}반 시간표`;
+    return `<section class="tt-print-card" data-kind="${kind}" data-id="${esc(row.id)}"><h3>${esc(options.title || "")} ${esc(name)}${kind === "teacher" ? ` <small>주 ${row.hours}시간</small>` : ""}</h3><table class="tt-print-table">${head}<tbody>${body}</tbody></table></section>`;
+  });
+  const pages = [];
+  for (let at = 0; at < cards.length; at += perPage) pages.push(`<div class="print-page tt-print-page" data-per="${perPage}">${cards.slice(at, at + perPage).join("")}</div>`);
+  return { html: pages.join(""), cards: cards.length, pages: pages.length };
+}
+
 // 저장된 시간표 조건(없으면 빈 객체). 여기서는 읽기만 한다.
 function timetableSettings() {
   const store = typeof state !== "undefined" && state && state.timetable && typeof state.timetable === "object" ? state.timetable : null;
@@ -1117,6 +1138,25 @@ function timetableRunFinish(run) {
   renderTimetable();
 }
 
+// 낱장 인쇄: 지금 보는 학기의 반(또는 교사) 시간표를 한 장에 2개씩 #printBatch에 넣고 인쇄한다. all = 전체, 아니면 지금 고른 반·교사만.
+function timetablePrint(all) {
+  const round = timetableRound();
+  const saved = timetableSaved(round);
+  const target = document.getElementById("printBatch");
+  const semester = TIMETABLE_VIEW.semester;
+  if (!saved || !target || !saved.result.layers?.[semester]) return;
+  const prepared = timetableInput(round, semester);
+  const kind = TIMETABLE_VIEW.grid === "teacher" ? "teacher" : "class";
+  const tables = timetableResultTables(prepared.input, saved.result.layers[semester]);
+  const printed = timetablePrintHtml(tables, kind, { title: `${prepared.year}학년도 ${semester}학기`, perPage: 2, only: all ? "" : TIMETABLE_VIEW.pick[kind] });
+  if (!printed.cards) return;
+  target.innerHTML = printed.html;
+  TIMETABLE_VIEW.runStatus = `${kind === "teacher" ? "교사" : "반"} 시간표 ${printed.cards}개(${printed.pages}장)를 인쇄합니다.`;
+  TIMETABLE_VIEW.runError = false;
+  renderTimetable();
+  if (typeof window !== "undefined" && typeof window.print === "function") window.print();
+}
+
 // 계산 결과를 엑셀로: 학기마다 학급별·교사별 전체 시간표 + 못 지킨 조건 + 담당 교사 없음.
 function timetableDownload() {
   const round = timetableRound();
@@ -1305,6 +1345,8 @@ function timetableGridHtml(tables, stale = false) {
   }
   return `<div class="tt-grid-tools"><span class="tt-presets" id="timetableGridTabs"><button class="button" type="button" data-tt-view="class" aria-pressed="${view === "class"}">반 시간표</button><button class="button" type="button" data-tt-view="teacher" aria-pressed="${view === "teacher"}">교사 시간표</button></span>
     <label>${view === "teacher" ? "교사" : "반"} <select id="timetableGridPick" data-tt-pick="${view}" data-focus-key="tt-grid-pick">${options}</select></label>
+    <button class="button" type="button" id="timetablePrintOne"${stale ? " disabled" : ""}>이 ${view === "teacher" ? "교사" : "반"} 인쇄</button>
+    <button class="button" type="button" id="timetablePrintAll"${stale ? " disabled" : ""}>${view === "teacher" ? "교사" : "반"} 전체 인쇄(${list.length}${view === "teacher" ? "명" : "개 반"})</button>
     <button class="button" type="button" id="timetableDownload"${stale ? ' disabled title="다시 계산한 뒤 내려받으세요"' : ""}>엑셀로 내려받기(학급·교사 전체 시간표)</button></div>
     ${view === "class" && !stale ? `<p class="cs-note" id="timetableEditHelp">직접 고치기: 반 수업 칸을 누르면 맞바꿀 수 있는 칸이 초록으로 표시됩니다 — 그 칸을 누르면 두 칸을 맞바꿉니다(블록·창체 칸, 교사가 그 시간에 다른 반에 있는 칸은 안 되고 이유는 칸에 마우스를 올리면 보입니다).
       <button class="button" type="button" id="timetableEditUndo"${TIMETABLE_VIEW.undo.length ? "" : " disabled"}>고친 것 되돌리기${TIMETABLE_VIEW.undo.length ? `(${TIMETABLE_VIEW.undo.length})` : ""}</button>
@@ -1617,6 +1659,8 @@ function timetableHandleClick(event) {
   }
   if (target.closest?.("#timetableStop")) { timetableRunStop(); return; }
   if (target.closest?.("#timetableDownload")) { timetableDownload(); return; }
+  if (target.closest?.("#timetablePrintOne")) { timetablePrint(false); return; }
+  if (target.closest?.("#timetablePrintAll")) { timetablePrint(true); return; }
   if (target.closest?.("#timetableEditUndo")) { timetableEditUndo(); return; }
   if (target.closest?.("#timetablePin")) { timetablePinToggle(); return; }
   if (target.closest?.("#timetablePinsClear")) {
