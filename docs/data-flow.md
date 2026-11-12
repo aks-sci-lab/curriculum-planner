@@ -99,7 +99,7 @@
 - 하지 않는 것(사용자 결정): 고른 학기로 택n 개수를 검사하는 기능(잘못 고르면 4단계 학년별 총 학급수 불일치로 드러남), 레이블 하나 과목을 두 학기로 나눠 여는 경우(그때는 편제표를 고침).
 
 ## 7단계 시간표(구현 중)
-설계 `docs/timetable-design.md`. 지금 있는 것: 순수 계산 `timetable.js`(입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck`), 자료 모으기 `timetable-view.js` `timetableInput(차수, 학기)`, 화면(메뉴 '7. 시간표' = 내부 단계 6: 조건 설정 + 사전 점검 결과). 시간표 계산·결과 저장은 아직 없다. **같은 값을 시간표에서 다시 입력받지 않는다.**
+설계 `docs/timetable-design.md`. 지금 있는 것: 순수 계산 `timetable.js`(입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck` + 반군 엇갈림 견적), 풀이기 `timetable-solve.js`(두 학기 함께 계산 + 독립 검증기), 자료 모으기·화면 `timetable-view.js`(메뉴 '7. 시간표' = 내부 단계 6: 조건 설정 → 사전 점검·선택지 → 시간표 계산 → 결과 표·못 지킨 조건·선택지 → 직접 고치기(두 칸 맞바꾸기·블록 한 시간 옮기기·담당 교사 바꾸기·칸/교사 고정) → 엑셀·낱장 인쇄·6단계로 블록 시간 적기). **같은 값을 시간표에서 다시 입력받지 않는다.**
 
 | 시간표 입력 | 출처(읽기만) | 맞추는 기준 | 없을 때 |
 |---|---|---|---|
@@ -118,6 +118,9 @@
 - 남은 한계: 한 그룹에서 일부 과목만 학급 단위이면 학급 단위 반이 빠지는 블록을 구분하지 못한다(경고로 알림).
 - 계산 결과: `state.timetable[차수] = { at, seconds, tried, stopped, signature, validation, result }` — `result.layers[학기]`의 `lessons[수업@반] = { slots, teacherId, bareSlots? }`·`blocks[블록] = { slots, teachers: { 분반: 교사 }, timesOverridden? }`·`creative`, `violations`(못 지킨 설정 조건), `noTeacher`(담당 교사 없음), `metrics`. `signature` = 계산 때의 두 학기 입력 서명(`timetableSignature`) — 지금 입력과 다르면 화면에 '바뀌기 전 결과'. 교사·반은 id만 저장하고 이름은 화면에서 6단계 명단으로 읽는다(학생 자료 없음). 블록 요일·교시는 시간표가 정하는 것이 기본이고(6단계 블록 시간은 `settings.keepBlockTimes`일 때만 읽음), 결과의 '6단계 블록 시간에 적어 넣기'를 누르면 7단계 → 6단계로 블록 시간(`entry.blockTimes`·`sectionResult.blocks[].times`·서명)을 되돌려 쓴다 — 6단계 출력물의 블록 시간 출처.
 - 6단계 '시간표 미리 점검'(`sectionResult.timetableCheck`)의 규칙은 `timetable.js` `timetablePrecheckDepartments` 한 곳(6단계 화면은 부르기만).
+- 시간표에만 있는 고정: `state.timetable.settings.pins[학기][수업 id] = ['월3', …]`(칸 고정)·`teacherPins[학기][수업 id] = 교사 id`(담당 교사 고정) → 입력 `pins.lessons`·`pins.teachers`. 수업 id = 결과 `lessons`의 키(`과목 id@반`). 입력 서명에는 넣지 않고 결과가 고정을 지키는지 `timetablePinsHeld`로 따로 본다.
+- 7단계 → 6단계로 가는 것은 두 가지뿐: ① '6단계 블록 시간에 적어 넣기'(사용자가 누를 때만, 블록 요일·교시) ② 6단계 학생 이동수업 시간표의 빈칸 채우기 — 6단계 `classSectionsTimetableSemesterModels`가 `typeof timetableStudentLessons === "function"` 가드로 `timetableStudentLessons(차수, 내년 학년, 학기)`를 읽기만 한다(7단계 결과가 지금 조건의 것이고 그 학기 블록 자리가 6단계 블록 시간과 같을 때만 값이 있고, 아니면 6단계는 예전 그대로).
+- 반군 엇갈림 견적(`timetableStaggerFor`·`timetableStaggerPrecheck`)은 6단계 `sectionResult`(분반·학생 배정)와 내년 반(`classSectionsHomeroomStudents`)을 **읽기만** 한다 — 6단계 분반·배정은 바꾸지 않는다.
 
 ## 남긴 것
 
