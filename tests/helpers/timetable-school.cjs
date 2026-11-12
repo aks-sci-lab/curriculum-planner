@@ -1,6 +1,7 @@
 // 시간표 테스트용 가상 학교(실제 학교와 같은 크기, 합성 자료). tests/timetable-precheck.test.cjs의 school()과 같은 모양.
 // 가상 학교: 1학년 10반(반 수업 30 + 창체 2), 2학년 11반(반 수업 19 + 택3 블록 12 + 창체 2), 3학년 11반(택5 블록 20 + 반 수업 6 + 창체 2), 주 35칸.
 // 3학년 반 수업(스포츠 생활 2 + 인공지능 기초 4)을 맡는 교사 수 = options.pe3 + options.info3 (기본 6 + 6 = 12 ≥ 11반).
+// options.blockTeachers = 블록 과목마다 교사 수(기본 2 — 1이면 어떤 두 블록도 같은 시간에 둘 수 없다), options.sharedPe = 아래 설명.
 const BLOCK_DEPARTMENTS = ["지리", "역사", "윤리", "일반사회", "물리", "화학", "생명", "지구", "일본어", "중국어", "경제"];
 function school(options = {}) {
   const teachers = [];
@@ -44,6 +45,8 @@ function school(options = {}) {
     ],
     rules: options.rules || {}
   };
+  // sharedPe: 3학년 스포츠 생활도 1·2학년 체육 교사(3명)가 맡는다 — 실제 학교 모양(3학년 반 수업 교사 = 체육 3 + 정보 options.info3명 < 11반, 체육 교사는 전 학년 수업으로 꽉 참)
+  if (options.sharedPe) input.lessons.find((lesson) => lesson.id === "3스포츠").department = "체육1";
   return input;
 }
 

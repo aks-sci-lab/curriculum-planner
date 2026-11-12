@@ -261,6 +261,30 @@ test("13칸 문제(교사가 반 수보다 적음): 조건을 다 지킬 수 없
   for (const item of reasons) assert.equal(released.layers["1"].lessons[Object.keys(released.layers["1"].lessons).find((id) => id.endsWith(`@${item.classId}`) && released.layers["1"].lessons[id].teacherId === null && id.startsWith(item.subject === "스포츠 생활" ? "3스포츠" : "3인공"))].teacherId, null);
 });
 
+test("실제 학교 모양(3학년 11반 · 블록 20 · 반 수업 2과목(2 + 4시간) · 반 수업 교사 6명 · 창체 금6·7): 블록을 1교시부터 빈틈없이 놓아 3학년 공강이 한 자리 수", () => {
+  const ctx = context();
+  // 3학년 반 수업 교사 = 체육 3명(전 학년 체육까지 맡음) + 정보 3명 = 6명 < 11반 → 반 수업은 하루 끝 쪽에만 올 수 있다
+  const inputs = { 1: school({ pe3: 0, info3: 3, sharedPe: true }) };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 300000, rounds: 4 }));
+  assert.equal(plain(ctx.timetableValidate(inputs, result)).ok, true);
+  const gaps = (grade) => result.violations.filter((item) => item.rule === "gap" && item.id.startsWith(`${grade}-`)).reduce((sum, item) => sum + item.amount, 0);
+  assert.ok(gaps("3") <= 9, `3학년 공강 ${gaps("3")}칸`);
+  assert.deepEqual([gaps("1"), gaps("2"), result.metrics.unplacedHours], [0, 0, 0]);
+  // 3학년 블록은 요일마다 1교시부터 이어지고(사이에 낀 칸 없음), 창체가 있는 금요일은 5교시까지 블록
+  const blocks = Object.entries(result.layers["1"].blocks).filter(([id]) => id.startsWith("3")).flatMap(([, item]) => item.slots);
+  const byDay = {};
+  for (const key of blocks) (byDay[key[0]] = byDay[key[0]] || []).push(Number(key.slice(1)));
+  for (const [day, periods] of Object.entries(byDay)) assert.deepEqual(periods.slice().sort((a, b) => a - b), periods.map((_, index) => index + 1), `${day}요일 블록 ${periods.join(",")}`);
+  assert.equal(byDay["금"].length, 5);
+  // '반드시' 조건끼리 부딪칠 때는 공강을 먼저 막는다(무게 공강 3000 > 하루 두 번 2000 > 교사 규칙 1000)
+  assert.deepEqual(plain(vm.runInContext("TIMETABLE_HARD_WEIGHTS", ctx)), { gap: 3000, oncePerDay: 2000 });
+  // 어떤 두 블록도 같은 시간에 둘 수 없는 극단(블록 과목 교사 1명씩)에서도 3학년 공강은 한 자리 수 근처(예전: 66칸)
+  const hard = { 1: school({ pe3: 0, info3: 3, sharedPe: true, blockTeachers: 1 }) };
+  const tough = plain(ctx.timetableSolve(hard, { seed: 1, iterations: 300000, rounds: 4 }));
+  assert.equal(plain(ctx.timetableValidate(hard, tough)).ok, true);
+  assert.ok(tough.metrics.gap <= 15, `극단 사례 공강 ${tough.metrics.gap}칸`);
+});
+
 test("흔들기·일찍 끝내기: 판 수는 설정값, 위반이 없고 나아지지 않으면 일찍 끝나고, 풀리지 않는 위반이 남으면 세 판 내리 그대로일 때 끝난다", () => {
   const ctx = context();
   const inputs = { 1: small() };
