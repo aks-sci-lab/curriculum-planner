@@ -521,12 +521,27 @@ function timetableTryMove(state, rng, temperature) {
     const to = Math.floor(rng() * P.S);
     if (from < 0 || from === to) return false;
     const riders = new Set();
-    for (let layer = 0; layer < P.L; layer += 1) for (const ci of act.classes) { const a = state.grid[layer][ci * P.S + to]; if (a !== -1) { if (P.acts[a].kind !== 0) return false; riders.add(a); } }
+    let partner = -1; // 그 칸에 같은 반들의 다른 블록·창체가 있으면 둘이 자리를 맞바꾼다
+    for (let layer = 0; layer < P.L; layer += 1) for (const ci of act.classes) {
+      const a = state.grid[layer][ci * P.S + to];
+      if (a === -1) continue;
+      if (P.acts[a].kind === 0) riders.add(a);
+      else if (partner === -1 || partner === a) partner = a;
+      else return false;
+    }
+    if (partner !== -1) {
+      const other = P.acts[partner];
+      if (other === act || other.fixedSlots || riders.size || other.classes.join() !== act.classes.join() || other.layers.join() !== act.layers.join()) return false;
+      timetableMark(state, act, k, from, -1, false); ops.push([act, k, from, -1]);
+      const ok = lift(other, to);
+      if (!drop(act, k, to) || !drop(other, ok, from)) { undo(); return false; }
+    } else {
     timetableMark(state, act, k, from, -1, false); ops.push([act, k, from, -1]);
     const moved = [];
     for (const a of riders) moved.push([P.acts[a], lift(P.acts[a], to)]);
     if (!drop(act, k, to)) { undo(); return false; }
     for (const [rider, rk] of moved) if (!drop(rider, rk, from)) { undo(); return false; }
+    }
   } else {
     // 이동 1·2. 절반쯤은 위반을 겨냥한다: 공강이 있는 반은 그 빈칸에 다른 날 수업을 끌어오고, 하루 두 번인 수업·교사 위반 수업은 다른 칸으로.
     let ci = Math.floor(rng() * P.C);

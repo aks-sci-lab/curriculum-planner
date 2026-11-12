@@ -107,7 +107,7 @@ test("5·6단계 자료를 시간표 입력으로 모은다: 학교 지정 과�
     ["3", "일본어", ["1"], 2, "제2외국어"], ["3", "일본어", ["2"], 2, "제2외국어"], ["3", "중국어", ["3"], 2, "제2외국어"]]);
   // 블록: 6단계 결과의 분반·교사, 시간은 지금 6단계 입력 칸(없으면 결과), 특별실
   assert.deepEqual(input.blocks, [
-    { id: "1:1:2-1 택2|a", grade: "2", label: "2-1 택2 a블록", times: "월1,화2,수3", sections: [
+    { id: "1:1:2-1 택2|a", grade: "2", label: "2-1 택2 a블록", times: "", sections: [
       { id: "1:1:2-1 택2|물리학#1", subject: "물리학", department: "과학-물리", credits: 3, teacherId: "p1", venue: "과학실" },
       { id: "1:1:2-1 택2|화학#1", subject: "화학", department: "과학-화학", credits: 3, teacherId: "c1", venue: "" }] },
     { id: "1:1:2-1 택2|b", grade: "2", label: "2-1 택2 b블록", times: "", sections: [{ id: "1:1:2-1 택2|물리학#2", subject: "물리학", department: "과학-물리", credits: 3, teacherIds: ["p1"], venue: "과학실" }] }]);
@@ -280,10 +280,10 @@ test("전공 일치: 담당 과목으로 두 교과를 함께 맡는 교사, 6�
   const causes = plain(ctx.timetablePrecheck(input)).issues.filter((issue) => issue.level === "fail").map((issue) => issue.cause);
   assert.ok(causes.some((cause) => /^교양: 3학년 생태와 환경 3시간을 맡을 수 있는 교사가 명단에 없습니다 → '담당 교사 없음' 3시간/.test(cause)), causes.join("\n"));
   assert.ok(causes.some((cause) => /^체육쌤 교사: 2학년 물리학\(2-1 택2 a블록\) 3시간은 이 교사의 담당 교과·담당 과목에 없는 수업입니다/.test(cause)), causes.join("\n"));
-  // 블록 시간 다시 놓기를 켜면 6단계 블록 시간을 넘기지 않는다
-  assert.equal(input.blocks[0].times, "월1,화2,수3");
-  const free = world({ entries, timetable: { settings: { freeBlockTimes: true } }, groups: ctx.classSectionsSource().groups });
-  assert.equal(plain(free.timetableInput("1", "1")).input.blocks[0].times, "");
+  // 블록 시간은 시간표가 정하는 것이 기본(6단계 블록 시간을 넘기지 않음), '6단계 블록 시간 그대로'를 켜면 고정 시간으로 넘긴다
+  assert.equal(input.blocks[0].times, "");
+  const keep = world({ entries, timetable: { settings: { keepBlockTimes: true } }, groups: ctx.classSectionsSource().groups });
+  assert.equal(plain(keep.timetableInput("1", "1")).input.blocks[0].times, "월1,화2,수3");
 });
 
 test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효과, 적용하면 고른 내역이 남고 되돌릴 수 있다(교사를 늘리는 선택지는 없음)", () => {
@@ -296,7 +296,10 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   const prepared = { creativeTotal: 2, input: { creative: { school: 2, schoolTimes: ["금6", "금7"], grade: 0, gradeTimes: {}, byGroup: false }, blocks: [{ times: "월1" }] } };
   const asked = [];
   const preview = (key) => { asked.push(key); return key === "creativeGroup" ? { counts: { block: 0, fail: 1 }, issues: [result.issues[1]] } : { counts: { block: 0, fail: 2 }, issues: result.issues }; };
-  const choices = ctx.timetableChoicesFor(result, prepared, { rules: { gap: "soft" } }, preview);
+  // 블록 시간을 이미 시간표가 정하고 있으면(기본) '블록 시간 다시 놓기' 선택지는 없다
+  assert.equal(plain(ctx.timetableChoicesFor(result, prepared, { rules: { gap: "soft" } }, preview).get("P6|3학년")).some((choice) => choice.key === "blockTimes"), false);
+  asked.length = 0;
+  const choices = ctx.timetableChoicesFor(result, prepared, { rules: { gap: "soft" }, keepBlockTimes: true }, preview);
   const view = (key) => plain(choices.get(key)).map((choice) => [choice.key, choice.kind, choice.effect ? [choice.effect.solved, choice.effect.failBefore, choice.effect.failAfter] : choice.where.step]);
   // P6: 추천 순서(양보가 작은 것부터), 이미 '최대한'인 공강은 빠짐, 반 묶음 나누기는 6단계 안내
   assert.deepEqual(view("P6|3학년"), [["blockTimes", "setting", [false, 2, 2]], ["creativeFree", "setting", [false, 2, 2]], ["creativeGroup", "setting", [true, 2, 1]], ["oncePerDay", "setting", [false, 2, 2]], ["stagger", "link", 8]]);

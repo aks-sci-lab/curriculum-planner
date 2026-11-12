@@ -1,6 +1,6 @@
 // 7단계 시간표 편성 순수 계산(timetable.js): 입력 모형과 사전 점검. DOM·state 없음(app.js보다 먼저 로드, Worker에서도 그대로 동작).
 // 설계: docs/timetable-design.md. 조건(rules)은 모두 설정값이고 기본값은 TIMETABLE_DEFAULT_RULES 한 곳.
-// 차례: 기본값·고칠 곳 → 작은 도우미(시간·매칭·유량) → timetableModel(입력 정리) → 사전 점검 P0~P10 → 6단계 미리 점검 규칙.
+// 차례: 기본값·고칠 곳 → 작은 도우미(시간·매칭·유량) → timetableModel(입력 정리) → 사전 점검 P0~P11 → 6단계 미리 점검 규칙.
 
 // "hard" = 반드시(해가 없을 때만 완화 사다리에서 풂), "soft" = 최대한, "off" = 끔.
 const TIMETABLE_DEFAULT_RULES = {
@@ -563,6 +563,42 @@ function timetablePrecheck(source) {
     }
     return [...pairs.values()];
   };
+
+  // P11 정해진 블록·창체 시간 때문에 피할 수 없는 공강: 그날 뒤쪽에 정해진 수업이 있는 빈칸(낀 칸)은 모두 채워야 하는데,
+  // 채울 수업(시간이 정해지지 않은 반 수업·블록·창체)이 그보다 적으면 모자란 만큼은 반드시 공강이 된다.
+  if (rules.gap !== "off") {
+    for (const grade of model.grades) {
+      if (!grade.classes.length) continue;
+      const creative = model.creative.byGrade[grade.grade] || { school: 0, grade: 0, total: 0, times: [] };
+      const creativeFixed = [...model.creative.schoolTimes.slice(0, creative.school), ...(model.creative.byGroup ? [] : creative.times.slice(0, creative.grade))]
+        .map((time) => `${time.day}${time.period}`).filter((key) => grade.slotByKey.has(key));
+      const hit = [];
+      for (const classId of grade.classes) {
+        const fixedKeys = new Set(creativeFixed);
+        let fixedBlockHours = 0;
+        for (const block of blocksOfClass.get(classId) || []) {
+          const keys = block.times.slice(0, block.hours).map((time) => `${time.day}${time.period}`).filter((key) => grade.slotByKey.has(key));
+          if (keys.length < block.hours) continue; // 시간이 덜 적혔거나 격자 밖이면 시간표가 놓는다
+          for (const key of keys) fixedKeys.add(key);
+          fixedBlockHours += block.hours;
+        }
+        if (!fixedKeys.size) continue;
+        const lastOfDay = new Map();
+        for (const key of fixedKeys) { const slot = grade.slotByKey.get(key); lastOfDay.set(slot.d, Math.max(lastOfDay.get(slot.d) || 0, slot.period)); }
+        const between = grade.slots.filter((slot) => !fixedKeys.has(slot.key) && slot.period < (lastOfDay.get(slot.d) || 0));
+        const movable = sum(lessonsOfClass.get(classId) || [], (lesson) => lesson.hours) + sum(blocksOfClass.get(classId) || [], (block) => block.hours) - fixedBlockHours + Math.max(0, creative.total - creativeFixed.length);
+        if (between.length > movable) hit.push({ classId, between: between.map((slot) => slot.key), movable, gaps: between.length - movable });
+      }
+      if (!hit.length) continue;
+      const total = sum(hit, (row) => row.gaps);
+      const worst = hit.reduce((a, b) => (b.gaps > a.gaps ? b : a));
+      const blockFixed = (blocksOfClass.get(worst.classId) || []).some((block) => block.times.length >= block.hours);
+      add("P11", rules.gap === "hard" ? "fail" : "warn",
+        `${grade.grade}학년: 정해진 ${blockFixed ? "블록" : ""}${blockFixed && creativeFixed.length ? "·" : ""}${creativeFixed.length ? "창체" : ""} 시간 사이에 낀 칸이 반마다 ${worst.between.length}칸(${joinNames(worst.between, 13)})인데 그 칸에 넣을 수업은 ${worst.movable}시간뿐입니다 → 반마다 최소 ${worst.gaps}칸, ${hit.length}개 반 모두 ${total}칸이 공강이 됩니다(${blockFixed ? "블록 시간을 시간표가 정하게 하면 없앨 수 있습니다" : "창체 시간을 풀면 줄일 수 있습니다"}).`,
+        blockFixed ? [timetableWhere("time", "블록 시간"), timetableWhere("sections", "블록 시간")] : [timetableWhere("time", "창체")],
+        { data: { grade: grade.grade, gaps: total, classes: hit.length, between: worst.between.length, movable: worst.movable }, relax: blockFixed ? ["blockTimes", "creativeFree", "gaps"] : ["creativeFree", "creativeGroup", "gaps"] });
+    }
+  }
 
   // P6·P7 학년(반군) 반 수업 동시성, 교사 한 명에 몰린 반 수업
   const gapHard = rules.gap === "hard";

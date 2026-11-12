@@ -1,4 +1,4 @@
-// 7단계 시간표 순수 계산(timetable.js): 입력 모형과 사전 점검 P0~P10. 모든 자료는 합성(실제 학교와 같은 크기의 가상 학교)이다.
+// 7단계 시간표 순수 계산(timetable.js): 입력 모형과 사전 점검 P0~P11. 모든 자료는 합성(실제 학교와 같은 크기의 가상 학교)이다.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -302,6 +302,36 @@ test("P6: 블록·창체 시간이 정해져 있어 반 수업 칸이 하루 가
   assert.equal(issuesOf(ctx.timetablePrecheck(byGroup), "P6").length, 0);
   byGroup.creative.byGroup = false;
   assert.equal(issuesOf(ctx.timetablePrecheck(byGroup), "P6").length, 1);
+});
+
+test("P11: 정해진 블록·창체 시간 사이에 낀 칸이 채울 수업보다 많으면 피할 수 없는 공강 수를 알린다(블록 시간을 풀면 사라짐)", () => {
+  const ctx = context();
+  const scattered = { a: "월3,화1,수7,목1", b: "월1,화6,수6,목4", c: "월7,화3,목3,금3", d: "월5,수5,목6,금5", e: "월6,화5,수3,금2" };
+  const input = school();
+  for (const [id, times] of Object.entries(scattered)) input.blocks.find((block) => block.id === `3${id}`).times = times.split(",");
+  const p11 = plain(issuesOf(ctx.timetablePrecheck(input), "P11"));
+  assert.equal(p11.length, 1);
+  assert.equal(p11[0].cause, "3학년: 정해진 블록·창체 시간 사이에 낀 칸이 반마다 11칸(월2, 월4, 화2, 화4, 수1, 수2, 수4, 목2, 목5, 금1, 금4)인데 그 칸에 넣을 수업은 6시간뿐입니다 → 반마다 최소 5칸, 11개 반 모두 55칸이 공강이 됩니다(블록 시간을 시간표가 정하게 하면 없앨 수 있습니다).");
+  assert.deepEqual([p11[0].level, p11[0].relax, p11[0].data, p11[0].where.map((where) => where.target)],
+    ["fail", ["blockTimes", "creativeFree", "gaps"], { grade: "3", gaps: 55, classes: 11, between: 11, movable: 6 }, ["블록 시간", "블록 시간"]]);
+  // 공강 규칙이 '최대한'이면 확인, 끄면 점검하지 않음
+  input.rules = { gap: "soft" };
+  assert.equal(plain(issuesOf(ctx.timetablePrecheck(input), "P11"))[0].level, "warn");
+  input.rules = { gap: "off" };
+  assert.equal(issuesOf(ctx.timetablePrecheck(input), "P11").length, 0);
+  // 블록 시간을 시간표가 정하면(시간 없음) 사라진다 — 창체 금6·7만 정해져 있어도 금요일 1~5교시를 채울 수업은 충분
+  assert.equal(issuesOf(ctx.timetablePrecheck(school()), "P11").length, 0);
+  // 블록을 하루 앞쪽부터 빈틈없이 정해 두었으면(월~목 1~5교시) 낀 칸은 금 1~5교시 5칸 ≤ 반 수업 6시간 → 통과
+  const packed = school();
+  ["a", "b", "c", "d", "e"].forEach((id, index) => { packed.blocks.find((block) => block.id === `3${id}`).times = ["월", "화", "수", "목"].map((day, d) => `${day}${((index + d) % 5) + 1}`); });
+  assert.equal(issuesOf(ctx.timetablePrecheck(packed), "P11").length, 0);
+  // 창체만 정해져 있고 채울 수업이 모자란 경우: 주 5시간뿐인 학년에 창체가 금7 → 금 1~6교시 6칸 > 5시간
+  const thin = { semester: "1", days: "월,화,수,목,금", periods: 7, grades: [{ grade: "1", classes: 2 }], creative: { school: 1, schoolTimes: ["금7"] },
+    teachers: [{ id: "k", name: "국어", departments: ["국어"] }, { id: "k2", name: "국어 2", departments: ["국어"] }], lessons: [{ id: "국어", grade: "1", subject: "국어", department: "국어", hours: 5 }], blocks: [], rules: {} };
+  const creativeOnly = plain(issuesOf(ctx.timetablePrecheck(thin), "P11"));
+  assert.equal(creativeOnly.length, 1);
+  assert.match(creativeOnly[0].cause, /^1학년: 정해진 창체 시간 사이에 낀 칸이 반마다 6칸.*넣을 수업은 5시간뿐입니다 → 반마다 최소 1칸, 2개 반 모두 2칸이 공강이 됩니다\(창체 시간을 풀면 줄일 수 있습니다\)\.$/);
+  assert.deepEqual(creativeOnly[0].relax, ["creativeFree", "creativeGroup", "gaps"]);
 });
 
 test("P7: 교사 한 명에 몰린 반 수업 — 한 학년 반 수업 시수는 그 학년 반 수업 칸 수를 넘을 수 없다, 같은 교사가 한 반에 하루 두 번은 안 됨", () => {

@@ -1,6 +1,9 @@
 // 7단계 시간표 풀이기 확인: 백업을 사용자처럼 복원한 앱에서 시간표 입력(5·6단계 자료)을 꺼낸 뒤, Node에서 풀이기(timetable-solve.js)를 돌려
 // 학기별 '반드시' 조건 위반·공강·규칙 지표·담당 교사 없음·걸린 시간과 검증기 결과를 적는다(화면이 아니라 계산 품질을 보는 스크립트).
-// 사용: node e2e/timetable-solve-check.cjs <출력 폴더> <백업 .json.gz> [--seeds 1,2,3] [--iterations 600000] [--modes each,frame] [--inputs <저장해 둔 inputs.json>]
+// 사용: node e2e/timetable-solve-check.cjs <출력 폴더> <백업 .json.gz> [--seeds 1,2,3] [--iterations 600000] [--modes each,frame] [--set blockTimes=keep,creative=byGroup] [--inputs <저장해 둔 inputs.json>]
+//   --set         = 시간표 조건을 바꿔서 계산(백업의 조건 위에 덮어씀, 쉼표로 여러 개):
+//                   blockTimes=free|keep(시간표가 블록 자리를 정함 = 기본 | 6단계 블록 시간 그대로), creative=fixed|grade|byGroup(전교 동시 6단계 고정 시간 | 학년별 | 학년별 + 반군별),
+//                   rules.<이름>=<값>(예: rules.gap=soft, rules.run=4, rules.semesterFrame=soft). --inputs 와 함께면 blockTimes=free 와 rules.* 만 쓸 수 있다.
 //   --modes each  = 학기마다 따로, frame = 두 학기 함께(뼈대: 이어지는 수업·블록·창체는 같은 칸). 기본 둘 다.
 //   --inputs      = 앞서 이 스크립트가 <출력 폴더>/inputs.json 에 적어 둔 입력으로 다시 계산(브라우저를 열지 않음).
 // 출력 폴더의 inputs.json·report.json 에는 교사 이름이 들어 있을 수 있으니 저장소에 커밋하지 않는다(학생 자료는 들어가지 않는다).
@@ -17,10 +20,20 @@ fs.mkdirSync(OUT, { recursive: true });
 const seeds = String(flag("seeds", "1")).split(",").map(Number).filter((value) => value > 0);
 const iterations = flag("iterations", "") ? Number(flag("iterations")) : undefined;
 const modes = String(flag("modes", "each,frame")).split(",");
+const SET = Object.fromEntries(String(flag("set", "")).split(",").filter(Boolean).map((pair) => { const at = pair.indexOf("="); return [pair.slice(0, at), pair.slice(at + 1)]; }));
+const ruleValue = (text) => (/^-?\d+(\.\d+)?$/.test(text) ? Number(text) : text);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function readInputs() {
-  if (INPUTS) return JSON.parse(fs.readFileSync(INPUTS, "utf8"));
+  if (INPUTS) {
+    const saved = JSON.parse(fs.readFileSync(INPUTS, "utf8"));
+    for (const [key, value] of Object.entries(SET)) {
+      if (key === "blockTimes" && value === "free") { for (const input of Object.values(saved.semesters)) for (const block of input.blocks || []) block.times = ""; }
+      else if (key.startsWith("rules.")) { for (const input of Object.values(saved.semesters)) input.rules = { ...(input.rules || {}), [key.slice(6)]: ruleValue(value) }; }
+      else { console.error(`--inputs 와 함께 쓸 수 없는 조건: ${key}=${value}(백업으로 다시 뽑으세요)`); process.exit(2); }
+    }
+    return saved;
+  }
   const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
   const { chromium } = require(path.join(globalRoot, "playwright"));
   const { startStaticServer } = require(path.join(ROOT, "e2e/lib/static-server.cjs"));
@@ -36,16 +49,26 @@ async function readInputs() {
   await page.locator("#restoreWorkspaceBackup").setInputFiles(BACKUP);
   await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 10000 }).catch(() => {});
   await nav; await sleep(2500);
-  const data = await page.evaluate(() => {
+  const data = await page.evaluate((set) => {
     const round = String(state.currentRound);
-    const out = { round, semesters: {}, assumptions: {} };
+    // 조건 덮어쓰기(--set): 화면에서 고르는 것과 같은 저장 값을 넣는다
+    const settings = timetableSettingsEdit();
+    for (const [key, text] of Object.entries(set)) {
+      if (key === "blockTimes") { if (text === "keep") settings.keepBlockTimes = true; else delete settings.keepBlockTimes; }
+      else if (key === "creative") {
+        if (text === "fixed") delete settings.creative;
+        else settings.creative = { school: 0, schoolTimes: [], grade: Number(timetableInput(round, "1").creativeTotal) || 0, gradeTimes: {}, byGroup: text === "byGroup" };
+      } else if (key.startsWith("rules.")) settings.rules = { ...(settings.rules || {}), [key.slice(6)]: /^-?\d+(\.\d+)?$/.test(text) ? Number(text) : text };
+      else throw new Error(`모르는 조건: ${key}`);
+    }
+    const out = { round, set, semesters: {}, assumptions: {} };
     for (const semester of ["1", "2"]) {
       const prepared = timetableInput(round, semester);
       out.semesters[semester] = JSON.parse(JSON.stringify(prepared.input));
       out.assumptions[semester] = prepared.assumptions.map((entry) => entry.text);
     }
     return out;
-  });
+  }, SET);
   await browser.close(); server.close?.();
   fs.writeFileSync(path.join(OUT, "inputs.json"), JSON.stringify(data));
   return data;
@@ -57,7 +80,8 @@ async function readInputs() {
   vm.runInContext(fs.readFileSync(path.join(ROOT, "timetable.js"), "utf8"), ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, "timetable-solve.js"), "utf8"), ctx);
   const plain = (value) => JSON.parse(JSON.stringify(value));
-  const report = { round: data.round, precheck: {}, runs: [] };
+  const report = { round: data.round, set: SET, precheck: {}, runs: [] };
+  if (Object.keys(SET).length) console.log(`조건 덮어쓰기: ${Object.entries(SET).map(([key, value]) => `${key}=${value}`).join(", ")}`);
   for (const semester of Object.keys(data.semesters)) {
     const check = plain(ctx.timetablePrecheck(data.semesters[semester]));
     report.precheck[semester] = { counts: check.counts, fail: check.issues.filter((issue) => issue.level === "fail" || issue.level === "block").map((issue) => `${issue.id} ${issue.cause}`) };

@@ -509,8 +509,9 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
         sectionHours[grade] = (sectionHours[grade] || 0) + credits;
       }
       if (!sections.length) continue;
-      // 블록 시간: 지금 6단계 입력 칸(없으면 결과). '시간표가 다시 놓기'를 켰으면 비워서 넘긴다.
-      const times = tt.freeBlockTimes ? "" : entry.blockTimes?.[letter] !== undefined ? entry.blockTimes[letter] : (block.times || []);
+      // 블록 시간: 기본은 시간표가 정한다(비워서 넘김 — 6단계 블록 시간은 공강을 모르고 정한 값이라 그대로 쓰면 공강이 생기기 쉽다).
+      // '6단계 블록 시간 그대로'를 켰을 때만 지금 6단계 입력 칸(없으면 결과)을 고정 시간으로 넘긴다.
+      const times = !tt.keepBlockTimes ? "" : entry.blockTimes?.[letter] !== undefined ? entry.blockTimes[letter] : (block.times || []);
       blocks.push({ id: `${group.key}|${letter}`, grade, label: `${group.category} ${letter}블록`, times: typeof times === "string" ? times.replace(/\//g, ",") : times, sections });
     }
   }
@@ -576,8 +577,8 @@ function timetableRuleDefault(key) {
 // 사전 점검 항목의 relax 이름 → 선택지. 순서가 추천 순서(양보가 작은 것부터).
 var TIMETABLE_CHOICES = {
   blockTimes: { label: "6단계 블록 시간을 시간표가 다시 놓기", gives: "6단계에서 정한 블록 요일·교시가 바뀝니다(분반·학생 배정은 그대로).",
-    skip: (tt, prepared) => Boolean(tt.freeBlockTimes) || !prepared.input.blocks.some((block) => String(block.times || "").length),
-    patch: (tt) => ({ ...tt, freeBlockTimes: true }) },
+    skip: (tt, prepared) => !tt.keepBlockTimes || !prepared.input.blocks.some((block) => String(block.times || "").length),
+    patch: (tt) => ({ ...tt, keepBlockTimes: null }) },
   creativeFree: { label: "창체 시간을 고정하지 않기(학년별로 놓고 계산이 정함)", gives: "창체가 지금 고정 시간(예: 금 6·7)이 아닐 수 있습니다. 동아리(전교 같은 시간)는 그대로 둡니다.",
     skip: (tt, prepared) => { const creative = prepared.input.creative; return !timetableTimes(creative.schoolTimes).length && !Object.values(creative.gradeTimes || {}).some((list) => timetableTimes(list).length); },
     patch: (tt, prepared) => { const total = Number(prepared.creativeTotal) || 0; const club = Math.min(1, total); return { ...tt, creative: { school: club, schoolTimes: [], grade: total - club, gradeTimes: {}, byGroup: Boolean(prepared.input.creative.byGroup) } }; } },
@@ -809,8 +810,8 @@ function timetableConditionsHtml(prepared) {
   }).join("") + `<p class="cs-note">과목마다 반 수는 편제표 × 학급 수(1단계 교차집중 팝업에서 고른 '1반 더 받을 과목' 포함)로 정해져 있어 여기서는 어느 반인지만 고릅니다. 교차집중은 다른 학기에 서로 맞바꿉니다.</p>`
     : '<p class="cs-note">반 일부만 듣는 학교 지정 과목(교차집중·분할 편성)이 없습니다.</p>';
 
-  const blockRow = `<div class="tt-row"><span class="tt-label">블록 시간</span><span class="tt-fields"><label><input type="checkbox" data-tt-field="blocks.free" ${tt.freeBlockTimes ? "checked" : ""}> 6단계 블록 시간을 지키지 않고 시간표가 다시 놓기</label>
-    <span class="cs-note">끄면 6단계에서 정한 블록 요일·교시를 그대로 씁니다.</span></span></div>`;
+  const blockRow = `<div class="tt-row"><span class="tt-label">블록 시간</span><span class="tt-fields"><label><input type="checkbox" data-tt-field="blocks.keep" ${tt.keepBlockTimes ? "checked" : ""}> 6단계 블록 시간 그대로 지키기</label>
+    <span class="cs-note">끄면(기본) 블록 요일·교시를 시간표가 공강이 생기지 않게 정합니다 — 분반·학생 배정은 그대로이고, 계산 뒤 결과에서 6단계에 적어 넣을 수 있습니다.</span></span></div>`;
   const chosen = Array.isArray(tt.choices) ? tt.choices : [];
   const chosenHtml = chosen.length ? `<div class="tt-chosen" id="timetableChosen" data-count="${chosen.length}"><strong>고른 선택 ${chosen.length}개</strong>
     <ol>${chosen.map((entry) => `<li>${timetableEsc(entry.label)}</li>`).join("")}</ol><button class="button" type="button" id="timetableChoiceUndo">마지막 선택 되돌리기</button></div>` : "";
@@ -1040,7 +1041,9 @@ function timetableResultHtml(saved, stale, semester, prepared) {
   const notesHtml = notes.length ? `<section class="cs-card" id="timetableNotes"><h4>알림 ${notes.length}건</h4><ul class="tt-issues">${notes.slice(0, 30).map((note) => `<li class="tt-issue"><span class="tt-level" data-level="info">알림</span><span class="tt-cause">${timetableEsc(note)}</span></li>`).join("")}</ul></section>` : "";
   let grid = "";
   try { grid = layer ? timetableGridHtml(timetableResultTables(prepared.input, layer)) : ""; } catch (error) { grid = `<p class="cs-note is-warn">표를 그리지 못했습니다: ${timetableEsc(error?.message || error)}</p>`; }
-  return `<section class="cs-card tt-result" id="timetableResult" data-stale="${stale ? "1" : "0"}"><h4>계산 결과${stale ? ' <span class="cs-note is-warn" id="timetableResultStale">조건·자료가 바뀌기 전 결과</span>' : ""}</h4>${summary}${invalid}${grid}</section>${violationHtml}${noTeacherHtml}${notesHtml}`;
+  const blockNote = Object.keys(layer?.blocks || {}).length && !timetableSettings().keepBlockTimes
+    ? '<p class="cs-note" id="timetableBlockNote">블록 요일·교시는 시간표가 정한 자리입니다(반 시간표의 블록 칸). 6단계 블록 시간 칸과 출력물에는 아직 옮겨 적지 않습니다.</p>' : "";
+  return `<section class="cs-card tt-result" id="timetableResult" data-stale="${stale ? "1" : "0"}"><h4>계산 결과${stale ? ' <span class="cs-note is-warn" id="timetableResultStale">조건·자료가 바뀌기 전 결과</span>' : ""}</h4>${summary}${invalid}${grid}${blockNote}</section>${violationHtml}${noTeacherHtml}${notesHtml}`;
 }
 
 function renderTimetableView() {
@@ -1111,9 +1114,9 @@ function timetableApplyField(field, target) {
     if (next.length === 1 && next[0] === "교양") delete settings.openDepartments; else settings.openDepartments = next;
     return `다른 교과 교사가 맡을 수 있는 교과: ${next.length ? next.join(", ") : "없음"}`;
   }
-  if (name === "blocks.free") {
-    if (target.checked) settings.freeBlockTimes = true; else delete settings.freeBlockTimes;
-    return target.checked ? "블록 시간을 시간표가 다시 놓기" : "6단계 블록 시간 그대로";
+  if (name === "blocks.keep") {
+    if (target.checked) settings.keepBlockTimes = true; else delete settings.keepBlockTimes;
+    return target.checked ? "6단계 블록 시간 그대로 지키기" : "블록 시간을 시간표가 정하기";
   }
   if (name.startsWith("rules.")) {
     const rule = name.slice(6);
@@ -1183,9 +1186,9 @@ function timetableApplyChoice(key) {
   if (!choice?.patch || !prepared) return "";
   const settings = timetableSettingsEdit();
   const plain = (value) => (value === undefined ? null : JSON.parse(JSON.stringify(value, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined)));
-  const before = { rules: plain(settings.rules), creative: plain(settings.creative), freeBlockTimes: plain(settings.freeBlockTimes) };
+  const before = { rules: plain(settings.rules), creative: plain(settings.creative), keepBlockTimes: plain(settings.keepBlockTimes) };
   const next = choice.patch(plain(settings) || {}, prepared);
-  for (const name of ["rules", "creative", "freeBlockTimes"]) {
+  for (const name of ["rules", "creative", "keepBlockTimes"]) {
     if (next[name] === undefined || next[name] === null) delete settings[name]; else settings[name] = next[name];
   }
   settings.choices = [...(Array.isArray(settings.choices) ? plain(settings.choices) : []), { key, label: choice.label, at: new Date().toISOString(), before }];
@@ -1197,7 +1200,7 @@ function timetableUndoChoice() {
   const list = Array.isArray(settings.choices) ? JSON.parse(JSON.stringify(settings.choices, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined)) : [];
   const last = list.pop();
   if (!last) return "";
-  for (const name of ["rules", "creative", "freeBlockTimes"]) {
+  for (const name of ["rules", "creative", "keepBlockTimes"]) {
     if (last.before?.[name] === undefined || last.before?.[name] === null) delete settings[name]; else settings[name] = last.before[name];
   }
   if (list.length) settings.choices = list; else delete settings.choices;
