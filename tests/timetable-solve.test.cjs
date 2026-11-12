@@ -406,6 +406,9 @@ test("두 학기 뼈대 + 학기마다 다른 블록 분반 교사(블록 교사
   // 3학년 공강은 블록 사이 낀 칸이 없으니 한 자리 수, 남는 교사 위반(점심·연강)은 위반 목록에 교사·요일과 함께
   const gap3 = result.violations.filter((item) => item.rule === "gap" && item.id.startsWith("3-")).reduce((sum, item) => sum + item.amount, 0);
   assert.ok(gap3 <= 9, `3학년 공강 ${gap3}칸`);
+  // 2학년 블록을 옮기다가 한 칸이 학년 전체(11반) 빈 채로 굳지 않는다 — 블록을 옮기면서 그 반들의 빈칸을 함께 메우고,
+  // 블록 교사가 그 시각에 맡고 있던 다른 반 수업을 비켜 주는 묶음 이동(예전에는 이 설정에서 2학년 공강 22칸이 남았다)
+  assert.ok(result.metrics.gap <= 6, `두 학기 공강 ${result.metrics.gap}칸`);
   assert.ok(result.violations.filter((item) => item.rule === "lunch").every((item) => item.kind === "teacher" && item.day && /점심 시간이 없습니다/.test(item.cause)));
 });
 
