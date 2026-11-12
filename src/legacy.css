@@ -2402,6 +2402,8 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-table thead th { background:#f5f7fb; font-size:12px; }
     .tt-choices { grid-column:2; margin-top:2px; padding:8px 10px; border-radius:8px; background:#f7f9fd; font-size:12px; }
     .tt-choices-title { font-weight:700; color:#33415c; }
+    .tt-choices li[data-recommended="1"] { background:#f1f8f3; border-radius:8px; padding:6px 8px; }
+    .tt-level.tt-recommend { background:#e3f4ea; color:#1f6a45; align-self:center; }
     .tt-choices ul { list-style:none; margin:6px 0 0; padding:0; }
     .tt-choices li { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:5px 0; border-top:1px dashed #e0e6f1; }
     .tt-choices li:first-child { border-top:0; }

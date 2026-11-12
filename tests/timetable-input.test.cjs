@@ -313,11 +313,19 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   // 계산 뒤 남은 위반에 맞는 선택지 이름은 모두 조건을 바꾸는 선택지(patch)
   const resultChoices = plain(vm.runInContext("TIMETABLE_RESULT_CHOICES", ctx));
   assert.deepEqual(Object.keys(resultChoices).sort(), ["gap", "lunch", "maxPerDay", "oncePerDay", "run"]);
-  // 뼈대 중간 단계: 점심·연강 위반에 '2학기 블록 순서를 학기마다 다르게 허용' — 뼈대가 '같은 칸'일 때만 나온다
+  // 뼈대 중간 단계: 점심·연강 위반에 '블록 순서를 학기마다 다르게 허용' — 뼈대가 '같은 칸'일 때만 나온다
   assert.deepEqual([resultChoices.lunch, resultChoices.run], [["frameOrder"], ["teacherRules", "frameOrder"]]);
   assert.deepEqual(plain(vm.runInContext("TIMETABLE_CHOICES.frameOrder.patch({ rules: { run: 4 } })", ctx)), { rules: { run: 4, semesterFrame: "order" } });
   assert.deepEqual([vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({})", ctx), vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'order' } })", ctx), vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'soft' } })", ctx)], [false, true, true]);
   assert.ok(Object.values(resultChoices).flat().every((key) => vm.runInContext(`typeof TIMETABLE_CHOICES.${key}.patch`, ctx) === "function"));
+  // 두 학기 같은 칸 결과에 교사 점심·연강이 남으면 '블록 순서를 학기마다 다르게 허용'이 맨 앞·추천(실제 자료에서 이 선택으로 풀린 위반)
+  const leftover = { metrics: { frameMode: "hard" }, noTeacher: [], violations: [
+    { level: "hard", rule: "oncePerDay", amount: 2, subjects: [] }, { level: "hard", rule: "lunch", amount: 1 }, { level: "hard", rule: "lunch", amount: 1 }, { level: "hard", rule: "run", amount: 1 }, { level: "soft", rule: "lunch", amount: 5 }] };
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, {}, {})), { keys: ["frameOrder", "releaseTeacher", "oncePerDay", "teacherRules"], recommended: "frameOrder", lunch: 2, run: 1 });
+  // 한 학기만 계산한 결과·이미 '같은 시간대'인 조건·점심·연강이 없는 결과에는 추천하지 않는다
+  assert.equal(ctx.timetableResultChoiceKeys({ ...leftover, metrics: { frameMode: "off" } }, {}, {}).recommended, "");
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, { rules: { semesterFrame: "order" } }, {})), { keys: ["releaseTeacher", "oncePerDay", "teacherRules"], recommended: "", lunch: 2, run: 1 });
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys({ metrics: { frameMode: "hard" }, violations: [{ level: "hard", rule: "oncePerDay", amount: 1 }] }, {}, {})), { keys: ["releaseTeacher", "oncePerDay"], recommended: "", lunch: 0, run: 0 });
   // 과목을 붙이는 선택지 'double:과목' = 그 과목 2시간 연속 수업 허용(이미 고른 과목이면 빠짐)
   const double = vm.runInContext("timetableChoiceOf('double:발명과 기업가 정신')", ctx);
   assert.equal(double.label, "'발명과 기업가 정신' 2시간 연속 수업 허용");

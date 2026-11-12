@@ -291,11 +291,17 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   console.log("▶ 계산 뒤 선택지: 고르면 그 조건으로 다시 계산");
   const total = async () => page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; return { hard: saved.result.metrics.hard, noTeacher: saved.result.metrics.noTeacherHours, run: (state.timetable.settings.rules || {}).run, cover: (state.timetable.settings.rules || {}).cover || "hard" }; });
   const beforeChoice = await total();
-  const choiceRows = await panel.locator("#timetableResultChoices [data-tt-choice-row]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.ttChoiceRow, text: el.textContent.replace(/\s+/g, " ").trim() })));
+  const choiceRows = await panel.locator("#timetableResultChoices [data-tt-choice-row]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.ttChoiceRow, recommended: el.dataset.recommended === "1", text: el.textContent.replace(/\s+/g, " ").trim() })));
   report.checks.choices = { beforeChoice, choiceRows };
   check(beforeChoice.hard > 0 && choiceRows.some((row) => row.key === "teacherRules" && /연강 4시간/.test(row.text) && /이 선택으로 다시 계산/.test(row.text)),
     `'반드시' 위반 ${beforeChoice.hard}건이 남은 결과에 선택지(${choiceRows.map((row) => row.key).join(", ")})`, choiceRows);
   check(!choiceRows.some((row) => /증원|순회|강사|교사를 늘/.test(row.text)), "선택지에 교사를 늘리는 문구 없음");
+  // 두 학기 같은 칸 결과에 교사 점심·연강이 남아 있으면 '블록 순서를 학기마다 다르게 허용'이 맨 위에 추천으로 나온다
+  const teacherLeft = await page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; const m = saved.result.metrics; return { mode: m.frameMode, lunch: m.lunch, run: m.run }; });
+  if (teacherLeft.mode === "hard" && teacherLeft.lunch + teacherLeft.run > 0 && choiceRows.some((row) => row.key === "frameOrder")) {
+    check(choiceRows[0].key === "frameOrder" && choiceRows[0].recommended && /^추천 블록 순서를 학기마다 다르게 허용/.test(choiceRows[0].text) && /두 학기 같은 칸에서는 .*(점심|연강) \d+건이 남았습니다/.test(choiceRows[0].text)
+      && choiceRows.filter((row) => row.recommended).length === 1, `같은 칸 결과에 점심 ${teacherLeft.lunch}·연강 ${teacherLeft.run}건 → 맨 위 추천: ${choiceRows[0].text.slice(0, 120)}`);
+  } else console.log(`  (추천 선택지 확인 건너뜀: 뼈대 ${teacherLeft.mode}, 점심 ${teacherLeft.lunch}, 연강 ${teacherLeft.run})`);
   await panel.locator('[data-tt-choice-solve="teacherRules"]').click();
   await panel.locator("#timetableRunProgress").waitFor({ timeout: 10000 });
   await waitResult(240000);

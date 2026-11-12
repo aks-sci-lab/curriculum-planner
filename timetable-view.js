@@ -799,7 +799,7 @@ var TIMETABLE_CHOICES = {
   gaps: { label: "반 공강 허용(최대한 줄이고 끝 교시 쪽으로)", gives: "어떤 반은 하루 가운데에 빈 시간이 생길 수 있습니다.",
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).gap !== "hard",
     patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), gap: "soft" } }) },
-  frameOrder: { label: "2학기 블록 순서를 학기마다 다르게 허용(블록 시간대는 그대로)", gives: "블록이 놓이는 요일·교시 묶음은 두 학기 같고, 그 안에서 어느 블록이 어느 칸인지는 학기마다 달라질 수 있습니다. 이어지는 반 수업은 그대로 두 학기 같은 칸·같은 교사입니다.",
+  frameOrder: { label: "블록 순서를 학기마다 다르게 허용(블록 시간대는 그대로)", gives: "블록이 놓이는 요일·교시 묶음은 두 학기 같고, 그 안에서 어느 블록이 어느 칸인지는 학기마다 달라질 수 있습니다. 이어지는 반 수업은 그대로 두 학기 같은 칸·같은 교사입니다.",
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).semesterFrame !== "hard",
     patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), semesterFrame: "order" } }) },
   releaseTeacher: { label: "공강·하루 두 번이 남으면 그 수업은 '담당 교사 없음'으로 두기(공강 먼저)", gives: "교사를 세우면 공강이나 하루 두 번이 생기는 반 수업은 담당 교사 칸을 비웁니다 — '담당 교사 없음' 시간이 늘어납니다.",
@@ -1548,6 +1548,34 @@ function timetableGridHtml(tables, stale = false) {
 }
 
 // 계산 결과 영역: 요약 → 남은 위반 → 담당 교사 없음 → 알림 → 반·교사 표. 고른 학기 것만 보여 준다.
+// 계산 뒤 선택지 목록(순수): 남은 '반드시' 위반의 규칙 → 선택지 이름(조건이 이미 그 값이면 뺌) + 과목별 '2시간 연속 수업 허용'.
+// 두 학기 같은 칸(뼈대 hard) 결과에 교사 점심·연강이 남아 있으면 '블록 순서를 학기마다 다르게 허용'을 맨 앞에 추천으로 둔다
+// (학기마다 블록 분반 교사가 달라 같은 칸에서는 남기 쉬운 위반 — 실제 자료에서 이 선택으로 풀렸다).
+// 돌려주는 값: { keys: [선택지 이름…], recommended: 추천 선택지 이름 | "", lunch: 점심 위반 수, run: 연강 위반 수 }
+function timetableResultChoiceKeys(result, settings, prepared) {
+  const keys = [];
+  const hard = (result?.violations || []).filter((entry) => entry.level === "hard");
+  for (const item of hard) for (const key of TIMETABLE_RESULT_CHOICES[item.rule] || []) {
+    const choice = TIMETABLE_CHOICES[key];
+    if (choice?.patch && !keys.includes(key) && !(choice.skip && choice.skip(settings, prepared))) keys.push(key);
+  }
+  // 같은 수업이 하루 두 번인 과목, 교사 시간이 모자라 담당 교사가 없는 반 수업 과목 → '그 과목 2시간 연속 수업 허용'
+  const doubleSubjects = new Set();
+  for (const item of hard) if (item.rule === "oncePerDay") for (const subject of item.subjects || []) doubleSubjects.add(subject);
+  for (const item of (result?.noTeacher || [])) if (item.kind === "lesson" && item.reason === "capacity") doubleSubjects.add(item.subject);
+  for (const subject of doubleSubjects) { const key = `double:${subject}`; if (!timetableChoiceOf(key).skip(settings) && keys.length < 12) keys.push(key); }
+  const amount = (rule) => hard.filter((item) => item.rule === rule).reduce((sum, item) => sum + (Number(item.amount) || 1), 0);
+  const lunch = amount("lunch");
+  const run = amount("run");
+  let recommended = "";
+  if (keys.includes("frameOrder") && result?.metrics?.frameMode === "hard" && lunch + run > 0) {
+    keys.splice(keys.indexOf("frameOrder"), 1);
+    keys.unshift("frameOrder");
+    recommended = "frameOrder";
+  }
+  return { keys, recommended, lunch, run };
+}
+
 function timetableResultHtml(saved, stale, semester, prepared) {
   if (!saved) return "";
   const result = saved.result;
@@ -1574,18 +1602,11 @@ function timetableResultHtml(saved, stale, semester, prepared) {
     <span class="tt-cause">${timetableEsc(item.cause)}</span></li>`).join("");
   // 남은 '반드시' 위반(두 학기 모두)에 맞는 선택지 — 고르면 조건을 바꾸고 바로 다시 계산
   const settings = timetableSettings();
-  const choiceKeys = [];
-  for (const item of (result.violations || []).filter((entry) => entry.level === "hard")) for (const key of TIMETABLE_RESULT_CHOICES[item.rule] || []) {
-    const choice = TIMETABLE_CHOICES[key];
-    if (choice?.patch && !choiceKeys.includes(key) && !(choice.skip && choice.skip(settings, prepared))) choiceKeys.push(key);
-  }
-  // 같은 수업이 하루 두 번인 과목, 교사 시간이 모자라 담당 교사가 없는 반 수업 과목 → '그 과목 2시간 연속 수업 허용'
-  const doubleSubjects = new Set();
-  for (const item of (result.violations || [])) if (item.level === "hard" && item.rule === "oncePerDay") for (const subject of item.subjects || []) doubleSubjects.add(subject);
-  for (const item of (result.noTeacher || [])) if (item.kind === "lesson" && item.reason === "capacity") doubleSubjects.add(item.subject);
-  for (const subject of doubleSubjects) { const key = `double:${subject}`; if (!timetableChoiceOf(key).skip(settings) && choiceKeys.length < 12) choiceKeys.push(key); }
-  const choicesHtml = choiceKeys.length && !stale ? `<div class="tt-choices" id="timetableResultChoices"><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요 — 고르면 그 조건으로 다시 계산합니다)</span><ul>${choiceKeys.map((key) => `<li data-tt-choice-row="${timetableEsc(key)}" data-kind="setting">
-    <strong>${timetableEsc(timetableChoiceOf(key).label)}</strong> <button class="button" type="button" data-tt-choice-solve="${timetableEsc(key)}">이 선택으로 다시 계산</button><span class="tt-gives">${timetableEsc(timetableChoiceOf(key).gives)}</span></li>`).join("")}</ul></div>` : "";
+  const picks = timetableResultChoiceKeys(result, settings, prepared);
+  const choiceKeys = picks.keys;
+  const recommendNote = picks.recommended ? `두 학기 같은 칸에서는 ${[picks.lunch ? `교사 점심 ${picks.lunch}건` : "", picks.run ? `연강 ${picks.run}건` : ""].filter(Boolean).join("·")}이 남았습니다 — 학기마다 블록 분반 교사가 달라 같은 칸에서는 남기 쉬운 위반이고, 블록 순서만 학기마다 다르게 두면 풀리는 경우가 많습니다. ` : "";
+  const choicesHtml = choiceKeys.length && !stale ? `<div class="tt-choices" id="timetableResultChoices"${picks.recommended ? ` data-recommended="${timetableEsc(picks.recommended)}"` : ""}><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요 — 고르면 그 조건으로 다시 계산합니다)</span><ul>${choiceKeys.map((key) => `<li data-tt-choice-row="${timetableEsc(key)}" data-kind="setting"${key === picks.recommended ? ' data-recommended="1"' : ""}>
+    ${key === picks.recommended ? '<span class="tt-level tt-recommend" data-level="info">추천</span> ' : ""}<strong>${timetableEsc(timetableChoiceOf(key).label)}</strong> <button class="button" type="button" data-tt-choice-solve="${timetableEsc(key)}">이 선택으로 다시 계산</button><span class="tt-gives">${key === picks.recommended ? timetableEsc(recommendNote) : ""}${timetableEsc(timetableChoiceOf(key).gives)}</span></li>`).join("")}</ul></div>` : "";
   const violationHtml = violations.length || choicesHtml ? `<section class="cs-card" id="timetableViolations" data-hard="${count(hard)}" data-soft="${count(soft)}"><h4>못 지킨 조건 <span class="cs-note">'반드시' ${count(hard)}건 · '최대한' ${count(soft)}건 — 조건을 바꾸려면 ${timetableWhereButtons([{ key: "rules", step: 6, label: "7단계 규칙" }])}</span></h4>
     <ul class="tt-issues">${violationList(hard, 60)}</ul>${choicesHtml}${soft.length ? `<details class="tt-section" data-tt-section="soft"${TIMETABLE_VIEW.open.soft ? " open" : ""}><summary><strong>'최대한' 조건 ${count(soft)}건</strong></summary><ul class="tt-issues">${violationList(soft, 80)}</ul></details>` : ""}</section>` : "";
   // 다른 교과 교사가 맡을 수 있는 교과(교양)의 수업이면 5단계 '담당 교과'로 바로 가는 단추
