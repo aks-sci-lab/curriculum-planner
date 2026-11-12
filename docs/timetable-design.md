@@ -393,7 +393,8 @@ state.timetable = {
 | T4 **(1차 완료)** | 계산 뒤 남은 '반드시' 위반의 선택지(공강 먼저·블록 시간 다시 놓기·창체 풀기·공강 허용·하루 두 번 허용·교사 규칙 양보) → 고르면 그 조건으로 바로 다시 계산, 앞 결과와 견줌(반드시 n → m, 담당 교사 없음 n → m), 고른 내역·되돌리기. 남은 것: 위반 한 건마다의 선택지·예상 효과 미리 계산 | 테스트: 일부러 불가능한 자료에서 항상 결과 + 사다리 기록, 실제 2학기 모양 합성 자료 |
 | T5a **(완료)** | 직접 고치기 1차: 반 시간표에서 칸을 누르면 맞바꿀 수 있는 칸 표시(안 되는 칸은 이유) → 두 칸 맞바꾸기(반 수업·빈칸만, 절대 조건은 검증기로 다시 확인), 위반 목록 다시 세기, 되돌리기, '직접 고침 n번' | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
 | T5b **(완료)** | 칸 고정 → 고정을 지키며 다시 계산: 반 수업 칸을 골라 '이 칸에 고정'(과목·칸 기준, 담당 교사는 다시 정해질 수 있음), 고정한 칸은 맞바꿀 수 없음, 이미 그 자리인 칸을 고정해도 결과는 그대로, 고정 모두 풀기 | `tests/timetable-solve.test.cjs`(고정·못 지킨 고정·뼈대), `tests/timetable-result.test.cjs`·`tests/timetable-input.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
-| T5 | 남은 직접 고치기: 블록 자리 옮기기(학년 전체), 교사 바꾸기·교사 고정 | `tests/timetable-edit.test.cjs`, 클릭 `e2e/timetable-edit-ui.cjs` |
+| T5c **(완료)** | 블록 한 시간 옮기기: 반 시간표에서 블록 칸을 누르면 옮길 수 있는 칸 표시 → 누르면 그 블록을 듣는 모든 반에서 함께 옮김(그 칸의 반 수업은 블록 자리로, 같은 반들의 다른 블록과는 자리 맞바꿈), 검증기로 절대 조건 확인·안 되는 칸은 이유, 두 학기 묶음이면 '벗어난 칸'으로 셈, 되돌리기 | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
+| T5 | 남은 직접 고치기: 교사 바꾸기·교사 고정 | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
 | T6a **(완료)** | 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(`timetableBlockTimeChanges`·`timetableWriteBlockTimes`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
 | T6b **(완료)** | 엑셀 내려받기: 학기마다 학급별·교사별 전체 시간표 + 못 지킨 조건 + 담당 교사 없음(`timetableResultSheets`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs`(파일 이름·시트) |
 | T6c **(완료)** | 낱장 인쇄: 지금 보는 학기의 반별·교사별 시간표를 A4 한 장에 2개씩(이 반/교사만, 전체) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |

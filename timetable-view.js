@@ -283,20 +283,41 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
   const model = input.gradeOf instanceof Map ? input : timetableModel(input); // 이미 만든 모형을 넘겨도 된다(여러 칸을 한꺼번에 살필 때)
   const grade = model.grades.find((item) => item.classes.includes(classId));
   if (!grade || !grade.slotByKey.has(a) || !grade.slotByKey.has(b)) return refuse("이 반의 시간표에 없는 칸입니다.");
-  const what = (key) => {
-    for (const block of model.blocks) if (block.classIds.includes(classId) && (layer.blocks?.[block.id]?.slots || []).includes(key)) return { kind: "block", name: block.label };
+  const what = (key, room = classId) => {
+    for (const block of model.blocks) if (block.classIds.includes(room) && (layer.blocks?.[block.id]?.slots || []).includes(key)) return { kind: "block", id: block.id, name: block.label };
     for (const item of layer.creative || []) {
-      const mine = item.scope === "school" || (item.scope === "grade" && String(item.grade) === grade.grade) || item.classId === classId;
+      const mine = item.scope === "school" || (item.scope === "grade" && String(item.grade) === grade.grade) || item.classId === room;
       if (mine && (item.slots || []).includes(key)) return { kind: "creative", name: "창체" };
     }
-    for (const lesson of model.lessons) if (lesson.classId === classId && (layer.lessons?.[lesson.id]?.slots || []).includes(key)) return { kind: "lesson", id: lesson.id, name: lesson.subject };
+    for (const lesson of model.lessons) if (lesson.classId === room && (layer.lessons?.[lesson.id]?.slots || []).includes(key)) return { kind: "lesson", id: lesson.id, name: lesson.subject };
     return { kind: "empty", name: "빈칸" };
   };
   const first = what(a);
   const second = what(b);
-  for (const [key, cell] of [[a, first], [b, second]]) if (cell.kind === "block" || cell.kind === "creative") return refuse(`${key}은 ${cell.name}(학년 전체가 함께 듣는 시간)이라 반 하나만 옮길 수 없습니다.`);
+  for (const [key, cell] of [[a, first], [b, second]]) if (cell.kind === "creative") return refuse(`${key}은 창체 시간이라 옮길 수 없습니다(창체 시간은 조건 설정에서 정합니다).`);
   if (first.kind === "empty" && second.kind === "empty") return refuse("두 칸 모두 비어 있습니다.");
   if (first.kind === "lesson" && second.kind === "lesson" && first.id === second.id) return refuse("같은 수업의 두 시간입니다.");
+  if (first.kind === "block" && second.kind === "block" && first.id === second.id) return refuse("같은 블록의 두 시간입니다.");
+  // 블록 칸이 끼면 '블록 한 시간 옮기기': 그 블록을 듣는 모든 반에서 함께 옮긴다 — 옮겨 갈 칸의 반 수업들은 블록이 있던 칸으로, 같은 반들의 다른 블록이면 둘이 자리를 맞바꾼다.
+  const blockMove = first.kind === "block" || second.kind === "block" ? (() => {
+    const [from, to, moving, target] = first.kind === "block" ? [a, b, first, second] : [b, a, second, first];
+    const block = model.blocks.find((item) => item.id === moving.id);
+    const riders = []; // [수업 id] — 옮겨 갈 칸에 있던 반 수업(블록이 있던 칸으로 간다)
+    let partner = null;
+    for (const room of block.classIds) {
+      const cell = what(to, room);
+      if (cell.kind === "creative") return { reason: `${to}은 ${room}반의 창체 시간이라 ${block.label}을 옮길 수 없습니다.` };
+      if (cell.kind === "block") { if (partner && partner !== cell.id) return { reason: `${to}에는 반마다 다른 블록이 있어 ${block.label}과 맞바꿀 수 없습니다.` }; partner = cell.id; }
+      else if (cell.kind === "lesson") riders.push(cell.id);
+    }
+    if (partner) {
+      const other = model.blocks.find((item) => item.id === partner);
+      if (riders.length || other.classIds.join() !== block.classIds.join()) return { reason: `${to}의 ${other.label}은 듣는 반이 달라 ${block.label}과 맞바꿀 수 없습니다.` };
+    }
+    void target;
+    return { from, to, block, riders, partner: partner ? model.blocks.find((item) => item.id === partner) : null };
+  })() : null;
+  if (blockMove && blockMove.reason) return refuse(blockMove.reason);
   const before = timetableValidate(inputs, result);
   const next = JSON.parse(JSON.stringify(result));
   let broken = 0;
@@ -316,8 +337,33 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
     item.slots = item.slots.map((key) => (key === from ? to : key));
     if (item.bareSlots) item.bareSlots = item.bareSlots.map((key) => (key === from ? to : key));
   };
-  if (first.kind === "lesson") move(first.id, a, b);
-  if (second.kind === "lesson") move(second.id, b, a);
+  // 블록 한 시간을 옮긴다. 두 학기 같은 자리 묶음이면 다른 학기의 짝 블록(같은 반들·같은 칸)도 묶음 표시를 푼다.
+  const moveBlock = (block, from, to) => {
+    const item = next.layers[semester].blocks[block.id];
+    if (item.frame) {
+      const same = item.slots.slice().sort().join(",");
+      for (const [other, otherLayer] of Object.entries(next.layers)) {
+        if (other === semester || !inputs[other]) continue;
+        const otherModel = inputs[other].gradeOf instanceof Map ? inputs[other] : timetableModel(inputs[other]);
+        for (const mate of otherModel.blocks) {
+          const value = otherLayer.blocks?.[mate.id];
+          if (value && value.frame && mate.grade === block.grade && mate.classIds.join() === block.classIds.join() && value.slots.slice().sort().join(",") === same) { delete value.frame; break; }
+        }
+      }
+      broken += 1;
+      delete item.frame;
+    }
+    item.slots = item.slots.map((key) => (key === from ? to : key));
+    if (item.bareSlots) item.bareSlots = item.bareSlots.map((key) => (key === from ? to : key));
+  };
+  if (blockMove) {
+    for (const id of blockMove.riders) move(id, blockMove.to, blockMove.from);
+    moveBlock(blockMove.block, blockMove.from, blockMove.to);
+    if (blockMove.partner) moveBlock(blockMove.partner, blockMove.to, blockMove.from);
+  } else {
+    if (first.kind === "lesson") move(first.id, a, b);
+    if (second.kind === "lesson") move(second.id, b, a);
+  }
   const check = timetableValidate(inputs, next);
   const known = new Set(before.errors.map((item) => `${item.semester}|${item.text}`));
   const fresh = check.errors.filter((item) => !known.has(`${item.semester}|${item.text}`));
@@ -327,6 +373,11 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
   next.metrics = { ...next.metrics, hard: check.violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + item.amount, 0), gap: check.counts.gap, oncePerDay: check.counts.oncePerDay, run: check.counts.run,
     maxPerDay: check.counts.maxPerDay, lunch: check.counts.lunch, frameBroken: (next.metrics?.frameBroken || 0) + broken };
   next.edits = (Number(result.edits) || 0) + 1;
+  if (blockMove) {
+    const rooms = blockMove.block.classIds.length;
+    return { ok: true, block: true, result: next, text: blockMove.partner ? `${grade.grade}학년 ${blockMove.from} ${blockMove.block.label} ↔ ${blockMove.to} ${blockMove.partner.label}`
+      : `${grade.grade}학년 ${blockMove.block.label} ${blockMove.from} → ${blockMove.to}(${rooms}개 반 함께${blockMove.riders.length ? `, 그 칸의 반 수업 ${blockMove.riders.length}개는 ${blockMove.from}으로` : ""})` };
+  }
   return { ok: true, result: next, text: `${classId}반 ${a} ${first.name} ↔ ${b} ${second.name}` };
 }
 
@@ -1302,7 +1353,11 @@ function timetableEditClick(slot) {
     TIMETABLE_VIEW.editPick = slot;
     TIMETABLE_VIEW.editTargets = targets;
     const able = Object.values(targets).filter((value) => value === true).length;
-    TIMETABLE_VIEW.editStatus = able ? `${slot}과 맞바꿀 수 있는 칸 ${able}곳을 표시했습니다. 바꿀 칸을 누르세요(같은 칸을 다시 누르면 취소).` : `${slot}은 지금 맞바꿀 수 있는 칸이 없습니다(칸마다 이유는 마우스를 올리면 보입니다).`;
+    const pickedBlock = inputs[semester].blocks.find((block) => block.classIds.includes(TIMETABLE_VIEW.pick.class) && (plainResult.layers?.[semester]?.blocks?.[block.id]?.slots || []).includes(slot));
+    TIMETABLE_VIEW.editStatus = pickedBlock
+      ? (able ? `${slot} ${pickedBlock.label}을 옮길 수 있는 칸 ${able}곳을 표시했습니다. 옮길 칸을 누르세요 — 이 블록을 듣는 ${pickedBlock.classIds.length}개 반이 함께 옮겨지고, 그 칸의 반 수업은 ${slot}으로 옵니다(같은 칸을 다시 누르면 취소).`
+        : `${slot} ${pickedBlock.label}은 지금 옮길 수 있는 칸이 없습니다(칸마다 이유는 마우스를 올리면 보입니다).`)
+      : able ? `${slot}과 맞바꿀 수 있는 칸 ${able}곳을 표시했습니다. 바꿀 칸을 누르세요(같은 칸을 다시 누르면 취소).` : `${slot}은 지금 맞바꿀 수 있는 칸이 없습니다(칸마다 이유는 마우스를 올리면 보입니다).`;
     TIMETABLE_VIEW.editError = !able;
     renderTimetable();
     return;
@@ -1317,7 +1372,7 @@ function timetableEditClick(slot) {
   TIMETABLE_VIEW.undo.push({ round, result: plainResult, text: outcome.text });
   if (TIMETABLE_VIEW.undo.length > 30) TIMETABLE_VIEW.undo.shift();
   state.timetable[round].result = outcome.result;
-  TIMETABLE_VIEW.editStatus = `맞바꿨습니다 — ${outcome.text}`;
+  TIMETABLE_VIEW.editStatus = `${outcome.block ? "블록을 옮겼습니다" : "맞바꿨습니다"} — ${outcome.text}`;
   TIMETABLE_VIEW.editError = false;
   if (typeof persistStateSoon === "function") persistStateSoon();
   renderTimetable();
@@ -1484,7 +1539,7 @@ function timetableGridHtml(tables, stale = false) {
     <button class="button" type="button" id="timetablePrintOne"${stale ? " disabled" : ""}>이 ${view === "teacher" ? "교사" : "반"} 인쇄</button>
     <button class="button" type="button" id="timetablePrintAll"${stale ? " disabled" : ""}>${view === "teacher" ? "교사" : "반"} 전체 인쇄(${list.length}${view === "teacher" ? "명" : "개 반"})</button>
     <button class="button" type="button" id="timetableDownload"${stale ? ' disabled title="다시 계산한 뒤 내려받으세요"' : ""}>엑셀로 내려받기(학급·교사 전체 시간표)</button></div>
-    ${view === "class" && !stale ? `<p class="cs-note" id="timetableEditHelp">직접 고치기: 반 수업 칸을 누르면 맞바꿀 수 있는 칸이 초록으로 표시됩니다 — 그 칸을 누르면 두 칸을 맞바꿉니다(블록·창체 칸, 교사가 그 시간에 다른 반에 있는 칸은 안 되고 이유는 칸에 마우스를 올리면 보입니다).
+    ${view === "class" && !stale ? `<p class="cs-note" id="timetableEditHelp">직접 고치기: 칸을 누르면 맞바꿀 수 있는 칸이 초록으로 표시됩니다 — 그 칸을 누르면 두 칸을 맞바꿉니다. 블록 칸을 누르면 그 블록 한 시간을 옮길 수 있는 칸이 표시되고, 옮기면 그 블록을 듣는 모든 반이 함께 옮겨집니다(그 칸의 반 수업은 블록 자리로, 같은 반들의 다른 블록과는 자리 맞바꿈). 창체 칸, 교사가 그 시간에 다른 반에 있는 칸은 안 되고 이유는 칸에 마우스를 올리면 보입니다.
       <button class="button" type="button" id="timetableEditUndo"${TIMETABLE_VIEW.undo.length ? "" : " disabled"}>고친 것 되돌리기${TIMETABLE_VIEW.undo.length ? `(${TIMETABLE_VIEW.undo.length})` : ""}</button>
       ${pickedLesson ? `<button class="button" type="button" id="timetablePin" data-pinned="${pinnedSlots.has(TIMETABLE_VIEW.editPick) ? "1" : "0"}">${pinnedSlots.has(TIMETABLE_VIEW.editPick) ? `${timetableEsc(TIMETABLE_VIEW.editPick)} 고정 풀기` : `${timetableEsc(TIMETABLE_VIEW.editPick)} ${timetableEsc(pickedLesson.text)} 이 칸에 고정`}</button>` : ""}
       ${pinTotal ? `<span id="timetablePinCount" data-count="${pinTotal}">고정 ${pinTotal}칸(다시 계산해도 그 자리)</span> <button class="button" type="button" id="timetablePinsClear">고정 모두 풀기</button>` : ""}</p>` : ""}

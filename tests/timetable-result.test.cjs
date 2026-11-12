@@ -165,12 +165,12 @@ test("직접 고치기: 반 시간표의 두 칸 맞바꾸기 — 절대 조건�
   const cells = (res, classId) => plain(ctx.timetableResultTables(input, res.layers["1"])).classes.find((row) => row.id === classId).cells;
   const before = cells(result, "1-1");
   const slotOf = (table, test) => Object.keys(table).filter((key) => test(table[key][0]));
-  // 창체·블록 칸은 반 하나만 옮길 수 없다
+  // 창체 칸은 옮길 수 없다(블록 칸은 아래 '블록 한 시간 옮기기')
   const lessonSlot = slotOf(before, (cell) => cell.kind === "lesson")[0];
-  assert.deepEqual(plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월1", b: lessonSlot })), { ok: false, reason: "월1은 창체(학년 전체가 함께 듣는 시간)이라 반 하나만 옮길 수 없습니다." });
+  assert.deepEqual(plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월1", b: lessonSlot })), { ok: false, reason: "월1은 창체 시간이라 옮길 수 없습니다(창체 시간은 조건 설정에서 정합니다)." });
   const blockSlot = layer.blocks["3a"].slots[0];
-  const thirdLesson = slotOf(cells(result, "3-1"), (cell) => cell.kind === "lesson")[0];
-  assert.match(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-1", a: blockSlot, b: thirdLesson }).reason, /3학년 a블록\(학년 전체가 함께 듣는 시간\)이라 반 하나만 옮길 수 없습니다/);
+  assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-1", a: blockSlot, b: "월1" }).reason, "월1은 창체 시간이라 옮길 수 없습니다(창체 시간은 조건 설정에서 정합니다).");
+  assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-1", a: blockSlot, b: layer.blocks["3a"].slots[1] }).reason, "같은 블록의 두 시간입니다.");
   // 같은 칸·없는 칸·빈칸끼리
   assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월2", b: "월2" }).reason, "같은 칸입니다.");
   assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월2", b: "토1" }).reason, "이 반의 시간표에 없는 칸입니다.");
@@ -204,6 +204,58 @@ test("직접 고치기: 반 시간표의 두 칸 맞바꾸기 — 절대 조건�
   for (const rule of ["gap", "oncePerDay", "run", "maxPerDay", "lunch"]) assert.equal(counted.violations.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0), result.metrics[rule], rule);
 });
 
+test("직접 고치기: 블록 한 시간 옮기기 — 그 블록을 듣는 모든 반에서 함께, 옮겨 갈 칸의 반 수업은 블록 자리로, 같은 반들의 다른 블록과는 맞바꿈", () => {
+  const ctx = context();
+  // 3학년 2반: a·b블록(2시간씩) + 반 수업 2과목, 월·화 5교시. 1학년은 없음(교사 겹침을 단순하게)
+  const input = { semester: "1", days: "월,화", periods: 5, grades: [{ grade: "3", classes: 2 }],
+    teachers: [{ id: "k1", name: "김국어", departments: ["국어"] }, { id: "m1", name: "박수학", departments: ["수학"] }, { id: "s1", name: "최선택", departments: ["선택"] }, { id: "s2", name: "정선택", departments: ["선택"] }],
+    lessons: [{ id: "3국어", grade: "3", subject: "화법", department: "국어", hours: 2 }, { id: "3수학", grade: "3", subject: "확통", department: "수학", hours: 2 }],
+    blocks: [{ id: "3a", grade: "3", label: "a블록", sections: [{ id: "3a-1", subject: "선택 가", department: "선택", credits: 2 }, { id: "3a-2", subject: "선택 나", department: "선택", credits: 2 }] },
+      { id: "3b", grade: "3", label: "b블록", sections: [{ id: "3b-1", subject: "선택 다", department: "선택", credits: 2 }, { id: "3b-2", subject: "선택 라", department: "선택", credits: 2 }] }],
+    rules: {} };
+  const inputs = { 1: input };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 8000, rounds: 2 }));
+  assert.equal(plain(ctx.timetableValidate(inputs, result)).ok, true);
+  const layer = result.layers["1"];
+  const keys = ["월", "화"].flatMap((day) => [1, 2, 3, 4, 5].map((period) => `${day}${period}`));
+  const cellsOf = (res, classId) => plain(ctx.timetableResultTables(input, res.layers["1"])).classes.find((row) => row.id === classId).cells;
+  const table = cellsOf(result, "3-1");
+  const from = layer.blocks["3a"].slots[0];
+  const tryAll = keys.filter((key) => key !== from).map((key) => [key, plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-1", a: from, b: key }))]);
+  // ① 반 수업 칸으로: 블록은 두 반 모두 그 칸으로, 그 칸에 있던 두 반의 수업은 블록 자리로. 검증기 통과, 위반 수는 검증기와 같다
+  const toLesson = tryAll.find(([key, outcome]) => outcome.ok && table[key]?.[0].kind === "lesson" && cellsOf(result, "3-2")[key]?.[0].kind === "lesson");
+  assert.ok(toLesson, tryAll.map(([key, outcome]) => `${key}:${outcome.ok ? "ok" : outcome.reason}`).join(" / "));
+  const [target, moved] = toLesson;
+  assert.deepEqual([moved.block, moved.text, moved.result.edits], [true, `3학년 a블록 ${from} → ${target}(2개 반 함께, 그 칸의 반 수업 2개는 ${from}으로)`, 1]);
+  assert.deepEqual([moved.result.layers["1"].blocks["3a"].slots.includes(target), moved.result.layers["1"].blocks["3a"].slots.includes(from)], [true, false]);
+  for (const classId of ["3-1", "3-2"]) {
+    const after = cellsOf(moved.result, classId);
+    assert.deepEqual([after[target][0].kind, after[from][0].kind, after[from][0].text], ["block", "lesson", cellsOf(result, classId)[target][0].text], classId);
+  }
+  const check = plain(ctx.timetableValidate(inputs, moved.result));
+  assert.deepEqual([check.ok, moved.result.metrics.hard], [true, check.violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + item.amount, 0)]);
+  // 반 수업 칸을 먼저 고르고 블록 칸을 눌러도 같은 이동
+  assert.deepEqual(plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-2", a: target, b: from })).result.layers["1"], moved.result.layers["1"]);
+  // ② 같은 반들의 다른 블록 칸으로: 두 블록이 자리를 맞바꾼다
+  const other = layer.blocks["3b"].slots[0];
+  const swapped = plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-1", a: from, b: other }));
+  assert.deepEqual([swapped.ok, swapped.text], [true, `3학년 ${from} a블록 ↔ ${other} b블록`]);
+  assert.deepEqual([swapped.result.layers["1"].blocks["3a"].slots.includes(other), swapped.result.layers["1"].blocks["3b"].slots.includes(from)], [true, true]);
+  assert.equal(plain(ctx.timetableValidate(inputs, swapped.result)).ok, true);
+  // ③ 안 되는 칸은 이유(검증기의 문장): 그 칸의 반 수업 교사가 블록 자리 시각에 다른 반에 있으면 겹침
+  const refused = tryAll.filter(([, outcome]) => !outcome.ok);
+  for (const [, outcome] of refused) assert.match(outcome.reason, /겹칩니다|같은 블록의 두 시간|창체|정해진 블록 시간/);
+  // ④ 블록 시간이 6단계에서 정해져 있으면(그 시간 그대로 쓰는 조건) 옮길 수 없다
+  const fixedInput = JSON.parse(JSON.stringify(input));
+  fixedInput.blocks[0].times = layer.blocks["3a"].slots.join(",");
+  const fixedResult = plain(ctx.timetableSolve({ 1: fixedInput }, { seed: 1, iterations: 8000, rounds: 2 }));
+  const fixedFrom = fixedResult.layers["1"].blocks["3a"].slots[0];
+  const lessonKey = keys.find((key) => cellsOf(fixedResult, "3-1")[key]?.[0].kind === "lesson" && cellsOf(fixedResult, "3-2")[key]?.[0].kind === "lesson");
+  const fixedTry = plain(ctx.timetableEditSwap({ 1: fixedInput }, fixedResult, { semester: "1", classId: "3-1", a: fixedFrom, b: lessonKey }));
+  assert.equal(fixedTry.ok, false);
+  assert.match(fixedTry.reason, /정해진 블록 시간|겹칩니다/);
+});
+
 test("직접 고치기(두 학기 뼈대): 한 학기에서 옮긴 수업은 다른 학기의 짝도 묶음 표시를 풀고 '벗어난 칸'으로 센다", () => {
   const ctx = context();
   const inputs = { 1: tiny(), 2: Object.assign(tiny(), { semester: "2" }) };
@@ -221,6 +273,17 @@ test("직접 고치기(두 학기 뼈대): 한 학기에서 옮긴 수업은 다
   assert.deepEqual([done.result.layers["1"].lessons["1음악@1-1"].slots, done.result.layers["2"].lessons["1음악@1-1"].slots], [[empty], [music]]);
   assert.equal(done.result.layers["1"].lessons["1국어@1-1"].frame, true, "다른 수업의 묶음은 그대로");
   assert.equal(plain(ctx.timetableValidate(inputs, done.result)).ok, true);
+  // 블록도 같다: 한 학기에서 블록 한 시간을 옮기면 두 학기 블록의 묶음 표시가 풀리고 '벗어난 칸'이 는다(그 칸의 묶음 반 수업도 함께)
+  assert.deepEqual([result.layers["1"].blocks["3a"].frame, result.layers["2"].blocks["3a"].frame], [true, true]);
+  const third = plain(ctx.timetableResultTables(inputs[1], result.layers["1"])).classes.find((row) => row.id === "3-1").cells;
+  const allKeys = ["월", "화"].flatMap((day) => [1, 2, 3, 4, 5].map((period) => `${day}${period}`));
+  const tries = result.layers["1"].blocks["3a"].slots.flatMap((slot) => allKeys.filter((key) => !third[key] || third[key][0].kind === "lesson").map((key) => [slot, key, plain(ctx.timetableEditSwap(models, result, { semester: "1", classId: "3-1", a: slot, b: key }))]));
+  const moves = tries.filter(([, , outcome]) => outcome.ok);
+  assert.ok(moves.length >= 1, tries.map(([slot, key, outcome]) => `${slot}→${key}: ${outcome.reason}`).join(" / "));
+  const [from, to, blockDone] = moves[0];
+  assert.deepEqual([blockDone.result.layers["1"].blocks["3a"].frame, blockDone.result.layers["2"].blocks["3a"].frame, blockDone.result.layers["1"].blocks["3a"].slots.includes(to), blockDone.result.layers["2"].blocks["3a"].slots.includes(from)], [undefined, undefined, true, true]);
+  assert.ok(blockDone.result.metrics.frameBroken >= 1);
+  assert.equal(plain(ctx.timetableValidate(inputs, blockDone.result)).ok, true);
 });
 
 test("칸 고정 도우미: 고정이 결과에서 지켜지는지, 그 칸의 반 수업 id", () => {

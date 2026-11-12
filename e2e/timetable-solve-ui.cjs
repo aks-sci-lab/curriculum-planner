@@ -1,7 +1,7 @@
 // 7단계 시간표 계산 화면 확인(사용자처럼 클릭): 하네스 백업(가상 학생) 복원 → 메뉴 '7. 시간표'
 // ① '시간표 계산' → 진행 표시 → 결과 요약(반드시 위반·담당 교사 없음)·반 시간표·교사 시간표 ② 반·교사 고르기, 학기 탭
 // ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답
-// ④-1 직접 고치기: 반 시간표의 두 칸 맞바꾸기(블록 칸·교사 겹침은 이유와 함께 거절), 되돌리기
+// ④-1 직접 고치기: 블록 한 시간 옮기기(그 블록을 듣는 모든 반 함께), 반 시간표의 두 칸 맞바꾸기(창체 칸·교사 겹침은 이유와 함께 거절), 되돌리기
 // ④-1b 칸 고정 → 고정을 지키며 다시 계산(고정한 칸은 맞바꿀 수 없음), 고정 모두 풀기
 // ④-2 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(6단계 결과는 '입력 변경됨'이 되지 않음)
 // ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '교사 규칙 양보' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
@@ -102,14 +102,50 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   console.log("▶ 직접 고치기: 두 칸 맞바꾸기·거절 이유·되돌리기");
   const editStatus = async () => ((await panel.locator("#timetableEditStatus").count()) ? clean(await panel.locator("#timetableEditStatus").innerText()) : "");
   const cellAt = (slot) => panel.locator(`#timetableGrid td[data-tt-edit="${slot}"]`);
-  // 블록 칸은 반 하나만 옮길 수 없다(3학년 반)
+  // 블록 한 시간 옮기기(3학년 반): 블록 칸을 누르면 옮길 수 있는 칸이 표시되고, 옮기면 그 블록을 듣는 모든 반에서 함께 옮겨진다
+  const thirdClass = await panel.locator("#timetableGridPick").inputValue();
   const thirdCells = (await gridOf()).cells;
-  const blockCell = thirdCells.find((cell) => /블록/.test(cell.text));
+  const blockCells = thirdCells.filter((cell) => /블록/.test(cell.text));
+  await cellAt(blockCells[0].slot).click(); await sleep(500);
+  check((await cellAt(blockCells[0].slot).getAttribute("aria-pressed")) === "true" && /블록(을 옮길 수 있는 칸 \d+곳을 표시했습니다|은 지금 옮길 수 있는 칸이 없습니다)/.test(await editStatus()), `블록 칸을 누르면 고른 표시 + 안내: ${(await editStatus()).slice(0, 110)}`);
+  await cellAt(blockCells[0].slot).click(); await sleep(200);
+  let blockMoved = null; const blockTried = [];
+  for (const cell of blockCells.slice(0, 12)) {
+    await cellAt(cell.slot).click(); await sleep(500);
+    const marks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => ({ slot: el.dataset.ttEdit, can: el.dataset.ttCan === "1", title: el.title, text: el.textContent.replace(/\s+/g, " ").trim() })));
+    const able = marks.filter((mark) => mark.can);
+    blockTried.push({ slot: cell.slot, able: able.length, reasons: [...new Set(marks.filter((mark) => !mark.can).map((mark) => mark.title.slice(0, 60)))].slice(0, 3) });
+    if (!able.length) { await cellAt(cell.slot).click(); await sleep(150); continue; }
+    const target = able.find((mark) => !/블록/.test(mark.text)) || able[0];
+    await cellAt(target.slot).click(); await sleep(500);
+    blockMoved = { from: cell, to: target, status: await editStatus() };
+    break;
+  }
+  report.checks.blockMove = { moved: blockMoved, tried: blockTried };
+  check(blockTried.every((item) => item.able > 0 || item.reasons.length > 0), `옮길 수 없는 칸에는 이유(예: ${blockTried.find((item) => item.reasons.length)?.reasons[0] || "없음"})`);
+  if (blockMoved) {
+    check(/^블록을 옮겼습니다 — 3학년 .+(→|↔)/.test(blockMoved.status), `블록 한 시간 옮기기: ${blockMoved.status.slice(0, 140)}`);
+    const nowThird = (await gridOf()).cells;
+    const at = (cells, slot) => cells.find((cell) => cell.slot === slot)?.text || "";
+    check(at(nowThird, blockMoved.to.slot) === blockMoved.from.text && at(nowThird, blockMoved.from.slot) === blockMoved.to.text, `이 반 표: ${blockMoved.to.slot}에 ${blockMoved.from.text.slice(0, 14)}, ${blockMoved.from.slot}에 ${blockMoved.to.text.slice(0, 14) || "빈칸"}`);
+    // 같은 학년 다른 반에서도 그 블록이 같은 칸으로 옮겨졌다
+    const sibling = classOptions.filter((id) => id.startsWith("3-") && id !== thirdClass).pop();
+    await panel.locator("#timetableGridPick").selectOption(sibling); await sleep(300);
+    check(at((await gridOf()).cells, blockMoved.to.slot) === blockMoved.from.text, `${sibling}반 표에서도 ${blockMoved.to.slot}에 ${blockMoved.from.text.slice(0, 14)}`);
+    check((await panel.locator("#timetableEdits").getAttribute("data-count")) === "1" && (await panel.locator("#timetableValidation").count()) === 0 && (await bar.getAttribute("data-state")) === "done", "블록을 옮긴 뒤에도 검증 오류 없음·'직접 고침 1번'");
+    await page.screenshot({ path: path.join(OUT, "03b-block-move.png"), fullPage: true });
+    await panel.locator("#timetableEditUndo").click(); await sleep(300);
+    await panel.locator("#timetableGridPick").selectOption(thirdClass); await sleep(300);
+    check(JSON.stringify((await gridOf()).cells.map((cell) => cell.text)) === JSON.stringify(thirdCells.map((cell) => cell.text)) && (await panel.locator("#timetableEdits").count()) === 0, "되돌리기 → 블록이 제자리로");
+  } else console.log(`  (이 자료에서는 살펴본 블록 칸 ${blockTried.length}곳 모두 옮길 수 있는 칸이 없음)`);
+  // 창체 칸은 옮길 수 없다
+  const creativeCell = thirdCells.find((cell) => /창체/.test(cell.text));
   const lessonCell = thirdCells.find((cell) => cell.text && !/블록|창체/.test(cell.text));
-  await cellAt(blockCell.slot).click(); await sleep(150);
-  check((await cellAt(blockCell.slot).getAttribute("aria-pressed")) === "true", `칸을 누르면 고른 표시(${blockCell.slot})`);
-  await cellAt(lessonCell.slot).click(); await sleep(300);
-  check(/바꾸지 않았습니다 — .*학년 전체가 함께 듣는 시간\)이라 반 하나만 옮길 수 없습니다/.test(await editStatus()), `블록 칸은 거절 + 이유: ${(await editStatus()).slice(0, 80)}`);
+  if (creativeCell && lessonCell) {
+    await cellAt(lessonCell.slot).click(); await sleep(500);
+    await cellAt(creativeCell.slot).click(); await sleep(300);
+    check(/바꾸지 않았습니다 — .*창체 시간이라 옮길 수 없습니다/.test(await editStatus()), `창체 칸은 거절 + 이유: ${(await editStatus()).slice(0, 80)}`);
+  }
   // 1학년 반: 반 수업 칸을 누르면 맞바꿀 수 있는 칸이 표시된다 → 표시된 칸을 눌러 맞바꾸기, 표시 안 된 칸은 이유와 함께 거절
   await panel.locator("#timetableGridPick").selectOption(classOptions[0]); await sleep(300);
   const original = (await gridOf()).cells;
