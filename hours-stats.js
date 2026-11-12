@@ -1218,7 +1218,9 @@ function computeHoursStats(year = hoursTargetYear()) {
   }
   // 시간표(6단계 명단 만들기·7단계)는 수업이 있는데 교사가 0명(빈칸 포함)인 교과에 자리 교사 1명을 두고 계산한다(사용자 결정: 증이 확실한 경우).
   // 교양(다른 교과 교사가 맡음)·공통 교과(세부 교과 교사가 맡음)는 빼고, 교사 수 칸 자체는 바꾸지 않는다.
-  const assumedTeachers = departments.filter((department) => !department.common && !department.otherTeachers && !(department.teachers > 0) && department.hours["1"] + department.hours["2"] > 0)
+  // 교사 수를 아직 하나도 넣지 않았으면(5단계를 하기 전) 적용하지 않는다 — 모든 교과를 1명으로 보면 6단계 시안 편성이 '교과마다 교사 1명'으로 막힌다.
+  const teachersEntered = departments.some((department) => department.teachers > 0);
+  const assumedTeachers = !teachersEntered ? [] : departments.filter((department) => !department.common && !department.otherTeachers && !(department.teachers > 0) && department.hours["1"] + department.hours["2"] > 0)
     .map((department) => ({ id: department.id, hours: { ...department.hours } }));
   if (assumedTeachers.length) {
     issues.push({ level: "info", action: "focus:hoursTeachers-" + assumedTeachers[0].id, text: `교사 0명 교과에 수업이 있습니다(${assumedTeachers.map((item) =>

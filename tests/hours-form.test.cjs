@@ -517,5 +517,11 @@ test("교사 0명인데 수업이 있는 교과: 시간표용 교사 수는 1명
   assert.deepEqual([counts.counts["국어"], counts.counts["과학-물리"], counts.assumed.includes("국어")], [1, 1, true]);
   // 교사 수를 넣으면 사라진다
   settings["2027"].teachers["국어"] = 3;
-  assert.ok(!plain(ctx.computeHoursStats("2027").assumedTeachers).some((item) => item.id === "국어"));
+  assert.ok(!plain(ctx.computeHoursStats("2027").assumedTeachers).some((item) => item.id === "국어"));  // 교사 수를 아직 하나도 넣지 않았으면(5단계 전) 적용하지 않는다 — 6단계 시안 편성이 '교과마다 1명'으로 막히지 않게
+  settings["2027"].teachers = {};
+  const empty = ctx.computeHoursStats("2027");
+  assert.deepEqual(plain(empty.assumedTeachers), []);
+  assert.equal(empty.issues.some((entry) => /^교사 0명 교과에 수업이 있습니다/.test(entry.text)), false);
+  ctx.hoursStatsCached = () => empty;
+  assert.deepEqual(plain(ctx.hoursTimetableTeacherCounts("2027")), { counts: {}, assumed: [] });
 });
