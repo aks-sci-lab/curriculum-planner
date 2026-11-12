@@ -10,6 +10,7 @@ var TIMETABLE_SOLVE_VERSION = 1;
 // 비용: 반드시 = 1000, 최대한 = 규칙별 작은 값, 끔 = 0. 못 넣은 수업 1시간 = 20000.
 var TIMETABLE_SOFT_WEIGHTS = { gap: 30, oncePerDay: 20, run: 12, maxPerDay: 12, lunch: 25, lunchSide: 2, sameSubjectDay: 1 };
 var TIMETABLE_UNPLACED_WEIGHT = 20000;
+var TIMETABLE_DEFAULT_ROUNDS = 12; // 흔들기 최대 횟수(한 번 = 기본 횟수의 절반)
 var TIMETABLE_DEFAULT_ITERATIONS = 600000; // 학기 층마다(두 학기 함께면 2배). 실제 크기 학교에서 한 학기 약 3초·두 학기 약 10초
 
 function timetableRng(seed) {
@@ -210,7 +211,8 @@ function timetableProblem(inputs) {
     act.index = index;
     if (act.kind === 0) {
       act.teachers = act.layers.map(() => (act.teacher >= 0 ? [act.teacher] : []));
-      act.pair = act.creative ? -1 : act.teacher >= 0 ? act.teacher : T + index;
+      act.pairFree = T + index;
+      act.pair = act.creative ? -1 : act.teacher >= 0 ? act.teacher : act.pairFree;
       act.venues = act.venue.map((v) => (v >= 0 ? [v] : []));
     } else if (act.kind === 1) {
       act.teachers = act.sections.map((sections) => sections.map((section) => section.teacher).filter((ti) => ti >= 0));
@@ -492,6 +494,7 @@ function timetableTryMove(state, rng, temperature) {
   const drop = (act, k, s) => { if (!timetableCanPlace(state, act, s, false)) return false; timetableMark(state, act, k, s, 1, false); ops.push([act, k, -1, s]); return true; };
   const roll = rng();
   let unplacedDelta = 0;
+  if (roll >= 0.94) return timetableTrySwapTeachers(state, rng, temperature);
   if (state.unplaced > 0 && roll < 0.25) {
     // 이동 4
     const pool = [];
@@ -563,22 +566,51 @@ function timetableTryMove(state, rng, temperature) {
     }
     if (s2 < 0 || s2 === s1) { s2 = Math.floor(rng() * (P.S - 1)); if (s2 >= s1) s2 += 1; }
     const single = P.L > 1 && rng() < 0.5 ? Math.floor(rng() * P.L) : -1;
-    const at1 = new Set();
-    const at2 = new Set();
-    for (let layer = 0; layer < P.L; layer += 1) {
-      if (single >= 0 && layer !== single) continue;
-      const a = state.grid[layer][ci * P.S + s1];
-      const b = state.grid[layer][ci * P.S + s2];
-      if (a !== -1) at1.add(a);
-      if (b !== -1) at2.add(b);
+    // 사슬(켐페): 옮겨 갈 칸에 그 교사의 다른 반 수업이 있으면 그 반도 같은 두 칸을 맞바꾼다(최대 6반).
+    const chain = [ci];
+    const pending = []; // [act, k, 옮겨 갈 칸]
+    const collect = (c) => {
+      const at1 = new Set();
+      const at2 = new Set();
+      for (let layer = 0; layer < P.L; layer += 1) {
+        if (single >= 0 && layer !== single) continue;
+        const a = state.grid[layer][c * P.S + s1];
+        const b = state.grid[layer][c * P.S + s2];
+        if (a !== -1) at1.add(a);
+        if (b !== -1) at2.add(b);
+      }
+      if (!at1.size && !at2.size) return false;
+      for (const a of at1) if (P.acts[a].kind !== 0 || (single >= 0 && P.acts[a].layers.length > 1) || at2.has(a)) return false;
+      for (const b of at2) if (P.acts[b].kind !== 0 || (single >= 0 && P.acts[b].layers.length > 1)) return false;
+      for (const a of at1) pending.push([P.acts[a], lift(P.acts[a], s1), s2]);
+      for (const b of at2) pending.push([P.acts[b], lift(P.acts[b], s2), s1]);
+      return true;
+    };
+    // 그 칸에서 이 수업의 교사를 잡고 있는 다른 반(같은 칸 번호의 반 수업일 때만), 없으면 -1
+    const blocker = (act, to) => {
+      for (let at = 0; at < act.layers.length; at += 1) {
+        const layer = act.layers[at];
+        const abs = P.absOf[act.gi][to];
+        for (const ti of act.teachers[at]) {
+          const b = state.tAt[layer][ti * P.ABS + abs];
+          if (b === -1) continue;
+          const other = P.acts[b];
+          if (other.kind !== 0 || state.grid[layer][other.classes[0] * P.S + to] !== b) return -1;
+          return other.classes[0];
+        }
+      }
+      return -1;
+    };
+    if (!collect(ci)) { undo(); return false; }
+    for (let i = 0; i < pending.length; i += 1) {
+      const [act, , to] = pending[i];
+      if (timetableCanPlace(state, act, to, false)) continue;
+      const other = blocker(act, to);
+      if (other < 0 || chain.includes(other) || chain.length >= 6) { undo(); return false; }
+      chain.push(other);
+      if (!collect(other)) { undo(); return false; }
     }
-    if (!at1.size && !at2.size) return false;
-    for (const a of at1) if (P.acts[a].kind !== 0 || (single >= 0 && P.acts[a].layers.length > 1) || at2.has(a)) return false;
-    for (const b of at2) if (P.acts[b].kind !== 0 || (single >= 0 && P.acts[b].layers.length > 1)) return false;
-    const first = [...at1].map((a) => [P.acts[a], lift(P.acts[a], s1)]);
-    const second = [...at2].map((b) => [P.acts[b], lift(P.acts[b], s2)]);
-    for (const [act, k] of first) if (!drop(act, k, s2)) { undo(); return false; }
-    for (const [act, k] of second) if (!drop(act, k, s1)) { undo(); return false; }
+    for (const [act, k, to] of pending) if (!drop(act, k, to)) { undo(); return false; }
   }
   const touched = ops.map(([act, , from, to]) => [act, from, to]);
   const { delta, changes } = timetableDelta(state, touched, false);
@@ -593,8 +625,51 @@ function timetableTryMove(state, rng, temperature) {
   return false;
 }
 
+// 이동 5: 같은 학년·같은 시수의 두 반 수업이 교사를 맞바꾼다(둘 다 서로의 후보일 때 — 전공 일치·교사별 시수는 그대로).
+function timetableSetTeacher(act, teacher) {
+  act.teacher = teacher;
+  act.teachers = act.layers.map(() => (teacher >= 0 ? [teacher] : []));
+  act.pair = teacher >= 0 ? teacher : act.pairFree;
+}
+
+function timetableTrySwapTeachers(state, rng, temperature) {
+  const P = state.P;
+  if (!P.swapMates) {
+    const movable = P.acts.filter((act) => act.kind === 0 && !act.creative && act.fixed < 0 && act.cands.length > 1);
+    P.swapMates = P.acts.map((act) => (movable.includes(act) ? movable.filter((other) => other !== act && other.gi === act.gi && other.hours === act.hours && other.layers.join() === act.layers.join()).map((other) => other.index) : []));
+    P.swapPool = movable.filter((act) => P.swapMates[act.index].length).map((act) => act.index);
+  }
+  if (!P.swapPool.length) return false;
+  const a = P.acts[P.swapPool[Math.floor(rng() * P.swapPool.length)]];
+  const mates = P.swapMates[a.index];
+  const b = P.acts[mates[Math.floor(rng() * mates.length)]];
+  const ta = a.teacher;
+  const tb = b.teacher;
+  if (ta < 0 || tb < 0 || ta === tb || !a.cands.includes(tb) || !b.cands.includes(ta)) return false;
+  const placed = [];
+  for (const act of [a, b]) state.slotOf[act.index].forEach((s, k) => { if (s >= 0 && state.bare[act.index][k] !== 1) placed.push([act, k, s]); });
+  for (const [act, k, s] of placed) timetableMark(state, act, k, s, -1, false);
+  const back = (done) => {
+    for (let i = done - 1; i >= 0; i -= 1) timetableMark(state, placed[i][0], placed[i][1], placed[i][2], -1, false);
+    timetableSetTeacher(a, ta); timetableSetTeacher(b, tb);
+    for (const [act, k, s] of placed) timetableMark(state, act, k, s, 1, false);
+    return false;
+  };
+  timetableSetTeacher(a, tb); timetableSetTeacher(b, ta);
+  for (let i = 0; i < placed.length; i += 1) {
+    const [act, k, s] = placed[i];
+    if (!timetableCanPlace(state, act, s, false)) return back(i);
+    timetableMark(state, act, k, s, 1, false);
+  }
+  const both = { layers: a.layers, classes: [], teachers: a.layers.map(() => [ta, tb]), everyone: false };
+  const touched = placed.flatMap(([act, , s]) => [[act, s, -1], [both, s, -1]]);
+  const { delta, changes } = timetableDelta(state, touched, false);
+  if (delta <= 0 || rng() < Math.exp(-delta / temperature)) { timetableCommit(state, changes); state.cost += delta; return true; }
+  return back(placed.length);
+}
+
 function timetableSnapshot(state) {
-  return { cost: state.cost, slots: state.slotOf.map((slots) => Int16Array.from(slots)) };
+  return { cost: state.cost, slots: state.slotOf.map((slots) => Int16Array.from(slots)), teachers: state.P.acts.map((act) => (act.kind === 0 ? act.teacher : -1)) };
 }
 
 function timetableRestoreSnapshot(state, snapshot) {
@@ -604,7 +679,7 @@ function timetableRestoreSnapshot(state, snapshot) {
   for (const table of state.absLoad) table.fill(0);
   for (const table of state.everyone) table.fill(0);
   for (const table of state.venueLoad) table.fill(0);
-  P.acts.forEach((act, index) => { state.slotOf[index].fill(-1); state.bare[index].fill(0); });
+  P.acts.forEach((act, index) => { state.slotOf[index].fill(-1); state.bare[index].fill(0); if (act.kind === 0 && !act.creative && snapshot.teachers && act.teacher !== snapshot.teachers[index]) timetableSetTeacher(act, snapshot.teachers[index]); });
   P.acts.forEach((act, index) => { snapshot.slots[index].forEach((s, k) => { if (s >= 0) timetableMark(state, act, k, s, 1, false); }); });
   timetableRecount(state);
 }
@@ -617,26 +692,34 @@ function timetableSolveStart(inputs, options = {}) {
   const rng = timetableRng(seed);
   timetableConstruct(state, rng);
   const total = Math.max(0, Math.floor(Number(options.iterations ?? TIMETABLE_DEFAULT_ITERATIONS * P.L)));
-  return { P, state, rng, seed, iteration: 0, total, base: total, phaseStart: 0, phaseEnd: total, hot: 40, extensions: 0, best: timetableSnapshot(state), startCost: state.cost, accepted: 0 };
+  // rounds = 첫 담금질 뒤 '흔들기'(가장 좋은 상태에서 다시 데워 돌기)를 몇 번까지 할지. 횟수 기준이라 같은 씨앗 = 같은 결과.
+  const rounds = Math.max(0, Math.floor(Number(options.rounds ?? TIMETABLE_DEFAULT_ROUNDS)));
+  return { P, state, rng, seed, iteration: 0, total, base: total, phaseStart: 0, phaseEnd: total, hot: 40, extensions: 0, rounds, stale: 0, roundCost: Infinity, best: timetableSnapshot(state), startCost: state.cost, accepted: 0 };
 }
 
 // 탐색을 count번 더 한다(Worker가 조각으로 불러 중단 요청을 받을 수 있게). 돌려주는 값: 진행 상황.
-// 정해진 횟수를 다 돌고도 '반드시' 조건 위반이나 못 넣은 수업이 남으면 가장 좋은 상태에서 조금 데워 더 돈다(최대 4번, 횟수 기준이라 재현됨).
+// 한 판(정해진 횟수)을 돌 때마다 가장 좋은 상태로 돌아가 살핀다:
+//   '반드시' 위반·못 넣은 수업이 없고 이번 판에 나아진 것이 거의 없으면 끝(일찍 끝내기),
+//   위반이 남았어도 세 판 내리 나아지지 않으면 끝(자료상 풀리지 않는 위반), 아니면 다시 데워(흔들기) 한 판 더 — 최대 rounds 판.
 function timetableSolveStep(run, count = 5000) {
   const { state } = run;
   const cold = 0.4;
   let left = count;
   while (left > 0) {
     if (run.iteration >= run.phaseEnd) {
-      if (run.finished || run.extensions >= 4 || !run.base) { run.finished = true; break; }
-      // 가장 좋은 상태로 돌아가 '반드시' 위반·못 넣은 수업이 남았는지 본다. 없으면 끝.
+      if (run.finished || !run.base) { run.finished = true; break; }
       timetableRestoreSnapshot(state, run.best);
-      if (!state.unplaced && !timetableViolations(state).some((item) => item.level === "hard")) { run.finished = true; break; }
+      const hardLeft = state.unplaced > 0 || timetableViolations(state).some((item) => item.level === "hard");
+      const improved = run.roundCost - run.best.cost;
+      run.stale = improved > Math.max(0.5, run.best.cost * 0.005) ? 0 : run.stale + 1;
+      run.roundCost = run.best.cost;
+      run.hardLeft = hardLeft;
+      if (run.extensions >= run.rounds || (!hardLeft && run.stale >= 1) || run.stale >= 3) { run.finished = true; break; }
       run.extensions += 1;
       run.phaseStart = run.iteration;
       run.phaseEnd = run.iteration + Math.max(1, Math.floor(run.base / 2));
       run.total = run.phaseEnd;
-      run.hot = 6;
+      run.hot = run.extensions % 2 ? 6 : 15;
     }
     const end = Math.min(run.phaseEnd, run.iteration + left);
     const span = Math.max(1, run.phaseEnd - run.phaseStart);
@@ -650,7 +733,7 @@ function timetableSolveStep(run, count = 5000) {
     }
   }
   const done = Boolean(run.finished) || !run.base;
-  return { done, iteration: run.iteration, total: run.total, cost: state.cost, best: run.best.cost, unplaced: state.unplaced, extensions: run.extensions };
+  return { done, iteration: run.iteration, total: run.total, cost: state.cost, best: run.best.cost, unplaced: state.unplaced, extensions: run.extensions, rounds: run.rounds, hardLeft: run.hardLeft };
 }
 
 // ---- 결과 ----
@@ -959,11 +1042,11 @@ function timetableValidate(inputs, result) {
 function TIMETABLE_FUNCTIONS_FOR_WORKER() {
   return [timetableWhere, timetableParseTime, timetableTimes, timetableNumber, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck,
     timetableRng, timetableRuleWeight, timetableProblem, timetableState, timetableCanPlace, timetableMark, timetableClassDayCost, timetableTeacherDayCost, timetableRecount, timetableDelta, timetableCommit,
-    timetableConstruct, timetableTryMove, timetableSnapshot, timetableRestoreSnapshot, timetableSolveStart, timetableSolveStep, timetableSolveFinish, timetableViolations, timetableSolve];
+    timetableConstruct, timetableTryMove, timetableSetTeacher, timetableTrySwapTeachers, timetableSnapshot, timetableRestoreSnapshot, timetableSolveStart, timetableSolveStep, timetableSolveFinish, timetableViolations, timetableSolve];
 }
 
 function timetableWorkerSource() {
-  const constants = { TIMETABLE_DEFAULT_RULES, TIMETABLE_WHERE, TIMETABLE_SOLVE_VERSION, TIMETABLE_SOFT_WEIGHTS, TIMETABLE_UNPLACED_WEIGHT, TIMETABLE_DEFAULT_ITERATIONS };
+  const constants = { TIMETABLE_DEFAULT_RULES, TIMETABLE_WHERE, TIMETABLE_SOLVE_VERSION, TIMETABLE_SOFT_WEIGHTS, TIMETABLE_UNPLACED_WEIGHT, TIMETABLE_DEFAULT_ITERATIONS, TIMETABLE_DEFAULT_ROUNDS };
   const lines = Object.entries(constants).map(([name, value]) => `var ${name} = ${JSON.stringify(value)};`);
   return `"use strict";\n${lines.join("\n")}\n${TIMETABLE_FUNCTIONS_FOR_WORKER().map((fn) => fn.toString()).join("\n")}
 var timetableRun = null;

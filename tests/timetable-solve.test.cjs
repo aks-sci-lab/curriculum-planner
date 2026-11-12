@@ -251,6 +251,27 @@ test("13칸 문제(교사가 반 수보다 적음): 조건을 다 지킬 수 없
   assert.deepEqual([result.metrics.gap, result.metrics.oncePerDay, result.metrics.run, result.metrics.maxPerDay, result.metrics.lunch], [check.counts.gap, check.counts.oncePerDay, check.counts.run, check.counts.maxPerDay, check.counts.lunch]);
 });
 
+test("흔들기·일찍 끝내기: 판 수는 설정값, 위반이 없고 나아지지 않으면 일찍 끝나고, 풀리지 않는 위반이 남으면 세 판 내리 그대로일 때 끝난다", () => {
+  const ctx = context();
+  const inputs = { 1: small() };
+  // rounds 0 = 첫 담금질만
+  const once = plain(ctx.timetableSolve(inputs, { seed: 2, iterations: 20000, rounds: 0 }));
+  assert.deepEqual([once.iterations, once.total], [20000, 20000]);
+  // 위반 0이면 최대 판 수(12)를 다 쓰지 않고 끝난다
+  const easy = plain(ctx.timetableSolve(inputs, { seed: 2, iterations: 60000 }));
+  assert.equal(easy.metrics.hard, 0);
+  assert.ok(easy.iterations < 60000 + 12 * 30000, `일찍 끝남: ${easy.iterations}`);
+  assert.equal(easy.iterations % 30000, 0);
+  // 풀리지 않는 위반(교사 1명이 한 반에 하루 두 번 들어갈 수밖에 없음: 주 5일에 7시간): 끝나고, 결과는 검증 통과
+  const stuck = { 1: small((input) => { input.lessons.find((lesson) => lesson.id === "1국어").hours = 7; input.lessons.find((lesson) => lesson.id === "1사회").hours = 0; input.teachers = input.teachers.filter((teacher) => !["국어2", "국어3"].includes(teacher.id)); input.lessons = input.lessons.filter((lesson) => lesson.hours > 0 && lesson.id !== "2국어"); }) };
+  const hard = plain(ctx.timetableSolve(stuck, { seed: 2, iterations: 20000, rounds: 8 }));
+  assert.ok(hard.metrics.hard > 0, "위반이 남는 자료");
+  assert.ok(hard.iterations <= 20000 + 8 * 10000);
+  assert.equal(plain(ctx.timetableValidate(stuck, hard)).ok, true);
+  // 같은 씨앗 = 같은 결과(교사 맞바꾸기·사슬 이동 포함)
+  assert.deepEqual(plain(ctx.timetableSolve(stuck, { seed: 2, iterations: 20000, rounds: 8 })), hard);
+});
+
 test("Worker 소스: 조각으로 돌며 진행 상황을 보내고, 중단하면 그때까지의 결과를 돌려준다(직접 풀이와 같은 결과)", () => {
   const ctx = context();
   const inputs = { 1: small() };
@@ -269,7 +290,7 @@ test("Worker 소스: 조각으로 돌며 진행 상황을 보내고, 중단하�
   assert.deepEqual([last.ok, last.done, last.stopped], [true, true, false]);
   assert.deepEqual(last.value, direct, "Worker 결과 = 직접 풀이");
   const progress = messages.filter((message) => !message.done);
-  assert.ok(progress.length >= 5 && progress.every((message) => message.id === "a" && message.progress.total === 30000));
+  assert.ok(progress.length >= 5 && progress.every((message) => message.id === "a" && message.progress.total >= 30000 && message.progress.best <= message.progress.cost + 1e-6));
   // 중단
   const stopped = [];
   const partial = start(stopped);
