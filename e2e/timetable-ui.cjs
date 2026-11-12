@@ -38,7 +38,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const panel = page.locator("#workflowStep6Panel");
   const openStep = async () => { await page.getByRole("button", { name: /7\. 시간표/ }).click(); await panel.waitFor({ state: "visible" }); await sleep(500); };
   const issues = async () => panel.locator("#timetablePrecheck > ul .tt-issue").evaluateAll((els) => els.map((el) => ({ id: el.dataset.ttIssue, level: el.dataset.level, text: el.querySelector(".tt-cause").textContent.trim() })));
-  const openSection = async (key) => { const d = panel.locator(`[data-tt-section="${key}"]`); if (!(await d.evaluate((el) => el.open))) { await d.locator("summary").click(); await sleep(200); } };
+  const openSection = async (key) => { const d = panel.locator(`[data-tt-section="${key}"]`); if (!(await d.evaluate((el) => el.open))) { await d.locator(":scope > summary").click(); await sleep(200); } };
 
   console.log("▶ 메뉴·사전 점검 결과");
   await openStep();
@@ -72,6 +72,18 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await page.screenshot({ path: path.join(OUT, "02-rule-change.png"), fullPage: true });
   await panel.locator("#timetableRulesReset").click(); await sleep(400);
   check((await issues()).some((item) => /^음악:/.test(item.text)) && /새로 생김/.test(clean(await change.innerText())), "규칙을 기본값으로 → 음악 항목이 다시 생김('새로 생김')");
+  // 2시간 연속 수업을 허용할 과목(과목별)
+  const doubleRow = panel.locator('[data-tt-rule="doubleSubjects"]');
+  await doubleRow.locator("details.tt-double > summary").click(); await sleep(200);
+  const doubleBoxes = doubleRow.locator('#timetableDoubleSubjects input[type="checkbox"]');
+  const doubleCount = await doubleBoxes.count();
+  const doubleName = clean(await doubleRow.locator("#timetableDoubleSubjects label").first().innerText());
+  await doubleBoxes.first().check(); await sleep(500);
+  const doubleChange = clean(await change.innerText());
+  check(doubleCount >= 5 && /방금 바꾼 조건: '.+' 2시간 연속 수업 허용/.test(doubleChange) && /^1과목: /.test(clean(await doubleRow.locator("details.tt-double > summary").innerText())),
+    `2시간 연속 수업 허용 과목 고르기(${doubleCount}과목 중 '${doubleName}') → 바로 다시 점검`, doubleChange.slice(0, 120));
+  await doubleRow.locator('#timetableDoubleSubjects input[type="checkbox"]').first().uncheck(); await sleep(400);
+  check(/없음 — 과목 고르기/.test(clean(await doubleRow.locator("details.tt-double > summary").innerText())), "체크를 풀면 '없음'으로 돌아감");
   // 창체 방식
   await openSection("time");
   const creativeBefore = clean(await panel.locator("#timetableCreative").innerText());

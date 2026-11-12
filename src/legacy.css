@@ -2351,6 +2351,9 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-goto { padding:2px 8px; border:1px solid #c9d3e6; border-radius:999px; background:#fff; color:var(--blue); font-size:12px; cursor:pointer; }
     .tt-goto:hover { background:#eef3ff; }
     .tt-info { margin-top:8px; font-size:12px; }
+    .tt-double { flex-basis:100%; }
+    .tt-double > summary { cursor:pointer; color:var(--blue); }
+    .tt-double-list { display:flex; flex-wrap:wrap; gap:4px 16px; padding:6px 0; }
     .tt-run { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin:10px 0; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; }
     .tt-run[data-state="running"] { background:#f4f7ff; border-color:#c9d8f7; }
     .tt-run-progress { display:flex; flex:1 1 320px; align-items:center; gap:10px; font-size:13px; }

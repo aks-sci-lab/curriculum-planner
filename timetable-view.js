@@ -627,6 +627,9 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   if (commonFallback.size) assume("commonTeachers", `${[...commonFallback].join("·")} 공통 과목에 따로 정한 교사가 없어 세부 교과 교사 모두를 후보로 계산`, "teachers", "담당 과목");
   notes.undecided = [...new Set(notes.undecided)];
 
+  // '2시간 연속 수업 허용' 과목: 같은 교사가 그 반에 하루 2시간이어도 이어져 있으면 '하루 한 번' 위반이 아니다(3시간 이상·떨어진 2시간은 위반)
+  const doubles = new Set((Array.isArray(tt.doubleSubjects) ? tt.doubleSubjects : []).map(courseKey));
+  if (doubles.size) for (const lesson of lessons) if (doubles.has(courseKey(lesson.subject))) lesson.double = true;
   const venues = Object.fromEntries(Object.entries({ ...(cs.rooms || {}), ...(tt.venues || {}) }).map(([key, value]) => [key, Number(value) || 0]));
   const input = {
     semester, days: cs.gridDays, periods: Number(cs.gridPeriods) || 7, periodsByDay: tt.periodsByDay || {}, lunchAfter: tt.lunchAfter || TIMETABLE_DEFAULT_LUNCH,
@@ -887,7 +890,15 @@ function timetableConditionsHtml(prepared) {
       ${value !== fallback ? `<span class="cs-badge" data-state="draft">기본값 ${timetableEsc(field.level ? (field.levels || TIMETABLE_LEVELS).find(([level]) => level === fallback)?.[1] : fallback)}에서 바꿈</span>` : ""}
       ${field.later ? '<span class="cs-note">시간표 계산에서 씁니다(사전 점검에는 영향 없음).</span>' : ""}</span></div>`;
   }).join("");
-  const rulesBody = `${ruleRows}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
+  const doubleNow = new Set(Array.isArray(tt.doubleSubjects) ? tt.doubleSubjects : []);
+  const doubleOptions = new Map(); // 과목 → 학년(반 수업으로 주 2시간 이상인 과목만)
+  for (const lesson of prepared.input.lessons || []) if (Number(lesson.hours) >= 2 || doubleNow.has(lesson.subject)) doubleOptions.set(lesson.subject, lesson.grade);
+  for (const subject of doubleNow) if (!doubleOptions.has(subject)) doubleOptions.set(subject, "");
+  const doubleRow = `<div class="tt-row" data-tt-rule="doubleSubjects"><span class="tt-label">2시간 연속 수업을 허용할 과목</span><span class="tt-fields">
+    <details class="tt-double"${doubleNow.size ? " open" : ""}><summary>${doubleNow.size ? `${doubleNow.size}과목: ${timetableEsc([...doubleNow].join(", "))}` : "없음 — 과목 고르기"}</summary><span class="tt-double-list" id="timetableDoubleSubjects">
+      ${[...doubleOptions.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])) || a[0].localeCompare(b[0], "ko")).map(([subject, grade]) => `<label><input type="checkbox" data-tt-field="double:${timetableEsc(subject)}" ${doubleNow.has(subject) ? "checked" : ""}> ${grade ? `${timetableEsc(grade)}학년 ` : ""}${timetableEsc(subject)}</label>`).join("")}</span></details>
+    <span class="cs-note">고른 과목은 같은 교사가 그 반에 하루 2시간이어도 이어져 있으면 '하루 한 번' 위반으로 보지 않습니다(3시간 이상·떨어진 2시간은 위반).</span></span></div>`;
+  const rulesBody = `${ruleRows}${doubleRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
     <span class="cs-note">'반드시'인 조건을 다 지킬 수 없으면 자동으로 풀지 않고, 아래 사전 점검의 선택지에서 무엇을 양보할지 고릅니다.</span></span></div>`;
 
   // 교사: 주어진 명단 안에서만 편성한다(교사를 늘리는 입력은 없다). 후보 = 6단계 명단의 담당 교과·담당 과목.
@@ -1274,8 +1285,13 @@ function timetableResultHtml(saved, stale, semester, prepared) {
     const choice = TIMETABLE_CHOICES[key];
     if (choice?.patch && !choiceKeys.includes(key) && !(choice.skip && choice.skip(settings, prepared))) choiceKeys.push(key);
   }
-  const choicesHtml = choiceKeys.length && !stale ? `<div class="tt-choices" id="timetableResultChoices"><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요 — 고르면 그 조건으로 다시 계산합니다)</span><ul>${choiceKeys.map((key) => `<li data-tt-choice-row="${key}" data-kind="setting">
-    <strong>${timetableEsc(TIMETABLE_CHOICES[key].label)}</strong> <button class="button" type="button" data-tt-choice-solve="${key}">이 선택으로 다시 계산</button><span class="tt-gives">${timetableEsc(TIMETABLE_CHOICES[key].gives)}</span></li>`).join("")}</ul></div>` : "";
+  // 같은 수업이 하루 두 번인 과목, 교사 시간이 모자라 담당 교사가 없는 반 수업 과목 → '그 과목 2시간 연속 수업 허용'
+  const doubleSubjects = new Set();
+  for (const item of (result.violations || [])) if (item.level === "hard" && item.rule === "oncePerDay") for (const subject of item.subjects || []) doubleSubjects.add(subject);
+  for (const item of (result.noTeacher || [])) if (item.kind === "lesson" && item.reason === "capacity") doubleSubjects.add(item.subject);
+  for (const subject of doubleSubjects) { const key = `double:${subject}`; if (!timetableChoiceOf(key).skip(settings) && choiceKeys.length < 12) choiceKeys.push(key); }
+  const choicesHtml = choiceKeys.length && !stale ? `<div class="tt-choices" id="timetableResultChoices"><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요 — 고르면 그 조건으로 다시 계산합니다)</span><ul>${choiceKeys.map((key) => `<li data-tt-choice-row="${timetableEsc(key)}" data-kind="setting">
+    <strong>${timetableEsc(timetableChoiceOf(key).label)}</strong> <button class="button" type="button" data-tt-choice-solve="${timetableEsc(key)}">이 선택으로 다시 계산</button><span class="tt-gives">${timetableEsc(timetableChoiceOf(key).gives)}</span></li>`).join("")}</ul></div>` : "";
   const violationHtml = violations.length || choicesHtml ? `<section class="cs-card" id="timetableViolations" data-hard="${count(hard)}" data-soft="${count(soft)}"><h4>못 지킨 조건 <span class="cs-note">'반드시' ${count(hard)}건 · '최대한' ${count(soft)}건 — 조건을 바꾸려면 ${timetableWhereButtons([{ key: "rules", step: 6, label: "7단계 규칙" }])}</span></h4>
     <ul class="tt-issues">${violationList(hard, 60)}</ul>${choicesHtml}${soft.length ? `<details class="tt-section" data-tt-section="soft"${TIMETABLE_VIEW.open.soft ? " open" : ""}><summary><strong>'최대한' 조건 ${count(soft)}건</strong></summary><ul class="tt-issues">${violationList(soft, 80)}</ul></details>` : ""}</section>` : "";
   // 다른 교과 교사가 맡을 수 있는 교과(교양)의 수업이면 5단계 '담당 교과'로 바로 가는 단추
@@ -1377,6 +1393,13 @@ function timetableApplyField(field, target) {
     if (next.length === 1 && next[0] === "교양") delete settings.openDepartments; else settings.openDepartments = next;
     return `다른 교과 교사가 맡을 수 있는 교과: ${next.length ? next.join(", ") : "없음"}`;
   }
+  if (name === "double") {
+    const subject = key;
+    const list = (Array.isArray(settings.doubleSubjects) ? settings.doubleSubjects : []).filter((item) => item !== subject);
+    if (target.checked) list.push(subject);
+    if (list.length) settings.doubleSubjects = list; else delete settings.doubleSubjects;
+    return `'${subject}' 2시간 연속 수업 ${target.checked ? "허용" : "허용 안 함"}`;
+  }
   if (name === "blocks.keep") {
     if (target.checked) settings.keepBlockTimes = true; else delete settings.keepBlockTimes;
     return target.checked ? "6단계 블록 시간 그대로 지키기" : "블록 시간을 시간표가 정하기";
@@ -1443,15 +1466,26 @@ function timetableCreativePreset(kind) {
 }
 
 // 선택지 적용: 시간표 조건을 바꾸고 고른 내역(되돌릴 값 포함)을 남긴다.
+// 과목을 붙여 쓰는 선택지('double:과목' = 그 과목 2시간 연속 수업 허용)
+function timetableChoiceOf(key) {
+  if (String(key).startsWith("double:")) {
+    const subject = String(key).slice(7);
+    return { label: `'${subject}' 2시간 연속 수업 허용`, gives: "그 과목은 같은 교사가 그 반에 하루 2시간을 이어서 할 수 있습니다(3시간 이상·떨어진 2시간은 여전히 위반).",
+      skip: (tt) => (Array.isArray(tt.doubleSubjects) ? tt.doubleSubjects : []).includes(subject),
+      patch: (tt) => ({ ...tt, doubleSubjects: [...(Array.isArray(tt.doubleSubjects) ? tt.doubleSubjects : []).filter((item) => item !== subject), subject] }) };
+  }
+  return TIMETABLE_CHOICES[key];
+}
+
 function timetableApplyChoice(key) {
-  const choice = TIMETABLE_CHOICES[key];
+  const choice = timetableChoiceOf(key);
   const prepared = TIMETABLE_VIEW.prepared;
   if (!choice?.patch || !prepared) return "";
   const settings = timetableSettingsEdit();
   const plain = (value) => (value === undefined ? null : JSON.parse(JSON.stringify(value, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined)));
-  const before = { rules: plain(settings.rules), creative: plain(settings.creative), keepBlockTimes: plain(settings.keepBlockTimes) };
+  const before = { rules: plain(settings.rules), creative: plain(settings.creative), keepBlockTimes: plain(settings.keepBlockTimes), doubleSubjects: plain(settings.doubleSubjects) };
   const next = choice.patch(plain(settings) || {}, prepared);
-  for (const name of ["rules", "creative", "keepBlockTimes"]) {
+  for (const name of ["rules", "creative", "keepBlockTimes", "doubleSubjects"]) {
     if (next[name] === undefined || next[name] === null) delete settings[name]; else settings[name] = next[name];
   }
   settings.choices = [...(Array.isArray(settings.choices) ? plain(settings.choices) : []), { key, label: choice.label, at: new Date().toISOString(), before }];
@@ -1463,7 +1497,7 @@ function timetableUndoChoice() {
   const list = Array.isArray(settings.choices) ? JSON.parse(JSON.stringify(settings.choices, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined)) : [];
   const last = list.pop();
   if (!last) return "";
-  for (const name of ["rules", "creative", "keepBlockTimes"]) {
+  for (const name of ["rules", "creative", "keepBlockTimes", "doubleSubjects"]) {
     if (last.before?.[name] === undefined || last.before?.[name] === null) delete settings[name]; else settings[name] = last.before[name];
   }
   if (list.length) settings.choices = list; else delete settings.choices;
@@ -1511,7 +1545,7 @@ function timetableHandleClick(event) {
     const label = timetableApplyChoice(solveChoice.dataset.ttChoiceSolve);
     if (!label) return;
     if (typeof persistStateSoon === "function") persistStateSoon();
-    timetableRunStart(TIMETABLE_CHOICES[solveChoice.dataset.ttChoiceSolve].label);
+    timetableRunStart(timetableChoiceOf(solveChoice.dataset.ttChoiceSolve).label);
     return;
   }
   if (target.closest?.("#timetableStop")) { timetableRunStop(); return; }

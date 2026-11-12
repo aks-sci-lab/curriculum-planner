@@ -314,6 +314,11 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   const resultChoices = plain(vm.runInContext("TIMETABLE_RESULT_CHOICES", ctx));
   assert.deepEqual(Object.keys(resultChoices).sort(), ["gap", "maxPerDay", "oncePerDay", "run"]);
   assert.ok(Object.values(resultChoices).flat().every((key) => vm.runInContext(`typeof TIMETABLE_CHOICES.${key}.patch`, ctx) === "function"));
+  // 과목을 붙이는 선택지 'double:과목' = 그 과목 2시간 연속 수업 허용(이미 고른 과목이면 빠짐)
+  const double = vm.runInContext("timetableChoiceOf('double:발명과 기업가 정신')", ctx);
+  assert.equal(double.label, "'발명과 기업가 정신' 2시간 연속 수업 허용");
+  assert.deepEqual(plain(double.patch({ doubleSubjects: ["체육"] })), { doubleSubjects: ["체육", "발명과 기업가 정신"] });
+  assert.deepEqual([double.skip({}), double.skip({ doubleSubjects: ["발명과 기업가 정신"] })], [false, true]);
   // '공강 먼저' 선택: 규칙 cover = soft, 이미 켜져 있으면 선택지에서 빠짐
   assert.deepEqual(plain(vm.runInContext("TIMETABLE_CHOICES.releaseTeacher.patch({ rules: { run: 4 } })", ctx)), { rules: { run: 4, cover: "soft" } });
   assert.deepEqual([vm.runInContext("TIMETABLE_CHOICES.releaseTeacher.skip({})", ctx), vm.runInContext("TIMETABLE_CHOICES.releaseTeacher.skip({ rules: { cover: 'soft' } })", ctx)], [false, true]);
@@ -325,11 +330,35 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   const settings = plain(ctx.state.timetable.settings);
   assert.deepEqual([settings.creative, settings.rules, settings.choices.map((entry) => [entry.key, entry.before.creative, entry.before.rules])],
     [{ school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: true }, { run: 4, gap: "soft" }, [["creativeGroup", null, { run: 4 }], ["gaps", { school: 1, schoolTimes: [], grade: 1, gradeTimes: {}, byGroup: true }, { run: 4 }]]]);
+  // 과목 선택지도 고른 내역에 남고 되돌릴 수 있다
+  assert.equal(ctx.timetableApplyChoice("double:체육"), "선택 — '체육' 2시간 연속 수업 허용");
+  assert.deepEqual([plain(ctx.state.timetable.settings.doubleSubjects), ctx.state.timetable.settings.choices.length], [["체육"], 3]);
+  assert.equal(ctx.timetableUndoChoice(), "되돌림 — '체육' 2시간 연속 수업 허용");
+  assert.equal(ctx.state.timetable.settings.doubleSubjects, undefined);
   assert.equal(ctx.timetableUndoChoice(), "되돌림 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
   assert.deepEqual([plain(ctx.state.timetable.settings.rules), ctx.state.timetable.settings.choices.length], [{ run: 4 }, 1]);
   assert.equal(ctx.timetableUndoChoice(), "되돌림 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
   assert.deepEqual(plain(ctx.state.timetable.settings), { rules: { run: 4 } });
   assert.equal(ctx.timetableUndoChoice(), "");
+});
+
+test("2시간 연속 수업 허용 과목: 고른 과목의 반 수업에만 double 표시(과목명 표기 차이는 맞춰 봄), 조건 칸으로 넣고 뺀다", () => {
+  const ctx = world({ timetable: { settings: { doubleSubjects: ["체 육"] } } });
+  const { input } = plain(ctx.timetableInput("1", "1"));
+  const doubled = input.lessons.filter((lesson) => lesson.double).map((lesson) => lesson.subject);
+  assert.deepEqual([...new Set(doubled)], ["체육"]);
+  assert.ok(input.lessons.some((lesson) => lesson.subject === "공통국어" && lesson.double === undefined));
+  // 사전 점검도 그 과목은 하루 2시간까지로 본다(같은 교사가 한 반에 주 5시간 넘어도 알리지 않음)
+  const off = plain(world().timetableInput("1", "1")).input;
+  assert.ok(off.lessons.every((lesson) => lesson.double === undefined));
+  // 조건 칸: 체크하면 목록에 넣고, 풀면 빼고, 비면 키를 지운다
+  ctx.state.timetable = { settings: {} };
+  assert.equal(ctx.timetableApplyField("double:문학", { checked: true }), "'문학' 2시간 연속 수업 허용");
+  assert.equal(ctx.timetableApplyField("double:체육", { checked: true }), "'체육' 2시간 연속 수업 허용");
+  assert.deepEqual(plain(ctx.state.timetable.settings.doubleSubjects), ["문학", "체육"]);
+  assert.equal(ctx.timetableApplyField("double:문학", { checked: false }), "'문학' 2시간 연속 수업 허용 안 함");
+  ctx.timetableApplyField("double:체육", { checked: false });
+  assert.equal(ctx.state.timetable.settings.doubleSubjects, undefined);
 });
 
 test("교사 0명인데 수업이 있는 교과는 자리 교사 1명을 두고 계산한다(사용자 결정) — 맡을 교사가 명단에 없을 때만, 가정으로 표시", () => {

@@ -971,6 +971,7 @@ function timetableViolations(state) {
       for (let i = slots.length - 1; i >= 0; i -= 1) if (grid[ci * P.S + slots[i]] !== -1) { last = i; break; }
       const empty = [];
       const twice = [];
+      const twiceSubjects = [];
       for (let i = 0; i <= last; i += 1) {
         const a = grid[ci * P.S + slots[i]];
         if (a === -1) { empty.push(P.slotPeriod[slots[i]]); continue; }
@@ -980,13 +981,14 @@ function timetableViolations(state) {
           const b = grid[ci * P.S + slots[j]];
           if (b === -1 || P.acts[b].pair !== act.pair || (act.double && b === a && j === i - 1)) continue;
           twice.push(act.kind === 1 ? act.labels[act.layers.indexOf(layer)] : `${act.teacher >= 0 ? `${P.teacherName[act.teacher]} 교사 ` : ""}${act.subjectName[act.layers.indexOf(layer)]}`);
+          if (act.kind === 0 && b === a) twiceSubjects.push(act.subjectName[act.layers.indexOf(layer)]); // 같은 수업이 하루 두 번 → '2시간 연속 수업 허용' 선택지의 과목
           break;
         }
       }
       if (empty.length && levelOf("gap") !== "off") out.push({ semester, rule: "gap", level: levelOf("gap"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: empty.length,
         cause: `${P.classIds[ci]}반 ${P.days[d]}요일 ${empty.join("·")}교시가 비었습니다(공강 ${empty.length}칸).` });
       if (twice.length && levelOf("oncePerDay") !== "off") out.push({ semester, rule: "oncePerDay", level: levelOf("oncePerDay"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: twice.length,
-        cause: `${P.classIds[ci]}반 ${P.days[d]}요일: ${[...new Set(twice)].join(", ")} 수업이 하루에 두 번 있습니다.` });
+        ...(twiceSubjects.length ? { subjects: [...new Set(twiceSubjects)] } : {}), cause: `${P.classIds[ci]}반 ${P.days[d]}요일: ${[...new Set(twice)].join(", ")} 수업이 하루에 두 번 있습니다.` });
     }
     for (let ti = 0; ti < P.T; ti += 1) {
       const sideDays = []; // '최대한' 조건은 교사마다 한 줄로 모은다(점심 앞뒤 수업, 같은 날 같은 과목)

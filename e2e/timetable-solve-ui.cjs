@@ -206,7 +206,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
 
   console.log("▶ 조건을 바꾸면 '바뀌기 전 결과' → 중단으로 다시 계산");
   const section = panel.locator('[data-tt-section="rules"]');
-  if (!(await section.evaluate((el) => el.open))) { await section.locator("summary").click(); await sleep(200); }
+  if (!(await section.evaluate((el) => el.open))) { await section.locator(":scope > summary").click(); await sleep(200); }
   const run = panel.locator('[data-tt-field="rules.run"]');
   const before = await run.inputValue();
   await run.fill("2"); await run.press("Tab"); await sleep(600); // 연강 상한을 2로 조여 '반드시' 위반이 남게 한다(뒤의 선택지 확인용)

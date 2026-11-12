@@ -278,6 +278,23 @@ test("실제 학교 모양(3학년 11반 · 블록 20 · 반 수업 2과목(2 + 
   assert.equal(byDay["금"].length, 5);
   // '반드시' 조건끼리 부딪칠 때는 공강을 먼저 막는다(무게 공강 3000 > 하루 두 번 2000 > 교사 규칙 1000)
   assert.deepEqual(plain(vm.runInContext("TIMETABLE_HARD_WEIGHTS", ctx)), { gap: 3000, oncePerDay: 2000 });
+  // 남는 '하루 두 번'은 같은 수업이 하루에 두 번인 경우 — 위반에 과목이 실려 '그 과목 2시간 연속 수업 허용' 선택지가 된다
+  const twice = result.violations.filter((item) => item.rule === "oncePerDay");
+  assert.ok(twice.length > 0 && twice.some((item) => (item.subjects || []).includes("인공지능 기초")), JSON.stringify(twice.slice(0, 2)));
+  // 인공지능 기초(4시간)에 2시간 연속 수업을 허용하면 '반드시' 위반이 없어진다(이어진 2시간은 위반이 아님, 검증기도 같은 판정)
+  const doubled = { 1: school({ pe3: 0, info3: 3, sharedPe: true }) };
+  doubled[1].lessons.find((lesson) => lesson.id === "3인공").double = true;
+  const relaxed = plain(ctx.timetableSolve(doubled, { seed: 1, iterations: 300000, rounds: 4 }));
+  const relaxedCheck = plain(ctx.timetableValidate(doubled, relaxed));
+  assert.deepEqual([relaxedCheck.ok, relaxedCheck.counts.oncePerDay], [true, relaxed.metrics.oncePerDay]);
+  assert.ok(relaxed.metrics.hard <= 3 && relaxed.metrics.hard < result.metrics.hard / 3, `'반드시' 위반 ${result.metrics.hard} → ${relaxed.metrics.hard}`); // 짧게 돌린 값(기본 횟수로는 0)
+  // 이어진 2시간은 위반으로 세지 않는다: 하루에 두 번 든 인공지능 기초 가운데 이어지지 않은 것의 수 ≤ 남은 '하루 두 번' 위반
+  const pairs = Object.entries(relaxed.layers["1"].lessons).filter(([id]) => id.startsWith("3인공")).map(([, item]) => item.slots);
+  let together = 0;
+  let apart = 0;
+  for (const slots of pairs) { const byDay = {}; for (const key of slots) (byDay[key[0]] = byDay[key[0]] || []).push(Number(key.slice(1))); for (const list of Object.values(byDay)) { if (list.length === 2 && Math.abs(list[0] - list[1]) === 1) together += 1; else if (list.length > 1) apart += 1; } }
+  assert.ok(together > 0, "어떤 반은 인공지능 기초가 하루에 2시간(연속)");
+  assert.ok(apart <= relaxed.metrics.oncePerDay, `떨어진 2시간 ${apart} ≤ 하루 두 번 위반 ${relaxed.metrics.oncePerDay}`);
   // 어떤 두 블록도 같은 시간에 둘 수 없는 극단(블록 과목 교사 1명씩)에서도 3학년 공강은 한 자리 수 근처(예전: 66칸)
   const hard = { 1: school({ pe3: 0, info3: 3, sharedPe: true, blockTeachers: 1 }) };
   const tough = plain(ctx.timetableSolve(hard, { seed: 1, iterations: 300000, rounds: 4 }));
