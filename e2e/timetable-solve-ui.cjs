@@ -2,7 +2,7 @@
 // ① '시간표 계산' → 진행 표시 → 결과 요약(반드시 위반·담당 교사 없음)·반 시간표·교사 시간표 ② 반·교사 고르기, 학기 탭
 // ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답
 // ④-2 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(6단계 결과는 '입력 변경됨'이 되지 않음)
-// ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '공강 먼저' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
+// ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '교사 규칙 양보' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-solve-ui.cjs /tmp/tt-solve-ui /tmp/e2e/downloads/workspace-backup.json.gz
 const path = require("path"), fs = require("fs");
 const { execFileSync } = require("child_process");
@@ -65,6 +65,14 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(/1학기 — /.test(first.text) && /담당 교사 없음 \d+시간/.test(first.text) && /개 중 가장 좋은 답/.test(first.text), `결과 요약(${seconds}초): ${first.text.slice(0, 150)}`);
   check((await panel.locator("#timetableValidation").count()) === 0, "결과 검증 오류 없음(반·교사 겹침, 불가 시간, 전공 일치, 시수)");
   check((await bar.getAttribute("data-state")) === "done" && /다시 계산/.test(clean(await panel.locator("#timetableRun").innerText())), "계산 뒤: '시간표 다시 계산' + 지금 조건으로 계산한 결과");
+
+  // 여러 씨앗으로 함께 푼 효과: 일꾼마다의 '반드시' 위반 수와 고른 답
+  const tries = await panel.locator("#timetableTries span[data-seed]").evaluateAll((els) => els.map((el) => ({ seed: Number(el.dataset.seed), hard: Number(el.dataset.hard), picked: el.dataset.picked === "1" })));
+  report.checks.tries = tries;
+  const pickedTry = tries.find((item) => item.picked);
+  check(tries.length >= 2 && Boolean(pickedTry) && pickedTry.hard === Math.min(...tries.map((item) => item.hard)), `일꾼별 '반드시' 위반: ${tries.map((item) => `씨앗 ${item.seed} ${item.hard}건${item.picked ? "(고름)" : ""}`).join(" · ")} — 가장 적은 답을 고름`, tries);
+  const openGoto = await panel.locator("#timetableNoTeacher [data-tt-open-department] .tt-goto").count();
+  check(openGoto >= 1, `담당 교사 없음 목록의 교양 과목에 '5단계 담당 교과' 바로가기(${openGoto}개)`);
 
   console.log("▶ 반 시간표·교사 시간표");
   const classGrid = await gridOf();
@@ -151,7 +159,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   if (!(await section.evaluate((el) => el.open))) { await section.locator("summary").click(); await sleep(200); }
   const run = panel.locator('[data-tt-field="rules.run"]');
   const before = await run.inputValue();
-  await run.fill(String(Number(before) + 1)); await run.press("Tab"); await sleep(600);
+  await run.fill("2"); await run.press("Tab"); await sleep(600); // 연강 상한을 2로 조여 '반드시' 위반이 남게 한다(뒤의 선택지 확인용)
   check((await bar.getAttribute("data-state")) === "stale" && (await panel.locator("#timetableResultStale").count()) === 1 && /바뀌기 전/.test(clean(await panel.locator("#timetableRunNote").innerText())),
     "규칙(연강 상한)을 바꾸면 결과에 '조건·자료가 바뀌기 전 결과'", clean(await bar.innerText()));
   await page.screenshot({ path: path.join(OUT, "05-stale.png") });
@@ -169,36 +177,28 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check((await gridOf()).cells.filter((cell) => cell.text).length >= 30, "중단한 결과도 반 시간표가 빠짐없이 참");
 
   console.log("▶ 계산 뒤 선택지: 고르면 그 조건으로 다시 계산");
-  const total = async () => page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; return { hard: saved.result.metrics.hard, noTeacher: saved.result.metrics.noTeacherHours, cover: (state.timetable.settings.rules || {}).cover || "hard" }; });
+  const total = async () => page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; return { hard: saved.result.metrics.hard, noTeacher: saved.result.metrics.noTeacherHours, run: (state.timetable.settings.rules || {}).run, cover: (state.timetable.settings.rules || {}).cover || "hard" }; });
   const beforeChoice = await total();
   const choiceRows = await panel.locator("#timetableResultChoices [data-tt-choice-row]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.ttChoiceRow, text: el.textContent.replace(/\s+/g, " ").trim() })));
   report.checks.choices = { beforeChoice, choiceRows };
-  check(beforeChoice.hard > 0 && choiceRows.some((row) => row.key === "releaseTeacher" && /담당 교사 없음/.test(row.text) && /이 선택으로 다시 계산/.test(row.text)),
+  check(beforeChoice.hard > 0 && choiceRows.some((row) => row.key === "teacherRules" && /연강 4시간/.test(row.text) && /이 선택으로 다시 계산/.test(row.text)),
     `'반드시' 위반 ${beforeChoice.hard}건이 남은 결과에 선택지(${choiceRows.map((row) => row.key).join(", ")})`, choiceRows);
   check(!choiceRows.some((row) => /증원|순회|강사|교사를 늘/.test(row.text)), "선택지에 교사를 늘리는 문구 없음");
-  await panel.locator('[data-tt-choice-solve="releaseTeacher"]').click();
+  await panel.locator('[data-tt-choice-solve="teacherRules"]').click();
   await panel.locator("#timetableRunProgress").waitFor({ timeout: 10000 });
   await waitResult(240000);
   const afterChoice = await total();
   const compareText = clean(await panel.locator("#timetableResultCompare").innerText());
   report.checks.choices.afterChoice = afterChoice; report.checks.choices.compareText = compareText;
-  check(afterChoice.cover === "soft" && afterChoice.hard < beforeChoice.hard && afterChoice.noTeacher >= beforeChoice.noTeacher,
-    `'공강 먼저'로 다시 계산: '반드시' ${beforeChoice.hard} → ${afterChoice.hard}건, 담당 교사 없음 ${beforeChoice.noTeacher} → ${afterChoice.noTeacher}시간`, afterChoice);
-  check(new RegExp(`'반드시' 조건 ${beforeChoice.hard} → ${afterChoice.hard}건 · 담당 교사 없음 ${beforeChoice.noTeacher} → ${afterChoice.noTeacher}시간 — 고른 선택: 공강·하루 두 번이 남으면`).test(compareText), `앞 결과와 견줌: ${compareText.slice(0, 110)}`);
+  check(afterChoice.run === 4 && afterChoice.hard < beforeChoice.hard,
+    `'교사 규칙 양보'로 다시 계산: 연강 상한 2 → 4, '반드시' ${beforeChoice.hard} → ${afterChoice.hard}건`, afterChoice);
+  check(new RegExp(`'반드시' 조건 ${beforeChoice.hard} → ${afterChoice.hard}건 · 담당 교사 없음 ${beforeChoice.noTeacher} → ${afterChoice.noTeacher}시간 — 고른 선택: 교사 규칙 양보`).test(compareText), `앞 결과와 견줌: ${compareText.slice(0, 110)}`);
   check((await panel.locator("#timetableValidation").count()) === 0 && (await bar.getAttribute("data-state")) === "done", "선택 뒤 결과도 검증 오류 없음·지금 조건의 결과");
   const chosen = clean(await panel.locator("#timetableChosen").innerText());
-  check(/고른 선택 1개/.test(chosen) && /공강 먼저/.test(chosen), `고른 내역: ${chosen.slice(0, 80)}`);
-  if (afterChoice.noTeacher > beforeChoice.noTeacher) {
-    const reasons = await panel.locator("#timetableNoTeacher .tt-cause").allInnerTexts();
-    const other = clean(await panel.locator('[data-tt-semester="2"]').innerText()) && reasons;
-    await panel.locator('[data-tt-semester="2"]').click(); await sleep(300);
-    const reasons2 = await panel.locator("#timetableNoTeacher .tt-cause").allInnerTexts();
-    await panel.locator('[data-tt-semester="1"]').click(); await sleep(300);
-    check([...other, ...reasons2].some((text) => /공강·하루 두 번을 없애려고 비움\('공강 먼저'\)/.test(text)), "담당 교사 없음 목록에 이유 '공강·하루 두 번을 없애려고 비움'", [...reasons, ...reasons2].slice(0, 6));
-  }
+  check(/고른 선택 1개/.test(chosen) && /교사 규칙 양보/.test(chosen), `고른 내역: ${chosen.slice(0, 80)}`);
   await page.screenshot({ path: path.join(OUT, "06-after-choice.png"), fullPage: true });
   await panel.locator("#timetableChoiceUndo").click(); await sleep(600);
-  check((await total()).cover === "hard" && (await bar.getAttribute("data-state")) === "stale", "마지막 선택 되돌리기 → 규칙이 돌아가고 결과는 '바뀌기 전 결과'");
+  check((await total()).run === 2 && (await bar.getAttribute("data-state")) === "stale", "마지막 선택 되돌리기 → 규칙이 돌아가고(연강 상한 2) 결과는 '바뀌기 전 결과'");
   await panel.locator("#timetableRun").click();
   await waitResult(240000);
   const latest = await summaryOf();
