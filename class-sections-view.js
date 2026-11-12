@@ -791,37 +791,12 @@ function classSectionsSaveResult(entry, result, input, group, source, batch = ""
   if (tails.length) CLASS_SECTIONS_VIEW.statusTail = tails.join(" · ");
 }
 
-// ---- 시간표 미리 점검(순수 계산) ----
-// 학년·학기마다 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간. 교과마다 그 학년 반 수업 시수(학급 단위 과목: 반 수 × 학점)를
-// 그 교과 교사 수로 나눈 값이 빈 칸을 넘으면 경고(교사 한 사람이 같은 시간에 두 반을 못 맡음 → 최소 ⌈시수 ÷ 빈 칸⌉명).
-// 학교 지정 과목(공통 국어 등) 반 수업은 6단계 자료에 없어 넣지 않는다(7단계 시간표에서 다시 점검).
+// ---- 시간표 미리 점검 ----
+// 규칙은 timetable.js(app.js보다 먼저 로드) timetablePrecheckDepartments 한 곳: 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간,
+// 교과마다 그 학년 반 수업 시수 ÷ 교사 수가 빈 칸을 넘으면 경고(최소 ⌈시수 ÷ 빈 칸⌉명). 학교 지정 과목 반 수업은 6단계 자료에 없어 넣지 않는다(7단계 시간표 사전 점검에서).
 // spec: { slots: 주 교시 수, fixed: 고정 시간 수, blockHours, lessons: [{ department, label, hours }], teachers: { 교과: 명 } | null }
 function classSectionsTimetablePrecheck(spec) {
-  const free = Math.max(0, (Number(spec.slots) || 0) - (Number(spec.blockHours) || 0) - (Number(spec.fixed) || 0));
-  const byDepartment = new Map();
-  for (const lesson of spec.lessons || []) {
-    if (!(Number(lesson.hours) > 0)) continue;
-    const item = byDepartment.get(lesson.department) || { department: lesson.department, hours: 0, labels: [] };
-    item.hours += Number(lesson.hours);
-    item.labels.push(lesson.label);
-    byDepartment.set(lesson.department, item);
-  }
-  const rows = [];
-  const issues = [];
-  for (const item of byDepartment.values()) {
-    const teachers = spec.teachers ? Number(spec.teachers[item.department]) || 0 : null;
-    const need = free > 0 ? Math.ceil(item.hours / free) : Infinity;
-    const row = { ...item, teachers, need: Number.isFinite(need) ? need : null, perTeacher: teachers ? Math.round((item.hours / teachers) * 10) / 10 : null };
-    rows.push(row);
-    if (teachers === null) continue;
-    if (free <= 0 || !teachers || item.hours / teachers > free) {
-      issues.push({ type: "timetable-precheck", severity: "warn", department: item.department, hours: item.hours, teachers, free, need: row.need,
-        message: teachers === 0 && free > 0 ? `${spec.label || ""} ${item.department}: 반 수업 ${item.labels.join(", ")} ${item.hours}시간을 맡을 교사가 명단에 없습니다 → 최소 ${row.need}명 필요.`.trim()
-          : free <= 0 ? `${spec.label || ""} 블록 밖 빈 칸이 없어(주 ${spec.slots}교시 − 블록 ${spec.blockHours} − 고정 ${spec.fixed}) ${item.department} 반 수업 ${item.hours}시간을 둘 곳이 없습니다.`.trim()
-          : `${spec.label || ""} ${item.department}: 반 수업 ${item.labels.join(", ")} ${item.hours}시간 ÷ 교사 ${teachers}명 = ${row.perTeacher}시간이 블록 밖 빈 칸 ${free}칸보다 많습니다 → 최소 ${row.need}명 필요(또는 블록 수·학급 단위 운영을 바꾸기).`.trim() });
-    }
-  }
-  return { slots: Number(spec.slots) || 0, fixed: Number(spec.fixed) || 0, blockHours: Number(spec.blockHours) || 0, free, rows, issues, teachersKnown: Boolean(spec.teachers) };
+  return timetablePrecheckDepartments(spec);
 }
 
 // 그 그룹의 학년(현 학년 → 내년 학년)·학기 자료로 점검 입력을 만든다.

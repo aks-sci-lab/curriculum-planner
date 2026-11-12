@@ -244,6 +244,7 @@ function context({ twoSemesters = false } = {}) {
   });
   ctx.downloads = downloads;
   vm.runInContext(solverSource, ctx);
+  vm.runInContext(fs.readFileSync(path.join(root, "timetable.js"), "utf8"), ctx);
   vm.runInContext(viewSource, ctx);
   vm.runInContext(printSource, ctx);
   return ctx;

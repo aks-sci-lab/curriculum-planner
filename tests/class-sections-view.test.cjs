@@ -9,6 +9,7 @@ const { test } = require("node:test");
 const root = path.join(__dirname, "..");
 const solver = fs.readFileSync(path.join(root, "class-sections.js"), "utf8");
 const view = fs.readFileSync(path.join(root, "class-sections-view.js"), "utf8");
+const timetable = fs.readFileSync(path.join(root, "timetable.js"), "utf8"); // 시간표 미리 점검 규칙(6단계 화면이 부른다)
 const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
@@ -37,6 +38,7 @@ function context() {
         enrollment: list.filter((student) => student.selections.some((selection) => selection.column === course.column)).length })) }] }] }] })
   });
   vm.runInContext(solver, ctx);
+  vm.runInContext(timetable, ctx);
   vm.runInContext(view, ctx);
   return ctx;
 }

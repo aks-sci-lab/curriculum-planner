@@ -98,6 +98,10 @@
 - 바꾸기: 4단계 과목 메뉴 `개설 학기 바꾸기 · N학년 1학기로 / 2학기로`(확정 잠금 따름, 확인 창) → 이 차수 고른 값 저장 → `applyTwoSemesterPick`(열 그대로 이름·학점·학기 표시를 바꾸고, 나뉜 열이 있으면 한 열로) → `classifyApplicationRecords`로 그룹 다시 정함 → 4·5·6단계·확인서·위계 점검이 같은 자료를 읽어 따라감. 그 과목의 학급수 입력·개설 결정은 지웁니다(학기가 바뀌므로).
 - 하지 않는 것(사용자 결정): 고른 학기로 택n 개수를 검사하는 기능(잘못 고르면 4단계 학년별 총 학급수 불일치로 드러남), 레이블 하나 과목을 두 학기로 나눠 여는 경우(그때는 편제표를 고침).
 
+## 7단계 시간표(구현 중)
+- 설계 `docs/timetable-design.md`. 지금 있는 것은 순수 계산뿐(`timetable.js`: 입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck`). **앱 자료를 읽는 연결(`timetableInput`)은 아직 없다** — 화면 걸음(T3)에서 5단계 `computeHoursStats` 항목(과목·학점·반 수·공통 과목 배분)과 6단계 `sectionResult`(블록·분반·분반 교사)·`settings.teachers`를 읽기 전용으로 모으고, 같은 값을 다시 입력받지 않는다. 그때 이 표에 '7 시간표' 줄과 '5단계 시수 합 = 7단계 교사 시수 합' 검사를 더한다.
+- 6단계 '시간표 미리 점검'(`sectionResult.timetableCheck`)의 규칙은 `timetable.js` `timetablePrecheckDepartments` 한 곳(6단계 화면은 부르기만).
+
 ## 남긴 것
 
 - 4단계 화면·집계표 엑셀은 확정된 차수도 지금 자료로 계산해 그립니다(스냅샷으로 그리지 않음). 5·6단계는 확정 스냅샷을 쓰므로 둘이 다르면 `roundSnapshotStale`이 알립니다('확정 해제 후 다시 확정').
