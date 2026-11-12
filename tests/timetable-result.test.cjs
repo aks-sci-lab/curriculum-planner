@@ -127,3 +127,31 @@ test("시간표가 정한 블록 자리를 6단계에 적어 넣기: 다른 블�
   assert.deepEqual(plain(ctx.timetableBlockTimeChanges("1")), []);
   assert.equal(ctx.timetableWriteBlockTimes("1"), 0);
 });
+
+test("엑셀 시트: 학기마다 학급별·교사별 전체 표(요일 × 교시/실제 시각) + 못 지킨 조건 + 담당 교사 없음", () => {
+  const ctx = context();
+  const input = tiny();
+  const result = plain(ctx.timetableSolve({ 1: input }, { seed: 1, iterations: 8000, rounds: 2 }));
+  const sheets = plain(ctx.timetableResultSheets({ 1: input }, result, { title: "2027학년도 2차", rules: { gap: "공강" }, reasons: { none: "맡을 수 있는 교사가 명단에 없음" } }));
+  assert.deepEqual(sheets.map((sheet) => sheet.name), ["1학기 학급", "1학기 교사", "못 지킨 조건", "담당 교사 없음"]);
+  const [classes, teachers, , none] = sheets;
+  // 학급 표: 제목, 요일(교시 수만큼 병합), 교시 번호, 반마다 한 줄(월·화 × 5교시 = 10칸)
+  assert.equal(classes.rows[0][0].v, "2027학년도 2차 1학기 학급별 시간표");
+  assert.deepEqual([classes.rows[1].map((cell) => cell.v), classes.rows[2].map((cell) => cell.v)], [["반", "월", "", "", "", "", "화", "", "", "", ""], ["", 1, 2, 3, 4, 5, 1, 2, 3, 4, 5]]);
+  assert.deepEqual([classes.merges, classes.freeze, classes.rows.slice(3).map((row) => row[0].v)], [["A1:K1", "A2:A3", "B2:F2", "G2:K2"], "B4", ["1-1", "1-2", "3-1"]]);
+  assert.ok(classes.rows.every((row, index) => index === 0 || row.length === 11));
+  const first = classes.rows[3];
+  assert.equal(first[1].v, "창체");
+  const filled = first.slice(1).filter((cell) => cell.v);
+  assert.equal(filled.length, 8);
+  assert.deepEqual(filled.filter((cell) => /^음악/.test(cell.v)).map((cell) => [cell.v, cell.s]), [["음악\n담당 교사 없음", 9]]);
+  assert.equal(filled.filter((cell) => cell.v === "국어\n김국어" && cell.s === 4).length, 3);
+  // 교사 표: 교사·시수 + 요일 × 실제 시각 6칸(4교시는 학년마다 다른 칸)
+  assert.deepEqual(teachers.rows[2].map((cell) => cell.v), ["", "", "1", "2", "3", "4(1)", "4(3)", "5", "1", "2", "3", "4(1)", "4(3)", "5"]);
+  assert.deepEqual([teachers.merges, teachers.freeze], [["A1:N1", "A2:A3", "B2:B3", "C2:H2", "I2:N2"], "C4"]);
+  const kim = teachers.rows.find((row) => row[0].v === "김국어");
+  assert.deepEqual([kim[1].v, kim.slice(2).filter((cell) => cell.v).length], [8, 8]);
+  assert.ok(kim.slice(2).filter((cell) => cell.v).every((cell) => /^(국어\n1-[12]|화법\n3-1)$/.test(cell.v)));
+  // 담당 교사 없음: 음악 2반 × 1시간
+  assert.deepEqual(none.rows.slice(1).map((row) => row.map((cell) => cell.v)), [["1학기", "1", "음악", "1-1", 1, "맡을 수 있는 교사가 명단에 없음"], ["1학기", "1", "음악", "1-2", 1, "맡을 수 있는 교사가 명단에 없음"]]);
+});

@@ -89,6 +89,16 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(new RegExp(`\\(${teacherFilled.length}시간\\)`).test(picked), `교사 고르기의 시수 = 표의 칸 수(${picked})`);
   await page.screenshot({ path: path.join(OUT, "03-teacher-grid.png"), fullPage: true });
   await panel.locator('[data-tt-view="class"]').click(); await sleep(200);
+  // 엑셀 내려받기: 앱이 붙인 파일 이름(a.download)과 내용(시트 이름)
+  await page.evaluate(() => { window.__ttNames = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) window.__ttNames.push(this.download); return click.call(this); }; });
+  const [excel] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), panel.locator("#timetableDownload").click()]);
+  const excelPath = path.join(OUT, "timetable.xlsx");
+  await excel.saveAs(excelPath);
+  const excelBytes = fs.readFileSync(excelPath);
+  const excelNames = await page.evaluate(() => window.__ttNames);
+  check(excelNames.length === 1 && /^\d{4}_\d+차_시간표\.xlsx$/.test(excelNames[0]), `엑셀 파일 이름: ${excelNames[0]}`);
+  check(excelBytes.slice(0, 2).toString() === "PK" && excelBytes.length > 20000 && ["1학기 학급", "1학기 교사", "2학기 학급", "2학기 교사", "못 지킨 조건", "담당 교사 없음"].every((name) => excelBytes.includes(Buffer.from(name))),
+    `엑셀 내용: ${Math.round(excelBytes.length / 1024)}KB, 시트 6개(학기별 학급·교사 + 못 지킨 조건 + 담당 교사 없음)`);
 
   console.log("▶ 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기");
   const staleSections = async () => page.evaluate(() => {

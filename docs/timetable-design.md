@@ -393,7 +393,8 @@ state.timetable = {
 | T4 **(1차 완료)** | 계산 뒤 남은 '반드시' 위반의 선택지(공강 먼저·블록 시간 다시 놓기·창체 풀기·공강 허용·하루 두 번 허용·교사 규칙 양보) → 고르면 그 조건으로 바로 다시 계산, 앞 결과와 견줌(반드시 n → m, 담당 교사 없음 n → m), 고른 내역·되돌리기. 남은 것: 위반 한 건마다의 선택지·예상 효과 미리 계산 | 테스트: 일부러 불가능한 자료에서 항상 결과 + 사다리 기록, 실제 2학기 모양 합성 자료 |
 | T5 | 직접 고치기(끌기·고정·실행취소·부분 재계산) | `tests/timetable-edit.test.cjs`, 클릭 `e2e/timetable-edit-ui.cjs` |
 | T6a **(완료)** | 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(`timetableBlockTimeChanges`·`timetableWriteBlockTimes`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
-| T6 | 출력물(엑셀·인쇄) + 6단계 학생 시간표 채우기 | `tests/timetable-print.test.cjs`(화면 = 엑셀 칸), 클릭 확인 |
+| T6b **(완료)** | 엑셀 내려받기: 학기마다 학급별·교사별 전체 시간표 + 못 지킨 조건 + 담당 교사 없음(`timetableResultSheets`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs`(파일 이름·시트) |
+| T6 | 남은 출력물: 반별·교사별 낱장 인쇄, 6단계 학생 시간표에 요일·교시 채우기 | `tests/timetable-print.test.cjs`(화면 = 엑셀 칸), 클릭 확인 |
 | T7 | 반군 엇갈림 견적 → 6단계 반군 재편성 연동, 반군별 창체 | 6단계 세션과 조율 필요(class-sections.js 입력에 반군) |
 | T8 | 장소(체육·특별실 반 수업), 연속 2시간, 확대학급 블록, 2학기 뼈대 유지, e2e 하네스 7단계, `data-flow.md`·CLAUDE.md | `tests/data-consistency.test.cjs`에 5단계 = 7단계 시수 |
 

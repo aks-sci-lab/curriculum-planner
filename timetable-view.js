@@ -226,6 +226,51 @@ function timetableResultTables(input, layer) {
     teachers: [...teachers.values()].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)) };
 }
 
+// 결과 → 엑셀 시트(createWorkbookBlob 모양, 순수). 학기마다 '학급'(반 × 요일·교시)·'교사'(교사 × 요일·실제 시각) 전체 표 + '못 지킨 조건' + '담당 교사 없음'.
+// inputs = { 학기: 시간표 입력 }, labels = { title: '2027학년도 2차' , rules: { 규칙: 이름 }, reasons: { 이유: 글 } }. 스타일 번호는 보고서 공통(1 제목, 2 머리글, 3 왼쪽, 4 가운데, 9 강조).
+function timetableResultSheets(inputs, result, labels = {}) {
+  const column = (index) => { let name = ""; for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + ((n - 1) % 26)) + name; return name; };
+  const sheets = [];
+  const title = labels.title ? `${labels.title} ` : "";
+  for (const semester of Object.keys(result?.layers || {}).sort()) {
+    if (!inputs?.[semester]) continue;
+    const tables = timetableResultTables(inputs[semester], result.layers[semester]);
+    const periods = Math.max(0, ...tables.classes.flatMap((row) => row.rows.map((item) => item.period || 0)));
+    const classHead = [{ v: "반", s: 2 }];
+    const classSub = [{ v: "", s: 2 }];
+    const classMerges = [`A1:${column(tables.days.length * periods)}1`, "A2:A3"];
+    tables.days.forEach((day, d) => {
+      for (let period = 1; period <= periods; period += 1) { classHead.push({ v: period === 1 ? day : "", s: 2 }); classSub.push({ v: period, s: 2 }); }
+      if (periods > 1) classMerges.push(`${column(1 + d * periods)}2:${column(d * periods + periods)}2`);
+    });
+    const cellOf = (entries, sub) => {
+      if (!entries || !entries.length) return { v: "", s: 4 };
+      return { v: entries.map((entry) => [entry.text, sub(entry)].filter(Boolean).join("\n")).join(" / "), s: entries.some((entry) => entry.noTeacher) || entries.length > 1 ? 9 : 4 };
+    };
+    sheets.push({ name: `${semester}학기 학급`, freeze: "B4", widths: [7, ...tables.days.flatMap(() => Array.from({ length: periods }, () => 11))], merges: classMerges, heights: [28],
+      rows: [[{ v: `${title}${semester}학기 학급별 시간표`, s: 1 }], classHead, classSub,
+        ...tables.classes.map((row) => [{ v: row.id, s: 2 }, ...tables.days.flatMap((day) => Array.from({ length: periods }, (_, index) => cellOf(row.cells[`${day}${index + 1}`], (entry) => (entry.noTeacher ? "담당 교사 없음" : entry.teacher))))])] });
+    const width = tables.teacherRows.length;
+    const teacherHead = [{ v: "교사", s: 2 }, { v: "시수", s: 2 }];
+    const teacherSub = [{ v: "", s: 2 }, { v: "", s: 2 }];
+    const teacherMerges = [`A1:${column(1 + tables.days.length * width)}1`, "A2:A3", "B2:B3"];
+    tables.days.forEach((day, d) => {
+      tables.teacherRows.forEach((row, index) => { teacherHead.push({ v: index === 0 ? day : "", s: 2 }); teacherSub.push({ v: row.label.replace(/교시/g, "").replace(/학년/g, ""), s: 2 }); });
+      if (width > 1) teacherMerges.push(`${column(2 + d * width)}2:${column(1 + d * width + width)}2`);
+    });
+    sheets.push({ name: `${semester}학기 교사`, freeze: "C4", widths: [12, 5, ...tables.days.flatMap(() => Array.from({ length: width }, () => 11))], merges: teacherMerges, heights: [28],
+      rows: [[{ v: `${title}${semester}학기 교사별 시간표`, s: 1 }], teacherHead, teacherSub,
+        ...tables.teachers.map((row) => [{ v: row.name, s: 2 }, { v: row.hours, s: 4 }, ...tables.days.flatMap((day, d) => tables.teacherRows.map((item) => cellOf(row.cells[`${d}|${item.pos}`], (entry) => entry.where)))])] });
+  }
+  const violations = result?.violations || [];
+  sheets.push({ name: "못 지킨 조건", widths: [7, 9, 16, 90], rows: [[{ v: "학기", s: 2 }, { v: "구분", s: 2 }, { v: "조건", s: 2 }, { v: "내용", s: 2 }],
+    ...violations.slice().sort((a, b) => (a.level === "hard" ? 0 : 1) - (b.level === "hard" ? 0 : 1) || String(a.semester).localeCompare(String(b.semester)))
+      .map((item) => [{ v: `${item.semester}학기`, s: 4 }, { v: item.level === "hard" ? "반드시" : "최대한", s: item.level === "hard" ? 9 : 4 }, { v: labels.rules?.[item.rule] || item.rule, s: 4 }, { v: item.cause, s: 3 }])] });
+  sheets.push({ name: "담당 교사 없음", widths: [7, 7, 24, 22, 7, 44], rows: [[{ v: "학기", s: 2 }, { v: "학년", s: 2 }, { v: "과목", s: 2 }, { v: "반·블록", s: 2 }, { v: "시간", s: 2 }, { v: "이유", s: 2 }],
+    ...(result?.noTeacher || []).map((item) => [{ v: `${item.semester}학기`, s: 4 }, { v: item.grade, s: 4 }, { v: item.subject, s: 3 }, { v: item.classId, s: 3 }, { v: Number(item.hours) || 0, s: 4 }, { v: labels.reasons?.[item.reason] || item.reason, s: 3 }])] });
+  return sheets;
+}
+
 // 저장된 시간표 조건(없으면 빈 객체). 여기서는 읽기만 한다.
 function timetableSettings() {
   const store = typeof state !== "undefined" && state && state.timetable && typeof state.timetable === "object" ? state.timetable : null;
@@ -968,6 +1013,18 @@ function timetableRunFinish(run) {
   renderTimetable();
 }
 
+// 계산 결과를 엑셀로: 학기마다 학급별·교사별 전체 시간표 + 못 지킨 조건 + 담당 교사 없음.
+function timetableDownload() {
+  const round = timetableRound();
+  const saved = timetableSaved(round);
+  if (!saved || typeof createWorkbookBlob !== "function" || typeof downloadBlob !== "function") return;
+  const inputs = {};
+  let year = "";
+  for (const semester of Object.keys(saved.result.layers || {})) { const prepared = timetableInput(round, semester); inputs[semester] = prepared.input; year = prepared.year; }
+  const sheets = timetableResultSheets(inputs, saved.result, { title: `${year}학년도 ${round}차`, rules: TIMETABLE_VIOLATION_LABELS, reasons: TIMETABLE_NO_TEACHER_REASONS });
+  downloadBlob(createWorkbookBlob(sheets), `${year}_${round}차_시간표.xlsx`);
+}
+
 // 저장된 계산 결과(차수). 없으면 null.
 function timetableSaved(round = timetableRound()) {
   const saved = state.timetable?.[round];
@@ -1039,7 +1096,7 @@ function timetableRunBarHtml(result, saved, stale) {
     <span class="cs-note${stale ? " is-warn" : ""}" id="timetableRunNote">${timetableEsc(note)}</span></section>`;
 }
 
-function timetableGridHtml(tables) {
+function timetableGridHtml(tables, stale = false) {
   const view = TIMETABLE_VIEW.grid === "teacher" ? "teacher" : "class";
   const list = view === "teacher" ? tables.teachers : tables.classes;
   if (!list.length) return `<p class="cs-note" id="timetableGrid">표로 보여 줄 ${view === "teacher" ? "교사" : "반"}이 없습니다.</p>`;
@@ -1056,7 +1113,8 @@ function timetableGridHtml(tables) {
     body = tables.teacherRows.map((row) => `<tr><th>${timetableEsc(row.label)}</th>${tables.days.map((day, d) => `<td data-tt-slot="${d}|${row.pos}">${cellHtml(picked.cells[`${d}|${row.pos}`], (entry) => entry.where)}</td>`).join("")}</tr>`).join("");
   }
   return `<div class="tt-grid-tools"><span class="tt-presets" id="timetableGridTabs"><button class="button" type="button" data-tt-view="class" aria-pressed="${view === "class"}">반 시간표</button><button class="button" type="button" data-tt-view="teacher" aria-pressed="${view === "teacher"}">교사 시간표</button></span>
-    <label>${view === "teacher" ? "교사" : "반"} <select id="timetableGridPick" data-tt-pick="${view}" data-focus-key="tt-grid-pick">${options}</select></label></div>
+    <label>${view === "teacher" ? "교사" : "반"} <select id="timetableGridPick" data-tt-pick="${view}" data-focus-key="tt-grid-pick">${options}</select></label>
+    <button class="button" type="button" id="timetableDownload"${stale ? ' disabled title="다시 계산한 뒤 내려받으세요"' : ""}>엑셀로 내려받기(학급·교사 전체 시간표)</button></div>
     <div class="table-wrap"><table class="tt-table tt-grid" id="timetableGrid" data-view="${view}" data-id="${timetableEsc(picked.id)}">${head}<tbody>${body}</tbody></table></div>`;
 }
 
@@ -1108,7 +1166,7 @@ function timetableResultHtml(saved, stale, semester, prepared) {
   const notes = (result.notes || []).filter((note) => !/^[12]학기/.test(note) || note.startsWith(`${semester}학기`));
   const notesHtml = notes.length ? `<section class="cs-card" id="timetableNotes"><h4>알림 ${notes.length}건</h4><ul class="tt-issues">${notes.slice(0, 30).map((note) => `<li class="tt-issue"><span class="tt-level" data-level="info">알림</span><span class="tt-cause">${timetableEsc(note)}</span></li>`).join("")}</ul></section>` : "";
   let grid = "";
-  try { grid = layer ? timetableGridHtml(timetableResultTables(prepared.input, layer)) : ""; } catch (error) { grid = `<p class="cs-note is-warn">표를 그리지 못했습니다: ${timetableEsc(error?.message || error)}</p>`; }
+  try { grid = layer ? timetableGridHtml(timetableResultTables(prepared.input, layer), stale) : ""; } catch (error) { grid = `<p class="cs-note is-warn">표를 그리지 못했습니다: ${timetableEsc(error?.message || error)}</p>`; }
   let blockChanges = [];
   try { blockChanges = timetableBlockTimeChanges(); } catch { blockChanges = []; }
   const hasBlocks = Object.values(result.layers || {}).some((item) => Object.keys(item.blocks || {}).length);
@@ -1320,6 +1378,7 @@ function timetableHandleClick(event) {
     return;
   }
   if (target.closest?.("#timetableStop")) { timetableRunStop(); return; }
+  if (target.closest?.("#timetableDownload")) { timetableDownload(); return; }
   if (target.closest?.("#timetableWriteBlockTimes")) {
     const count = timetableBlockTimeChanges().length;
     const ask = typeof appConfirm === "function" ? appConfirm(`시간표가 정한 블록 요일·교시 ${count}개를 6단계 블록 시간에 적어 넣을까요?\n분반·학생 배정·분반 교사는 바뀌지 않습니다.`, { title: "6단계 블록 시간에 적어 넣기", ok: "적어 넣기" }) : Promise.resolve(true);
