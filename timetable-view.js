@@ -271,6 +271,65 @@ function timetableResultSheets(inputs, result, labels = {}) {
   return sheets;
 }
 
+// 직접 고치기(순수): 한 반 시간표의 두 칸 내용을 맞바꾼다. 반 수업과 빈칸만 — 블록·창체 칸은 학년(반 묶음) 전체가 함께 움직여야 해서 반 하나만 옮길 수 없다.
+// 절대 조건(반·교사 겹침, 불가 시간, 장소, 시수)은 검증기로 다시 보고, 어기면 바꾸지 않고 이유를 돌려준다. 설정 조건 위반 목록은 검증기가 다시 센 것으로 바꾼다.
+// 돌려주는 값: { ok: true, result, text } 또는 { ok: false, reason }
+function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
+  const refuse = (reason) => ({ ok: false, reason });
+  const input = inputs?.[semester];
+  const layer = result?.layers?.[semester];
+  if (!input || !layer) return refuse("이 학기의 계산 결과가 없습니다.");
+  if (a === b) return refuse("같은 칸입니다.");
+  const model = input.gradeOf instanceof Map ? input : timetableModel(input); // 이미 만든 모형을 넘겨도 된다(여러 칸을 한꺼번에 살필 때)
+  const grade = model.grades.find((item) => item.classes.includes(classId));
+  if (!grade || !grade.slotByKey.has(a) || !grade.slotByKey.has(b)) return refuse("이 반의 시간표에 없는 칸입니다.");
+  const what = (key) => {
+    for (const block of model.blocks) if (block.classIds.includes(classId) && (layer.blocks?.[block.id]?.slots || []).includes(key)) return { kind: "block", name: block.label };
+    for (const item of layer.creative || []) {
+      const mine = item.scope === "school" || (item.scope === "grade" && String(item.grade) === grade.grade) || item.classId === classId;
+      if (mine && (item.slots || []).includes(key)) return { kind: "creative", name: "창체" };
+    }
+    for (const lesson of model.lessons) if (lesson.classId === classId && (layer.lessons?.[lesson.id]?.slots || []).includes(key)) return { kind: "lesson", id: lesson.id, name: lesson.subject };
+    return { kind: "empty", name: "빈칸" };
+  };
+  const first = what(a);
+  const second = what(b);
+  for (const [key, cell] of [[a, first], [b, second]]) if (cell.kind === "block" || cell.kind === "creative") return refuse(`${key}은 ${cell.name}(학년 전체가 함께 듣는 시간)이라 반 하나만 옮길 수 없습니다.`);
+  if (first.kind === "empty" && second.kind === "empty") return refuse("두 칸 모두 비어 있습니다.");
+  if (first.kind === "lesson" && second.kind === "lesson" && first.id === second.id) return refuse("같은 수업의 두 시간입니다.");
+  const before = timetableValidate(inputs, result);
+  const next = JSON.parse(JSON.stringify(result));
+  let broken = 0;
+  const move = (id, from, to) => {
+    const item = next.layers[semester].lessons[id];
+    if (item.frame) {
+      // 두 학기 같은 자리에서 벗어난다: 다른 학기의 짝(같은 반·같은 칸·같은 교사)도 묶음 표시를 푼다
+      const same = item.slots.slice().sort().join(",");
+      for (const [other, otherLayer] of Object.entries(next.layers)) {
+        if (other === semester) continue;
+        const mate = Object.entries(otherLayer.lessons || {}).find(([key, value]) => value.frame && String(key.split("@")[1] || "").split("#")[0] === classId && value.teacherId === item.teacherId && value.slots.slice().sort().join(",") === same);
+        if (mate) delete mate[1].frame;
+      }
+      broken += 1;
+      delete item.frame;
+    }
+    item.slots = item.slots.map((key) => (key === from ? to : key));
+    if (item.bareSlots) item.bareSlots = item.bareSlots.map((key) => (key === from ? to : key));
+  };
+  if (first.kind === "lesson") move(first.id, a, b);
+  if (second.kind === "lesson") move(second.id, b, a);
+  const check = timetableValidate(inputs, next);
+  const known = new Set(before.errors.map((item) => `${item.semester}|${item.text}`));
+  const fresh = check.errors.filter((item) => !known.has(`${item.semester}|${item.text}`));
+  if (fresh.length) return refuse(fresh.slice(0, 2).map((item) => item.text).join(" / "));
+  const soft = (result.violations || []).filter((item) => !["gap", "oncePerDay", "run", "maxPerDay", "lunch"].includes(item.rule)); // 검증기가 세지 않는 '최대한' 조건은 그대로 둔다(다시 계산하면 갱신)
+  next.violations = [...check.violations, ...soft];
+  next.metrics = { ...next.metrics, hard: check.violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + item.amount, 0), gap: check.counts.gap, oncePerDay: check.counts.oncePerDay, run: check.counts.run,
+    maxPerDay: check.counts.maxPerDay, lunch: check.counts.lunch, frameBroken: (next.metrics?.frameBroken || 0) + broken };
+  next.edits = (Number(result.edits) || 0) + 1;
+  return { ok: true, result: next, text: `${classId}반 ${a} ${first.name} ↔ ${b} ${second.name}` };
+}
+
 // 저장된 시간표 조건(없으면 빈 객체). 여기서는 읽기만 한다.
 function timetableSettings() {
   const store = typeof state !== "undefined" && state && state.timetable && typeof state.timetable === "object" ? state.timetable : null;
@@ -587,7 +646,7 @@ function timetablePrecheckFor(round, semester = "1") {
 
 // ---- 화면: 조건 설정 + 사전 점검 결과 + 시간표 계산·결과 ----
 // 메뉴 '7. 시간표' = 내부 단계 6. 그리기 입구는 renderTimetable 하나(보이지 않으면 미루고, 다시 그릴 때 스크롤·포커스를 지킨다).
-var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" } }
+var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
 var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대" };
@@ -1009,6 +1068,10 @@ function timetableRunFinish(run) {
   const tries = run.results.map((item, index) => (item && !item.failed ? { seed: item.seed, hard: item.metrics?.hard ?? null, noTeacherHours: item.metrics?.noTeacherHours ?? null, long: Boolean(run.plans[index].long) } : { seed: run.plans[index].seed, failed: true }));
   state.timetable[run.round] = { at: new Date().toISOString(), tries, ...(previous ? { previous } : {}), ...(run.choice ? { choice: run.choice } : {}), seconds: Math.round((Date.now() - run.startedAt) / 100) / 10, tried: run.results.filter((item) => item && !item.failed).length, stopped: run.stopping,
     signature: run.signature, validation, result: best };
+  TIMETABLE_VIEW.undo = []; // 새로 계산하면 직접 고친 것의 되돌리기 기록은 비운다
+  TIMETABLE_VIEW.editPick = "";
+  TIMETABLE_VIEW.editTargets = null;
+  TIMETABLE_VIEW.editStatus = "";
   if (typeof persistStateSoon === "function") persistStateSoon();
   TIMETABLE_VIEW.runStatus = "";
   TIMETABLE_VIEW.runError = false;
@@ -1025,6 +1088,62 @@ function timetableDownload() {
   for (const semester of Object.keys(saved.result.layers || {})) { const prepared = timetableInput(round, semester); inputs[semester] = prepared.input; year = prepared.year; }
   const sheets = timetableResultSheets(inputs, saved.result, { title: `${year}학년도 ${round}차`, rules: TIMETABLE_VIOLATION_LABELS, reasons: TIMETABLE_NO_TEACHER_REASONS });
   downloadBlob(createWorkbookBlob(sheets), `${year}_${round}차_시간표.xlsx`);
+}
+
+// 직접 고치기: 반 시간표에서 칸 둘을 차례로 누르면 맞바꾼다. 되돌리기는 이 창에서 고친 것만(새로 계산하면 비움).
+function timetableEditClick(slot) {
+  const round = timetableRound();
+  const saved = timetableSaved(round);
+  if (!saved || TIMETABLE_RUN) return;
+  const semester = TIMETABLE_VIEW.semester;
+  const inputs = {};
+  for (const key of Object.keys(saved.result.layers || {})) inputs[key] = timetableModel(timetableInput(round, key).input);
+  const plainResult = JSON.parse(JSON.stringify(saved.result, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined));
+  if (!TIMETABLE_VIEW.editPick) {
+    // 첫 칸을 고르면 맞바꿀 수 있는 칸을 미리 살펴 표에 표시한다(안 되는 칸은 이유를 칸 설명으로)
+    const targets = {};
+    const grade = inputs[semester].grades.find((item) => item.classes.includes(TIMETABLE_VIEW.pick.class));
+    for (const other of grade ? grade.slots : []) {
+      if (other.key === slot) continue;
+      let outcome;
+      try { outcome = timetableEditSwap(inputs, plainResult, { semester, classId: TIMETABLE_VIEW.pick.class, a: slot, b: other.key }); } catch (error) { outcome = { ok: false, reason: error?.message || String(error) }; }
+      targets[other.key] = outcome.ok ? true : outcome.reason;
+    }
+    TIMETABLE_VIEW.editPick = slot;
+    TIMETABLE_VIEW.editTargets = targets;
+    const able = Object.values(targets).filter((value) => value === true).length;
+    TIMETABLE_VIEW.editStatus = able ? `${slot}과 맞바꿀 수 있는 칸 ${able}곳을 표시했습니다. 바꿀 칸을 누르세요(같은 칸을 다시 누르면 취소).` : `${slot}은 지금 맞바꿀 수 있는 칸이 없습니다(칸마다 이유는 마우스를 올리면 보입니다).`;
+    TIMETABLE_VIEW.editError = !able;
+    renderTimetable();
+    return;
+  }
+  const first = TIMETABLE_VIEW.editPick;
+  TIMETABLE_VIEW.editPick = "";
+  TIMETABLE_VIEW.editTargets = null;
+  if (first === slot) { TIMETABLE_VIEW.editStatus = ""; renderTimetable(); return; }
+  let outcome;
+  try { outcome = timetableEditSwap(inputs, plainResult, { semester, classId: TIMETABLE_VIEW.pick.class, a: first, b: slot }); } catch (error) { outcome = { ok: false, reason: error?.message || String(error) }; }
+  if (!outcome.ok) { TIMETABLE_VIEW.editStatus = `바꾸지 않았습니다 — ${outcome.reason}`; TIMETABLE_VIEW.editError = true; renderTimetable(); return; }
+  TIMETABLE_VIEW.undo.push({ round, result: plainResult, text: outcome.text });
+  if (TIMETABLE_VIEW.undo.length > 30) TIMETABLE_VIEW.undo.shift();
+  state.timetable[round].result = outcome.result;
+  TIMETABLE_VIEW.editStatus = `맞바꿨습니다 — ${outcome.text}`;
+  TIMETABLE_VIEW.editError = false;
+  if (typeof persistStateSoon === "function") persistStateSoon();
+  renderTimetable();
+}
+
+function timetableEditUndo() {
+  const last = TIMETABLE_VIEW.undo.pop();
+  const round = timetableRound();
+  if (!last || last.round !== round || !timetableSaved(round)) { TIMETABLE_VIEW.undo = []; renderTimetable(); return; }
+  state.timetable[round].result = last.result;
+  TIMETABLE_VIEW.editPick = "";
+  TIMETABLE_VIEW.editTargets = null;
+  TIMETABLE_VIEW.editStatus = `되돌렸습니다 — ${last.text}`;
+  TIMETABLE_VIEW.editError = false;
+  if (typeof persistStateSoon === "function") persistStateSoon();
+  renderTimetable();
 }
 
 // 저장된 계산 결과(차수). 없으면 null.
@@ -1110,13 +1229,16 @@ function timetableGridHtml(tables, stale = false) {
   let body = "";
   if (view === "class") {
     body = picked.rows.map((row) => (row.lunch ? `<tr class="tt-lunch"><th>점심</th><td colspan="${tables.days.length}"></td></tr>`
-      : `<tr><th>${row.period}</th>${tables.days.map((day) => { const entries = picked.cells[`${day}${row.period}`]; return `<td data-tt-slot="${timetableEsc(day)}${row.period}"${entries && entries.length > 1 ? ' data-clash="1"' : ""}>${cellHtml(entries, (entry) => (entry.noTeacher ? "담당 교사 없음" : entry.teacher))}</td>`; }).join("")}</tr>`)).join("");
+      : `<tr><th>${row.period}</th>${tables.days.map((day) => { const entries = picked.cells[`${day}${row.period}`]; const key = `${day}${row.period}`; return `<td data-tt-slot="${timetableEsc(key)}"${entries && entries.length > 1 ? ' data-clash="1"' : ""}${stale ? "" : ` data-tt-edit="${timetableEsc(key)}"${TIMETABLE_VIEW.editPick && TIMETABLE_VIEW.editTargets && key !== TIMETABLE_VIEW.editPick ? ` data-tt-can="${TIMETABLE_VIEW.editTargets[key] === true ? "1" : "0"}"${TIMETABLE_VIEW.editTargets[key] !== true ? ` title="${timetableEsc(TIMETABLE_VIEW.editTargets[key] || "")}"` : ""}` : ""} role="button" tabindex="0" aria-pressed="${TIMETABLE_VIEW.editPick === key}" aria-label="${timetableEsc(`${day}요일 ${row.period}교시 ${(entries || []).map((entry) => entry.text).join(", ") || "빈칸"}`)}"`}>${cellHtml(entries, (entry) => (entry.noTeacher ? "담당 교사 없음" : entry.teacher))}</td>`; }).join("")}</tr>`)).join("");
   } else {
     body = tables.teacherRows.map((row) => `<tr><th>${timetableEsc(row.label)}</th>${tables.days.map((day, d) => `<td data-tt-slot="${d}|${row.pos}">${cellHtml(picked.cells[`${d}|${row.pos}`], (entry) => entry.where)}</td>`).join("")}</tr>`).join("");
   }
   return `<div class="tt-grid-tools"><span class="tt-presets" id="timetableGridTabs"><button class="button" type="button" data-tt-view="class" aria-pressed="${view === "class"}">반 시간표</button><button class="button" type="button" data-tt-view="teacher" aria-pressed="${view === "teacher"}">교사 시간표</button></span>
     <label>${view === "teacher" ? "교사" : "반"} <select id="timetableGridPick" data-tt-pick="${view}" data-focus-key="tt-grid-pick">${options}</select></label>
     <button class="button" type="button" id="timetableDownload"${stale ? ' disabled title="다시 계산한 뒤 내려받으세요"' : ""}>엑셀로 내려받기(학급·교사 전체 시간표)</button></div>
+    ${view === "class" && !stale ? `<p class="cs-note" id="timetableEditHelp">직접 고치기: 반 수업 칸을 누르면 맞바꿀 수 있는 칸이 초록으로 표시됩니다 — 그 칸을 누르면 두 칸을 맞바꿉니다(블록·창체 칸, 교사가 그 시간에 다른 반에 있는 칸은 안 되고 이유는 칸에 마우스를 올리면 보입니다).
+      <button class="button" type="button" id="timetableEditUndo"${TIMETABLE_VIEW.undo.length ? "" : " disabled"}>고친 것 되돌리기${TIMETABLE_VIEW.undo.length ? `(${TIMETABLE_VIEW.undo.length})` : ""}</button></p>` : ""}
+    ${TIMETABLE_VIEW.editStatus ? `<p class="tt-status${TIMETABLE_VIEW.editError ? " is-error" : ""}" id="timetableEditStatus" role="status">${timetableEsc(TIMETABLE_VIEW.editStatus)}</p>` : ""}
     <div class="table-wrap"><table class="tt-table tt-grid" id="timetableGrid" data-view="${view}" data-id="${timetableEsc(picked.id)}">${head}<tbody>${body}</tbody></table></div>`;
 }
 
@@ -1137,7 +1259,7 @@ function timetableResultHtml(saved, stale, semester, prepared) {
   const summary = `<p class="tt-verdict" id="timetableResultSummary" data-state="${count(hard) || noTeacherHours ? "fail" : "ok"}" data-hard="${count(hard)}" data-no-teacher="${noTeacherHours}" role="status">
     <strong>${semester}학기 — ${count(hard) ? `'반드시' 조건을 못 지킨 곳 ${count(hard)}건` : "'반드시' 조건을 모두 지켰습니다"} · 담당 교사 없음 ${noTeacherHours}시간</strong>
     <span class="cs-note">'최대한' 조건 ${count(soft)}건${metrics.frame ? ` · 두 학기 같은 자리 ${metrics.frameActs}묶음${metrics.frameBroken ? `(벗어난 칸 ${metrics.frameBroken})` : ""}` : ""}${metrics.blockTimesChanged ? ` · 6단계 블록 시간과 다른 블록 ${metrics.blockTimesChanged}개` : ""}
-      · ${timetableEsc(time)} 계산(${saved.seconds}초, ${saved.tried}개 중 가장 좋은 답${saved.stopped ? ", 중단함" : ""})</span></p>`;
+      · ${timetableEsc(time)} 계산(${saved.seconds}초, ${saved.tried}개 중 가장 좋은 답${saved.stopped ? ", 중단함" : ""})${result.edits ? ` · <span id="timetableEdits" data-count="${result.edits}">직접 고침 ${result.edits}번</span>` : ""}</span></p>`;
   const previous = saved.previous;
   const compare = previous ? `<p class="cs-note" id="timetableResultCompare" data-hard-before="${previous.hard}" data-hard-after="${metrics.hard}">앞 결과와 견줌(두 학기 합계): '반드시' 조건 ${previous.hard} → ${metrics.hard}건 · 담당 교사 없음 ${previous.noTeacherHours} → ${metrics.noTeacherHours}시간${saved.choice ? ` — 고른 선택: ${timetableEsc(saved.choice)}` : ""}</p>` : "";
   const tries = Array.isArray(saved.tries) ? saved.tries.filter((item) => !item.failed) : [];
@@ -1377,8 +1499,13 @@ function timetableGoto(key, step) {
 function timetableHandleClick(event) {
   const target = event.target;
   const tab = target.closest?.("[data-tt-semester]");
-  if (tab) { TIMETABLE_VIEW.semester = tab.dataset.ttSemester === "2" ? "2" : "1"; TIMETABLE_VIEW.changeInfo = null; TIMETABLE_VIEW.status = ""; renderTimetable(); return; }
-  if (target.closest?.("#timetableRun")) { timetableRunStart(); return; }
+  if (tab) { TIMETABLE_VIEW.editPick = ""; TIMETABLE_VIEW.editTargets = null; TIMETABLE_VIEW.editStatus = ""; TIMETABLE_VIEW.semester = tab.dataset.ttSemester === "2" ? "2" : "1"; TIMETABLE_VIEW.changeInfo = null; TIMETABLE_VIEW.status = ""; renderTimetable(); return; }
+  if (target.closest?.("#timetableRun")) {
+    const edits = Number(timetableSaved()?.result?.edits) || 0;
+    if (!edits || typeof appConfirm !== "function") { timetableRunStart(); return; }
+    appConfirm(`다시 계산하면 직접 고친 ${edits}곳이 사라집니다. 계속할까요?`, { title: "시간표 다시 계산", ok: "다시 계산" }).then((ok) => { if (ok) timetableRunStart(); });
+    return;
+  }
   const solveChoice = target.closest?.("[data-tt-choice-solve]");
   if (solveChoice) {
     const label = timetableApplyChoice(solveChoice.dataset.ttChoiceSolve);
@@ -1389,6 +1516,9 @@ function timetableHandleClick(event) {
   }
   if (target.closest?.("#timetableStop")) { timetableRunStop(); return; }
   if (target.closest?.("#timetableDownload")) { timetableDownload(); return; }
+  if (target.closest?.("#timetableEditUndo")) { timetableEditUndo(); return; }
+  const editCell = target.closest?.("[data-tt-edit]");
+  if (editCell) { timetableEditClick(editCell.dataset.ttEdit); return; }
   if (target.closest?.("#timetableWriteBlockTimes")) {
     const count = timetableBlockTimeChanges().length;
     const ask = typeof appConfirm === "function" ? appConfirm(`시간표가 정한 블록 요일·교시 ${count}개를 6단계 블록 시간에 적어 넣을까요?\n분반·학생 배정·분반 교사는 바뀌지 않습니다.`, { title: "6단계 블록 시간에 적어 넣기", ok: "적어 넣기" }) : Promise.resolve(true);
@@ -1403,7 +1533,7 @@ function timetableHandleClick(event) {
     return;
   }
   const view = target.closest?.("[data-tt-view]");
-  if (view) { TIMETABLE_VIEW.grid = view.dataset.ttView === "teacher" ? "teacher" : "class"; renderTimetable(); return; }
+  if (view) { TIMETABLE_VIEW.editPick = ""; TIMETABLE_VIEW.editTargets = null; TIMETABLE_VIEW.grid = view.dataset.ttView === "teacher" ? "teacher" : "class"; renderTimetable(); return; }
   const go = target.closest?.("[data-tt-goto]");
   if (go) { timetableGoto(go.dataset.ttGoto, go.dataset.ttStep); return; }
   const preset = target.closest?.("[data-tt-creative-preset]");
@@ -1416,7 +1546,7 @@ function timetableHandleClick(event) {
 
 function timetableHandleChange(event) {
   const pick = event.target?.dataset?.ttPick;
-  if (pick) { TIMETABLE_VIEW.pick[pick === "teacher" ? "teacher" : "class"] = event.target.value; renderTimetable(); return; }
+  if (pick) { TIMETABLE_VIEW.editPick = ""; TIMETABLE_VIEW.editTargets = null; TIMETABLE_VIEW.editStatus = ""; TIMETABLE_VIEW.pick[pick === "teacher" ? "teacher" : "class"] = event.target.value; renderTimetable(); return; }
   const field = event.target?.dataset?.ttField;
   if (field) timetableChanged(timetableApplyField(field, event.target));
 }
@@ -1427,6 +1557,7 @@ function initTimetable() {
   panel.dataset.ttBound = "1";
   panel.addEventListener("click", timetableHandleClick);
   panel.addEventListener("change", timetableHandleChange);
+  panel.addEventListener("keydown", (event) => { const cell = event.target?.closest?.("[data-tt-edit]"); if (cell && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); timetableEditClick(cell.dataset.ttEdit); } });
   // 접는 영역을 연 상태를 기억한다(다시 그려도 그대로). toggle은 위로 올라오지 않아 잡는 단계에서 받는다.
   panel.addEventListener("toggle", (event) => { const key = event.target?.dataset?.ttSection; if (key) TIMETABLE_VIEW.open[key] = event.target.open; }, true);
 }

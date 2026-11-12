@@ -2362,6 +2362,11 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-grid th:first-child { width:120px; background:#f5f7fb; font-size:12px; }
     .tt-grid td { height:44px; vertical-align:middle; padding:3px 4px; }
     .tt-grid td[data-clash] { outline:2px solid #d9534f; outline-offset:-2px; }
+    .tt-grid td[data-tt-edit] { cursor:pointer; }
+    .tt-grid td[data-tt-edit]:hover, .tt-grid td[data-tt-edit]:focus-visible { background:#f2f6ff; outline:1px solid #9db6ee; outline-offset:-1px; }
+    .tt-grid td[data-tt-can="1"] { background:#e9f7ee; outline:1px solid #7cc79a; outline-offset:-1px; }
+    .tt-grid td[data-tt-can="0"] { opacity:.45; }
+    .tt-grid td[data-tt-edit][aria-pressed="true"] { background:#dfe9ff; outline:2px solid var(--blue); outline-offset:-2px; }
     .tt-grid .tt-lunch th, .tt-grid .tt-lunch td { height:14px; padding:0; background:#f1f3f8; font-size:11px; color:#6a768c; }
     .tt-cell-entry { display:block; line-height:1.25; font-size:12px; }
     .tt-cell-entry strong { display:block; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

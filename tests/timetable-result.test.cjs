@@ -155,3 +155,70 @@ test("엑셀 시트: 학기마다 학급별·교사별 전체 표(요일 × 교�
   // 담당 교사 없음: 음악 2반 × 1시간
   assert.deepEqual(none.rows.slice(1).map((row) => row.map((cell) => cell.v)), [["1학기", "1", "음악", "1-1", 1, "맡을 수 있는 교사가 명단에 없음"], ["1학기", "1", "음악", "1-2", 1, "맡을 수 있는 교사가 명단에 없음"]]);
 });
+
+test("직접 고치기: 반 시간표의 두 칸 맞바꾸기 — 절대 조건에 걸리면 이유와 함께 거절, 되면 위반 목록을 다시 센다", () => {
+  const ctx = context();
+  const input = tiny();
+  const inputs = { 1: input };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 8000, rounds: 2 }));
+  const layer = result.layers["1"];
+  const cells = (res, classId) => plain(ctx.timetableResultTables(input, res.layers["1"])).classes.find((row) => row.id === classId).cells;
+  const before = cells(result, "1-1");
+  const slotOf = (table, test) => Object.keys(table).filter((key) => test(table[key][0]));
+  // 창체·블록 칸은 반 하나만 옮길 수 없다
+  const lessonSlot = slotOf(before, (cell) => cell.kind === "lesson")[0];
+  assert.deepEqual(plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월1", b: lessonSlot })), { ok: false, reason: "월1은 창체(학년 전체가 함께 듣는 시간)이라 반 하나만 옮길 수 없습니다." });
+  const blockSlot = layer.blocks["3a"].slots[0];
+  const thirdLesson = slotOf(cells(result, "3-1"), (cell) => cell.kind === "lesson")[0];
+  assert.match(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "3-1", a: blockSlot, b: thirdLesson }).reason, /3학년 a블록\(학년 전체가 함께 듣는 시간\)이라 반 하나만 옮길 수 없습니다/);
+  // 같은 칸·없는 칸·빈칸끼리
+  assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월2", b: "월2" }).reason, "같은 칸입니다.");
+  assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월2", b: "토1" }).reason, "이 반의 시간표에 없는 칸입니다.");
+  const empties = ["월", "화"].flatMap((day) => [1, 2, 3, 4, 5].map((period) => `${day}${period}`)).filter((key) => !before[key]);
+  assert.equal(empties.length, 2);
+  assert.equal(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: empties[0], b: empties[1] }).reason, "두 칸 모두 비어 있습니다.");
+  // 교사가 그 시간에 다른 반에 있으면 거절(이유 = 검증기의 문장)
+  const kimOther = slotOf(cells(result, "1-2"), (cell) => cell.teacher === "김국어")[0]; // 김국어가 1-2반에 있는 칸
+  const mine = before[kimOther];
+  const kimMine = slotOf(before, (cell) => cell.teacher === "김국어").find((key) => key !== kimOther);
+  if (!mine || mine[0].teacher !== "김국어") {
+    const refused = plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: kimMine, b: kimOther }));
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /김국어 교사 .*겹칩니다/);
+  }
+  // 음악(담당 교사 없음)과 빈칸을 맞바꾸면 된다: 칸이 옮겨지고, 위반 목록·수가 검증기와 같아진다
+  const music = slotOf(before, (cell) => cell.text === "음악")[0];
+  const done = plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: music, b: empties[0] }));
+  assert.deepEqual([done.ok, done.text, done.result.edits], [true, `1-1반 ${music} 음악 ↔ ${empties[0]} 빈칸`, 1]);
+  const after = cells(done.result, "1-1");
+  assert.deepEqual([after[music], after[empties[0]].map((cell) => [cell.text, cell.noTeacher])], [undefined, [["음악", true]]]);
+  const check = plain(ctx.timetableValidate(inputs, done.result));
+  assert.equal(check.ok, true);
+  assert.deepEqual([done.result.metrics.gap, done.result.metrics.oncePerDay, done.result.metrics.hard], [check.counts.gap, check.counts.oncePerDay, check.violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + item.amount, 0)]);
+  assert.deepEqual(done.result.violations.filter((item) => item.rule === "gap"), check.violations.filter((item) => item.rule === "gap"));
+  // 원래 결과는 그대로(되돌리기용), 한 번 더 고치면 횟수가 는다
+  assert.deepEqual(cells(result, "1-1"), before);
+  assert.equal(plain(ctx.timetableEditSwap(inputs, done.result, { semester: "1", classId: "1-1", a: empties[0], b: music })).result.edits, 2);
+  // 검증기의 위반 목록은 풀이기 결과와 같은 수
+  const counted = plain(ctx.timetableValidate(inputs, result));
+  for (const rule of ["gap", "oncePerDay", "run", "maxPerDay", "lunch"]) assert.equal(counted.violations.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0), result.metrics[rule], rule);
+});
+
+test("직접 고치기(두 학기 뼈대): 한 학기에서 옮긴 수업은 다른 학기의 짝도 묶음 표시를 풀고 '벗어난 칸'으로 센다", () => {
+  const ctx = context();
+  const inputs = { 1: tiny(), 2: Object.assign(tiny(), { semester: "2" }) };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 8000, rounds: 2 }));
+  assert.equal(result.metrics.frame, true);
+  const table = plain(ctx.timetableResultTables(inputs[1], result.layers["1"])).classes.find((row) => row.id === "1-1").cells;
+  const music = Object.keys(table).find((key) => table[key][0].text === "음악");
+  const empty = ["월", "화"].flatMap((day) => [1, 2, 3, 4, 5].map((period) => `${day}${period}`)).find((key) => !table[key]);
+  assert.equal(result.layers["1"].lessons["1음악@1-1"].frame, true);
+  // 이미 만든 모형을 넘겨도 같다(화면은 칸마다 살필 때 모형을 한 번만 만든다)
+  const models = { 1: ctx.timetableModel(inputs[1]), 2: ctx.timetableModel(inputs[2]) };
+  const done = plain(ctx.timetableEditSwap(models, result, { semester: "1", classId: "1-1", a: music, b: empty }));
+  assert.equal(done.ok, true);
+  assert.deepEqual([done.result.layers["1"].lessons["1음악@1-1"].frame, done.result.layers["2"].lessons["1음악@1-1"].frame, done.result.metrics.frameBroken], [undefined, undefined, 1]);
+  assert.deepEqual([done.result.layers["1"].lessons["1음악@1-1"].slots, done.result.layers["2"].lessons["1음악@1-1"].slots], [[empty], [music]]);
+  assert.equal(done.result.layers["1"].lessons["1국어@1-1"].frame, true, "다른 수업의 묶음은 그대로");
+  assert.equal(plain(ctx.timetableValidate(inputs, done.result)).ok, true);
+});

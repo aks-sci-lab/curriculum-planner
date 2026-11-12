@@ -1,6 +1,7 @@
 // 7단계 시간표 계산 화면 확인(사용자처럼 클릭): 하네스 백업(가상 학생) 복원 → 메뉴 '7. 시간표'
 // ① '시간표 계산' → 진행 표시 → 결과 요약(반드시 위반·담당 교사 없음)·반 시간표·교사 시간표 ② 반·교사 고르기, 학기 탭
 // ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답
+// ④-1 직접 고치기: 반 시간표의 두 칸 맞바꾸기(블록 칸·교사 겹침은 이유와 함께 거절), 되돌리기
 // ④-2 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(6단계 결과는 '입력 변경됨'이 되지 않음)
 // ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '교사 규칙 양보' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-solve-ui.cjs /tmp/tt-solve-ui /tmp/e2e/downloads/workspace-backup.json.gz
@@ -97,6 +98,55 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(new RegExp(`\\(${teacherFilled.length}시간\\)`).test(picked), `교사 고르기의 시수 = 표의 칸 수(${picked})`);
   await page.screenshot({ path: path.join(OUT, "03-teacher-grid.png"), fullPage: true });
   await panel.locator('[data-tt-view="class"]').click(); await sleep(200);
+  console.log("▶ 직접 고치기: 두 칸 맞바꾸기·거절 이유·되돌리기");
+  const editStatus = async () => ((await panel.locator("#timetableEditStatus").count()) ? clean(await panel.locator("#timetableEditStatus").innerText()) : "");
+  const cellAt = (slot) => panel.locator(`#timetableGrid td[data-tt-edit="${slot}"]`);
+  // 블록 칸은 반 하나만 옮길 수 없다(3학년 반)
+  const thirdCells = (await gridOf()).cells;
+  const blockCell = thirdCells.find((cell) => /블록/.test(cell.text));
+  const lessonCell = thirdCells.find((cell) => cell.text && !/블록|창체/.test(cell.text));
+  await cellAt(blockCell.slot).click(); await sleep(150);
+  check((await cellAt(blockCell.slot).getAttribute("aria-pressed")) === "true", `칸을 누르면 고른 표시(${blockCell.slot})`);
+  await cellAt(lessonCell.slot).click(); await sleep(300);
+  check(/바꾸지 않았습니다 — .*학년 전체가 함께 듣는 시간\)이라 반 하나만 옮길 수 없습니다/.test(await editStatus()), `블록 칸은 거절 + 이유: ${(await editStatus()).slice(0, 80)}`);
+  // 1학년 반: 반 수업 칸을 누르면 맞바꿀 수 있는 칸이 표시된다 → 표시된 칸을 눌러 맞바꾸기, 표시 안 된 칸은 이유와 함께 거절
+  await panel.locator("#timetableGridPick").selectOption(classOptions[0]); await sleep(300);
+  const original = (await gridOf()).cells;
+  const lessons = original.filter((cell) => cell.text && !/블록|창체/.test(cell.text));
+  let swapped = null; const refusals = [];
+  for (const lesson of lessons) {
+    await cellAt(lesson.slot).click(); await sleep(400);
+    const marks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => ({ slot: el.dataset.ttEdit, can: el.dataset.ttCan === "1", title: el.title, text: el.textContent.replace(/\s+/g, " ").trim() })));
+    const able = marks.filter((mark) => mark.can && mark.text && mark.text !== lesson.text);
+    const blocked = marks.find((mark) => !mark.can && mark.text && !/블록|창체/.test(mark.text) && /겹칩니다|불가 시간/.test(mark.title));
+    if (!able.length) { await cellAt(lesson.slot).click(); await sleep(150); continue; } // 취소하고 다음 칸
+    report.checks.editMarks = { picked: lesson.slot, able: marks.filter((mark) => mark.can).length, blocked: marks.filter((mark) => !mark.can).length, status: await editStatus() };
+    check(/맞바꿀 수 있는 칸 \d+곳을 표시했습니다/.test(await editStatus()) && marks.length === 34, `${lesson.slot}(${lesson.text.slice(0, 12)})을 누르면 맞바꿀 수 있는 칸 ${marks.filter((mark) => mark.can).length}곳 표시(나머지 ${marks.filter((mark) => !mark.can).length}곳은 흐리게)`);
+    if (blocked) {
+      await cellAt(blocked.slot).click(); await sleep(300);
+      refusals.push(await editStatus());
+      check(/^바꾸지 않았습니다 — .+(겹칩니다|불가 시간)/.test(refusals[0]) && blocked.title.length > 5, `표시 안 된 칸을 누르면 거절 + 이유: ${refusals[0].slice(0, 90)}`);
+      await cellAt(lesson.slot).click(); await sleep(400);
+    }
+    await cellAt(able[0].slot).click(); await sleep(300);
+    const text = await editStatus();
+    if (/^맞바꿨습니다/.test(text)) swapped = { a: lesson, b: { slot: able[0].slot, text: able[0].text }, text };
+    break;
+  }
+  report.checks.edit = { swapped, refusals };
+  check(Boolean(swapped), `표시된 칸을 눌러 두 칸 맞바꾸기: ${swapped?.text}`, refusals.slice(0, 3));
+  if (swapped) {
+    const now = (await gridOf()).cells;
+    const textAt = (cells, slot) => cells.find((cell) => cell.slot === slot).text;
+    check(textAt(now, swapped.a.slot) === swapped.b.text && textAt(now, swapped.b.slot) === swapped.a.text, "표에서 두 칸의 내용이 서로 바뀜");
+    check((await panel.locator("#timetableEdits").getAttribute("data-count")) === "1" && /되돌리기\(1\)/.test(clean(await panel.locator("#timetableEditUndo").innerText())), "요약에 '직접 고침 1번', 되돌리기(1)");
+    check((await panel.locator("#timetableValidation").count()) === 0 && (await bar.getAttribute("data-state")) === "done", "고친 뒤에도 검증 오류 없음·지금 조건의 결과");
+    await page.screenshot({ path: path.join(OUT, "03c-edit.png"), fullPage: true });
+    await panel.locator("#timetableEditUndo").click(); await sleep(300);
+    const back = (await gridOf()).cells;
+    check(/^되돌렸습니다/.test(await editStatus()) && JSON.stringify(back.map((cell) => cell.text)) === JSON.stringify(original.map((cell) => cell.text)) && (await panel.locator("#timetableEdits").count()) === 0, "되돌리기 → 표가 처음과 같고 '직접 고침' 표시 없음");
+  }
+
   // 엑셀 내려받기: 앱이 붙인 파일 이름(a.download)과 내용(시트 이름)
   await page.evaluate(() => { window.__ttNames = []; const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) window.__ttNames.push(this.download); return click.call(this); }; });
   const [excel] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), panel.locator("#timetableDownload").click()]);

@@ -1047,6 +1047,7 @@ function timetableValidate(inputs, result) {
   const counts = { gap: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 };
   const hours = {};
   const frames = [];
+  const violations = []; // 설정 조건 위반(공강·하루 두 번·연강·하루 최대·점심)을 결과의 violations와 같은 모양으로 — 직접 고친 뒤 다시 셀 때 쓴다
   for (const semester of Object.keys(inputs || {}).filter((key) => inputs[key]).sort()) {
     const model = inputs[semester].gradeOf instanceof Map ? inputs[semester] : timetableModel(inputs[semester]);
     const layer = result.layers?.[semester];
@@ -1160,15 +1161,21 @@ function timetableValidate(inputs, result) {
         const periods = grade.slots.filter((slot) => slot.d === d);
         const filled = periods.map((slot) => classCells.has(`${classId}|${slot.key}`));
         const last = filled.lastIndexOf(true);
-        if (last >= 0 && rules.gap !== "off") counts.gap += filled.slice(0, last).filter((value) => !value).length;
+        if (last >= 0 && rules.gap !== "off") {
+          const empty = periods.slice(0, last).filter((slot, index) => !filled[index]).map((slot) => slot.period);
+          counts.gap += empty.length;
+          if (empty.length) violations.push({ semester, rule: "gap", level: rules.gap, kind: "class", id: classId, day: model.days[d], amount: empty.length, cause: `${classId}반 ${model.days[d]}요일 ${empty.join("·")}교시가 비었습니다(공강 ${empty.length}칸).` });
+        }
         if (rules.oncePerDay === "off") continue;
         const list = (pairs.get(`${classId}|${d}`) || []).sort((a, b) => a.period - b.period);
         const seen = [];
+        const twice = [];
         for (const entry of list) {
           const prior = seen.filter((other) => other.key === entry.key);
-          if (prior.length && !(entry.double && prior.length === 1 && prior[0].id === entry.id && prior[0].period === entry.period - 1)) counts.oncePerDay += 1;
+          if (prior.length && !(entry.double && prior.length === 1 && prior[0].id === entry.id && prior[0].period === entry.period - 1)) { counts.oncePerDay += 1; twice.push(classCells.get(`${classId}|${model.days[d]}${entry.period}`) || entry.id); }
           seen.push(entry);
         }
+        if (twice.length) violations.push({ semester, rule: "oncePerDay", level: rules.oncePerDay, kind: "class", id: classId, day: model.days[d], amount: twice.length, cause: `${classId}반 ${model.days[d]}요일: ${[...new Set(twice)].join(", ")} 수업이 하루에 두 번 있습니다(같은 교사).` });
       }
     }
     const lunch = model.lunchPositions;
@@ -1177,9 +1184,20 @@ function timetableValidate(inputs, result) {
       const total = busy.filter(Boolean).length;
       if (!total) continue;
       let streak = 0;
-      for (const value of busy) { if (value) { streak += 1; if (Number(rules.run) > 0 && streak > Number(rules.run)) counts.run += 1; } else streak = 0; }
-      if (Number(rules.maxPerDay) > 0 && total > Number(rules.maxPerDay)) counts.maxPerDay += total - Number(rules.maxPerDay);
-      if (rules.lunch !== "off" && lunch.length && lunch.every((pos) => busy[pos])) counts.lunch += 1;
+      let over = 0;
+      let longest = 0;
+      for (const value of busy) { if (value) { streak += 1; longest = Math.max(longest, streak); if (Number(rules.run) > 0 && streak > Number(rules.run)) over += 1; } else streak = 0; }
+      counts.run += over;
+      const day = model.days[d];
+      if (over) violations.push({ semester, rule: "run", level: "hard", kind: "teacher", id: teacher.id, day, amount: over, cause: `${teacher.name} 교사 ${day}요일 ${longest}시간 연강(상한 ${Number(rules.run)}).` });
+      if (Number(rules.maxPerDay) > 0 && total > Number(rules.maxPerDay)) {
+        counts.maxPerDay += total - Number(rules.maxPerDay);
+        violations.push({ semester, rule: "maxPerDay", level: "hard", kind: "teacher", id: teacher.id, day, amount: total - Number(rules.maxPerDay), cause: `${teacher.name} 교사 ${day}요일 ${total}시간(하루 최대 ${Number(rules.maxPerDay)}).` });
+      }
+      if (rules.lunch !== "off" && lunch.length && lunch.every((pos) => busy[pos])) {
+        counts.lunch += 1;
+        violations.push({ semester, rule: "lunch", level: rules.lunch, kind: "teacher", id: teacher.id, day, amount: 1, cause: `${teacher.name} 교사 ${day}요일 점심 시간이 없습니다(학년별 점심 칸에 모두 수업).` });
+      }
     }
   }
   // 두 학기 뼈대: 묶음으로 표시된 수업·블록은 다른 학기에 같은 반·같은 칸(수업은 같은 교사)의 짝이 있어야 한다.
@@ -1190,7 +1208,7 @@ function timetableValidate(inputs, result) {
     for (const item of frames) { const key = keyOf(item); if (!bag.has(key)) bag.set(key, {}); bag.get(key)[item.semester] = (bag.get(key)[item.semester] || 0) + 1; }
     for (const [key, entry] of bag) if (semesters.some((semester) => (entry[semester] || 0) !== (entry[semesters[0]] || 0))) errors.push({ type: "frame", semester: "", text: `두 학기 묶음이 같은 칸에 있지 않습니다: ${key}` });
   }
-  return { ok: errors.length === 0, errors, counts, hours };
+  return { ok: errors.length === 0, errors, counts, hours, violations };
 }
 
 // ---- Worker: 조각으로 돌려 진행 상황을 보내고 중단 요청을 받는다 ----
