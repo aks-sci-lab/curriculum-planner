@@ -829,7 +829,19 @@ function timetableStaggerFor(round, grade, classCount, settings = timetableSetti
     plans.push({ k, extra: Math.max(...each.map(([, plan]) => plan.extra)), small: Math.max(...each.map(([, plan]) => plan.small)),
       blocks: Object.fromEntries(each.map(([key, plan]) => [key, plan.blocks.map((id) => semesters[key].blocks.find((block) => block.id === id)?.label || id)])) });
   }
-  return { label: Object.values(used).map(span).join(" / "), mapped, plans, semesters };
+  return { label: Object.values(used).map(span).join(" / "), spans: Object.fromEntries(Object.entries(used).map(([key, list]) => [key, span(list)])), mapped, plans, semesters };
+}
+
+// 엇갈림 견적의 예상 효과(T7a-2): 이 학기 입력에서 블록 k개를 반 묶음별 블록으로 나눈 구조(timetableStaggerInput)로 사전 점검을 다시 돌린다.
+// 돌려주는 값: 사전 점검 결과(나눌 블록을 입력에서 못 찾으면 null). 실제 분반·배정은 바꾸지 않는다(어림).
+function timetableStaggerPrecheck(input, estimate, grade, k) {
+  const own = estimate?.semesters?.[String(input?.semester || "")];
+  const plan = own?.plans?.[k - 1];
+  if (!plan || typeof timetableStaggerInput !== "function") return null;
+  const spec = { grade: String(grade), groups: own.groups, labels: estimate.spans,
+    blocks: plan.blocks.map((id) => ({ id, courses: (own.blocks.find((block) => block.id === id)?.courses || []).map((course) => ({ name: course.name, parts: course.parts })) })) };
+  const staggered = timetableStaggerInput(input, spec);
+  return staggered === input ? null : timetablePrecheck(staggered);
 }
 
 function timetableChoicesFor(result, prepared, settings, preview) {
@@ -862,7 +874,22 @@ function timetableChoicesFor(result, prepared, settings, preview) {
             const gradeRow = (prepared.input?.grades || []).find((item) => String(item.grade) === String(issue.data.grade));
             const classCount = Number(issue.data.classes) || (Array.isArray(gradeRow?.classes) ? gradeRow.classes.length : Number(gradeRow?.classes) || 0);
             const estimate = timetableStaggerFor(prepared.round, issue.data.grade, classCount, settings);
-            if (estimate && estimate.plans.length) item.estimate = { grade: issue.data.grade, label: estimate.label, mapped: estimate.mapped, plans: estimate.plans.slice(0, 2).map((plan) => ({ k: plan.k, extra: plan.extra, small: plan.small, blocks: plan.blocks })) };
+            // 예상 효과: 엇갈린 구조로 이 학기 사전 점검을 다시 돌려, 이 항목이 풀리는지와 조건 위반 수를 본다(같은 학년·같은 k는 한 번만 계산)
+            const effectOfPlan = (k) => {
+              const cacheKey = `stagger|${issue.data.grade}|${k}`;
+              if (!cache.has(cacheKey)) { let after = null; try { after = timetableStaggerPrecheck(prepared.input, estimate, issue.data.grade, k); } catch { after = null; } cache.set(cacheKey, after); }
+              const after = cache.get(cacheKey);
+              if (!after) return undefined;
+              const same = (other) => other.level === "fail" && other.id === issue.id && String(other.data?.grade) === String(issue.data.grade)
+                && (issue.id !== "P7" || (other.data?.teachers || []).some((id) => (issue.data.teachers || []).includes(id)));
+              // 풀리지 않아도 얼마나 나아지는지: P7 = 넣을 수 없는 시간, P6 = 들어가는 반 수업 시간
+              const rest = after.issues.find(same);
+              const number = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
+              const note = !rest ? "" : issue.id === "P7" && number(issue.data.shortage) !== null && number(rest.data?.shortage) !== null ? `넣을 수 없는 시간 ${issue.data.shortage} → ${rest.data.shortage}시간`
+                : issue.id === "P6" && number(issue.data.capacity) !== null && number(rest.data?.capacity) !== null ? `들어가는 반 수업 ${issue.data.capacity} → ${rest.data.capacity}시간, 필요 ${rest.data.need}시간` : "";
+              return { solved: !rest, note, failBefore, failAfter: after.counts.fail + after.counts.block };
+            };
+            if (estimate && estimate.plans.length) item.estimate = { grade: issue.data.grade, label: estimate.label, mapped: estimate.mapped, plans: estimate.plans.slice(0, 2).map((plan) => ({ k: plan.k, extra: plan.extra, small: plan.small, blocks: plan.blocks, effect: effectOfPlan(plan.k) })) };
           } catch { /* 견적을 못 내면 안내만 */ }
         }
         list.push(item);
@@ -926,7 +953,9 @@ function timetableChoicesHtml(list) {
     const effect = choice.kind !== "setting" ? ""
       : `<span class="tt-effect" data-solved="${choice.effect.solved}">${choice.effect.solved ? "이 항목 풀림" : "이 항목은 그대로"} · 조건 위반 ${choice.effect.failBefore} → ${choice.effect.failAfter}건</span>`;
     const action = choice.kind === "setting" ? `<button class="button" type="button" data-tt-choice="${choice.key}">이 선택으로 다시 점검</button>` : timetableWhereButtons([choice.where]);
-    const estimate = choice.estimate ? `<span class="tt-gives tt-estimate" data-tt-stagger="${timetableEsc(choice.estimate.grade)}">예상(${timetableEsc(choice.estimate.grade)}학년 반 묶음 ${timetableEsc(choice.estimate.label)}, 6단계 분반 결과로 어림 · 두 학기 중 큰 쪽): ${choice.estimate.plans.map((plan) => `<span data-k="${plan.k}" data-extra="${plan.extra}" data-small="${plan.small}">블록 ${plan.k}개 엇갈림 → 분반 <strong>+${plan.extra}</strong>${plan.small ? ` · ${TIMETABLE_STAGGER_SMALL}명 미만 분반 ${plan.small}개` : ""} (${timetableEsc(Object.entries(plan.blocks).map(([semester, labels]) => `${semester}학기 ${labels.join("·")}`).join(", "))})</span>`).join(" / ")}${choice.estimate.mapped ? "" : " — 내년 반 배정표가 없어 지금 반 기준입니다"}. 반 묶음은 조건 설정 › 규칙에서 바꿉니다.</span>` : "";
+    const estimate = choice.estimate ? `<div class="tt-gives tt-estimate" data-tt-stagger="${timetableEsc(choice.estimate.grade)}">예상(${timetableEsc(choice.estimate.grade)}학년 반 묶음 ${timetableEsc(choice.estimate.label)}, 6단계 분반 결과로 어림 · 두 학기 중 큰 쪽)${choice.estimate.mapped ? "" : " — 내년 반 배정표가 없어 지금 반 기준입니다"}
+      <ul class="tt-estimate-list">${choice.estimate.plans.map((plan) => `<li data-k="${plan.k}" data-extra="${plan.extra}" data-small="${plan.small}">블록 ${plan.k}개 엇갈림 → 분반 <strong>+${plan.extra}</strong>${plan.small ? ` · ${TIMETABLE_STAGGER_SMALL}명 미만 분반 ${plan.small}개` : ""} <span class="tt-estimate-blocks">(${timetableEsc(Object.entries(plan.blocks).map(([semester, labels]) => `${semester}학기 ${labels.join("·")}`).join(", "))})</span>${plan.effect ? ` <span class="tt-effect" data-tt-stagger-effect="${plan.k}" data-solved="${plan.effect.solved}" data-fail-after="${plan.effect.failAfter}">${plan.effect.solved ? "이 항목 풀림" : `이 항목은 그대로${plan.effect.note ? `(${timetableEsc(plan.effect.note)})` : ""}`} · 조건 위반 ${plan.effect.failBefore} → ${plan.effect.failAfter}건</span>` : ""}</li>`).join("")}</ul>
+      ${choice.estimate.plans.some((plan) => plan.effect) ? "풀림·위반 수는 이 학기 사전 점검을 엇갈린 구조로 다시 돌린 어림입니다. " : ""}반 묶음은 조건 설정 › 규칙에서 바꿉니다.</div>` : "";
     return `<li data-tt-choice-row="${choice.key}" data-kind="${choice.kind}"><strong>${timetableEsc(choice.label)}</strong> ${effect} ${action}<span class="tt-gives">${timetableEsc(choice.gives)}</span>${estimate}</li>`;
   };
   return `<div class="tt-choices"><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요)</span><ul>${list.map(row).join("")}</ul></div>`;

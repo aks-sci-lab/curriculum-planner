@@ -702,6 +702,82 @@ function timetablePrecheck(source) {
           relax: movable ? ["blockTimes"] : ["creativeFree", "creativeGroup", "blockTimes", "oncePerDay", "gaps", "stagger"] });
       }
     }
+    // P6(반 묶음이 여럿일 때 — 반 일부만 듣는 블록, 엇갈림): 묶음마다는 교사가 충분해도 학년 전체로는 모자랄 수 있다.
+    // 들어갈 수 있는 반 수업 = (한 묶음이 자기 블록일 때 다른 묶음이 받는 수업) + (모든 반이 블록이 아닌 칸 — 교사가 반 수보다 적으니 하루 끝 쪽만).
+    // 묶음별 블록이 차지하는 서로 다른 칸 수 D(가장 긴 묶음 ~ 모두 다른 시간)를 바꿔 가며 가장 큰 값을 본다. 묶음별 블록에 정해진 시간이 있으면 하지 않는다.
+    if (groups.size > 1 && !issues.some((issue) => issue.id === "P6" && String(issue.data?.grade) === grade.grade)) {
+      const lessonsAll = grade.classes.flatMap((classId) => lessonsOfClass.get(classId) || []);
+      const needAll = sum(lessonsAll, (lesson) => lesson.hours);
+      const reachAll = grade.classes.map((classId) => [...new Set((lessonsOfClass.get(classId) || []).flatMap((lesson) => lesson.candidates))]);
+      const simultaneous = needAll && lessonsAll.every((lesson) => lesson.candidates.length) ? timetableMatch(reachAll).size : 0;
+      const gradeBlocks = model.blocks.filter((block) => block.grade === grade.grade);
+      const common = gradeBlocks.filter((block) => block.classIds.length === grade.classes.length);
+      const own = gradeBlocks.filter((block) => block.classIds.length !== grade.classes.length);
+      if (simultaneous && simultaneous < grade.classes.length && !own.some((block) => block.times.length)) {
+        let perDay = Infinity;
+        if (onceHard) { perDay = 0; for (const classId of grade.classes) perDay = Math.max(perDay, sum(pairsOfClass(classId), (item) => Math.max(item.double ? 2 : 1, Math.ceil(item.hours / days.length)))); }
+        const loose = model.creative.byGroup ? creative.grade : 0;
+        const syncCreative = creative.total - loose;
+        const classCount = grade.classes.length;
+        const dayValue = (tail) => (loose ? Math.min(simultaneous * tail, classCount * perDay) : simultaneous * Math.min(tail, perDay));
+        const parts = [...groups.values()].map((classIds) => {
+          const mine = sum(own.filter((block) => block.classIds.includes(classIds[0])), (block) => block.hours);
+          const lessons = classIds.flatMap((classId) => lessonsOfClass.get(classId) || []);
+          const reach = classIds.map((classId) => [...new Set((lessonsOfClass.get(classId) || []).flatMap((lesson) => lesson.candidates))]);
+          return { count: classIds.length, mine, need: sum(lessons, (lesson) => lesson.hours), full: timetableMatch(reach).size >= classIds.length };
+        });
+        const commonHours = sum(common, (block) => block.hours);
+        const fixedCommon = [];
+        let flexCommon = 0;
+        for (const block of common) { const placed = gapHard ? block.times.filter((time) => grade.slotByKey.has(`${time.day}${time.period}`)).slice(0, block.hours) : []; fixedCommon.push(...placed); flexCommon += block.hours - placed.length; }
+        const creativeTimes = [...model.creative.schoolTimes.slice(0, creative.school), ...(loose ? [] : creative.times.slice(0, creative.grade))];
+        const creativeFlex = Math.max(0, syncCreative - creativeTimes.length);
+        const tailOf = (distinct) => { // 묶음별 블록이 서로 다른 칸 distinct개를 쓸 때, 모든 반이 블록이 아닌 칸에 들어가는 반 수업 최대
+          const lessonFree = grade.slotCount - syncCreative - commonHours - distinct;
+          if (lessonFree < 0) return -1;
+          if (!gapHard) return loose ? Math.min(simultaneous * lessonFree, classCount * days.length * perDay) : simultaneous * Math.min(lessonFree, days.length * perDay);
+          const fixedByDay = days.map(() => new Set());
+          for (const time of [...fixedCommon, ...creativeTimes]) { const slot = grade.slotByKey.get(`${time.day}${time.period}`); if (slot) fixedByDay[slot.d].add(slot.period); }
+          const flexHours = flexCommon + distinct + creativeFlex;
+          const dayFlexCap = (onceHard ? gradeBlocks.length : Infinity) + creativeFlex;
+          let states = new Map([[0, 0]]);
+          days.forEach((day, d) => {
+            const periods = model.periodsOf[day];
+            const fixedCount = fixedByDay[d].size;
+            const lastFixed = Math.max(0, ...fixedByDay[d]);
+            const nextStates = new Map();
+            for (let tail = 0; tail <= periods - lastFixed; tail += 1) {
+              const flex = periods - tail - fixedCount;
+              if (flex < 0 || flex > dayFlexCap) continue;
+              for (const [used, value] of states) {
+                if (used + flex > flexHours) continue;
+                const total = value + dayValue(tail);
+                if (!(nextStates.get(used + flex) >= total)) nextStates.set(used + flex, total);
+              }
+            }
+            states = nextStates;
+          });
+          return states.has(flexHours) ? states.get(flexHours) : -1;
+        };
+        let best = null;
+        const longest = Math.max(0, ...parts.map((part) => part.mine));
+        const allApart = sum(parts, (part) => part.mine);
+        for (let distinct = longest; distinct <= allApart; distinct += 1) {
+          const tail = tailOf(distinct);
+          if (tail < 0) continue;
+          // 묶음 g가 블록이 아닌 '묶음별 블록 칸'은 distinct − 자기 블록 시수개. 그 칸마다 그 묶음 모든 반이 수업(교사가 묶음 반 수 이상일 때), 한 칸에 교사 수까지.
+          const apart = Math.min(simultaneous * distinct, sum(parts, (part) => Math.min(part.need, part.full ? part.count * (distinct - part.mine) : 0)));
+          if (!best || apart + tail > best.apart + best.tail) best = { distinct, apart, tail };
+        }
+        const capacity = best ? Math.min(needAll, best.apart) + best.tail : 0;
+        if (capacity < needAll) {
+          add("P6", "fail", `${grade.grade}학년(반 묶음 ${groups.size}개): 반 수업 ${needAll}시간이 들어가야 하는데, 한 묶음이 자기 블록일 때 다른 묶음이 받는 수업 ${best ? best.apart : 0}시간 + 모든 반이 블록이 아닌 칸(같은 시간에 가르칠 수 있는 교사 ${simultaneous}명 < ${classCount}반이라 하루 끝 쪽만) ${best ? best.tail : 0}시간 = 최대 ${capacity}시간만 들어갑니다.`,
+            [timetableWhere("time", "창체 시간"), timetableWhere("rules", "공강·하루 한 번"), timetableWhere("teachers", "반 수업 과목의 담당 교과·과목")],
+            { data: { grade: grade.grade, classes: classCount, groups: groups.size, need: needAll, simultaneous, perDay: Number.isFinite(perDay) ? perDay : null, apart: best ? best.apart : 0, tail: best ? best.tail : 0, capacity },
+              relax: ["creativeFree", "creativeGroup", "oncePerDay", "gaps", "stagger"] });
+        }
+      }
+    }
     // 반군이 여럿이면 교사는 다른 반군이 블록일 때도 반 수업을 할 수 있다 → 모든 반이 함께 듣는 블록만 뺀다.
     if (groups.size > 1) widest = grade.slotCount - creative.total - sum(model.blocks.filter((block) => block.grade === grade.grade && block.classIds.length === grade.classes.length), (block) => block.hours);
     if (model.creative.byGroup) widest += creative.grade;
@@ -833,7 +909,7 @@ function timetablePrecheckDepartments(spec) {
 // 학년을 반 묶음(반군)으로 나누고 블록 k개를 묶음마다 따로 분반하면(엇갈림) 분반이 얼마나 늘어나는지 어림한다. 6단계 편성을 바꾸지 않고 읽기만 한다.
 // spec = { groups: { A: ['3-1', …], B: [...] } (없으면 classes를 앞·뒤 절반으로), classes: [반…], capacity: 분반 정원(기본), minSize: 이보다 적으면 소인수 분반,
 //          blocks: [{ id, label, courses: [{ name, sections: 지금 분반 수, capacity?: 과목 정원, byClass: { 반: 그 블록에서 이 과목을 듣는 학생 수 } }] }] }
-// 돌려주는 값: { groups, blocks: [{ id, label, now, next, extra, small, courses: [{ name, now, next, extra, sizes: { 묶음: 인원 }, small }] }](늘어나는 분반이 적은 순),
+// 돌려주는 값: { groups, blocks: [{ id, label, now, next, extra, small, courses: [{ name, now, next, extra, sizes: { 묶음: 인원 }, parts: { 묶음: 분반 수 }, small }] }](늘어나는 분반이 적은 순),
 //               plans: [{ k, blocks: [id…], extra, small }] (k = 1 … 블록 수: 늘어나는 분반이 적은 블록부터 k개를 엇갈릴 때) }
 function timetableStaggerEstimate(spec = {}) {
   const classes = (spec.classes || []).map(String);
@@ -852,10 +928,13 @@ function timetableStaggerEstimate(spec = {}) {
       const now = Math.max(0, Math.floor(Number(course.sections) || 0));
       // 묶음마다 따로 분반: 학생이 있는 묶음은 최소 1개. 묶음에 넣지 못한 반의 학생(자료 누락)은 가장 큰 묶음에 더해 어림한다.
       if (outside) { const biggest = Object.keys(sizes).reduce((a, b) => (sizes[b] > sizes[a] ? b : a)); sizes[biggest] += outside; }
-      const parts = Object.values(sizes).filter((count) => count > 0).map((count) => { const sections = Math.ceil(count / cap); return { sections, smallest: Math.floor(count / sections) }; });
-      const next = Math.max(now, parts.reduce((sum, part) => sum + part.sections, 0));
-      const small = minSize ? parts.filter((part) => part.smallest < minSize).length : 0;
-      return { name: String(course.name || ""), now, next, extra: next - now, sizes, small };
+      const parts = Object.fromEntries(Object.entries(sizes).map(([key, count]) => [key, count > 0 ? Math.ceil(count / cap) : 0]));
+      const small = minSize ? Object.entries(parts).filter(([key, sections]) => sections > 0 && Math.floor(sizes[key] / sections) < minSize).length : 0;
+      let total = Object.values(parts).reduce((sum, sections) => sum + sections, 0);
+      // 지금 분반이 정원으로 어림한 것보다 많으면(교사·균형 때문에 더 나눈 과목) 그만큼은 유지한다: 한 분반이 가장 큰 묶음부터 하나씩 더
+      while (total > 0 && total < now) { const key = Object.keys(parts).filter((item) => sizes[item] > 0).reduce((a, b) => (sizes[b] / parts[b] > sizes[a] / parts[a] ? b : a)); parts[key] += 1; total += 1; }
+      const next = Math.max(now, total);
+      return { name: String(course.name || ""), now, next, extra: next - now, sizes, parts, small };
     });
     const total = (pick) => courses.reduce((sum, course) => sum + pick(course), 0);
     return { id: String(block.id ?? ""), label: String(block.label || block.id || ""), now: total((course) => course.now), next: total((course) => course.next), extra: total((course) => course.extra), small: total((course) => course.small), courses };
@@ -867,6 +946,46 @@ function timetableStaggerEstimate(spec = {}) {
   return { groups, blocks, plans };
 }
 
+// 엇갈린 구조의 입력(T7a-2, 순수): 고른 블록을 반 묶음마다 따로 여는 블록으로 나눈 시간표 입력을 돌려준다(원래 입력은 바꾸지 않는다).
+// 이 입력으로 timetablePrecheck를 다시 돌리면 엇갈렸을 때 어떤 점검이 풀리고 무엇이 새로 걸리는지 미리 볼 수 있다(견적용 — 실제 분반·학생 배정은 6단계가 정한다).
+// spec = { grade, groups: { A: [반…], B: [...] }, labels: { A: '1~6반' }, blocks: [{ id, courses: [{ name, parts: { A: 분반 수, B: … } }] }] }
+// 나눈 블록: id '원래 id#A', 반 = 그 묶음, 시간 없음(다시 놓아야 하므로), 분반 = 과목마다 parts[묶음]개.
+//   분반 담당 후보 = 그 과목 원래 분반의 교사(정해진 교사·후보) + 명단에서 그 과목·담당 교과를 맡는 교사. 견적에 없는 과목의 분반은 묶음마다 그대로 둔다(넉넉하게 어림).
+function timetableStaggerInput(input = {}, spec = {}) {
+  const picked = new Map((spec.blocks || []).map((block) => [String(block.id), block]));
+  const groups = Object.entries(spec.groups || {});
+  if (!picked.size || groups.length < 2) return input;
+  const blocks = [];
+  let replaced = 0;
+  for (const block of input.blocks || []) {
+    const plan = String(block.grade) === String(spec.grade) ? picked.get(String(block.id)) : null;
+    if (!plan) { blocks.push(block); continue; }
+    replaced += 1;
+    const bySubject = new Map();
+    for (const section of block.sections || []) { const key = String(section.subject || ""); if (!bySubject.has(key)) bySubject.set(key, []); bySubject.get(key).push(section); }
+    const partsOf = new Map((plan.courses || []).map((course) => [String(course.name || ""), course.parts || {}]));
+    for (const [key, classIds] of groups) {
+      const sections = [];
+      for (const [subject, list] of bySubject) {
+        const parts = partsOf.get(subject);
+        const count = parts ? Math.max(0, Math.floor(Number(parts[key]) || 0)) : list.length;
+        const department = String(list[0].department || "");
+        const teacherIds = [...new Set([
+          ...list.flatMap((section) => [section.teacherId, ...(Array.isArray(section.teacherIds) ? section.teacherIds : [])]),
+          ...(input.teachers || []).filter((teacher) => (teacher.courses || []).includes(subject) || (department && (teacher.departments || []).includes(department))).map((teacher) => teacher.id)
+        ].filter(Boolean).map(String))];
+        for (let n = 0; n < count; n += 1) {
+          const from = list[n % list.length];
+          sections.push({ id: `${from.id || `${block.id}-${subject}`}#${key}${n + 1}`, subject: from.subject, department: from.department, credits: from.credits, teacherIds: teacherIds.length ? teacherIds : undefined, venue: from.venue });
+        }
+      }
+      if (sections.length) blocks.push({ ...block, id: `${block.id}#${key}`, label: `${block.label || block.id}(${spec.labels?.[key] || key})`, classes: (classIds || []).map(String), times: "", sections });
+    }
+  }
+  return replaced ? { ...input, blocks } : input; // 고른 블록이 입력에 없으면 입력 그대로
+}
+
 if (typeof module !== "undefined" && module.exports) {
+  Object.assign(module.exports, { timetableStaggerInput });
   Object.assign(module.exports, { TIMETABLE_DEFAULT_RULES, TIMETABLE_WHERE, timetableWhere, timetableParseTime, timetableTimes, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck, timetablePrecheckDepartments, timetableStaggerEstimate });
 }

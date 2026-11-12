@@ -402,6 +402,40 @@ test("반군 엇갈림 견적(T7a): 6단계 분반 결과를 읽어 블록 k개�
   const result = { counts: { block: 0, fail: 1, warn: 0, info: 0 }, issues: [{ id: "P6", level: "fail", cause: "3학년: 반 수업 칸 13개…", data: { grade: "3", classes: 4 }, relax: ["stagger"] }] };
   const choices = plain(ctx.timetableChoicesFor(result, { round: "1", input: { creative: {}, blocks: [] } }, {}, () => null).get("P6|3학년"));
   assert.deepEqual(choices.map((choice) => [choice.key, choice.kind, choice.estimate?.label, choice.estimate?.plans.map((plan) => [plan.k, plan.extra])]), [["stagger", "link", "1~2반 / 3~4반", [[1, 1], [2, 3]]]]);
+  assert.deepEqual(choices[0].estimate.plans.map((plan) => plan.effect), [undefined, undefined], "입력에 그 블록이 없으면 예상 효과는 붙이지 않는다");
+  // 예상 효과(T7a-2): 이 학기 입력을 엇갈린 구조로 바꿔 사전 점검을 다시 돌린다.
+  // 3학년 4반, 주 20칸, 블록 a·b 4시간씩, 반 수업 체육 4시간(교사 2명 < 4반, 한 반 하루 1시간) → 하루 끝 쪽 닷새 × 2명 = 10 < 16시간(13칸 문제)
+  const staff = (id, department) => ({ id, name: id, departments: [department] });
+  const section = (id, subject, department, teacherId) => ({ id, subject, department, credits: 4, teacherId });
+  const input = { semester: "1", days: "월,화,수,목,금", periods: 4, grades: [{ grade: "3", classes: 4 }], creative: { school: 0, schoolTimes: [] },
+    teachers: [staff("체1", "체육"), staff("체2", "체육"), staff("물1", "물리"), staff("물2", "물리"), staff("화1", "화학"), staff("생1", "생명"), staff("생2", "생명"), staff("생3", "생명")],
+    lessons: [{ id: "체육", grade: "3", subject: "체육", department: "체육", hours: 4 }],
+    blocks: [{ id: "2:1:3-1 택2|a", grade: "3", label: "3-1 택2 a블록", sections: [section("물리#1", "물리학", "물리", "물1"), section("물리#2", "물리학", "물리", "물2"), section("화학#1", "화학", "화학", "화1")] },
+      { id: "2:1:3-1 택2|b", grade: "3", label: "3-1 택2 b블록", sections: [section("생명#1", "생명과학", "생명", "생1"), section("생명#2", "생명과학", "생명", "생2")] }] };
+  const checked = ctx.timetablePrecheck(input);
+  assert.deepEqual(plain(checked.issues.filter((issue) => issue.level === "fail").map((issue) => [issue.id, issue.data.capacity, issue.data.need])), [["P6", 10, 16]]);
+  const staggered = plain(ctx.timetableChoicesFor(checked, { round: "1", input }, {}, () => null).get("P6|3학년")).find((choice) => choice.key === "stagger");
+  // b블록 하나를 엇갈리면(생명과학 2 + 1분반): 한 묶음(2반)이 b블록일 때 다른 묶음 2반이 체육을 받는다 → 4칸 × 2반 × 2묶음 = 16시간 → 이 항목 풀림, 조건 위반 1 → 0건
+  assert.deepEqual(staggered.estimate.plans.map((plan) => [plan.k, plan.extra, plan.effect]), [[1, 1, { solved: true, note: "", failBefore: 1, failAfter: 0 }], [2, 3, { solved: true, note: "", failBefore: 1, failAfter: 0 }]]);
+  // 풀리지 않을 때는 얼마나 나아지는지: 체육 교사가 한 명이면(4반 × 4시간 = 16시간을 한 칸에 한 반씩) 반 수업 칸 12 → 엇갈리면 16칸
+  const solo = { ...input, teachers: input.teachers.filter((teacher) => teacher.id !== "체2") };
+  const soloCheck = ctx.timetablePrecheck(solo);
+  const p7 = plain(soloCheck.issues.find((issue) => issue.id === "P7"));
+  assert.deepEqual([p7.data.free, p7.data.shortage, p7.relax.includes("stagger")], [12, 4, true]);
+  const soloChoice = plain(ctx.timetableChoicesFor(soloCheck, { round: "1", input: solo }, {}, () => null).get(ctx.timetableIssueKey(p7))).find((choice) => choice.key === "stagger");
+  assert.deepEqual(soloChoice.estimate.plans.map((plan) => [plan.k, plan.effect.solved, plan.effect.note]), [[1, true, ""], [2, true, ""]]);
+  // 체육이 5시간이면(20시간): 블록 하나를 엇갈려도 16칸이라 4시간이 남는다 → '그대로'와 함께 줄어든 만큼을 적고, 둘 다 엇갈리면 풀림
+  const heavy = { ...solo, lessons: [{ ...solo.lessons[0], hours: 5 }] };
+  const heavyCheck = ctx.timetablePrecheck(heavy);
+  const heavyIssue = plain(heavyCheck.issues.find((issue) => issue.id === "P7"));
+  const heavyChoice = plain(ctx.timetableChoicesFor(heavyCheck, { round: "1", input: heavy }, {}, () => null).get(ctx.timetableIssueKey(heavyIssue))).find((choice) => choice.key === "stagger");
+  assert.deepEqual(heavyChoice.estimate.plans.map((plan) => [plan.k, plan.effect.solved, plan.effect.note]), [[1, false, "넣을 수 없는 시간 8 → 4시간"], [2, true, ""]]);
+  assert.match(ctx.timetableChoicesHtml([heavyChoice]), /data-solved="false" data-fail-after="\d+">이 항목은 그대로\(넣을 수 없는 시간 8 → 4시간\) · 조건 위반 \d+ → \d+건</);
+  const after = plain(ctx.timetableStaggerPrecheck(input, ctx.timetableStaggerFor("1", "3", 4, {}), "3", 1));
+  assert.deepEqual([after.counts.fail, after.issues.filter((issue) => issue.id === "P6").length], [0, 0]);
+  assert.match(ctx.timetableChoicesHtml([staggered]), /data-tt-stagger-effect="1" data-solved="true" data-fail-after="0">이 항목 풀림 · 조건 위반 1 → 0건</);
+  // 다른 학기(이 학기에는 그 학년 블록 견적이 없음)면 예상 효과 없음
+  assert.equal(ctx.timetableStaggerPrecheck({ ...input, semester: "2" }, ctx.timetableStaggerFor("1", "3", 4, {}), "3", 1), null);
 });
 
 test("2시간 연속 수업 허용 과목: 고른 과목의 반 수업에만 double 표시(과목명 표기 차이는 맞춰 봄), 조건 칸으로 넣고 뺀다", () => {

@@ -74,10 +74,15 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check((await issues()).some((item) => /^음악:/.test(item.text)) && /새로 생김/.test(clean(await change.innerText())), "규칙을 기본값으로 → 음악 항목이 다시 생김('새로 생김')");
   // 반군 엇갈림 견적(읽기 전용): '반 묶음을 나눠 블록 일부를 엇갈리게' 선택지에 6단계 분반 결과로 어림한 숫자
   const staggerNotes = await panel.locator('#timetablePrecheck [data-tt-choice-row="stagger"] [data-tt-stagger]').evaluateAll((els) => els.map((el) => ({ grade: el.dataset.ttStagger, text: el.textContent.replace(/\s+/g, " ").trim(),
-    plans: [...el.querySelectorAll("[data-k]")].map((plan) => ({ k: Number(plan.dataset.k), extra: Number(plan.dataset.extra), small: Number(plan.dataset.small) })) })));
+    plans: [...el.querySelectorAll("[data-k]")].map((plan) => { const effect = plan.querySelector("[data-tt-stagger-effect]"); return { k: Number(plan.dataset.k), extra: Number(plan.dataset.extra), small: Number(plan.dataset.small),
+      effect: effect ? { solved: effect.dataset.solved === "true", failAfter: Number(effect.dataset.failAfter), text: effect.textContent.replace(/\s+/g, " ").trim() } : null }; }) })));
   report.checks.stagger = staggerNotes;
   check(staggerNotes.length >= 1 && staggerNotes.every((note) => note.plans.length >= 1 && note.plans.every((plan) => plan.extra >= 0) && /반 묶음 \d+~\d+반 \/ \d+~\d+반/.test(note.text) && /블록 1개 엇갈림 → 분반 \+\d+/.test(note.text)),
     `반군 엇갈림 견적: ${staggerNotes[0]?.text.slice(0, 150)}`, staggerNotes);
+  // 예상 효과(T7a-2): 엇갈린 구조로 이 학기 사전 점검을 다시 돌린 결과('이 항목 풀림/그대로 · 조건 위반 n → m건')가 블록 수마다 붙는다
+  const staggerEffects = staggerNotes.flatMap((note) => note.plans.map((plan) => plan.effect).filter(Boolean));
+  check(staggerEffects.length >= 1 && staggerEffects.every((effect) => /^이 항목(은 그대로(\(.+\))?| 풀림) · 조건 위반 \d+ → \d+건$/.test(effect.text)),
+    `엇갈림 예상 효과: ${staggerNotes.map((note) => `${note.grade}학년 ${note.plans.map((plan) => `${plan.k}블록 ${plan.effect ? plan.effect.text : "없음"}`).join(" / ")}`).slice(0, 2).join(" | ")}`, staggerEffects);
   // 2시간 연속 수업을 허용할 과목(과목별)
   const doubleRow = panel.locator('[data-tt-rule="doubleSubjects"]');
   await doubleRow.locator("details.tt-double > summary").click(); await sleep(200);

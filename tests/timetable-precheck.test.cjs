@@ -413,14 +413,49 @@ test("반군 엇갈림 견적: 블록을 반 묶음마다 따로 분반하면 �
   assert.deepEqual(estimate.groups, { A: ["3-1", "3-2"], B: ["3-3", "3-4"] });
   // 늘어나는 분반이 적은 블록부터(같으면 소인수가 적은 것 먼저)
   assert.deepEqual(estimate.blocks.map((block) => [block.id, block.now, block.next, block.extra, block.small]), [["b", 3, 3, 0, 0], ["c", 2, 2, 0, 1], ["a", 3, 5, 2, 1]]);
-  assert.deepEqual(estimate.blocks[2].courses, [{ name: "물리학", now: 2, next: 3, extra: 1, sizes: { A: 40, B: 10 }, small: 1 }, { name: "화학", now: 1, next: 2, extra: 1, sizes: { A: 14, B: 14 }, small: 0 }]);
+  assert.deepEqual(estimate.blocks[2].courses, [{ name: "물리학", now: 2, next: 3, extra: 1, sizes: { A: 40, B: 10 }, parts: { A: 2, B: 1 }, small: 1 }, { name: "화학", now: 1, next: 2, extra: 1, sizes: { A: 14, B: 14 }, parts: { A: 1, B: 1 }, small: 0 }]);
   assert.deepEqual(estimate.plans, [{ k: 1, blocks: ["b"], extra: 0, small: 0 }, { k: 2, blocks: ["b", "c"], extra: 0, small: 1 }, { k: 3, blocks: ["b", "c", "a"], extra: 2, small: 2 }]);
   // 반 묶음을 직접 주면 그 묶음으로(계열별): 물리학을 듣는 반끼리 묶으면 a블록이 덜 늘어난다
   const custom = plain(ctx.timetableStaggerEstimate({ classes, capacity: 30, groups: { 이과: ["3-1", "3-2", "3-3"], 문과: ["3-4"] }, blocks: [{ id: "a", courses: [{ name: "물리학", sections: 2, byClass: { "3-1": 20, "3-2": 20, "3-3": 6, "3-4": 4 } }] }] }));
   assert.deepEqual([custom.blocks[0].courses[0].sizes, custom.blocks[0].extra], [{ 이과: 46, 문과: 4 }, 1]);
   // 지금 분반 수보다 줄지는 않는다(견적은 '늘어나는 수'만), 빈 입력
-  assert.equal(plain(ctx.timetableStaggerEstimate({ classes, blocks: [{ id: "x", courses: [{ name: "가", sections: 3, byClass: { "3-1": 10 } }] }] })).blocks[0].extra, 0);
+  const kept = plain(ctx.timetableStaggerEstimate({ classes, blocks: [{ id: "x", courses: [{ name: "가", sections: 3, byClass: { "3-1": 10 } }] }] })).blocks[0];
+  assert.deepEqual([kept.extra, kept.courses[0].parts], [0, { A: 3, B: 0 }]); // 지금 분반 3개는 학생이 있는 묶음에 그대로
   assert.deepEqual(plain(ctx.timetableStaggerEstimate({})), { groups: { A: [], B: [] }, blocks: [], plans: [] });
+});
+
+test("엇갈린 구조로 다시 점검(T7a-2): 블록을 반 묶음별 블록으로 나눈 입력을 만들고, 반 묶음이 여럿일 때 학년 전체로 들어갈 수 있는 반 수업을 센다", () => {
+  const ctx = context();
+  // 3학년 11반, 반 수업 교사 체육 3 + 정보 3 = 6명 < 11반 → 13칸 문제(하루 끝 쪽 2칸 × 나흘 × 6명 = 48 < 66시간)
+  const input = school({ pe3: 3, info3: 3 });
+  const before = plain(ctx.timetablePrecheck(input));
+  assert.deepEqual(issuesOf(before, "P6").map((issue) => [issue.data.capacity, issue.data.need]), [[48, 66]]);
+  const groups = { A: ["3-1", "3-2", "3-3", "3-4", "3-5", "3-6"], B: ["3-7", "3-8", "3-9", "3-10", "3-11"] };
+  const courses = input.blocks.find((block) => block.id === "3a").sections.map((section) => ({ name: section.subject, parts: { A: 1, B: 1 } }));
+  const spec = { grade: "3", groups, labels: { A: "1~6반", B: "7~11반" }, blocks: [{ id: "3a", courses }] };
+  const copy = JSON.stringify(input);
+  const staggered = plain(ctx.timetableStaggerInput(input, spec));
+  assert.equal(JSON.stringify(input), copy, "원래 입력은 그대로");
+  // 3a블록이 반 묶음별 블록 둘로(반·분반·이름), 나머지 블록은 그대로. 분반 담당 후보 = 그 교과 교사 모두
+  const parts = staggered.blocks.filter((block) => block.id.startsWith("3a#"));
+  assert.deepEqual(parts.map((block) => [block.id, block.label, block.classes.length, block.sections.length, block.times]), [["3a#A", "a블록(1~6반)", 6, 11, ""], ["3a#B", "a블록(7~11반)", 5, 11, ""]]);
+  assert.deepEqual([staggered.blocks.length, parts[0].sections[0].id, parts[0].sections[0].teacherIds], [input.blocks.length + 1, "3a-1#A1", ["t-지리-1", "t-지리-2"]]);
+  // 한 묶음이 a블록일 때 다른 묶음(6반·5반 ≤ 교사 6명)이 반 수업을 받는다: 4칸 × 6반 + 4칸 × 5반 = 44시간 + 하루 끝 쪽 48시간 ≥ 66 → 13칸 문제가 풀린다
+  const after = plain(ctx.timetablePrecheck(staggered));
+  assert.deepEqual(issuesOf(after, "P6"), []);
+  // 학년 전체로 모자라면 알린다: 인공지능 기초가 9시간이면 반 수업 121시간, 엇갈린 칸 44 + 하루 끝 쪽(한 반 하루 3시간까지) 54 = 98시간
+  const heavy = school({ pe3: 3, info3: 3 });
+  heavy.lessons.find((lesson) => lesson.id === "3인공").hours = 9;
+  const joint = issuesOf(plain(ctx.timetablePrecheck(ctx.timetableStaggerInput(heavy, spec))), "P6");
+  assert.equal(joint.length, 1);
+  assert.match(joint[0].cause, /^3학년\(반 묶음 2개\): 반 수업 121시간이 들어가야 하는데, 한 묶음이 자기 블록일 때 다른 묶음이 받는 수업 44시간 \+ 모든 반이 블록이 아닌 칸\(같은 시간에 가르칠 수 있는 교사 6명 < 11반이라 하루 끝 쪽만\) 54시간 = 최대 98시간만 들어갑니다\.$/);
+  assert.deepEqual([joint[0].data.groups, joint[0].data.apart, joint[0].data.tail, joint[0].data.capacity, joint[0].relax.includes("stagger")], [2, 44, 54, 98, true]);
+  // 묶음 하나의 반 수가 교사 수보다 많으면(교사 5명 < 6반) 그 묶음은 다른 묶음이 블록일 때 수업을 받을 수 없다: 5반 묶음만 4칸 × 5반 = 20시간 + 끝 쪽 40시간 = 60 < 66
+  const few = issuesOf(plain(ctx.timetablePrecheck(ctx.timetableStaggerInput(school({ pe3: 2, info3: 3 }), spec))), "P6");
+  assert.deepEqual(few.map((issue) => [issue.data.groups, issue.data.apart, issue.data.tail, issue.data.capacity]), [[2, 20, 40, 60]]);
+  // 고른 블록이 없거나 묶음이 하나면 입력 그대로
+  assert.equal(ctx.timetableStaggerInput(input, { grade: "3", groups, blocks: [] }), input);
+  assert.equal(ctx.timetableStaggerInput(input, { grade: "3", groups: { A: groups.A }, blocks: spec.blocks }), input);
 });
 
 test("최대 유량 묶음: 모자란 묶음을 같은 교사로 이어진 것끼리 뭉쳐 돌려준다", () => {

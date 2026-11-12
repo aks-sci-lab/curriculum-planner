@@ -2366,6 +2366,9 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-info { margin-top:8px; font-size:12px; }
     .tt-estimate { color:#33415c; }
     .tt-estimate strong { color:#8a5a00; }
+    .tt-choices .tt-estimate-list { display:grid; gap:4px; margin:4px 0; padding:0 0 0 14px; list-style:disc; }
+    .tt-choices .tt-estimate-list li { display:list-item; padding:0; border:0; }
+    .tt-estimate-blocks { color:#6a768c; }
     .tt-double { flex-basis:100%; }
     .tt-double > summary { cursor:pointer; color:var(--blue); }
     .tt-double-list { display:flex; flex-wrap:wrap; gap:4px 16px; padding:6px 0; }
