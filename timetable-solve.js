@@ -63,7 +63,11 @@ function timetableProblem(inputs) {
     for (const teacher of model.teachers) { const ti = teacherIndex.get(teacher.id); for (const abs of teacher.blocked) if (abs >= 0 && abs < ABS) table[ti * ABS + abs] = 1; }
     return table;
   });
-  const capacity = models.map((model) => { const table = new Float64Array(T).fill(0); for (const row of timetablePrecheck(model).teachers) table[teacherIndex.get(row.id)] = row.capacity; return table; });
+  const prechecks = models.map((model) => timetablePrecheck(model));
+  const capacity = prechecks.map((check) => { const table = new Float64Array(T).fill(0); for (const row of check.teachers) table[teacherIndex.get(row.id)] = row.capacity; return table; });
+  // 학년마다 반 수업 칸 수(주 칸 − 블록 − 창체): 한 교사가 그 학년 반 수업으로 설 수 있는 시간의 한계(한 칸에 한 반)
+  const gradeFree = prechecks.map((check) => grades.map((grade) => { const row = check.grades.find((item) => item.grade === grade); return row && Number.isFinite(row.free) ? row.free + (models[0].creative.byGroup ? row.creative : 0) : Infinity; }));
+  const gradeLoad = models.map(() => new Map()); // 교사|학년 → 그 학년 반 수업 시수
   const softHours = Number(rules.maxHours) > 0 ? Number(rules.maxHours) : 22;
   const teacherName = teacherIds.map((id) => models.map((model) => model.teacherOf.get(id)).find(Boolean)?.name || id);
   const homeroomOf = new Map(); // 반 → 담임 교사
@@ -131,13 +135,24 @@ function timetableProblem(inputs) {
     return { layer, id: block.id, gi: gradeIndex.get(block.grade), label: block.label, hours: block.hours, classes: block.classIds.map((id) => classIndex.get(id)).filter((ci) => ci !== undefined), sections,
       fixedSlots: times.length >= block.hours ? times.slice(0, block.hours) : null };
   }));
-  const blockAct = (items) => ({ kind: 1, layers: items.map((item) => item.layer), classes: items[0].classes, gi: items[0].gi, hours: items[0].hours, ids: items.map((item) => item.id), labels: items.map((item) => item.label),
-    sections: items.map((item) => item.sections), fixedSlots: items.map((item) => item.fixedSlots).find(Boolean) || null });
+  // 두 학기 묶음 블록: 정해진 블록 시간이 학기마다 다르면 앞 학기 자리를 따른다(뼈대가 먼저) — 바뀐 학기는 overridden으로 표시.
+  const blockAct = (items) => {
+    const fixedSlots = items.map((item) => item.fixedSlots).find(Boolean) || null;
+    const overridden = items.map((item) => Boolean(item.fixedSlots && fixedSlots && item.fixedSlots.slice().sort().join(",") !== fixedSlots.slice().sort().join(",")));
+    items.forEach((item, at) => { if (overridden[at]) notes.push(`${keys[item.layer]}학기 ${grades[item.gi]}학년 ${item.label}: 두 학기 뼈대를 맞추려고 6단계 블록 시간 대신 ${keys[items[0].layer]}학기 자리를 씁니다.`); });
+    return { kind: 1, layers: items.map((item) => item.layer), classes: items[0].classes, gi: items[0].gi, hours: items[0].hours, ids: items.map((item) => item.id), labels: items.map((item) => item.label),
+      sections: items.map((item) => item.sections), fixedSlots, overridden, ownFixed: items.map((item) => item.fixedSlots) };
+  };
   if (frame) {
+    // 짝 = 같은 학년·같은 반·같은 시간 수. 정해진 블록 시간이 많이 겹치는 것끼리 먼저 짝지어 6단계 시간을 최대한 지킨다.
     const left = rawBlocks[1].slice().sort((a, b) => String(a.label).localeCompare(String(b.label), "ko"));
+    const overlap = (a, b) => (a.fixedSlots && b.fixedSlots ? a.fixedSlots.filter((slot) => b.fixedSlots.includes(slot)).length : 0);
     for (const block of rawBlocks[0].slice().sort((a, b) => String(a.label).localeCompare(String(b.label), "ko"))) {
-      const sameSlots = (a, b) => !a || !b || a.join(",") === b.join(",");
-      const at = left.findIndex((other) => other.gi === block.gi && other.hours === block.hours && other.classes.join(",") === block.classes.join(",") && sameSlots(block.fixedSlots, other.fixedSlots));
+      let at = -1;
+      left.forEach((other, index) => {
+        if (other.gi !== block.gi || other.hours !== block.hours || other.classes.join(",") !== block.classes.join(",")) return;
+        if (at < 0 || overlap(block, other) > overlap(block, left[at])) at = index;
+      });
       acts.push(blockAct(at >= 0 ? [block, left.splice(at, 1)[0]] : [block]));
     }
     for (const block of left) acts.push(blockAct([block]));
@@ -175,7 +190,7 @@ function timetableProblem(inputs) {
     let best = -1;
     let bestScore = Infinity;
     for (const ti of options) {
-      if (act.layers.some((layer) => load[layer][ti] + act.hours > capacity[layer][ti])) continue;
+      if (act.layers.some((layer) => load[layer][ti] + act.hours > capacity[layer][ti] || (gradeLoad[layer].get(`${ti}|${act.gi}`) || 0) + act.hours > gradeFree[layer][act.gi])) continue;
       let score = Math.max(...act.layers.map((layer) => (load[layer][ti] + act.hours) / softHours));
       const together = Math.max(...act.layers.map((layer) => pairHours.get(`${layer}|${act.classes[0]}|${ti}`) || 0)) + act.hours;
       if (together > D && rules.oncePerDay !== "off") score += 5;
@@ -183,7 +198,7 @@ function timetableProblem(inputs) {
       if (score < bestScore) { bestScore = score; best = ti; }
     }
     act.teacher = best;
-    if (best >= 0) for (const layer of act.layers) { load[layer][best] += act.hours; pairHours.set(`${layer}|${act.classes[0]}|${best}`, (pairHours.get(`${layer}|${act.classes[0]}|${best}`) || 0) + act.hours); }
+    if (best >= 0) for (const layer of act.layers) { load[layer][best] += act.hours; gradeLoad[layer].set(`${best}|${act.gi}`, (gradeLoad[layer].get(`${best}|${act.gi}`) || 0) + act.hours); pairHours.set(`${layer}|${act.classes[0]}|${best}`, (pairHours.get(`${layer}|${act.classes[0]}|${best}`) || 0) + act.hours); }
     else act.layers.forEach((layer, at) => noTeacher.push({ layer, kind: "lesson", grade: grades[act.gi], classId: classIds[act.classes[0]], subject: act.subjectName[at], hours: act.hours, reason: options.length ? "capacity" : "none" }));
   }
   for (const list of rawBlocks) for (const block of list) for (const section of block.sections) {
@@ -221,6 +236,7 @@ function timetableState(P) {
     absLoad: Array.from({ length: L }, () => new Int16Array(ABS)), everyone: Array.from({ length: L }, () => new Uint8Array(ABS)),
     venueLoad: Array.from({ length: L }, () => new Int16Array(P.venueNames.length * ABS)), slotOf: P.acts.map((act) => new Int16Array(act.hours).fill(-1)),
     bare: P.acts.map((act) => new Uint8Array(act.hours)), // 1 = 그 시간은 담당 교사 없이 반 칸만 차지(마지막 수단)
+    extra: Array.from({ length: L }, () => new Map()), // 두 학기 묶음인데 같은 칸에 못 넣은 시간: 층마다 따로 놓은 칸(활동 번호 → [칸])
     classCost: Array.from({ length: L }, () => new Float64Array(C * D)), teacherCost: Array.from({ length: L }, () => new Float64Array(T * D)), cost: 0, unplaced: 0 };
 }
 
@@ -642,7 +658,14 @@ function timetableSolveFinish(run) {
   const { P, state } = run;
   timetableRestoreSnapshot(state, run.best);
   // 끝까지 못 넣은 수업: 교사 없이 반의 빈 칸에(담당 교사 없음). 블록·창체는 반이 모두 비는 칸에.
+  // 두 학기 묶음인데 두 학기 모두 비는 칸이 없으면 학기마다 따로 놓는다(뼈대에서 벗어난 칸으로 센다).
   const unplaced = [];
+  let frameBroken = 0;
+  const emptyBefore = (layersOf, classes, s) => {
+    let before = 0;
+    for (const other of P.slotsByDay[P.slotDay[s]]) { if (other === s) break; for (const layer of layersOf) for (const ci of classes) if (state.grid[layer][ci * P.S + other] === -1) before += 1; }
+    return before;
+  };
   for (const act of P.acts) {
     const slots = state.slotOf[act.index];
     for (let k = 0; k < slots.length; k += 1) {
@@ -651,19 +674,33 @@ function timetableSolveFinish(run) {
       let bestScore = Infinity;
       for (let s = 0; s < P.S; s += 1) {
         if (!timetableCanPlace(state, act, s, true)) continue;
-        let before = 0;
-        for (const other of P.slotsByDay[P.slotDay[s]]) { if (other === s) break; for (const layer of act.layers) for (const ci of act.classes) if (state.grid[layer][ci * P.S + other] === -1) before += 1; }
-        const score = before * 10 + (slots.some((other) => other >= 0 && P.slotDay[other] === P.slotDay[s]) ? 50 : 0) + P.slotPeriod[s];
+        const score = emptyBefore(act.layers, act.classes, s) * 10 + (slots.some((other) => other >= 0 && P.slotDay[other] === P.slotDay[s]) ? 50 : 0) + P.slotPeriod[s];
         if (score < bestScore) { bestScore = score; chosen = s; }
       }
-      if (chosen >= 0) timetableMark(state, act, k, chosen, 1, true);
-      else unplaced.push({ act: act.index, hour: k });
+      if (chosen >= 0) { timetableMark(state, act, k, chosen, 1, true); continue; }
+      let missing = 0;
+      for (const layer of act.layers) {
+        let own = -1;
+        let ownScore = Infinity;
+        for (let s = 0; s < P.S; s += 1) {
+          if (act.classes.some((ci) => state.grid[layer][ci * P.S + s] !== -1)) continue;
+          const score = emptyBefore([layer], act.classes, s) * 10 + P.slotPeriod[s];
+          if (score < ownScore) { ownScore = score; own = s; }
+        }
+        if (own < 0) { missing += 1; continue; }
+        for (const ci of act.classes) state.grid[layer][ci * P.S + own] = act.index;
+        if (!state.extra[layer].has(act.index)) state.extra[layer].set(act.index, []);
+        state.extra[layer].get(act.index).push(own);
+        if (act.layers.length > 1) frameBroken += 1;
+      }
+      if (missing) unplaced.push({ act: act.index, hour: k });
     }
   }
   timetableRecount(state);
   const layers = {};
   const noTeacher = P.noTeacher.map((item) => ({ semester: P.keys[item.layer], kind: item.kind, grade: item.grade, classId: item.classId, subject: item.subject, hours: item.hours, reason: item.reason }));
-  const frameBroken = [];
+  let blockTimesChanged = 0;
+  const notes = P.notes.slice();
   P.keys.forEach((key, layer) => {
     const lessons = {};
     const blocks = {};
@@ -671,15 +708,23 @@ function timetableSolveFinish(run) {
     for (const act of P.acts) {
       const at = act.layers.indexOf(layer);
       if (at < 0) continue;
-      const slots = [...state.slotOf[act.index]].map((s) => (s >= 0 ? P.slotKey[s] : ""));
+      const apart = (state.extra[layer].get(act.index) || []).map((s) => P.slotKey[s]); // 이 학기에만 따로 놓은 칸(교사 없이)
+      const slots = [...[...state.slotOf[act.index]].filter((s) => s >= 0).map((s) => P.slotKey[s]), ...apart];
+      while (slots.length < act.hours) slots.push("");
+      const framed = act.layers.length > 1 && !apart.length;
       if (act.kind === 0 && act.creative) creative.push({ scope: "class", classId: P.classIds[act.classes[0]], slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null });
       else if (act.kind === 0) {
-        const bare = slots.filter((_, k) => state.bare[act.index][k] === 1);
-        lessons[act.ids[at]] = { slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(bare.length ? { bareSlots: bare } : {}), ...(act.layers.length > 1 ? { frame: true } : {}) };
+        const bare = [...[...state.slotOf[act.index]].filter((s, k) => s >= 0 && state.bare[act.index][k] === 1).map((s) => P.slotKey[s]), ...apart];
+        lessons[act.ids[at]] = { slots, teacherId: act.teacher >= 0 ? P.teacherIds[act.teacher] : null, ...(bare.length ? { bareSlots: bare } : {}), ...(framed ? { frame: true } : {}) };
         if (bare.length && act.teacher >= 0) noTeacher.push({ semester: key, kind: "lesson", grade: P.grades[act.gi], classId: P.classIds[act.classes[0]], subject: act.subjectName[at], hours: bare.length, reason: "clash" });
       } else if (act.kind === 1) {
-        const bare = slots.filter((_, k) => state.bare[act.index][k] === 1);
-        blocks[act.ids[at]] = { slots, teachers: Object.fromEntries(act.sections[at].map((section) => [section.id, section.teacher >= 0 ? P.teacherIds[section.teacher] : null])), ...(bare.length ? { bareSlots: bare } : {}), ...(act.layers.length > 1 ? { frame: true } : {}) };
+        const bare = [...[...state.slotOf[act.index]].filter((s, k) => s >= 0 && state.bare[act.index][k] === 1).map((s) => P.slotKey[s]), ...apart];
+        // 6단계가 정한 블록 시간과 다른 자리에 놓였는지(두 학기 뼈대를 맞추거나, 정한 시간이 다른 블록과 겹칠 때)
+        const own = act.ownFixed && act.ownFixed[at];
+        const moved = Boolean(own && (apart.length || [...state.slotOf[act.index]].some((s) => s >= 0 && !own.includes(s))));
+        if (moved) { blockTimesChanged += 1; if (!(act.overridden && act.overridden[at])) notes.push(`${key}학기 ${P.grades[act.gi]}학년 ${act.labels[at]}: 6단계 블록 시간에 놓을 수 없어 다른 자리에 놓았습니다.`); }
+        blocks[act.ids[at]] = { slots, teachers: Object.fromEntries(act.sections[at].map((section) => [section.id, section.teacher >= 0 ? P.teacherIds[section.teacher] : null])), ...(bare.length ? { bareSlots: bare } : {}), ...(framed ? { frame: true } : {}),
+          ...(moved ? { timesOverridden: true } : {}) };
         if (bare.length) for (const section of act.sections[at]) if (section.teacher >= 0) noTeacher.push({ semester: key, kind: "section", grade: P.grades[act.gi], classId: act.labels[at], subject: section.subject, hours: bare.length, reason: "clash" });
       } else creative.push({ scope: act.scope, grade: act.gi >= 0 ? P.grades[act.gi] : "", slots });
     }
@@ -689,10 +734,11 @@ function timetableSolveFinish(run) {
   const count = (rule) => violations.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0);
   const hard = violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + item.amount, 0);
   const metrics = { cost: Math.round(state.cost), hard, gap: count("gap"), oncePerDay: count("oncePerDay"), run: count("run"), maxPerDay: count("maxPerDay"), lunch: count("lunch"),
-    noTeacherHours: noTeacher.reduce((sum, item) => sum + item.hours, 0), unplacedHours: unplaced.length, frame: P.frame, frameActs: P.acts.filter((act) => act.layers.length > 1).length, frameBroken: frameBroken.length };
+    noTeacherHours: noTeacher.reduce((sum, item) => sum + item.hours, 0), unplacedHours: unplaced.length, frame: P.frame, frameActs: P.acts.filter((act) => act.layers.length > 1).length, frameBroken,
+    blockTimesChanged };
   return { version: TIMETABLE_SOLVE_VERSION, seed: run.seed, iterations: run.iteration, total: run.total, semesters: P.keys.slice(), layers, violations, noTeacher,
     unplaced: unplaced.map((item) => ({ subject: P.acts[item.act].kind === 0 ? P.acts[item.act].subjectName[0] : P.acts[item.act].kind === 1 ? P.acts[item.act].labels[0] : "창체", grade: P.acts[item.act].gi >= 0 ? P.grades[P.acts[item.act].gi] : "" })),
-    notes: P.notes.slice(), metrics };
+    notes, metrics };
 }
 
 // 남은 설정 조건 위반(반·교사·요일마다 한 줄).
@@ -826,7 +872,7 @@ function timetableValidate(inputs, result) {
       if (!item) { fail("hours", `${name}: 결과에 없습니다.`); continue; }
       if (item.slots.length !== block.hours || item.slots.some((key) => !key)) fail("hours", `${name}: ${block.hours}시간인데 ${item.slots.filter(Boolean).length}칸만 놓였습니다.`);
       const given = block.times.map((time) => `${time.day}${time.period}`);
-      if (given.length >= block.hours && new Set(given).size >= block.hours && item.slots.some((key) => !given.includes(key))) fail("blockTime", `${name}: 정해진 블록 시간(${given.join(",")})과 다릅니다.`);
+      if (!item.timesOverridden && given.length >= block.hours && new Set(given).size >= block.hours && item.slots.some((key) => !given.includes(key))) fail("blockTime", `${name}: 정해진 블록 시간(${given.join(",")})과 다릅니다.`);
       const bare = new Set(item.bareSlots || []);
       if (item.frame) frames.push({ kind: "block", semester, classId: `${block.grade}|${block.classIds.join(",")}`, department: "", hours: block.hours, slots: item.slots.slice().sort().join(","), teacherId: "" });
       const used = new Set();

@@ -172,6 +172,40 @@ test("두 학기 뼈대: 이어지는 수업·블록·창체는 두 학기 같�
   assert.equal(plain(ctx.timetableValidate(inputs, loose)).ok, true);
 });
 
+test("두 학기 뼈대 + 학기마다 다른 6단계 블록 시간: 앞 학기 자리를 따르고 표시하며, 반 시간표는 빠짐없이 찬다", () => {
+  const ctx = context();
+  const first = small((input) => {
+    input.blocks.find((block) => block.id === "3a").times = ["월2", "화2", "수2", "목2"];
+    input.blocks.find((block) => block.id === "3b").times = ["월4", "화4", "수4", "목4"];
+    input.blocks.find((block) => block.id === "3c").times = ["월5", "화5", "수5", "목5"];
+  });
+  const second = small((input) => {
+    input.semester = "2";
+    // 2학기: 블록 이름이 다르고(3x·3y·3z) 시간도 일부만 같다 → 시간이 많이 겹치는 것끼리 짝(3a–3y, 3b–3z, 3c–3x)
+    const rename = { "3a": "3x", "3b": "3y", "3c": "3z" };
+    for (const block of input.blocks) if (rename[block.id]) { block.id = rename[block.id]; block.label = `${block.id} 블록`; block.sections.forEach((section, index) => { section.id = `${block.id}-${index + 1}`; }); }
+    input.blocks.find((block) => block.id === "3x").times = ["월6", "화6", "수6", "목6"];
+    input.blocks.find((block) => block.id === "3y").times = ["월2", "화2", "수2", "금2"];
+    input.blocks.find((block) => block.id === "3z").times = ["월4", "화4", "수4", "목4"];
+  });
+  const inputs = { 1: first, 2: second };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 3, iterations: 120000 }));
+  const check = plain(ctx.timetableValidate(inputs, result));
+  assert.deepEqual([check.ok, check.errors], [true, []]);
+  const one = result.layers["1"].blocks;
+  const two = result.layers["2"].blocks;
+  const sorted = (item) => item.slots.slice().sort();
+  // 1학기는 6단계 시간 그대로, 2학기는 1학기 자리(뼈대)
+  assert.deepEqual([sorted(one["3a"]), one["3a"].timesOverridden], [["월2", "목2", "수2", "화2"].sort(), undefined]);
+  assert.deepEqual([sorted(two["3y"]), sorted(two["3z"]), sorted(two["3x"])], [sorted(one["3a"]), sorted(one["3b"]), sorted(one["3c"])]);
+  // 시간이 같은 3z는 표시 없음, 달라진 3y(금2 → 목2)·3x는 표시 + 알림
+  assert.deepEqual([two["3z"].timesOverridden, two["3y"].timesOverridden, two["3x"].timesOverridden, result.metrics.blockTimesChanged], [undefined, true, true, 2]);
+  assert.equal(result.notes.filter((note) => /두 학기 뼈대를 맞추려고 6단계 블록 시간 대신 1학기 자리/.test(note)).length, 2);
+  // 반 시간표는 두 학기 모두 빠짐없이
+  assert.deepEqual([result.metrics.unplacedHours, result.unplaced], [0, []]);
+  assert.equal(check.hours["1"], check.hours["2"]);
+});
+
 test("창체: 학년별(시간은 계산이 정함)·반군별 허용(반마다 따로)·전교 동시 시간 미정", () => {
   const ctx = context();
   const grade = { 1: small((input) => { input.creative = { school: 1, grade: 1 }; }) };
