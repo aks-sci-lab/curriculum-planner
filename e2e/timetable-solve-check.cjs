@@ -6,6 +6,7 @@
 //                   creativeFrom=<n>(시간을 정하지 않은 창체는 n교시 이후, 기본 5 · 1 = 제한 없음), double=<과목>+<과목>(2시간 연속 수업 허용 과목),
 //                   rules.<이름>=<값>(예: rules.gap=soft, rules.run=4, rules.semesterFrame=soft). --inputs 와 함께면 blockTimes=free 와 rules.* 만 쓸 수 있다.
 //   --modes each  = 학기마다 따로, frame = 두 학기 함께(뼈대: 이어지는 수업·블록·창체는 같은 칸). 기본 둘 다.
+//   점심·연강 위반이 남으면 그 교사의 그날 배치를 종류마다 3건까지 찍는다('교사 배치:' 줄 — 실제 시각 칸마다 과목@반, [블록], 두 학기 묶음은 '=').
 //   --show 3-1,2-4 = 그 반의 요일별 배치를 출력([블록 글자] · 과목 앞 두 글자(× = 담당 교사 없음) · 창 · -- 빈칸). 블록이 1교시부터 이어지는지 볼 때.
 //   --inputs      = 앞서 이 스크립트가 <출력 폴더>/inputs.json 에 적어 둔 입력으로 다시 계산(브라우저를 열지 않음).
 // 출력 폴더의 inputs.json·report.json 에는 교사 이름이 들어 있을 수 있으니 저장소에 커밋하지 않는다(학생 자료는 들어가지 않는다).
@@ -129,11 +130,26 @@ async function readInputs() {
           for (const day of tables.days) console.log(`      ${day} ${row.rows.filter((item) => item.period).map((item) => { const entry = (row.cells[`${day}${item.period}`] || [])[0]; return !entry ? "--" : entry.kind === "block" ? `[${String(entry.text).replace(/블록.*$/, "").trim().slice(-1)}]` : entry.kind === "creative" ? "창" : `${String(entry.text).slice(0, 2)}${entry.noTeacher ? "×" : ""}`; }).join(" ")}`);
         }
       }
+      // 점심·연강 위반이 남으면 그 교사의 그날 배치를 2~3건 찍는다(실제 시각 칸마다: 반 수업은 '과목@반', 블록은 '[블록 이름]', 두 학기 묶음은 끝에 '=')
+      const teacherDays = result.violations.filter((entry) => entry.level === "hard" && entry.kind === "teacher" && (entry.rule === "lunch" || entry.rule === "run"));
+      const shown = [];
+      for (const rule of ["lunch", "run"]) for (const item of teacherDays.filter((entry) => entry.rule === rule).slice(0, 3)) {
+        const tables = plain(ctx.timetableResultTables(job.inputs[item.semester], result.layers[item.semester]));
+        const row = tables.teachers.find((teacher) => teacher.id === item.id);
+        const d = tables.days.indexOf(item.day);
+        if (!row || d < 0) continue;
+        const layer = result.layers[item.semester];
+        const framed = (entry) => { const id = Object.keys(layer.lessons).find((key) => key.endsWith(`@${entry.where}`) && layer.lessons[key].teacherId === item.id && layer.lessons[key].frame); return id ? "=" : ""; };
+        const line = tables.teacherRows.map((slot) => { const entry = (row.cells[`${d}|${slot.pos}`] || [])[0]; return `${slot.label.replace(/교시/g, "").replace(/학년/g, "")}:${!entry ? "--" : /블록/.test(entry.where) ? `[${entry.where}]` : `${String(entry.text).slice(0, 6)}@${entry.where}${framed(entry)}`}`; }).join(" | ");
+        const text = `${item.semester}학기 ${row.name} ${item.day}(${rule === "lunch" ? "점심" : "연강"}): ${line}`;
+        shown.push(text);
+        console.log(`    교사 배치: ${text}`);
+      }
       for (const error of valid.errors.slice(0, 5)) console.log(`    검증 오류(${error.type}): ${error.text}`);
       for (const item of result.violations.filter((entry) => entry.level === "hard").slice(0, 6)) console.log(`    위반: ${item.semester}학기 ${item.cause}`);
       for (const item of result.noTeacher.slice(0, 6)) console.log(`    담당 교사 없음: ${item.semester}학기 ${item.grade}학년 ${item.classId} ${item.subject} ${item.hours}시간(${item.reason})`);
       if (!valid.ok) failed += 1;
-      report.runs.push({ name: job.name, seed, ms, iterations: result.iterations, metrics: m, bySemester, noTeacher, valid: valid.ok, errors: valid.errors.slice(0, 20), violations: result.violations.filter((entry) => entry.level === "hard").slice(0, 50), notes: result.notes });
+      report.runs.push({ name: job.name, seed, ms, iterations: result.iterations, metrics: m, bySemester, noTeacher, valid: valid.ok, errors: valid.errors.slice(0, 20), violations: result.violations.filter((entry) => entry.level === "hard").slice(0, 50), teacherDays: shown, notes: result.notes });
     }
   }
   fs.writeFileSync(path.join(OUT, "report.json"), JSON.stringify(report, null, 1));

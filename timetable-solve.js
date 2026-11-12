@@ -683,7 +683,13 @@ function timetableTryMove(state, rng, temperature) {
       }
     }
     if (s2 < 0 || s2 === s1) { s2 = Math.floor(rng() * (P.S - 1)); if (s2 >= s1) s2 += 1; }
-    const single = P.L > 1 && rng() < 0.5 ? Math.floor(rng() * P.L) : -1;
+    // 한 학기만 맞바꾸기는 두 칸에 두 학기 묶음이 없을 때만 고른다(묶음이 있으면 두 학기 함께 — 헛도는 시도를 없앤다)
+    let single = -1;
+    if (P.L > 1 && rng() < 0.5) {
+      let bound = false;
+      for (let layer = 0; layer < P.L && !bound; layer += 1) for (const slot of [s1, s2]) { const a = state.grid[layer][ci * P.S + slot]; if (a !== -1 && P.acts[a].layers.length > 1) bound = true; }
+      if (!bound) single = Math.floor(rng() * P.L);
+    }
     // 사슬(켐페): 옮겨 갈 칸에 그 교사의 다른 반 수업이 있으면 그 반도 같은 두 칸을 맞바꾼다(최대 6반).
     const chain = [ci];
     const pending = []; // [act, k, 옮겨 갈 칸]
@@ -791,7 +797,20 @@ function timetableTrySwapTeachers(state, rng, temperature) {
     P.swapPool = movable.filter((act) => P.swapMates[act.index].length).map((act) => act.index);
   }
   if (!P.swapPool.length) return false;
-  const a = P.acts[P.swapPool[Math.floor(rng() * P.swapPool.length)]];
+  let a = P.acts[P.swapPool[Math.floor(rng() * P.swapPool.length)]];
+  const hot = state.hot;
+  if (hot && hot.hotT.length && rng() < 0.6) {
+    // 교사 위반(점심·연강)을 겨냥: 그 교사가 그날 맡은 반 수업(점심 칸 쪽 먼저)을 다른 교사와 맞바꾼다
+    const i = 3 * Math.floor(rng() * (hot.hotT.length / 3));
+    const layer = hot.hotT[i];
+    const ti = hot.hotT[i + 1];
+    const d = hot.hotT[i + 2];
+    const order = P.lunchPositions.length && rng() < 0.7 ? P.lunchPositions : Array.from({ length: P.positions }, (_, pos) => pos);
+    for (const pos of order) {
+      const index = state.tAt[layer][ti * P.ABS + d * P.positions + pos];
+      if (index !== -1 && P.acts[index].kind === 0 && P.swapMates[index].length) { a = P.acts[index]; break; }
+    }
+  }
   const mates = P.swapMates[a.index];
   const b = P.acts[mates[Math.floor(rng() * mates.length)]];
   const ta = a.teacher;
@@ -844,7 +863,7 @@ function timetableSolveStart(inputs, options = {}) {
   timetableConstruct(state, rng);
   const total = Math.max(0, Math.floor(Number(options.iterations ?? TIMETABLE_DEFAULT_ITERATIONS * P.L)));
   // rounds = 첫 담금질 뒤 '흔들기'(가장 좋은 상태에서 다시 데워 돌기)를 몇 번까지 할지. 횟수 기준이라 같은 씨앗 = 같은 결과.
-  const rounds = Math.max(0, Math.floor(Number(options.rounds ?? TIMETABLE_DEFAULT_ROUNDS)));
+  const rounds = Math.max(0, Math.floor(Number(options.rounds ?? (P.frame ? TIMETABLE_DEFAULT_ROUNDS * 2 : TIMETABLE_DEFAULT_ROUNDS)))); // 두 학기 뼈대는 묶음 때문에 더 오래 걸려 판을 두 배로
   return { P, state, rng, seed, iteration: 0, total, base: total, phaseStart: 0, phaseEnd: total, hot: 40, extensions: 0, rounds, stale: 0, roundCost: Infinity, best: timetableSnapshot(state), startCost: state.cost, accepted: 0 };
 }
 
@@ -866,7 +885,7 @@ function timetableSolveStep(run, count = 5000) {
       run.roundCost = run.best.cost;
       run.hardLeft = hardLeft;
       if (run.extensions >= run.rounds || (!hardLeft && run.stale >= 1)) { run.finished = true; break; }
-      if (run.stale >= 3 || (hardLeft && run.stale >= 1 && run.P.rules.cover === "soft")) {
+      if (run.stale >= (run.P.frame ? 5 : 3) || (hardLeft && run.stale >= 1 && run.P.rules.cover === "soft")) {
         // 더 나아지지 않는다: '공강 먼저'면 걸리는 수업의 교사를 비우고 한 판 더, 아니면 끝
         if (run.P.rules.cover !== "soft" || !timetableRelease(run)) { run.finished = true; break; }
         run.stale = 0;

@@ -330,6 +330,26 @@ test("실제 학교 모양(3학년 11반 · 블록 20 · 반 수업 2과목(2 + 
   assert.ok(tough.metrics.gap <= 15, `극단 사례 공강 ${tough.metrics.gap}칸`);
 });
 
+test("두 학기 뼈대 + 학기마다 다른 블록 분반 교사(블록 교사가 1학년 반 수업도 맡음): 검증 통과·블록 사이 낀 칸 없음·묶음 유지", () => {
+  const ctx = context();
+  const make = (semester) => school({ pe3: 0, info3: 3, sharedPe: true, sharedSocial: true, unevenBlocks: true, semester });
+  const inputs = { 1: make("1"), 2: make("2") };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 300000, rounds: 2 }));
+  const check = plain(ctx.timetableValidate(inputs, result));
+  assert.deepEqual([check.ok, check.errors, result.metrics.unplacedHours, result.metrics.frameBroken], [true, [], 0, 0]);
+  // 3학년 블록은 두 학기 같은 자리, 요일마다 1교시부터 이어진다(탐색이 블록을 흩지 않는다)
+  for (const semester of ["1", "2"]) {
+    const byDay = {};
+    for (const [id, item] of Object.entries(result.layers[semester].blocks)) if (id.startsWith("3")) for (const key of item.slots) (byDay[key[0]] = byDay[key[0]] || []).push(Number(key.slice(1)));
+    for (const [day, periods] of Object.entries(byDay)) assert.deepEqual(periods.slice().sort((a, b) => a - b), periods.map((_, index) => index + 1), `${semester}학기 ${day}요일 블록 ${periods.join(",")}`);
+  }
+  assert.deepEqual(Object.fromEntries(Object.entries(result.layers["1"].blocks).map(([id, item]) => [id, item.slots.slice().sort().join(",")])), Object.fromEntries(Object.entries(result.layers["2"].blocks).map(([id, item]) => [id, item.slots.slice().sort().join(",")])));
+  // 3학년 공강은 블록 사이 낀 칸이 없으니 한 자리 수, 남는 교사 위반(점심·연강)은 위반 목록에 교사·요일과 함께
+  const gap3 = result.violations.filter((item) => item.rule === "gap" && item.id.startsWith("3-")).reduce((sum, item) => sum + item.amount, 0);
+  assert.ok(gap3 <= 9, `3학년 공강 ${gap3}칸`);
+  assert.ok(result.violations.filter((item) => item.rule === "lunch").every((item) => item.kind === "teacher" && item.day && /점심 시간이 없습니다/.test(item.cause)));
+});
+
 test("흔들기·일찍 끝내기: 판 수는 설정값, 위반이 없고 나아지지 않으면 일찍 끝나고, 풀리지 않는 위반이 남으면 세 판 내리 그대로일 때 끝난다", () => {
   const ctx = context();
   const inputs = { 1: small() };

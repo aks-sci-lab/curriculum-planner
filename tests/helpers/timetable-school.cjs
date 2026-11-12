@@ -47,6 +47,24 @@ function school(options = {}) {
   };
   // sharedPe: 3학년 스포츠 생활도 1·2학년 체육 교사(3명)가 맡는다 — 실제 학교 모양(3학년 반 수업 교사 = 체육 3 + 정보 options.info3명 < 11반, 체육 교사는 전 학년 수업으로 꽉 참)
   if (options.sharedPe) input.lessons.find((lesson) => lesson.id === "3스포츠").department = "체육1";
+  // sharedSocial: 1학년 한국사·통합사회도 2·3학년 블록 과목 교사(역사·지리, 2명씩 더)가 맡는다 — 블록 교사가 1학년 반 수업(두 학기 이어지는 과목)도 맡는 실제 모양
+  if (options.sharedSocial) {
+    input.lessons.find((lesson) => lesson.id === "1한국사").department = "역사";
+    input.lessons.find((lesson) => lesson.id === "1통사").department = "지리";
+    for (const department of ["역사", "지리"]) for (const n of [3, 4]) teachers.push({ id: `t-${department}-${n}`, name: `${department} ${n}`, departments: [department] });
+  }
+  // unevenBlocks: 블록마다 한 과목은 분반이 2개, 한 과목은 없음(학기마다 다른 과목) — 블록 분반 교사가 학기마다 달라 두 학기 뼈대가 학기별 계산보다 어려워지는 모양
+  //   (재현: 학기별 점심 위반 4 + 6건, 두 학기 뼈대 12건 — e2e/timetable-solve-check.cjs --inputs 로 돌려 볼 수 있다)
+  if (options.unevenBlocks) {
+    const shift = options.semester === "2" ? 4 : 0;
+    input.blocks.forEach((block, index) => {
+      const at = (index * 2 + shift) % block.sections.length;
+      const next = (at + 1) % block.sections.length;
+      block.sections[at].department = block.sections[next].department;
+      block.sections[at].subject = `${block.sections[next].subject} B`;
+    });
+  }
+  if (options.semester) input.semester = String(options.semester);
   return input;
 }
 
