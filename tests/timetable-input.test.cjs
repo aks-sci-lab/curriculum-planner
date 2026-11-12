@@ -370,6 +370,40 @@ test("칸 고정: settings.pins[학기]가 그 학기 입력의 pins.lessons로 
   assert.deepEqual(plain(model.lessons.filter((lesson) => lesson.pins.length).map((lesson) => [lesson.id, lesson.pins])), [["1|공통국어@1-1", ["월2"]]]);
 });
 
+test("반군 엇갈림 견적(T7a): 6단계 분반 결과를 읽어 블록 k개를 엇갈릴 때 늘어나는 분반 수를 학기별로 내고 큰 쪽을 보여 준다(6단계 자료는 그대로)", () => {
+  // 3학년 4반, 1학기 택2: a블록 물리학 2분반(1·2반 학생 40명, 3·4반 10명)·화학 1분반(반마다 7명), b블록 생명과학 2분반(같은 학생들: 1·2반 40명, 3·4반 10명)
+  const students = [];
+  const assign = {};
+  const add = (room, count, ids) => { for (let n = 0; n < count; n += 1) { const key = `2-${room}-${students.length + 1}`; students.push({ key, homeroom: String(room) }); assign[key] = ids; } };
+  add(1, 20, ["물리#1", "생명#1"]); add(2, 20, ["물리#2", "생명#1"]); add(3, 6, ["물리#1", "생명#2"]); add(4, 4, ["물리#2", "생명#2"]);
+  for (const room of [1, 2, 3, 4]) add(room, 7, ["화학#1"]);
+  const sectionResult = { signature: "sig", blocks: [{ id: "a", letter: "a" }, { id: "b", letter: "b" }], assign,
+    sections: [{ id: "물리#1", courseKey: "물리", blockId: "a" }, { id: "물리#2", courseKey: "물리", blockId: "a" }, { id: "화학#1", courseKey: "화학", blockId: "a" }, { id: "생명#1", courseKey: "생명", blockId: "b" }, { id: "생명#2", courseKey: "생명", blockId: "b" }] };
+  const before = JSON.stringify(sectionResult);
+  const group = { key: "2:1:3-1 택2", grade: "2", targetGrade: "3", semester: "1", category: "3-1 택2", students, courses: [{ key: "물리", name: "물리학" }, { key: "화학", name: "화학" }, { key: "생명", name: "생명과학" }] };
+  const ctx = world({ groups: [group], entries: { "2:1:3-1 택2": { blockTimes: {}, classCounts: {}, classUnit: {}, sectionResult } } });
+  ctx.classSectionsSource = () => ({ groups: [group], maxClassSize: 30 });
+  ctx.classSectionsHomeroomStudents = (target) => target.students;
+  ctx.classSectionsEffectiveClassMap = () => ({ map: null });
+  const estimate = plain(ctx.timetableStaggerFor("1", "3", 4, {}));
+  assert.deepEqual([estimate.label, estimate.mapped, Object.keys(estimate.semesters)], ["1~2반 / 3~4반", false, ["1"]]);
+  // 정원 30: b블록(생명과학 40·10 → 2 + 1 = 3분반, +1) 먼저, 그다음 a블록(물리학 40·10 → +1, 화학 14·14 → +1). 뒤 묶음 10명은 '10명 미만'이 아니다
+  assert.deepEqual(estimate.plans, [{ k: 1, extra: 1, small: 0, blocks: { 1: ["3-1 택2 b블록"] } }, { k: 2, extra: 3, small: 0, blocks: { 1: ["3-1 택2 b블록", "3-1 택2 a블록"] } }]);
+  assert.equal(JSON.stringify(sectionResult), before, "6단계 결과는 읽기만");
+  // 반 묶음을 직접 지정('1-3/4'): 물리학·생명과학 46·4, 화학 21·7 → 과목마다 +1이고 4반 묶음 분반 3개는 모두 10명 미만
+  const custom = plain(ctx.timetableStaggerFor("1", "3", 4, { staggerGroups: { 3: "1-3/4" } }));
+  assert.deepEqual([custom.label, custom.plans[1].extra, custom.plans[1].small], ["1~3반 / 4반", 3, 3]);
+  // 반 묶음 글 읽기: 둘 이상·겹치지 않게·범위 안
+  assert.deepEqual(plain(ctx.timetableStaggerGroups("1-6/7-11", "3", 11)), { A: ["3-1", "3-2", "3-3", "3-4", "3-5", "3-6"], B: ["3-7", "3-8", "3-9", "3-10", "3-11"] });
+  assert.deepEqual([ctx.timetableStaggerGroups("1-6", "3", 11), ctx.timetableStaggerGroups("1-6/6-11", "3", 11), ctx.timetableStaggerGroups("1-6/12", "3", 11), ctx.timetableStaggerGroups("가/나", "3", 11)], [null, null, null, null]);
+  // 분반 결과가 없는 학년은 견적 없음
+  assert.equal(ctx.timetableStaggerFor("1", "1", 4, {}), null);
+  // 사전 점검 선택지: P6의 '반 묶음을 나눠 블록 일부를 엇갈리게'에 견적이 붙는다
+  const result = { counts: { block: 0, fail: 1, warn: 0, info: 0 }, issues: [{ id: "P6", level: "fail", cause: "3학년: 반 수업 칸 13개…", data: { grade: "3", classes: 4 }, relax: ["stagger"] }] };
+  const choices = plain(ctx.timetableChoicesFor(result, { round: "1", input: { creative: {}, blocks: [] } }, {}, () => null).get("P6|3학년"));
+  assert.deepEqual(choices.map((choice) => [choice.key, choice.kind, choice.estimate?.label, choice.estimate?.plans.map((plan) => [plan.k, plan.extra])]), [["stagger", "link", "1~2반 / 3~4반", [[1, 1], [2, 3]]]]);
+});
+
 test("2시간 연속 수업 허용 과목: 고른 과목의 반 수업에만 double 표시(과목명 표기 차이는 맞춰 봄), 조건 칸으로 넣고 뺀다", () => {
   const ctx = world({ timetable: { settings: { doubleSubjects: ["체 육"] } } });
   const { input } = plain(ctx.timetableInput("1", "1"));

@@ -372,6 +372,7 @@ function timetableSettings() {
   return store && store.settings && typeof store.settings === "object" ? store.settings : {};
 }
 
+var TIMETABLE_STAGGER_SMALL = 10; // 반군 엇갈림 견적에서 '소인수 분반'으로 세는 기준(이 인원 미만 — 막지 않고 수로만 보여 준다)
 var TIMETABLE_CREATIVE_FROM = 5; // 시간을 정하지 않은 창체(학년별·반군별·전교 동시)는 기본 5교시 이후에만 놓는다(낮 시간에 창체가 끼지 않게)
 var TIMETABLE_DEFAULT_LUNCH = { 1: 4, 2: 4, 3: 3 }; // 사용자 학교: 3학년은 3교시 뒤, 1·2학년은 4교시 뒤
 var TIMETABLE_CREATIVE_LABEL = /창체|창의적|동아리|자율|진로/;
@@ -756,7 +757,7 @@ var TIMETABLE_CHOICES = {
   otherDepartment: { label: "다른 교과 교사가 맡기(교양 과목만)", link: "hours", target: "과목별 상세 · 담당 교과", onlyOpen: true,
     gives: "교양 과목은 5단계 과목별 상세의 '담당 교과'에서 맡을 교과를 고르면 그 교과 교사가 후보가 됩니다. 교양이 아닌 과목은 다른 전공 교사가 맡을 수 없습니다." },
   sectionsMove: { label: "분반 구성·분반 교사 바꾸기", link: "sections", target: "분반·블록·분반 교사", gives: "6단계에서 분반을 다른 블록으로 옮기거나, 같은 전공 교사끼리 나눠 맡게 한 뒤 다시 계산합니다." },
-  stagger: { label: "반 묶음을 나눠 블록 일부를 엇갈리게", link: "sections", target: "분반 편성", gives: "반 묶음마다 블록 시간이 달라져 반 수업 칸이 늘지만 분반 수가 늘고 6단계를 다시 편성해야 합니다(예상 분반 수 견적은 준비 중)." },
+  stagger: { label: "반 묶음을 나눠 블록 일부를 엇갈리게", link: "sections", target: "분반 편성", gives: "반 묶음마다 블록 시간이 달라져 반 수업 칸이 늘지만 분반 수가 늘고 6단계를 다시 편성해야 합니다(6단계 반 묶음 편성은 아직 준비 중 — 아래 숫자는 미리 보는 견적입니다)." },
   noTeacher: { label: "그대로 두기 — '담당 교사 없음'으로 표시하고 나머지를 편성", accept: true, link: "aggregate", target: "개설 학급 수·개설 학기",
     gives: "그 시수는 시간표에 '담당 교사 없음'으로 남습니다(해결할 문제 목록). 개설 학급 수·개설 학기를 줄이려면 4단계, 담당 교과·과목은 5단계·6단계 명단에서 고칩니다." }
 };
@@ -768,6 +769,69 @@ function timetableIssueKey(issue) {
 
 // 항목마다 선택지와 예상 효과. preview(key) → 그 선택을 적용했을 때의 사전 점검 결과(없으면 null).
 // 돌려주는 값: Map(항목 키 → [{ key, label, gives, kind: 'setting' | 'link' | 'accept', where, effect: { solved, failBefore, failAfter } }])
+// 반 묶음 글('1-6/7-11') → { A: ['3-1', …], B: [...] }. 묶음이 둘 이상이고 겹치지 않아야 한다. 못 읽으면 null.
+function timetableStaggerGroups(text, grade, total) {
+  const parts = String(text ?? "").split("/").map((part) => timetableClassList(part, total));
+  if (parts.length < 2 || parts.some((list) => !list || !list.length || list.some((n) => Number(n) < 1 || Number(n) > total))) return null;
+  const all = parts.flat();
+  if (new Set(all).size !== all.length) return null;
+  return Object.fromEntries(parts.map((list, index) => [String.fromCharCode(65 + index), list.map((n) => `${grade}-${n}`)]));
+}
+
+// 반군 엇갈림 견적(T7a, 읽기 전용): 6단계 분반 결과에서 블록·과목·내년 반별 인원을 모아 학기마다 timetableStaggerEstimate를 돌리고,
+// 엇갈릴 블록 수 k마다 두 학기 중 큰 쪽을 보여 준다(엇갈림 블록 수는 두 학기 같게 — 뼈대 유지). 6단계 자료는 바꾸지 않는다.
+// 돌려주는 값: { label: '1~6반 / 7~11반', mapped: 내년 반을 아는지, plans: [{ k, extra, small, blocks: { 학기: [블록 이름] } }], semesters: { 학기: 견적 } } 또는 null(분반 결과 없음)
+function timetableStaggerFor(round, grade, classCount, settings = timetableSettings()) {
+  if (typeof classSectionsSource !== "function" || typeof classSectionsEntry !== "function") return null;
+  const total = Math.max(0, Math.floor(Number(classCount) || 0));
+  const classes = Array.from({ length: total }, (_, index) => `${grade}-${index + 1}`);
+  const groups = timetableStaggerGroups(settings.staggerGroups?.[grade], grade, total) || undefined;
+  const source = classSectionsSource(round);
+  const semesters = {};
+  let mapped = true;
+  for (const semester of ["1", "2"]) {
+    const blocks = [];
+    for (const group of source.groups || []) {
+      if (String(group.targetGrade) !== String(grade) || String(group.semester) !== semester) continue;
+      const result = classSectionsEntry(round, group.key, false)?.sectionResult;
+      if (!result?.sections?.length || !result.assign) continue;
+      if (typeof classSectionsEffectiveClassMap === "function" && !classSectionsEffectiveClassMap(group).map) mapped = false;
+      const students = typeof classSectionsHomeroomStudents === "function" ? classSectionsHomeroomStudents(group) : group.students || [];
+      const roomOf = new Map(students.map((student) => [student.key, String(student.homeroom ?? "")]));
+      const members = new Map(result.sections.map((section) => [section.id, {}]));
+      for (const [key, ids] of Object.entries(result.assign)) {
+        const room = roomOf.get(key);
+        if (!room || room === "미정") continue;
+        for (const id of ids || []) { const bag = members.get(id); if (bag) bag[`${grade}-${room}`] = (bag[`${grade}-${room}`] || 0) + 1; }
+      }
+      const nameOf = new Map((group.courses || []).map((course) => [course.key, course.name]));
+      for (const block of result.blocks || []) {
+        const courses = new Map();
+        for (const section of result.sections) {
+          if (section.blockId !== block.id) continue;
+          const row = courses.get(section.courseKey) || { name: nameOf.get(section.courseKey) || section.courseKey, sections: 0, byClass: {} };
+          row.sections += 1;
+          for (const [classId, count] of Object.entries(members.get(section.id) || {})) row.byClass[classId] = (row.byClass[classId] || 0) + count;
+          courses.set(section.courseKey, row);
+        }
+        if (courses.size) blocks.push({ id: `${group.key}|${block.letter || block.id}`, label: `${group.category} ${block.letter || block.id}블록`, courses: [...courses.values()] });
+      }
+    }
+    if (blocks.length) semesters[semester] = timetableStaggerEstimate({ classes, groups, capacity: Number(source.maxClassSize) || 34, minSize: TIMETABLE_STAGGER_SMALL, blocks });
+  }
+  const keys = Object.keys(semesters);
+  if (!keys.length) return null;
+  const used = semesters[keys[0]].groups;
+  const span = (list) => { const numbers = list.map((id) => Number(String(id).split("-")[1])).sort((a, b) => a - b); return numbers.length > 1 && numbers[numbers.length - 1] - numbers[0] === numbers.length - 1 ? `${numbers[0]}~${numbers[numbers.length - 1]}반` : `${numbers.join("·")}반`; };
+  const plans = [];
+  for (let k = 1; k <= Math.min(...keys.map((key) => semesters[key].plans.length)); k += 1) {
+    const each = keys.map((key) => [key, semesters[key].plans[k - 1]]);
+    plans.push({ k, extra: Math.max(...each.map(([, plan]) => plan.extra)), small: Math.max(...each.map(([, plan]) => plan.small)),
+      blocks: Object.fromEntries(each.map(([key, plan]) => [key, plan.blocks.map((id) => semesters[key].blocks.find((block) => block.id === id)?.label || id)])) });
+  }
+  return { label: Object.values(used).map(span).join(" / "), mapped, plans, semesters };
+}
+
 function timetableChoicesFor(result, prepared, settings, preview) {
   const out = new Map();
   const failBefore = result.counts.fail + result.counts.block;
@@ -790,7 +854,19 @@ function timetableChoicesFor(result, prepared, settings, preview) {
         if (!after) continue;
         const solved = !after.issues.some((other) => other.level === "fail" && timetableIssueKey(other) === timetableIssueKey(issue));
         list.push({ key, label: choice.label, gives: choice.gives, kind: "setting", effect: { solved, failBefore, failAfter: after.counts.fail + after.counts.block } });
-      } else list.push({ key, label: choice.label, gives: choice.gives, kind: choice.accept ? "accept" : "link", where: timetableWhere(choice.link, choice.target) });
+      } else {
+        const item = { key, label: choice.label, gives: choice.gives, kind: choice.accept ? "accept" : "link", where: timetableWhere(choice.link, choice.target) };
+        // 반 묶음 엇갈림: 6단계 분반 결과로 어림한 숫자(늘어나는 분반 수·10명 미만 분반 수, 두 학기 중 큰 쪽)를 붙인다
+        if (key === "stagger" && issue.data?.grade) {
+          try {
+            const gradeRow = (prepared.input?.grades || []).find((item) => String(item.grade) === String(issue.data.grade));
+            const classCount = Number(issue.data.classes) || (Array.isArray(gradeRow?.classes) ? gradeRow.classes.length : Number(gradeRow?.classes) || 0);
+            const estimate = timetableStaggerFor(prepared.round, issue.data.grade, classCount, settings);
+            if (estimate && estimate.plans.length) item.estimate = { grade: issue.data.grade, label: estimate.label, mapped: estimate.mapped, plans: estimate.plans.slice(0, 2).map((plan) => ({ k: plan.k, extra: plan.extra, small: plan.small, blocks: plan.blocks })) };
+          } catch { /* 견적을 못 내면 안내만 */ }
+        }
+        list.push(item);
+      }
     }
     if (list.length) out.set(timetableIssueKey(issue), list);
   }
@@ -850,7 +926,8 @@ function timetableChoicesHtml(list) {
     const effect = choice.kind !== "setting" ? ""
       : `<span class="tt-effect" data-solved="${choice.effect.solved}">${choice.effect.solved ? "이 항목 풀림" : "이 항목은 그대로"} · 조건 위반 ${choice.effect.failBefore} → ${choice.effect.failAfter}건</span>`;
     const action = choice.kind === "setting" ? `<button class="button" type="button" data-tt-choice="${choice.key}">이 선택으로 다시 점검</button>` : timetableWhereButtons([choice.where]);
-    return `<li data-tt-choice-row="${choice.key}" data-kind="${choice.kind}"><strong>${timetableEsc(choice.label)}</strong> ${effect} ${action}<span class="tt-gives">${timetableEsc(choice.gives)}</span></li>`;
+    const estimate = choice.estimate ? `<span class="tt-gives tt-estimate" data-tt-stagger="${timetableEsc(choice.estimate.grade)}">예상(${timetableEsc(choice.estimate.grade)}학년 반 묶음 ${timetableEsc(choice.estimate.label)}, 6단계 분반 결과로 어림 · 두 학기 중 큰 쪽): ${choice.estimate.plans.map((plan) => `<span data-k="${plan.k}" data-extra="${plan.extra}" data-small="${plan.small}">블록 ${plan.k}개 엇갈림 → 분반 <strong>+${plan.extra}</strong>${plan.small ? ` · ${TIMETABLE_STAGGER_SMALL}명 미만 분반 ${plan.small}개` : ""} (${timetableEsc(Object.entries(plan.blocks).map(([semester, labels]) => `${semester}학기 ${labels.join("·")}`).join(", "))})</span>`).join(" / ")}${choice.estimate.mapped ? "" : " — 내년 반 배정표가 없어 지금 반 기준입니다"}. 반 묶음은 조건 설정 › 규칙에서 바꿉니다.</span>` : "";
+    return `<li data-tt-choice-row="${choice.key}" data-kind="${choice.kind}"><strong>${timetableEsc(choice.label)}</strong> ${effect} ${action}<span class="tt-gives">${timetableEsc(choice.gives)}</span>${estimate}</li>`;
   };
   return `<div class="tt-choices"><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요)</span><ul>${list.map(row).join("")}</ul></div>`;
 }
@@ -945,7 +1022,12 @@ function timetableConditionsHtml(prepared) {
     <details class="tt-double"${doubleNow.size ? " open" : ""}><summary>${doubleNow.size ? `${doubleNow.size}과목: ${timetableEsc([...doubleNow].join(", "))}` : "없음 — 과목 고르기"}</summary><span class="tt-double-list" id="timetableDoubleSubjects">
       ${[...doubleOptions.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])) || a[0].localeCompare(b[0], "ko")).map(([subject, grade]) => `<label><input type="checkbox" data-tt-field="double:${timetableEsc(subject)}" ${doubleNow.has(subject) ? "checked" : ""}> ${grade ? `${timetableEsc(grade)}학년 ` : ""}${timetableEsc(subject)}</label>`).join("")}</span></details>
     <span class="cs-note">고른 과목은 같은 교사가 그 반에 하루 2시간이어도 이어져 있으면 '하루 한 번' 위반으로 보지 않습니다(3시간 이상·떨어진 2시간은 위반).</span></span></div>`;
-  const rulesBody = `${ruleRows}${doubleRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
+  const blockGrades = [...new Set((prepared.input.blocks || []).map((block) => String(block.grade)))].sort();
+  const staggerRow = blockGrades.length ? `<div class="tt-row" data-tt-rule="staggerGroups"><span class="tt-label">반 묶음(엇갈림 견적용)</span><span class="tt-fields">
+    ${blockGrades.map((grade) => { const total = (prepared.input.grades || []).find((item) => String(item.grade) === grade)?.classes || 0; const half = Math.ceil(total / 2);
+      return `<label>${grade}학년 <input class="cs-text" type="text" value="${timetableEsc(tt.staggerGroups?.[grade] || "")}" placeholder="${total > 1 ? `1-${half}/${half + 1}-${total}` : ""}" data-tt-field="stagger:${grade}" data-focus-key="tt-stagger-${grade}" aria-label="${grade}학년 반 묶음"></label>`; }).join("")}
+    <span class="cs-note">비우면 앞·뒤 절반. '1-6/7-11'처럼 묶음을 /로 나눠 적습니다. 사전 점검의 '반 묶음을 나눠 블록 일부를 엇갈리게' 선택지에 보이는 예상 분반 수에만 쓰입니다(6단계 편성은 바꾸지 않음).</span></span></div>` : "";
+  const rulesBody = `${ruleRows}${doubleRow}${staggerRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
     <span class="cs-note">'반드시'인 조건을 다 지킬 수 없으면 자동으로 풀지 않고, 아래 사전 점검의 선택지에서 무엇을 양보할지 고릅니다.</span></span></div>`;
 
   // 교사: 주어진 명단 안에서만 편성한다(교사를 늘리는 입력은 없다). 후보 = 6단계 명단의 담당 교과·담당 과목.
@@ -1495,6 +1577,16 @@ function timetableApplyField(field, target) {
     const next = target.checked ? [...new Set([...current, key])] : current.filter((id) => id !== key);
     if (next.length === 1 && next[0] === "교양") delete settings.openDepartments; else settings.openDepartments = next;
     return `다른 교과 교사가 맡을 수 있는 교과: ${next.length ? next.join(", ") : "없음"}`;
+  }
+  if (name === "stagger") {
+    const text = String(target.value ?? "").trim();
+    const total = (TIMETABLE_VIEW.prepared?.input.grades || []).find((item) => String(item.grade) === key)?.classes || 0;
+    const groups = { ...(settings.staggerGroups || {}) };
+    if (!text) delete groups[key];
+    else if (!timetableStaggerGroups(text, key, total)) return fail(`${key}학년 반 묶음은 '1-6/7-11'처럼 겹치지 않는 묶음 둘 이상으로 적어 주세요(1~${total}반).`);
+    else groups[key] = text;
+    if (Object.keys(groups).length) settings.staggerGroups = groups; else delete settings.staggerGroups;
+    return `${key}학년 반 묶음 → ${text || "앞·뒤 절반"}`;
   }
   if (name === "double") {
     const subject = key;

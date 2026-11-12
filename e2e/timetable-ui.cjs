@@ -72,6 +72,12 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await page.screenshot({ path: path.join(OUT, "02-rule-change.png"), fullPage: true });
   await panel.locator("#timetableRulesReset").click(); await sleep(400);
   check((await issues()).some((item) => /^음악:/.test(item.text)) && /새로 생김/.test(clean(await change.innerText())), "규칙을 기본값으로 → 음악 항목이 다시 생김('새로 생김')");
+  // 반군 엇갈림 견적(읽기 전용): '반 묶음을 나눠 블록 일부를 엇갈리게' 선택지에 6단계 분반 결과로 어림한 숫자
+  const staggerNotes = await panel.locator('#timetablePrecheck [data-tt-choice-row="stagger"] [data-tt-stagger]').evaluateAll((els) => els.map((el) => ({ grade: el.dataset.ttStagger, text: el.textContent.replace(/\s+/g, " ").trim(),
+    plans: [...el.querySelectorAll("[data-k]")].map((plan) => ({ k: Number(plan.dataset.k), extra: Number(plan.dataset.extra), small: Number(plan.dataset.small) })) })));
+  report.checks.stagger = staggerNotes;
+  check(staggerNotes.length >= 1 && staggerNotes.every((note) => note.plans.length >= 1 && note.plans.every((plan) => plan.extra >= 0) && /반 묶음 \d+~\d+반 \/ \d+~\d+반/.test(note.text) && /블록 1개 엇갈림 → 분반 \+\d+/.test(note.text)),
+    `반군 엇갈림 견적: ${staggerNotes[0]?.text.slice(0, 150)}`, staggerNotes);
   // 2시간 연속 수업을 허용할 과목(과목별)
   const doubleRow = panel.locator('[data-tt-rule="doubleSubjects"]');
   await doubleRow.locator("details.tt-double > summary").click(); await sleep(200);
