@@ -973,6 +973,8 @@ function computeHoursStats(year = hoursTargetYear()) {
         // 교차집중 학급 수가 과목 수로 나눠지지 않으면 1반 더 받을 과목(1단계 교차집중 팝업)도 근거다.
         item.planClasses = total;
         item.crossPick = Boolean(entry.crossed && entry.names > 1 && Number(entry.crossSemesters) > 1 && total % entry.names);
+        // 반 일부만 듣는 과목(교차집중·분할 편성)의 묶음: 같은 편제표 행의 과목끼리 반을 나눈다(7단계 시간표가 반 배정에 씀).
+        if (entry.names > 1) item.split = { row: entry.rowIndex, names: Number(entry.names), index: Number(entry.nameIndex) || 0, crossed: Boolean(entry.crossed && Number(entry.crossSemesters) > 1) };
         item.basis = entry.names > 1
           ? entry.crossed
             ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`

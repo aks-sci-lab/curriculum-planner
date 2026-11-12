@@ -1723,6 +1723,8 @@ async function stepTimetable({ page, h, report }) {
     const nav = page.locator(STEP6.nav).first();
     const label = (await nav.count()) ? String(await nav.textContent()).trim() : "";
     if (!label || /보류/.test(label)) return { skipped: true, reason: `6단계 미연결(메뉴: ${label || "없음"})` };
+    // 내부 단계 6 자리는 이제 '7. 시간표'(조건 설정·사전 점검)다. 클릭 확인은 e2e/timetable-ui.cjs·timetable-input-check.cjs가 따로 한다.
+    if (/시간표/.test(label)) return { skipped: true, reason: `7단계 시간표는 e2e/timetable-ui.cjs로 확인(메뉴: ${label})` };
     report.timings.step6Enter = await gotoStep(page, 6);
     const panelText = await text(page, STEP6.panel);
     if (/준비 중/.test(panelText)) return { skipped: true, reason: "6단계 화면이 '준비 중'" };

@@ -175,3 +175,77 @@ test("시간표 조건(state.timetable.settings)이 있으면 그 값을 쓰고 
   const causes = plain(ctx.timetablePrecheckFor("1", "1")).issues.filter((issue) => issue.id === "P10").map((issue) => issue.cause);
   assert.ok(causes.some((cause) => /확대학급/.test(cause)) && causes.some((cause) => /2학년 심화 영어: 개설 학기/.test(cause)) && causes.some((cause) => /분반 편성 입력이 바뀌었습니다/.test(cause)));
 });
+
+test("반 일부만 듣는 과목(교차집중·분할 편성)의 반 배정: 기본은 앞 반부터, 받은 값은 반 수가 편제표와 같을 때만, 교차집중은 다른 학기에 맞바꿈", () => {
+  const ctx = world();
+  const split = (index, crossed = true) => ({ row: 7, names: 2, index, crossed });
+  const items = [item("2", "1", "미술", 2, 5, { split: split(0) }), item("2", "1", "연극", 2, 6, { split: split(1) }), item("2", "2", "미술", 2, 6, { split: split(0) }), item("2", "2", "연극", 2, 5, { split: split(1) }),
+    item("2", "1", "문학", 4, 11), item("3", "1", "음악 감상", 2, 4, { split: { row: 3, names: 3, index: 0, crossed: false } }), item("3", "1", "미술 감상", 2, 4, { split: { row: 3, names: 3, index: 1, crossed: false } }), item("3", "1", "연극 감상", 2, 3, { split: { row: 3, names: 3, index: 2, crossed: false } })];
+  const groups = plain(ctx.timetableSplitGroups(items));
+  assert.deepEqual(groups.map((group) => [group.key, group.label, group.crossed, group.members.map((member) => [member.subject, member.counts])]), [
+    ["2|미술↔연극", "2학년 미술 ↔ 연극(교차집중)", true, [["미술", { 1: 5, 2: 6 }], ["연극", { 1: 6, 2: 5 }]]],
+    ["3|음악 감상↔미술 감상↔연극 감상", "3학년 음악 감상 · 미술 감상 · 연극 감상(분할 편성)", false, [["음악 감상", { 1: 4, 2: 0 }], ["미술 감상", { 1: 4, 2: 0 }], ["연극 감상", { 1: 3, 2: 0 }]]]]);
+  const range = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => String(from + index));
+  // 기본: 앞 반부터, 2학기는 맞바꿈(1학기에 미술을 들은 반은 2학기에 연극)
+  const basic = plain(ctx.timetableSplitPlan(groups[0], 11));
+  assert.deepEqual([basic.base, basic.source, basic.errors, basic.classes], ["1", "default", [], { 1: { 미술: range(1, 5), 연극: range(6, 11) }, 2: { 미술: range(6, 11), 연극: range(1, 5) } }]);
+  // 받은 값: 한 과목만 적으면 남는 반이 다른 과목, 범위(7-11)·'반' 글자 허용
+  const saved = plain(ctx.timetableSplitPlan(groups[0], 11, { 미술: "7-11" }));
+  assert.deepEqual([saved.source, saved.classes[1], saved.classes[2]], ["saved", { 미술: range(7, 11), 연극: range(1, 6) }, { 미술: range(1, 6), 연극: range(7, 11) }]);
+  assert.deepEqual(plain(ctx.timetableSplitPlan(groups[0], 11, { 미술: "11반, 1 3 5 7" })).classes[1].미술, ["1", "3", "5", "7", "11"]);
+  // 반 수가 편제표 × 학급 수(1단계 교차집중 1반 더 받을 과목)와 다르면 쓰지 않는다
+  for (const [text, pattern] of [["1,2", /미술: 1학기 5반이어야 합니다\(지금 2반\)/], ["1,2,3,4,12", /반 번호를 1~11 사이 숫자로/], ["가,나", /반 번호를 1~11 사이 숫자로/]]) {
+    const bad = plain(ctx.timetableSplitPlan(groups[0], 11, { 미술: text }));
+    assert.equal(bad.source, "default");
+    assert.match(bad.errors[0], pattern);
+    assert.deepEqual(bad.classes[1].미술, range(1, 5));
+  }
+  assert.match(plain(ctx.timetableSplitPlan(groups[0], 11, { 미술: "1-5", 연극: "5-10" })).errors[0], /연극: 다른 과목과 겹치는 반/);
+  // 분할 편성(세 과목): 적지 않은 과목은 남는 반을 차례로
+  const three = plain(ctx.timetableSplitPlan(groups[1], 11, { "연극 감상": "1,2,3" }));
+  assert.deepEqual(three.classes, { 1: { "연극 감상": ["1", "2", "3"], "음악 감상": range(4, 7), "미술 감상": range(8, 11) } });
+});
+
+test("교차집중 반 배정이 시간표 입력에 들어간다: 조건에서 받으면 가정이 사라지고, 틀린 값은 경고", () => {
+  const split = (index) => ({ row: 7, names: 2, index, crossed: true });
+  const items = [item("2", "1", "미술", 2, 1, { department: "미술", split: split(0) }), item("2", "1", "연극", 2, 2, { department: "미술", split: split(1) }),
+    item("2", "2", "미술", 2, 2, { department: "미술", split: split(0) }), item("2", "2", "연극", 2, 1, { department: "미술", split: split(1) })];
+  const classesOf = (ctx, semester) => Object.fromEntries(plain(ctx.timetableInput("1", semester)).input.lessons.map((lesson) => [lesson.subject, lesson.classes]));
+  const basic = world({ stats: { items }, groups: [] });
+  assert.deepEqual([classesOf(basic, "1"), classesOf(basic, "2")], [{ 미술: ["1"], 연극: ["2", "3"] }, { 미술: ["2", "3"], 연극: ["1"] }]);
+  assert.ok(plain(basic.timetableInput("1", "1")).assumptions.some((entry) => entry.key === "partial:2"));
+  const chosen = world({ stats: { items }, groups: [], timetable: { settings: { splitClasses: { "2|미술↔연극": { 미술: "3" } } } } });
+  assert.deepEqual([classesOf(chosen, "1"), classesOf(chosen, "2")], [{ 미술: ["3"], 연극: ["1", "2"] }, { 미술: ["1", "2"], 연극: ["3"] }]);
+  const prepared = plain(chosen.timetableInput("1", "2"));
+  assert.ok(!prepared.assumptions.some((entry) => entry.key === "partial:2"));
+  assert.deepEqual(prepared.splits, [{ key: "2|미술↔연극", label: "2학년 미술 ↔ 연극(교차집중)", grade: "2", crossed: true, base: "1", source: "saved", errors: [],
+    members: [{ subject: "미술", count: 1, classes: ["3"], here: ["1", "2"] }, { subject: "연극", count: 2, classes: ["1", "2"], here: ["3"] }] }]);
+  const wrong = world({ stats: { items }, groups: [], timetable: { settings: { splitClasses: { "2|미술↔연극": { 미술: "1,2" } } } } });
+  assert.match(plain(wrong.timetableInput("1", "1")).input.missing[0].cause, /^2학년 미술 ↔ 연극\(교차집중\) 반 배정: 미술: 1학기 1반이어야 합니다\(지금 2반\).* 앞 반부터 차례로 계산했습니다\.$/);
+  // 체육 장소 수를 넣으면 체육 교과 수업에 장소가 붙는다(장소 겹침 점검 대상)
+  const venue = world({ timetable: { settings: { venues: { 체육: 2 } } } });
+  assert.equal(plain(venue.timetableInput("1", "1")).input.lessons.find((lesson) => lesson.subject === "체육").venue, "체육");
+});
+
+test("조건을 바꾸기 전·후 사전 점검 비교(풀림·달라짐·새로 생김), 저장 복원", () => {
+  const ctx = world();
+  const issue = (id, level, cause) => ({ id, level, cause });
+  const before = [issue("P2", "fail", "음악: 교사 2명 × 22 = 44시간 < 이번 학기 수업 45시간(1시간 초과)."), issue("P6", "fail", "3학년: 반 수업 칸 13개(주 35칸 − 블록 20 − 창체 2)에 11반이 … 최대 56시간만 들어갑니다."),
+    issue("P1", "info", "1학년: 주간 수업 32시간 < 주 35칸")];
+  const after = [issue("P6", "fail", "3학년: 반 수업 칸 13개(주 35칸 − 블록 20 − 창체 2)에 11반이 … 최대 60시간만 들어갑니다."), issue("P10", "warn", "현1 → 2학년 1학기: 분반 편성 입력이 바뀌었습니다."), issue("P1", "info", "1학년: 달라진 참고")];
+  const changes = plain(ctx.timetableIssueChanges(before, after));
+  assert.deepEqual([changes.resolved.map((entry) => entry.id), changes.changed.map((entry) => [entry.after.id, /56시간/.test(entry.before), /60시간/.test(entry.after.cause)]), changes.added.map((entry) => entry.id)], [["P2"], [["P6", true, true]], ["P10"]]);
+  assert.deepEqual(plain(ctx.timetableIssueChanges(before, before)), { resolved: [], added: [], changed: [] });
+  // 저장 복원: 조건(settings)과 차수별 값만, 그 밖은 버림(예전 백업은 빈 객체)
+  assert.deepEqual(plain(ctx.timetableRestore({ settings: { rules: { maxHours: 20 } }, 1: { 1: {} }, junk: 3, 2: "x" })), { settings: { rules: { maxHours: 20 } }, 1: { 1: {} } });
+  assert.deepEqual([plain(ctx.timetableRestore(undefined)), plain(ctx.timetableRestore([1]))], [{}, {}]);
+  // 앱 연결: 기본값·작업 자료(백업·저장소)·복원·전체 초기화·단계 그리기
+  const app = read("app.js");
+  assert.match(app, /classSections: \{\},\n\s+timetable: \{\},/);
+  assert.match(app, /timetable: state\.timetable,/);
+  assert.match(app, /state\.timetable = typeof timetableRestore === "function" \? timetableRestore\(saved\.timetable\)/);
+  assert.match(app, /state\.applicationRosters = \{\};\n\s+state\.timetable = \{\};/);
+  assert.match(app, /if \(step === 6 && typeof renderTimetable === "function"\) renderTimetable\(\);/);
+  const view = read("timetable-view.js");
+  assert.match(view, /deferRenderUntilStepVisible\(6, "renderTimetable", renderTimetable\)\) return;\n  if \(typeof preserveViewDuring === "function"\) return preserveViewDuring\(\["#workflowStep6Panel"\], renderTimetableView\);/);
+});

@@ -51,6 +51,7 @@
       courseSemesterPicks: {},
       hoursStats: {},
       classSections: {},
+      timetable: {},
       applicationRosters: {},
       courseChecks: {},
       curriculumCompliance: {},
@@ -456,6 +457,7 @@
           courseSemesterPicks: state.courseSemesterPicks,
           hoursStats: state.hoursStats,
           classSections: state.classSections,
+          timetable: state.timetable,
           applicationRosters: state.applicationRosters,
           courseChecks: state.courseChecks,
           curriculumCompliance: state.curriculumCompliance,
@@ -1273,7 +1275,7 @@
         badge.textContent = entry[1];
       }
       const step = Number(state.workflowStep);
-      if (step === 5 || step === 6) $("#workflowDeferred").open = true;
+      if (step === 5) $("#workflowDeferred").open = true;
     }
 
     function renderWorkflowLayout() {
@@ -1310,6 +1312,7 @@
       }
       if (step === 7 && typeof renderHoursStats === "function") renderHoursStats();
       if (step === 8 && typeof renderClassSections === "function") renderClassSections();
+      if (step === 6 && typeof renderTimetable === "function") renderTimetable();
       // 3단계에 들어오면 목록의 첫 학생 확인서를 바로 보여 준다(이미 고른 학생이 목록에 있으면 그대로).
       if (step === 3 && typeof showFirstVisibleStudent === "function") showFirstVisibleStudent();
       // 안 보일 때 미뤄 둔 이 단계의 그리기(view-keep.js). 위에서 직접 그린 것은 이미 빠져 있다.
@@ -1336,9 +1339,9 @@
       schedule(next);
     }
 
-    // 내부 단계 번호 5·6(이동수업 과목 분류·시간표)은 보류 중이고 시수 통계는 7번, 분반 편성(표시 6단계)은 8번으로 저장한다.
+    // 내부 단계 번호 5(이동수업 과목 분류)는 보류 중이고 시수 통계는 7번, 분반 편성(표시 6단계)은 8번, 시간표(표시 7단계)는 6번으로 저장한다.
     function workflowStepLabel(step) {
-      return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 8: "6단계", 5: "보류 · 이동수업", 6: "보류 · 시간표" })[Number(step)] || "1단계";
+      return ({ 1: "1단계", 2: "2단계", 3: "3단계", 4: "4단계", 7: "5단계", 8: "6단계", 6: "7단계", 5: "보류 · 이동수업" })[Number(step)] || "1단계";
     }
 
     function switchWorkflowStep(step, skipPersist = false) {
@@ -1383,8 +1386,8 @@
         `<option value="${round}">${round}차</option>`).join("");
       if (selector.innerHTML !== options) selector.innerHTML = options;
       selector.value = state.currentRound;
-      // 맨 위 '결과 차수' 하나가 2~6단계 모든 화면의 기준이다(5단계 시수(7)·6단계 분반(8)도 이 차수). 편제표(1)·보류 단계(6)에서만 잠근다.
-      selector.disabled = step === 1 || step === 6;
+      // 맨 위 '결과 차수' 하나가 2~6단계 모든 화면의 기준이다(5단계 시수(7)·6단계 분반(8)·7단계 시간표(6)도 이 차수). 편제표(1)에서만 잠근다.
+      selector.disabled = step === 1;
       const hasPlan = !!state.curriculumImportedLayout || !!state.curriculumPlan.length;
       const message = $("#workflowReadinessMessage");
       const action = $("#workflowNextAction");
@@ -1440,6 +1443,10 @@
         message.textContent = `${state.currentRound}차 결과가 확정되었습니다. 5단계에서 내년도 교과별 시수 통계를 작성하세요.`;
         action.textContent = "시수 통계로";
         action.dataset.nextStep = "7";
+      } else if (step === 6) {
+        message.textContent = "7단계는 5단계 시수와 6단계 분반 결과로 시간표 조건을 정하고, 계산 전에 걸리는 곳을 미리 점검합니다. 맨 위 '결과 차수' 기준입니다.";
+        action.textContent = "6단계 분반 편성으로";
+        action.dataset.nextStep = "8";
       } else if (step === 8 && state.students.length) {
         // 6단계는 자기 화면의 '차수'에서 고른 결과로 편성한다(4단계 문구를 쓰지 않는다).
         message.textContent = "6단계는 4단계에서 정한 개설 과목·분반 수로 분반을 편성합니다. 맨 위 '결과 차수'의 결과 기준이며, 확정 전 차수로 만든 편성은 시안입니다.";
@@ -1669,6 +1676,7 @@
       state.hoursStats = {};
       state.classSections = {};
       state.applicationRosters = {};
+      state.timetable = {};
       state.courseChecks = {};
       state.curriculumCompliance = {};
       state.curriculumVersions = {};
@@ -1796,6 +1804,9 @@
         // 6단계 분반 편성(예전 저장분·백업에는 없음 → 빈 객체). 정리는 class-sections-view.js가 한다.
         state.classSections = typeof classSectionsRestore === "function" ? classSectionsRestore(saved.classSections)
           : plainObject(saved.classSections) ? saved.classSections : {};
+        // 7단계 시간표 조건(예전 저장분·백업에는 없음 → 빈 객체). 정리는 timetable-view.js가 한다.
+        state.timetable = typeof timetableRestore === "function" ? timetableRestore(saved.timetable)
+          : plainObject(saved.timetable) ? saved.timetable : {};
         // 웹 신청 명렬(현 학년 전체, 이 PC에만). 예전 저장분·백업에는 없음 → 빈 객체.
         state.applicationRosters = typeof applicationRostersRestore === "function" ? applicationRostersRestore(saved.applicationRosters) : {};
         // 예전 저장분(백업 포함)의 학생 점검 쪽 교과(군) 필수 학점(courseChecks.required)은 편제 점검 기준 설정으로 한 번 옮긴다.

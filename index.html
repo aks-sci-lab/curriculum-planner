@@ -95,10 +95,10 @@
           <button class="workflow-step-button" type="button" data-workflow-step="4">4. 집계·개설 확정</button>
           <button class="workflow-step-button" type="button" data-workflow-step="7">5. 교과별 시수 통계</button>
           <button class="workflow-step-button" type="button" data-workflow-step="8">6. 분반 편성</button>
+          <button class="workflow-step-button" type="button" data-workflow-step="6">7. 시간표</button>
           <details class="workflow-deferred" id="workflowDeferred">
-            <summary>보류 단계 2개 · 업무 파악 후 진행</summary>
+            <summary>보류 단계 1개 · 업무 파악 후 진행</summary>
             <button class="workflow-step-button is-deferred" type="button" data-workflow-step="5">이동수업 과목 분류 (보류)</button>
-            <button class="workflow-step-button is-deferred" type="button" data-workflow-step="6">시간표 작성 (보류)</button>
           </details>
         </div>
       </section>
@@ -376,9 +376,18 @@
         </section>
         </div>
       </section>
-      <section class="workflow-placeholder hidden" id="workflowStep6Panel">
-        <h3>시간표 작성 · 준비 중</h3>
-        <p>아직 시간표 자동 편성 기능은 제공하지 않습니다. 이동수업 분반·블록 편성은 ‘6. 분반 편성’에서 합니다.</p>
+      <section class="workflow-step-panel hidden" id="workflowStep6Panel" aria-labelledby="timetableTitle">
+        <div class="hours-heading">
+          <div>
+            <h3 id="timetableTitle">7단계 · 시간표 <span class="count-pill" id="timetableRoundBadge"></span></h3>
+            <p class="note">5단계 시수와 6단계 분반 결과로 시간표 조건을 정하고, 계산 전에 걸리는 곳(원인과 고칠 곳)을 미리 점검합니다. 조건을 바꾸면 점검이 바로 다시 돕니다. 시간표 계산(편성)은 준비 중입니다.</p>
+          </div>
+          <div class="hours-toolbar" id="timetableSemesterTabs" role="group" aria-label="학기">
+            <button class="button" type="button" data-tt-semester="1" aria-pressed="true">1학기</button>
+            <button class="button" type="button" data-tt-semester="2" aria-pressed="false">2학기</button>
+          </div>
+        </div>
+        <div id="timetableBody"></div>
       </section>
 
       <section id="certificatePanel" class="hidden">

@@ -2313,6 +2313,47 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-note { color:var(--muted); font-size:11px; }
     .cs-note.is-warn { color:#a44939; font-weight:700; }
     .cs-card { margin:12px 0; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+    /* 7단계 시간표: 조건 설정·사전 점검 */
+    .tt-verdict { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; margin:10px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:#f3f8f4; color:#1f6a45; font-size:14px; }
+    .tt-verdict[data-state="fail"] { background:#fff6e6; border-color:#f0d49a; color:#8a5a00; }
+    .tt-verdict[data-state="block"] { background:#fdecea; border-color:#f1c1ba; color:#a44939; }
+    .tt-change { margin:10px 0; padding:10px 14px; border:1px solid #c9d8f7; border-radius:10px; background:#f4f7ff; font-size:13px; }
+    .tt-change h4 { margin:0 0 6px; font-size:13px; }
+    .tt-change ul { margin:4px 0 8px; padding-left:18px; }
+    .tt-change [data-kind="resolved"] strong { color:#1f6a45; }
+    .tt-change [data-kind="added"] strong { color:#a44939; }
+    .tt-change [data-kind="changed"] strong { color:#8a5a00; }
+    .tt-section { border-top:1px solid var(--line); padding:8px 0; }
+    .tt-section > summary { cursor:pointer; font-size:13px; padding:4px 0; }
+    .tt-section-body { padding:6px 0 2px; }
+    .tt-row { display:grid; grid-template-columns:minmax(120px, 200px) 1fr; gap:6px 14px; align-items:start; padding:6px 0; font-size:13px; }
+    .tt-row + .tt-row { border-top:1px dashed #e6eaf2; }
+    .tt-label { font-weight:700; color:#33415c; }
+    .tt-fields { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; }
+    .tt-fields label { display:inline-flex; align-items:center; gap:5px; }
+    .tt-fields .cs-text { min-width:150px; }
+    .tt-sub { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; color:#526078; }
+    .tt-presets { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
+    .tt-presets .button[aria-pressed="true"], #timetableSemesterTabs .button[aria-pressed="true"] { background:var(--blue); border-color:var(--blue); color:#fff; }
+    .tt-status { min-height:0; margin:0 0 4px; font-size:12px; color:#526078; }
+    .tt-status.is-error { color:#a44939; font-weight:700; }
+    .tt-issues { list-style:none; margin:0; padding:0; }
+    .tt-issue { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; padding:8px 0; border-top:1px solid #edf0f6; font-size:13px; line-height:1.5; }
+    .tt-issue:first-child { border-top:0; }
+    .tt-level { align-self:start; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; background:#eef2f9; color:#5d6a82; }
+    .tt-level[data-level="block"] { background:#fde8e4; color:#a44939; }
+    .tt-level[data-level="fail"] { background:#fff0d2; color:#8a5a00; }
+    .tt-level[data-level="warn"] { background:#eef2f9; color:#33415c; }
+    .tt-where { grid-column:2; display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:#6a768c; font-size:12px; }
+    .tt-goto { padding:2px 8px; border:1px solid #c9d3e6; border-radius:999px; background:#fff; color:var(--blue); font-size:12px; cursor:pointer; }
+    .tt-goto:hover { background:#eef3ff; }
+    .tt-info { margin-top:8px; font-size:12px; }
+    .tt-table { border-collapse:collapse; font-size:13px; }
+    .tt-table th, .tt-table td { padding:5px 10px; border:1px solid var(--line); text-align:center; }
+    .tt-table thead th { background:#f5f7fb; font-size:12px; }
+    .tt-teachers { margin:6px 0; padding-left:18px; font-size:13px; }
+    .tt-teachers li { margin:3px 0; }
+    @media (max-width: 720px) { .tt-row { grid-template-columns:1fr; } }
     .cs-card h4 { margin:0 0 10px; font-size:14px; }
     .cs-card h5 { margin:12px 0 6px; font-size:12px; }
     .cs-fields { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; margin:8px 0; font-size:12px; }

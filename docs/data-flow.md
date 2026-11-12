@@ -99,17 +99,17 @@
 - 하지 않는 것(사용자 결정): 고른 학기로 택n 개수를 검사하는 기능(잘못 고르면 4단계 학년별 총 학급수 불일치로 드러남), 레이블 하나 과목을 두 학기로 나눠 여는 경우(그때는 편제표를 고침).
 
 ## 7단계 시간표(구현 중)
-설계 `docs/timetable-design.md`. 지금 있는 것: 순수 계산 `timetable.js`(입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck`)와 자료 모으기 `timetable-view.js` `timetableInput(차수, 학기)`(화면·저장 없음). **같은 값을 시간표에서 다시 입력받지 않는다.**
+설계 `docs/timetable-design.md`. 지금 있는 것: 순수 계산 `timetable.js`(입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck`), 자료 모으기 `timetable-view.js` `timetableInput(차수, 학기)`, 화면(메뉴 '7. 시간표' = 내부 단계 6: 조건 설정 + 사전 점검 결과). 시간표 계산·결과 저장은 아직 없다. **같은 값을 시간표에서 다시 입력받지 않는다.**
 
 | 시간표 입력 | 출처(읽기만) | 맞추는 기준 | 없을 때 |
 |---|---|---|---|
 | 학년·반 수 | 5단계 `stats.classCounts`(= 4단계 내년 학급 수) | 내년 학년 | 계산 막음(P0) |
 | 반 수업(학교 지정 과목) | 5단계 `computeHoursStats` 항목(그 학기, `designated`) — 반 수는 편제표 값 `autoClasses`(확대학급은 넣지 않고 알림) | 과목명·담당 교과 `item.department` | 신입생 편제표가 없으면 올해 1학년 편제표의 1학년 과목(가정) |
-| 반 일부만 듣는 지정 과목(교차집중·분할 편성) | 같은 항목의 반 수 | 앞 반부터 차례로 | 가정(실제 반 배정 자료 없음) |
+| 반 일부만 듣는 지정 과목(교차집중·분할 편성) | 반 수 = 5단계 항목(`autoClasses`, 1단계 `crossSplit` 반영) · 묶음 = `item.split`(같은 편제표 행) · 어느 반인지 = `state.timetable.settings.splitClasses[학년|과목↔과목]` | 반 수가 편제표와 같을 때만 씀, 교차집중은 다른 학기에 맞바꿈 | 앞 반부터 차례로(가정) |
 | 공통 과목 반별 담당(통합과학 조각) | 5단계 `hoursCommonClassAssignment(학년, 학기)` | 과목 → 반 → 교과별 시간 | 교과군 세부 교과 교사 모두 후보(가정) |
 | 이동수업 블록·분반·분반 교사·특별실 | 6단계 `sectionResult`(그룹 = 현학년:학기:택n), 블록 시간은 지금 6단계 입력 칸 `blockTimes` | 분반 id, 과목 키 | 계산 막음(P0), 입력이 바뀌었으면 알림 |
 | 학급 단위 과목(반 → 과목) | 6단계 `classSectionsClassUnitPlan` | 내년 반 번호 | 내년 반 배정표가 없으면 6단계 자동 배정(가정) |
-| 교사(담당 교과·과목·불가 시간) | 6단계 `settings.teachers` | 교사 id | 5단계 교과별 교사 수로 자리 교사(가정) |
+| 교사(담당 교과·과목·불가 시간·출근 요일 `days`·상한 `maxHours`) | 6단계 `settings.teachers` — **시간표 화면의 '교사 추가(증원·순회·강사)'도 이 명단에 더한다**(`addedIn: "timetable"`) | 교사 id | 5단계 교과별 교사 수로 자리 교사(가정) |
 | 요일·교시 격자, 전교 고정 시간 | 6단계 `gridDays`·`gridPeriods`·`fixedSlots`('창체' 이름은 전교 동시 창체로) | — | 월~금 7교시 |
 | 창체 시수 | 5단계 `creativeHours`(자율 + 진로) | 학년 공통 | 0 |
 | 요일별 교시 수·점심·창체 나눔·담임·규칙·장소 | `state.timetable.settings`(시간표에만 있는 조건) | — | 기본값 + '가정' 목록 |
