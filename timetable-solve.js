@@ -533,6 +533,21 @@ function timetableTryMove(state, rng, temperature) {
   const undo = () => { for (let i = ops.length - 1; i >= 0; i -= 1) { const [act, k, from, to] = ops[i]; if (to >= 0) timetableMark(state, act, k, to, -1, false); if (from >= 0) timetableMark(state, act, k, from, 1, false); } };
   const lift = (act, s) => { const k = state.slotOf[act.index].indexOf(s); timetableMark(state, act, k, s, -1, state.bare[act.index][k] === 1); ops.push([act, k, s, -1]); return k; };
   const drop = (act, k, s) => { if (!timetableCanPlace(state, act, s, false)) return false; timetableMark(state, act, k, s, 1, false); ops.push([act, k, -1, s]); return true; };
+  // '반드시' 위반이 있는 반·요일, 교사·요일 목록(1000번 움직일 때마다 다시 만든다) — 겨냥 이동이 여기서 고른다
+  state.moves = (state.moves || 0) + 1;
+  if (!state.hot || state.moves - state.hot.at >= 1000) {
+    const hotC = [];
+    const hotT = [];
+    for (let layer = 0; layer < P.L; layer += 1) {
+      const classCost = state.classCost[layer];
+      const teacherCost = state.teacherCost[layer];
+      for (let i = 0; i < P.C * P.D; i += 1) if (classCost[i] >= 1000) hotC.push(layer, (i - (i % P.D)) / P.D, i % P.D);
+      for (let i = 0; i < P.T * P.D; i += 1) if (teacherCost[i] >= 1000) hotT.push(layer, (i - (i % P.D)) / P.D, i % P.D);
+    }
+    state.hot = { at: state.moves, hotC, hotT };
+  }
+  const hot = state.hot;
+  const pickHot = (list) => { const i = 3 * Math.floor(rng() * (list.length / 3)); return [list[i], list[i + 1], list[i + 2]]; };
   const roll = rng();
   let unplacedDelta = 0;
   if (roll >= 0.94) return timetableTrySwapTeachers(state, rng, temperature);
@@ -556,11 +571,26 @@ function timetableTryMove(state, rng, temperature) {
     // 이동 3
     const sync = P.syncMovable || (P.syncMovable = P.acts.filter((act) => act.kind !== 0 && !act.fixedSlots));
     if (!sync.length) return false;
-    const act = sync[Math.floor(rng() * sync.length)];
-    const k = Math.floor(rng() * act.hours);
+    let act = sync[Math.floor(rng() * sync.length)];
+    let k = Math.floor(rng() * act.hours);
+    if (hot.hotT.length && rng() < 0.5) {
+      // 교사 위반(점심·연강·하루 최대)을 겨냥: 그 교사가 그날 들어가는 블록 한 시간(점심 칸 쪽을 먼저)
+      const [layer, ti, d] = pickHot(hot.hotT);
+      const pos = P.lunchPositions.length && rng() < 0.6 ? P.lunchPositions[Math.floor(rng() * P.lunchPositions.length)] : Math.floor(rng() * P.positions);
+      const abs = d * P.positions + pos;
+      const a = state.tAt[layer][ti * P.ABS + abs];
+      if (a !== -1 && P.acts[a].kind === 1 && !P.acts[a].fixedSlots) {
+        const found = P.acts[a];
+        const slots = state.slotOf[a];
+        for (let i = 0; i < slots.length; i += 1) if (slots[i] >= 0 && P.absOf[found.gi][slots[i]] === abs) { act = found; k = i; break; }
+      }
+    }
     const from = state.slotOf[act.index][k];
-    const to = Math.floor(rng() * P.S);
-    if (from < 0 || from === to) return false;
+    if (from < 0) return false;
+    // 절반은 같은 날 안에서 옮긴다(빈틈없이 놓인 블록을 흩지 않고 순서만 바꿔 교사 연강·점심을 고친다)
+    const sameDay = P.slotsByDay[P.slotDay[from]];
+    const to = rng() < 0.5 ? sameDay[Math.floor(rng() * sameDay.length)] : Math.floor(rng() * P.S);
+    if (from === to) return false;
     const riders = new Set();
     let partner = -1; // 그 칸에 같은 반들의 다른 블록·창체가 있으면 둘이 자리를 맞바꾼다
     for (let layer = 0; layer < P.L; layer += 1) for (const ci of act.classes) {
@@ -590,10 +620,12 @@ function timetableTryMove(state, rng, temperature) {
     let s2 = -1;
     if (rng() < 0.5) {
       for (let attempt = 0; attempt < 4; attempt += 1) {
-        const layer = Math.floor(rng() * P.L);
-        const d = Math.floor(rng() * P.D);
-        if (rng() < 0.75) {
-          const c = Math.floor(rng() * P.C);
+        let layer = Math.floor(rng() * P.L);
+        let d = Math.floor(rng() * P.D);
+        const classSide = hot.hotC.length ? !hot.hotT.length || rng() < 0.6 : hot.hotT.length ? false : rng() < 0.75;
+        if (classSide) {
+          let c = Math.floor(rng() * P.C);
+          if (hot.hotC.length) [layer, c, d] = pickHot(hot.hotC);
           if (!state.classCost[layer][c * P.D + d]) continue;
           const slots = P.slotsByDay[d];
           const grid = state.grid[layer];
@@ -610,12 +642,17 @@ function timetableTryMove(state, rng, temperature) {
           } else s1 = slots[Math.floor(rng() * slots.length)];
           break;
         }
-        const ti = Math.floor(rng() * P.T);
+        let ti = Math.floor(rng() * P.T);
+        if (hot.hotT.length) [layer, ti, d] = pickHot(hot.hotT);
         if (!state.teacherCost[layer][ti * P.D + d]) continue;
-        const a = state.tAt[layer][ti * P.ABS + d * P.positions + Math.floor(rng() * P.positions)];
+        // 그 교사가 그날 맡은 반 수업 하나(점심 칸 쪽을 먼저) → 다른 칸으로
+        const pos = P.lunchPositions.length && rng() < 0.5 ? P.lunchPositions[Math.floor(rng() * P.lunchPositions.length)] : Math.floor(rng() * P.positions);
+        const abs = d * P.positions + pos;
+        const a = state.tAt[layer][ti * P.ABS + abs];
         if (a === -1 || P.acts[a].kind !== 0) continue;
-        const s = state.slotOf[a][Math.floor(rng() * P.acts[a].hours)];
-        if (s < 0 || P.slotDay[s] !== d) continue;
+        let s = -1;
+        for (const slot of state.slotOf[a]) if (slot >= 0 && P.absOf[P.acts[a].gi][slot] === abs) s = slot;
+        if (s < 0) continue;
         ci = P.acts[a].classes[0]; s1 = s;
         break;
       }
