@@ -93,3 +93,37 @@ test("결과 표: 반 표(점심 줄·블록·창체·담당 교사 없음)와 �
   // 결과가 없는 학기는 빈 표
   assert.deepEqual(plain(ctx.timetableResultTables(input, null)).teachers, []);
 });
+
+test("시간표가 정한 블록 자리를 6단계에 적어 넣기: 다른 블록만, 입력 칸·결과 블록 시간·서명을 함께, 분반·배정은 그대로", () => {
+  const entries = {
+    "1:1:2-1 택2": { blockTimes: { a: "월1,화2,수3", b: "" }, sectionResult: { signature: "sig:월1,화2,수3|", assign: { "1-1-1": ["물리학#1"] },
+      blocks: [{ id: "a", letter: "a", times: ["월:1", "화:2", "수:3"], sectionIds: ["물리학#1"] }, { id: "b", letter: "b", times: [], sectionIds: ["화학#1"] }] } },
+    "1:2:2-2 택2": { blockTimes: {}, sectionResult: { signature: "예전 서명", blocks: [{ id: "a", letter: "a", times: ["목:5", "금:1"], sectionIds: [] }] } }
+  };
+  const persisted = [];
+  const ctx = vm.createContext({
+    state: { currentRound: "1", timetable: { 1: { at: "2026-11-12T00:00:00Z", signature: "x", result: { metrics: {}, layers: {
+      1: { lessons: {}, creative: [], blocks: { "1:1:2-1 택2|a": { slots: ["수3", "월1", "화2"] }, "1:1:2-1 택2|b": { slots: ["목4", "월2", "금1"] }, "없는 그룹|a": { slots: ["월1"] } } },
+      2: { lessons: {}, creative: [], blocks: { "1:2:2-2 택2|a": { slots: ["금1", "화5"] } } } } } } } },
+    classSectionsEntry: (round, key) => entries[key] || null,
+    classSectionsSource: () => ({ groups: [{ key: "1:1:2-1 택2" }, { key: "1:2:2-2 택2" }] }),
+    classSectionsBuildInput: (round, group, entry) => ({ times: `${entry.blockTimes.a || ""}|${entry.blockTimes.b || ""}` }),
+    classSectionsSignature: (input) => `sig:${input.times}`,
+    persistStateSoon: () => persisted.push(1)
+  });
+  for (const file of ["timetable.js", "timetable-solve.js", "timetable-view.js"]) vm.runInContext(read(file), ctx);
+  // 순서만 다른 a블록은 같은 것으로 보고, 비어 있던 b블록과 2학기 a블록만 다르다
+  assert.deepEqual(plain(ctx.timetableBlockTimeChanges("1")), [
+    { semester: "1", groupKey: "1:1:2-1 택2", letter: "b", before: "", after: "월2,목4,금1" },
+    { semester: "2", groupKey: "1:2:2-2 택2", letter: "a", before: "목5,금1", after: "화5,금1" }]);
+  assert.equal(ctx.timetableWriteBlockTimes("1"), 2);
+  assert.deepEqual([entries["1:1:2-1 택2"].blockTimes, plain(entries["1:1:2-1 택2"].sectionResult.blocks.map((block) => block.times))], [{ a: "월1,화2,수3", b: "월2,목4,금1" }, [["월:1", "화:2", "수:3"], ["월:2", "목:4", "금:1"]]]);
+  // 적기 전에 최신이던 결과는 서명을 새로 맞추고(6단계가 '입력 변경됨'이 되지 않음), 이미 어긋나 있던 결과의 서명은 건드리지 않는다
+  assert.equal(entries["1:1:2-1 택2"].sectionResult.signature, "sig:월1,화2,수3|월2,목4,금1");
+  assert.deepEqual([entries["1:2:2-2 택2"].blockTimes, plain(entries["1:2:2-2 택2"].sectionResult.blocks[0].times), entries["1:2:2-2 택2"].sectionResult.signature], [{ a: "화5,금1" }, ["화:5", "금:1"], "예전 서명"]);
+  // 분반·배정은 그대로, 저장 예약, 다시 보면 다른 블록 없음
+  assert.deepEqual(plain(entries["1:1:2-1 택2"].sectionResult.assign), { "1-1-1": ["물리학#1"] });
+  assert.equal(persisted.length, 1);
+  assert.deepEqual(plain(ctx.timetableBlockTimeChanges("1")), []);
+  assert.equal(ctx.timetableWriteBlockTimes("1"), 0);
+});

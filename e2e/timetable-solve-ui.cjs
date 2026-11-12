@@ -1,6 +1,7 @@
 // 7단계 시간표 계산 화면 확인(사용자처럼 클릭): 하네스 백업(가상 학생) 복원 → 메뉴 '7. 시간표'
 // ① '시간표 계산' → 진행 표시 → 결과 요약(반드시 위반·담당 교사 없음)·반 시간표·교사 시간표 ② 반·교사 고르기, 학기 탭
 // ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답
+// ④-2 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(6단계 결과는 '입력 변경됨'이 되지 않음)
 // ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '공강 먼저' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-solve-ui.cjs /tmp/tt-solve-ui /tmp/e2e/downloads/workspace-backup.json.gz
 const path = require("path"), fs = require("fs");
@@ -88,6 +89,29 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(new RegExp(`\\(${teacherFilled.length}시간\\)`).test(picked), `교사 고르기의 시수 = 표의 칸 수(${picked})`);
   await page.screenshot({ path: path.join(OUT, "03-teacher-grid.png"), fullPage: true });
   await panel.locator('[data-tt-view="class"]').click(); await sleep(200);
+
+  console.log("▶ 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기");
+  const staleSections = async () => page.evaluate(() => {
+    const round = String(state.currentRound);
+    return classSectionsSource(round).groups.filter((group) => { const entry = classSectionsEntry(round, group.key, false); return entry?.sectionResult && entry.sectionResult.signature !== classSectionsSignature(classSectionsBuildInput(round, group, entry)); }).map((group) => group.key);
+  });
+  const staleBefore = await staleSections();
+  const blockNote = panel.locator("#timetableBlockNote");
+  const differ = Number(await blockNote.getAttribute("data-count"));
+  check(differ > 0 && /6단계 블록 시간과 다른 블록 \d+개/.test(clean(await blockNote.innerText())), `블록 자리가 6단계 블록 시간과 다른 블록 ${differ}개 + '적어 넣기' 단추`, clean(await blockNote.innerText()));
+  await panel.locator("#timetableWriteBlockTimes").click();
+  await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 10000 });
+  await sleep(600);
+  check(new RegExp(`6단계 블록 시간 ${differ}개를 시간표의 블록 자리로 적어 넣었습니다`).test(clean(await panel.locator("#timetableRunStatus").innerText())), "적어 넣은 뒤 안내 문구");
+  check((await blockNote.getAttribute("data-count")) === "0" && /같습니다/.test(clean(await blockNote.innerText())), "적어 넣은 뒤: 6단계 블록 시간 = 시간표 블록 자리");
+  check((await bar.getAttribute("data-state")) === "done", "시간표 결과는 그대로 지금 조건의 결과(바뀌기 전 표시 없음)");
+  const staleAfter = await staleSections();
+  check(staleAfter.length === staleBefore.length, "6단계 분반 결과가 '입력 변경됨'이 되지 않음(서명 함께 갱신)", { staleBefore, staleAfter });
+  await page.getByRole("button", { name: /6\. 분반 편성/ }).click(); await sleep(1200);
+  const sixTimes = await page.locator("#workflowStep8Panel [data-cs-block-times]").evaluateAll((els) => els.map((el) => el.value));
+  check(sixTimes.length > 0 && sixTimes.every((value) => /^[월화수목금]\d(,[월화수목금]\d)*$/.test(value)), `6단계 화면의 블록 시간 칸에 시간표 값(${sixTimes.slice(0, 3).join(" / ")})`, sixTimes);
+  await page.screenshot({ path: path.join(OUT, "03b-six-block-times.png") });
+  await openStep();
 
   console.log("▶ 못 지킨 조건·담당 교사 없음·학기 탭");
   const noTeacher = await panel.locator("#timetableNoTeacher").count() ? await panel.locator("#timetableNoTeacher").evaluate((el) => ({ hours: Number(el.dataset.hours), items: [...el.querySelectorAll(".tt-cause")].map((n) => n.textContent.trim()) })) : { hours: 0, items: [] };

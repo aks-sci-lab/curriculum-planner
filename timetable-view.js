@@ -974,6 +974,55 @@ function timetableSaved(round = timetableRound()) {
   return saved && saved.result && saved.result.layers ? saved : null;
 }
 
+// 시간표 결과의 블록 자리와 6단계 블록 시간이 다른 블록(두 학기). 돌려주는 값: [{ semester, groupKey, letter, before, after }] (시간 글자 '월1,수2')
+function timetableBlockTimeChanges(round = timetableRound()) {
+  const saved = timetableSaved(round);
+  if (!saved || typeof classSectionsEntry !== "function") return [];
+  const order = (key) => "월화수목금토일".indexOf(key[0]) * 100 + Number(key.slice(1));
+  const text = (list) => list.map((key) => String(key).replace(/[:\s]/g, "")).filter(Boolean).sort((a, b) => order(a) - order(b)).join(",");
+  const changes = [];
+  for (const [semester, layer] of Object.entries(saved.result.layers || {})) for (const [id, item] of Object.entries(layer.blocks || {})) {
+    const cut = id.lastIndexOf("|");
+    if (cut < 0) continue;
+    const groupKey = id.slice(0, cut);
+    const letter = id.slice(cut + 1);
+    const entry = classSectionsEntry(round, groupKey, false);
+    const block = entry?.sectionResult?.blocks?.find((row) => (row.letter || row.id) === letter);
+    if (!block) continue;
+    const after = text(item.slots || []);
+    const typed = entry.blockTimes?.[letter];
+    const before = text(typed !== undefined && typed !== "" ? String(typed).split(/[,\s/]+/) : (block.times || []).map((time) => (typeof time === "string" ? time : `${time.day}${time.period}`)));
+    if (after && before !== after) changes.push({ semester, groupKey, letter, before, after });
+  }
+  return changes;
+}
+
+// 시간표가 정한 블록 자리를 6단계에 적어 넣는다: 블록 시간 입력 칸 + 저장된 분반 결과의 블록 시간 + (지금 결과가 최신이면) 결과 서명.
+// 분반·학생 배정·분반 교사는 건드리지 않는다. 돌려주는 값: 바꾼 블록 수.
+function timetableWriteBlockTimes(round = timetableRound()) {
+  const changes = timetableBlockTimeChanges(round);
+  const groups = typeof classSectionsSource === "function" ? classSectionsSource(round).groups || [] : [];
+  const sign = (group, entry) => (group && typeof classSectionsSignature === "function" && typeof classSectionsBuildInput === "function" ? classSectionsSignature(classSectionsBuildInput(round, group, entry)) : null);
+  const touched = new Map();
+  for (const change of changes) {
+    const entry = classSectionsEntry(round, change.groupKey, false);
+    if (!touched.has(change.groupKey)) {
+      const group = groups.find((item) => item.key === change.groupKey);
+      let fresh = false;
+      try { fresh = Boolean(group) && entry.sectionResult.signature === sign(group, entry); } catch { fresh = false; }
+      touched.set(change.groupKey, { entry, group, fresh });
+    }
+    if (!entry.blockTimes || typeof entry.blockTimes !== "object") entry.blockTimes = {};
+    entry.blockTimes[change.letter] = change.after;
+    const block = entry.sectionResult.blocks.find((row) => (row.letter || row.id) === change.letter);
+    block.times = change.after.split(",").filter(Boolean).map((key) => `${key[0]}:${key.slice(1)}`);
+  }
+  // 적기 전에 6단계 결과가 최신이었으면 적은 뒤에도 최신으로 둔다(블록 시간만 바뀌었고 그 자리는 시간표 검증을 통과한 값)
+  for (const { entry, group, fresh } of touched.values()) if (fresh) { try { entry.sectionResult.signature = sign(group, entry); } catch { /* 서명을 못 만들면 6단계가 '입력 변경됨'으로 알린다 */ } }
+  if (changes.length && typeof persistStateSoon === "function") persistStateSoon();
+  return changes.length;
+}
+
 function timetableRunBarHtml(result, saved, stale) {
   const run = TIMETABLE_RUN;
   const blocked = result.counts.block > 0;
@@ -1060,8 +1109,13 @@ function timetableResultHtml(saved, stale, semester, prepared) {
   const notesHtml = notes.length ? `<section class="cs-card" id="timetableNotes"><h4>알림 ${notes.length}건</h4><ul class="tt-issues">${notes.slice(0, 30).map((note) => `<li class="tt-issue"><span class="tt-level" data-level="info">알림</span><span class="tt-cause">${timetableEsc(note)}</span></li>`).join("")}</ul></section>` : "";
   let grid = "";
   try { grid = layer ? timetableGridHtml(timetableResultTables(prepared.input, layer)) : ""; } catch (error) { grid = `<p class="cs-note is-warn">표를 그리지 못했습니다: ${timetableEsc(error?.message || error)}</p>`; }
-  const blockNote = Object.keys(layer?.blocks || {}).length && !timetableSettings().keepBlockTimes
-    ? '<p class="cs-note" id="timetableBlockNote">블록 요일·교시는 시간표가 정한 자리입니다(반 시간표의 블록 칸). 6단계 블록 시간 칸과 출력물에는 아직 옮겨 적지 않습니다.</p>' : "";
+  let blockChanges = [];
+  try { blockChanges = timetableBlockTimeChanges(); } catch { blockChanges = []; }
+  const hasBlocks = Object.values(result.layers || {}).some((item) => Object.keys(item.blocks || {}).length);
+  const blockNote = !hasBlocks ? "" : blockChanges.length
+    ? `<p class="cs-note" id="timetableBlockNote" data-count="${blockChanges.length}">시간표가 정한 블록 자리가 6단계 블록 시간과 다른 블록 ${blockChanges.length}개(두 학기).
+      <button class="button" type="button" id="timetableWriteBlockTimes"${stale ? " disabled" : ""}>6단계 블록 시간에 적어 넣기</button> 분반·학생 배정·분반 교사는 그대로이고, 6단계 블록 시간 칸과 출력물(교실 카드·학생 시간표)의 요일·교시만 바뀝니다.</p>`
+    : '<p class="cs-note" id="timetableBlockNote" data-count="0">6단계 블록 시간과 시간표의 블록 자리가 같습니다.</p>';
   return `<section class="cs-card tt-result" id="timetableResult" data-stale="${stale ? "1" : "0"}"><h4>계산 결과${stale ? ' <span class="cs-note is-warn" id="timetableResultStale">조건·자료가 바뀌기 전 결과</span>' : ""}</h4>${summary}${compare}${invalid}${grid}${blockNote}</section>${violationHtml}${noTeacherHtml}${notesHtml}`;
 }
 
@@ -1266,6 +1320,19 @@ function timetableHandleClick(event) {
     return;
   }
   if (target.closest?.("#timetableStop")) { timetableRunStop(); return; }
+  if (target.closest?.("#timetableWriteBlockTimes")) {
+    const count = timetableBlockTimeChanges().length;
+    const ask = typeof appConfirm === "function" ? appConfirm(`시간표가 정한 블록 요일·교시 ${count}개를 6단계 블록 시간에 적어 넣을까요?\n분반·학생 배정·분반 교사는 바뀌지 않습니다.`, { title: "6단계 블록 시간에 적어 넣기", ok: "적어 넣기" }) : Promise.resolve(true);
+    Promise.resolve(ask).then((ok) => {
+      if (!ok) return;
+      const written = timetableWriteBlockTimes();
+      TIMETABLE_VIEW.runStatus = `6단계 블록 시간 ${written}개를 시간표의 블록 자리로 적어 넣었습니다.`;
+      TIMETABLE_VIEW.runError = false;
+      if (typeof renderClassSections === "function") renderClassSections();
+      renderTimetable();
+    });
+    return;
+  }
   const view = target.closest?.("[data-tt-view]");
   if (view) { TIMETABLE_VIEW.grid = view.dataset.ttView === "teacher" ? "teacher" : "class"; renderTimetable(); return; }
   const go = target.closest?.("[data-tt-goto]");
