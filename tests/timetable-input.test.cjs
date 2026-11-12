@@ -310,6 +310,13 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   assert.deepEqual([...new Set(asked)].sort(), ["blockTimes", "creativeFree", "creativeGroup", "oncePerDay"], "같은 선택은 한 번만 계산");
   const labels = Object.values(vm.runInContext("TIMETABLE_CHOICES", ctx)).map((choice) => `${choice.label} ${choice.gives}`).join(" ");
   assert.doesNotMatch(labels, /증원|강사|순회|교사를 늘/);
+  // 계산 뒤 남은 위반에 맞는 선택지 이름은 모두 조건을 바꾸는 선택지(patch)
+  const resultChoices = plain(vm.runInContext("TIMETABLE_RESULT_CHOICES", ctx));
+  assert.deepEqual(Object.keys(resultChoices).sort(), ["gap", "maxPerDay", "oncePerDay", "run"]);
+  assert.ok(Object.values(resultChoices).flat().every((key) => vm.runInContext(`typeof TIMETABLE_CHOICES.${key}.patch`, ctx) === "function"));
+  // '공강 먼저' 선택: 규칙 cover = soft, 이미 켜져 있으면 선택지에서 빠짐
+  assert.deepEqual(plain(vm.runInContext("TIMETABLE_CHOICES.releaseTeacher.patch({ rules: { run: 4 } })", ctx)), { rules: { run: 4, cover: "soft" } });
+  assert.deepEqual([vm.runInContext("TIMETABLE_CHOICES.releaseTeacher.skip({})", ctx), vm.runInContext("TIMETABLE_CHOICES.releaseTeacher.skip({ rules: { cover: 'soft' } })", ctx)], [false, true]);
   // 적용: 조건이 바뀌고 고른 내역(되돌릴 값)이 남는다 → 되돌리기
   vm.runInContext("TIMETABLE_VIEW.prepared = " + JSON.stringify(prepared), ctx);
   ctx.state.timetable = { settings: { rules: { run: 4 } } };

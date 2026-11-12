@@ -1,6 +1,7 @@
 // 7단계 시간표 계산 화면 확인(사용자처럼 클릭): 하네스 백업(가상 학생) 복원 → 메뉴 '7. 시간표'
 // ① '시간표 계산' → 진행 표시 → 결과 요약(반드시 위반·담당 교사 없음)·반 시간표·교사 시간표 ② 반·교사 고르기, 학기 탭
-// ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답 ⑤ 새로고침·백업 복원 뒤에도 결과 유지 ⑥ 콘솔 오류 없음
+// ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답
+// ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '공강 먼저' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-solve-ui.cjs /tmp/tt-solve-ui /tmp/e2e/downloads/workspace-backup.json.gz
 const path = require("path"), fs = require("fs");
 const { execFileSync } = require("child_process");
@@ -133,6 +134,41 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check((await bar.getAttribute("data-state")) === "done" && (await panel.locator("#timetableResultStale").count()) === 0 && (await panel.locator("#timetableValidation").count()) === 0, "다시 계산한 결과는 지금 조건의 것(검증 오류 없음)");
   check((await gridOf()).cells.filter((cell) => cell.text).length >= 30, "중단한 결과도 반 시간표가 빠짐없이 참");
 
+  console.log("▶ 계산 뒤 선택지: 고르면 그 조건으로 다시 계산");
+  const total = async () => page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; return { hard: saved.result.metrics.hard, noTeacher: saved.result.metrics.noTeacherHours, cover: (state.timetable.settings.rules || {}).cover || "hard" }; });
+  const beforeChoice = await total();
+  const choiceRows = await panel.locator("#timetableResultChoices [data-tt-choice-row]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.ttChoiceRow, text: el.textContent.replace(/\s+/g, " ").trim() })));
+  report.checks.choices = { beforeChoice, choiceRows };
+  check(beforeChoice.hard > 0 && choiceRows.some((row) => row.key === "releaseTeacher" && /담당 교사 없음/.test(row.text) && /이 선택으로 다시 계산/.test(row.text)),
+    `'반드시' 위반 ${beforeChoice.hard}건이 남은 결과에 선택지(${choiceRows.map((row) => row.key).join(", ")})`, choiceRows);
+  check(!choiceRows.some((row) => /증원|순회|강사|교사를 늘/.test(row.text)), "선택지에 교사를 늘리는 문구 없음");
+  await panel.locator('[data-tt-choice-solve="releaseTeacher"]').click();
+  await panel.locator("#timetableRunProgress").waitFor({ timeout: 10000 });
+  await waitResult(240000);
+  const afterChoice = await total();
+  const compareText = clean(await panel.locator("#timetableResultCompare").innerText());
+  report.checks.choices.afterChoice = afterChoice; report.checks.choices.compareText = compareText;
+  check(afterChoice.cover === "soft" && afterChoice.hard < beforeChoice.hard && afterChoice.noTeacher >= beforeChoice.noTeacher,
+    `'공강 먼저'로 다시 계산: '반드시' ${beforeChoice.hard} → ${afterChoice.hard}건, 담당 교사 없음 ${beforeChoice.noTeacher} → ${afterChoice.noTeacher}시간`, afterChoice);
+  check(new RegExp(`'반드시' 조건 ${beforeChoice.hard} → ${afterChoice.hard}건 · 담당 교사 없음 ${beforeChoice.noTeacher} → ${afterChoice.noTeacher}시간 — 고른 선택: 공강·하루 두 번이 남으면`).test(compareText), `앞 결과와 견줌: ${compareText.slice(0, 110)}`);
+  check((await panel.locator("#timetableValidation").count()) === 0 && (await bar.getAttribute("data-state")) === "done", "선택 뒤 결과도 검증 오류 없음·지금 조건의 결과");
+  const chosen = clean(await panel.locator("#timetableChosen").innerText());
+  check(/고른 선택 1개/.test(chosen) && /공강 먼저/.test(chosen), `고른 내역: ${chosen.slice(0, 80)}`);
+  if (afterChoice.noTeacher > beforeChoice.noTeacher) {
+    const reasons = await panel.locator("#timetableNoTeacher .tt-cause").allInnerTexts();
+    const other = clean(await panel.locator('[data-tt-semester="2"]').innerText()) && reasons;
+    await panel.locator('[data-tt-semester="2"]').click(); await sleep(300);
+    const reasons2 = await panel.locator("#timetableNoTeacher .tt-cause").allInnerTexts();
+    await panel.locator('[data-tt-semester="1"]').click(); await sleep(300);
+    check([...other, ...reasons2].some((text) => /공강·하루 두 번을 없애려고 비움\('공강 먼저'\)/.test(text)), "담당 교사 없음 목록에 이유 '공강·하루 두 번을 없애려고 비움'", [...reasons, ...reasons2].slice(0, 6));
+  }
+  await page.screenshot({ path: path.join(OUT, "06-after-choice.png"), fullPage: true });
+  await panel.locator("#timetableChoiceUndo").click(); await sleep(600);
+  check((await total()).cover === "hard" && (await bar.getAttribute("data-state")) === "stale", "마지막 선택 되돌리기 → 규칙이 돌아가고 결과는 '바뀌기 전 결과'");
+  await panel.locator("#timetableRun").click();
+  await waitResult(240000);
+  const latest = await summaryOf();
+
   console.log("▶ 백업 내려받기 → 복원 뒤에도 결과 유지");
   await sleep(1200);
   await page.locator("#workspaceDataMenu summary").click();
@@ -142,7 +178,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await restore(saved);
   await openStep();
   const restored = await summaryOf();
-  check(restored.text === stopped.text, "백업 복원 뒤 같은 결과 요약", restored.text.slice(0, 120));
+  check(restored.text === latest.text, "백업 복원 뒤 같은 결과 요약", restored.text.slice(0, 120));
 
   check(logs.length === 0, "콘솔 오류 없음", logs.slice(0, 5));
   fs.writeFileSync(path.join(OUT, "report.json"), JSON.stringify(report, null, 1));

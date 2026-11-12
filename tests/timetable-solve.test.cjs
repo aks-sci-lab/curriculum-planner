@@ -249,6 +249,16 @@ test("13칸 문제(교사가 반 수보다 적음): 조건을 다 지킬 수 없
   assert.ok(result.metrics.hard > 0 || result.metrics.noTeacherHours > 0, "남은 위반 또는 담당 교사 없음으로 드러난다");
   assert.ok(result.violations.every((item) => item.cause && item.semester === "1" && ["class", "teacher"].includes(item.kind)));
   assert.deepEqual([result.metrics.gap, result.metrics.oncePerDay, result.metrics.run, result.metrics.maxPerDay, result.metrics.lunch], [check.counts.gap, check.counts.oncePerDay, check.counts.run, check.counts.maxPerDay, check.counts.lunch]);
+  assert.ok(result.metrics.hard > 0, "기본(교사 먼저)은 교사를 최대한 세워 공강·하루 두 번이 남는다");
+  // '공강 먼저'(rules.cover = soft): 걸리는 수업의 교사를 비워 위반을 없앤다 — 담당 교사 없음이 늘고, 이유는 released
+  const soft = { 1: school({ pe3: 3, info3: 3, rules: { cover: "soft" } }) };
+  const released = plain(ctx.timetableSolve(soft, { seed: 1, iterations: 200000 }));
+  assert.equal(plain(ctx.timetableValidate(soft, released)).ok, true);
+  assert.ok(released.metrics.hard < result.metrics.hard, `위반 ${result.metrics.hard} → ${released.metrics.hard}`);
+  assert.ok(released.metrics.noTeacherHours > result.metrics.noTeacherHours, `담당 교사 없음 ${result.metrics.noTeacherHours} → ${released.metrics.noTeacherHours}`);
+  const reasons = released.noTeacher.filter((item) => item.reason === "released");
+  assert.ok(reasons.length > 0 && reasons.every((item) => item.grade === "3" && item.kind === "lesson" && item.hours > 0));
+  for (const item of reasons) assert.equal(released.layers["1"].lessons[Object.keys(released.layers["1"].lessons).find((id) => id.endsWith(`@${item.classId}`) && released.layers["1"].lessons[id].teacherId === null && id.startsWith(item.subject === "스포츠 생활" ? "3스포츠" : "3인공"))].teacherId, null);
 });
 
 test("흔들기·일찍 끝내기: 판 수는 설정값, 위반이 없고 나아지지 않으면 일찍 끝나고, 풀리지 않는 위반이 남으면 세 판 내리 그대로일 때 끝난다", () => {

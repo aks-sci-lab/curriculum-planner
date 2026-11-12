@@ -640,6 +640,39 @@ function timetableTryMove(state, rng, temperature) {
   return false;
 }
 
+// '공강 먼저'(rules.cover = "soft")일 때만: 남은 공강·하루 두 번이 있는 반·요일에서, 교사가 붙은 반 수업 가운데 그날 가장 뒤 교시에 놓인 것을
+// 담당 교사 없음으로 돌린다(교사 때문에 그 칸에 묶여 있던 수업이 어느 칸에나 놓일 수 있게 됨). 한 번에 최대 4개. 돌려주는 값: 돌린 수업 수.
+function timetableRelease(run) {
+  const { P, state } = run;
+  const picked = [];
+  for (const item of timetableViolations(state)) {
+    if (item.level !== "hard" || item.kind !== "class" || (item.rule !== "gap" && item.rule !== "oncePerDay")) continue;
+    const layer = P.keys.indexOf(item.semester);
+    const ci = P.classIds.indexOf(item.id);
+    const d = P.days.indexOf(item.day);
+    if (layer < 0 || ci < 0 || d < 0) continue;
+    const slots = P.slotsByDay[d];
+    let found = null;
+    for (let i = slots.length - 1; i >= 0 && !found; i -= 1) {
+      const a = state.grid[layer][ci * P.S + slots[i]];
+      const act = a === -1 ? null : P.acts[a];
+      if (act && act.kind === 0 && !act.creative && act.teacher >= 0 && act.fixed < 0 && !picked.includes(act)) found = act;
+    }
+    if (found) picked.push(found);
+    if (picked.length >= 4) break;
+  }
+  for (const act of picked) {
+    const placed = [];
+    state.slotOf[act.index].forEach((s, k) => { if (s >= 0) placed.push([k, s, state.bare[act.index][k] === 1]); });
+    for (const [k, s, bare] of placed) timetableMark(state, act, k, s, -1, bare);
+    timetableSetTeacher(act, -1);
+    for (const [k, s] of placed) timetableMark(state, act, k, s, 1, false);
+    act.layers.forEach((layer, at) => P.noTeacher.push({ layer, kind: "lesson", grade: P.grades[act.gi], classId: P.classIds[act.classes[0]], subject: act.subjectName[at], hours: act.hours, reason: "released" }));
+  }
+  if (picked.length) { timetableRecount(state); run.best = timetableSnapshot(state); }
+  return picked.length;
+}
+
 // 이동 5: 같은 학년·같은 시수의 두 반 수업이 교사를 맞바꾼다(둘 다 서로의 후보일 때 — 전공 일치·교사별 시수는 그대로).
 function timetableSetTeacher(act, teacher) {
   act.teacher = teacher;
@@ -729,7 +762,13 @@ function timetableSolveStep(run, count = 5000) {
       run.stale = improved > Math.max(0.5, run.best.cost * 0.005) ? 0 : run.stale + 1;
       run.roundCost = run.best.cost;
       run.hardLeft = hardLeft;
-      if (run.extensions >= run.rounds || (!hardLeft && run.stale >= 1) || run.stale >= 3) { run.finished = true; break; }
+      if (run.extensions >= run.rounds || (!hardLeft && run.stale >= 1)) { run.finished = true; break; }
+      if (run.stale >= 3 || (hardLeft && run.stale >= 1 && run.P.rules.cover === "soft")) {
+        // 더 나아지지 않는다: '공강 먼저'면 걸리는 수업의 교사를 비우고 한 판 더, 아니면 끝
+        if (run.P.rules.cover !== "soft" || !timetableRelease(run)) { run.finished = true; break; }
+        run.stale = 0;
+        run.roundCost = run.best.cost;
+      }
       run.extensions += 1;
       run.phaseStart = run.iteration;
       run.phaseEnd = run.iteration + Math.max(1, Math.floor(run.base / 2));
@@ -1080,7 +1119,7 @@ function timetableValidate(inputs, result) {
 function TIMETABLE_FUNCTIONS_FOR_WORKER() {
   return [timetableWhere, timetableParseTime, timetableTimes, timetableNumber, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck,
     timetableRng, timetableRuleWeight, timetableProblem, timetableState, timetableCanPlace, timetableMark, timetableClassDayCost, timetableTeacherDayCost, timetableRecount, timetableDelta, timetableCommit,
-    timetableConstruct, timetableTryMove, timetableSetTeacher, timetableTrySwapTeachers, timetableSnapshot, timetableRestoreSnapshot, timetableSolveStart, timetableSolveStep, timetableSolveFinish, timetableViolations, timetableSolve];
+    timetableConstruct, timetableTryMove, timetableSetTeacher, timetableRelease, timetableTrySwapTeachers, timetableSnapshot, timetableRestoreSnapshot, timetableSolveStart, timetableSolveStep, timetableSolveFinish, timetableViolations, timetableSolve];
 }
 
 function timetableWorkerSource() {
