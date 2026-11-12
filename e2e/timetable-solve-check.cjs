@@ -5,6 +5,7 @@
 //                   blockTimes=free|keep(시간표가 블록 자리를 정함 = 기본 | 6단계 블록 시간 그대로), creative=fixed|grade|byGroup(전교 동시 6단계 고정 시간 | 학년별 | 학년별 + 반군별),
 //                   rules.<이름>=<값>(예: rules.gap=soft, rules.run=4, rules.semesterFrame=soft). --inputs 와 함께면 blockTimes=free 와 rules.* 만 쓸 수 있다.
 //   --modes each  = 학기마다 따로, frame = 두 학기 함께(뼈대: 이어지는 수업·블록·창체는 같은 칸). 기본 둘 다.
+//   --show 3-1,2-4 = 그 반의 요일별 배치를 출력([블록 글자] · 과목 앞 두 글자(× = 담당 교사 없음) · 창 · -- 빈칸). 블록이 1교시부터 이어지는지 볼 때.
 //   --inputs      = 앞서 이 스크립트가 <출력 폴더>/inputs.json 에 적어 둔 입력으로 다시 계산(브라우저를 열지 않음).
 // 출력 폴더의 inputs.json·report.json 에는 교사 이름이 들어 있을 수 있으니 저장소에 커밋하지 않는다(학생 자료는 들어가지 않는다).
 const path = require("path"), fs = require("fs"), vm = require("vm");
@@ -21,6 +22,7 @@ const seeds = String(flag("seeds", "1")).split(",").map(Number).filter((value) =
 const iterations = flag("iterations", "") ? Number(flag("iterations")) : undefined;
 const modes = String(flag("modes", "each,frame")).split(",");
 const SET = Object.fromEntries(String(flag("set", "")).split(",").filter(Boolean).map((pair) => { const at = pair.indexOf("="); return [pair.slice(0, at), pair.slice(at + 1)]; }));
+const SHOW = String(flag("show", "")).split(",").filter(Boolean);
 const ruleValue = (text) => (/^-?\d+(\.\d+)?$/.test(text) ? Number(text) : text);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -79,6 +81,7 @@ async function readInputs() {
   const ctx = vm.createContext({});
   vm.runInContext(fs.readFileSync(path.join(ROOT, "timetable.js"), "utf8"), ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, "timetable-solve.js"), "utf8"), ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, "timetable-view.js"), "utf8"), ctx); // 결과 → 반 표(timetableResultTables). 화면 코드는 document가 없으면 돌지 않는다.
   const plain = (value) => JSON.parse(JSON.stringify(value));
   const report = { round: data.round, set: SET, precheck: {}, runs: [] };
   if (Object.keys(SET).length) console.log(`조건 덮어쓰기: ${Object.entries(SET).map(([key, value]) => `${key}=${value}`).join(", ")}`);
@@ -102,16 +105,26 @@ async function readInputs() {
       const m = result.metrics;
       const bySemester = {};
       for (const item of result.violations) {
-        const row = bySemester[item.semester] || (bySemester[item.semester] = { hard: 0, gapPlaces: 0, gapCells: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 });
+        const row = bySemester[item.semester] || (bySemester[item.semester] = { hard: 0, gapPlaces: 0, gapCells: 0, gapByGrade: {}, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 });
+        if (item.level !== "hard") continue; // '최대한' 조건은 세지 않는다
         if (item.level === "hard") row.hard += item.amount;
-        if (item.rule === "gap") { row.gapPlaces += 1; row.gapCells += item.amount; } else row[item.rule] += item.amount;
+        if (item.rule === "gap") { row.gapPlaces += 1; row.gapCells += item.amount; const grade = String(item.id).split("-")[0]; row.gapByGrade[grade] = (row.gapByGrade[grade] || 0) + item.amount; } else row[item.rule] = (row[item.rule] || 0) + item.amount;
       }
       const noTeacher = {};
       for (const item of result.noTeacher) noTeacher[item.semester] = (noTeacher[item.semester] || 0) + item.hours;
       console.log(`▶ ${job.name} · 씨앗 ${seed}: ${(ms / 1000).toFixed(1)}초 · 반복 ${result.iterations} · 반드시 위반 ${m.hard} · 공강 ${m.gap}칸 · 하루 두 번 ${m.oncePerDay} · 연강 ${m.run} · 하루 최대 ${m.maxPerDay} · 점심 ${m.lunch} · 담당 교사 없음 ${m.noTeacherHours}시간 · 못 넣음 ${m.unplacedHours} · 묶음 ${m.frameActs} · 검증 ${valid.ok ? "통과" : `실패 ${valid.errors.length}건`}`);
       for (const semester of result.semesters) {
-        const row = bySemester[semester] || { hard: 0, gapPlaces: 0, gapCells: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 };
-        console.log(`    ${semester}학기: 반드시 위반 ${row.hard} · 공강 ${row.gapPlaces}곳 ${row.gapCells}칸 · 하루 두 번 ${row.oncePerDay} · 연강 ${row.run} · 하루 최대 ${row.maxPerDay} · 점심 ${row.lunch} · 담당 교사 없음 ${noTeacher[semester] || 0}시간`);
+        const row = bySemester[semester] || { hard: 0, gapPlaces: 0, gapCells: 0, gapByGrade: {}, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 };
+        console.log(`    ${semester}학기: 반드시 위반 ${row.hard} · 공강 ${row.gapPlaces}곳 ${row.gapCells}칸${row.gapCells ? `(${Object.entries(row.gapByGrade).map(([grade, cells]) => `${grade}학년 ${cells}`).join(", ")})` : ""} · 하루 두 번 ${row.oncePerDay} · 연강 ${row.run} · 하루 최대 ${row.maxPerDay} · 점심 ${row.lunch} · 담당 교사 없음 ${noTeacher[semester] || 0}시간`);
+      }
+      for (const semester of SHOW.length ? result.semesters : []) {
+        const tables = plain(ctx.timetableResultTables(job.inputs[semester], result.layers[semester]));
+        for (const id of SHOW) {
+          const row = tables.classes.find((item) => item.id === id);
+          if (!row) continue;
+          console.log(`    ${semester}학기 ${id}반 배치:`);
+          for (const day of tables.days) console.log(`      ${day} ${row.rows.filter((item) => item.period).map((item) => { const entry = (row.cells[`${day}${item.period}`] || [])[0]; return !entry ? "--" : entry.kind === "block" ? `[${String(entry.text).replace(/블록.*$/, "").trim().slice(-1)}]` : entry.kind === "creative" ? "창" : `${String(entry.text).slice(0, 2)}${entry.noTeacher ? "×" : ""}`; }).join(" ")}`);
+        }
       }
       for (const error of valid.errors.slice(0, 5)) console.log(`    검증 오류(${error.type}): ${error.text}`);
       for (const item of result.violations.filter((entry) => entry.level === "hard").slice(0, 6)) console.log(`    위반: ${item.semester}학기 ${item.cause}`);
