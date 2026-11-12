@@ -631,6 +631,32 @@ function timetableTryMove(state, rng, temperature) {
     }
     return true;
   };
+  // 들어낸 반 수업의 새 자리: home에 바로 놓을 수 있으면 거기에, 아니면 그 반의 다른 칸 수업과 맞바꾼다(이 수업 → 그 칸, 그 칸 수업 → home).
+  const settle = (lesson, lk, home) => {
+    if (drop(lesson, lk, home)) return true;
+    const ci = lesson.classes[0];
+    const start = Math.floor(rng() * P.S);
+    for (let n = 0; n < P.S; n += 1) {
+      const x = (start + n) % P.S;
+      if (x === home || !teacherFree(lesson, x)) continue;
+      const there = [];
+      let ok = true;
+      for (const layer of lesson.layers) {
+        const a = state.grid[layer][ci * P.S + x];
+        if (a === -1) continue;
+        const other = P.acts[a];
+        if (there.includes(other)) continue;
+        if (other.kind !== 0 || other.creative || (other.pins && other.pins.has(x)) || other.layers.some((item) => !lesson.layers.includes(item)) || !teacherFree(other, home) || state.bare[other.index][state.slotOf[other.index].indexOf(x)] === 1) { ok = false; break; }
+        there.push(other);
+      }
+      if (!ok || !there.length) continue;
+      const length = ops.length;
+      const lifted = there.map((other) => [other, lift(other, x)]);
+      if (drop(lesson, lk, x) && lifted.every(([other, ok2]) => drop(other, ok2, home))) return true;
+      rollback(length);
+    }
+    return false;
+  };
   // 반들의 공강 칸마다, 어느 요일이든 그 반의 마지막 반 수업(고정한 칸 제외)을 끌어와 메운다(놓을 수 있는 첫 후보). 이동 3의 뒤처리.
   const fillGaps = (classes) => {
     const dayOrder = Array.from({ length: P.D }, (_, d) => d);
@@ -785,32 +811,6 @@ function timetableTryMove(state, rng, temperature) {
       }
       return drop(mover, mk, s);
     };
-    // 들어낸 반 수업의 새 자리: home에 바로 놓을 수 있으면 거기에, 아니면 그 반의 다른 칸 수업과 맞바꾼다(이 수업 → 그 칸, 그 칸 수업 → home).
-    const settle = (lesson, lk, home) => {
-      if (drop(lesson, lk, home)) return true;
-      const ci = lesson.classes[0];
-      const start = Math.floor(rng() * P.S);
-      for (let n = 0; n < P.S; n += 1) {
-        const x = (start + n) % P.S;
-        if (x === home || !teacherFree(lesson, x)) continue;
-        const there = [];
-        let ok = true;
-        for (const layer of lesson.layers) {
-          const a = state.grid[layer][ci * P.S + x];
-          if (a === -1) continue;
-          const other = P.acts[a];
-          if (there.includes(other)) continue;
-          if (other.kind !== 0 || other.creative || (other.pins && other.pins.has(x)) || other.layers.some((item) => !lesson.layers.includes(item)) || !teacherFree(other, home) || state.bare[other.index][state.slotOf[other.index].indexOf(x)] === 1) { ok = false; break; }
-          there.push(other);
-        }
-        if (!ok || !there.length) continue;
-        const length = ops.length;
-        const lifted = there.map((other) => [other, lift(other, x)]);
-        if (drop(lesson, lk, x) && lifted.every(([other, ok2]) => drop(other, ok2, home))) return true;
-        rollback(length);
-      }
-      return false;
-    };
     if (partner !== -1) {
       const other = P.acts[partner];
       if (other === act || other.fixedSlots || riders.size || other.classes.join() !== act.classes.join() || other.layers.join() !== act.layers.join()) return false;
@@ -944,15 +944,35 @@ function timetableTryMove(state, rng, temperature) {
       return -1;
     };
     if (!collect(ci)) { undo(); return false; }
+    const ejected = []; // [반 수업, k, 그 반에서 비게 된 칸]
     for (let i = 0; i < pending.length; i += 1) {
       const [act, , to] = pending[i];
       if (timetableCanPlace(state, act, to, false)) continue;
       const other = blocker(act, to);
-      if (other < 0 || chain.includes(other) || chain.length >= 6) { undo(); return false; }
-      chain.push(other);
-      if (!collect(other)) { undo(); return false; }
+      if (other >= 0 && !chain.includes(other) && chain.length < 6 && rng() < 0.7) { chain.push(other); if (!collect(other)) { undo(); return false; } continue; }
+      // 사슬이 안 되면(다른 학년 반 수업이 막거나, 그 반이 같은 두 칸을 맞바꿀 수 없음): 이 수업의 교사를 그 시각에 잡고 있는 반 수업을 들어내
+      // 그 반의 다른 칸과 맞바꾼다(2개까지) — 점심 칸에 묶인 두 학기 묶음 수업을 다른 칸으로 뺄 때 필요한 이동
+      if (act.gi < 0) { undo(); return false; }
+      const abs = P.absOf[act.gi][to];
+      for (let at = 0; at < act.layers.length; at += 1) {
+        for (const ti of act.teachers[at]) {
+          const b = state.tAt[act.layers[at]][ti * P.ABS + abs];
+          if (b === -1) continue;
+          const lesson = P.acts[b];
+          if (lesson.kind !== 0 || lesson.creative || ejected.length >= 2) { undo(); return false; }
+          let sb = -1;
+          for (const slot of state.slotOf[b]) if (slot >= 0 && P.absOf[lesson.gi][slot] === abs) sb = slot;
+          if (sb < 0 || (lesson.pins && lesson.pins.has(sb))) { undo(); return false; }
+          const lk = state.slotOf[b].indexOf(sb);
+          if (state.bare[b][lk] === 1) { undo(); return false; }
+          lift(lesson, sb);
+          ejected.push([lesson, lk, sb]);
+        }
+      }
+      if (!timetableCanPlace(state, act, to, false)) { undo(); return false; }
     }
     for (const [act, k, to] of pending) if (!drop(act, k, to)) { undo(); return false; }
+    for (const [lesson, lk, home] of ejected) if (!settle(lesson, lk, home)) { undo(); return false; }
   }
   const touched = ops.map(([act, , from, to]) => [act, from, to]);
   const { delta, changes } = timetableDelta(state, touched, false, unplacedDelta < 0 ? undefined : temperature * 30);
