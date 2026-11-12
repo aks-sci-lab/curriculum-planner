@@ -493,7 +493,10 @@ function timetableConstruct(state, rng) {
           const d = P.slotDay[s];
           let zone = 0; // 뼈대 order: 다른 학기에서 블록이 놓인 칸을 먼저 쓴다(블록 시간대를 같게)
           if (P.orderFrame && act.kind === 1) for (let other = 0; other < P.L; other += 1) { if (act.layers.includes(other)) continue; const b = state.grid[other][act.classes[0] * P.S + s]; if (b !== -1 && P.acts[b].kind === 1) zone -= 200; }
-          const score = (usedDays.has(d) ? 1000 : 0) + (syncPerDay.get(dayKey(act, d)) || 0) * 10 + P.slotPeriod[s] + rng() + zone;
+          // 학년마다 점심이 다를 때: 블록을 '다른 학년의 점심 시각'에 해당하는 칸(예: 1·2학년 4교시 = 3학년 점심)에 놓지 않는다.
+          // 그 칸은 교사가 비어 보여서 앞 교시부터 채우면 먼저 골라지는데, 그 교사가 다른 학년 블록을 맞은편 점심 칸에 맡고 있으면 점심을 못 먹는다.
+          const lunchCell = act.kind === 1 && act.gi >= 0 && P.lunchPositions.length > 1 && P.lunchPositions.includes(P.absOf[act.gi][s] % P.positions) ? 60 : 0;
+          const score = (usedDays.has(d) ? 1000 : 0) + (syncPerDay.get(dayKey(act, d)) || 0) * 10 + P.slotPeriod[s] + rng() + zone + lunchCell;
           if (score < bestScore) { bestScore = score; chosen = s; }
         }
         if (chosen < 0) {
