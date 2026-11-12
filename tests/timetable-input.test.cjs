@@ -165,11 +165,18 @@ test("자료가 없을 때: 막는 것(분반 결과·학급 수·5단계 오류
 test("시간표 조건(state.timetable.settings)이 있으면 그 값을 쓰고 가정에서 빠진다, 알림(입력 변경됨·확대학급·학기 미정·공통 배분)", () => {
   const ctx = world({ signature: "changed", matchesSaved: false, mapped: true,
     timetable: { settings: { periodsByDay: { 수: 6 }, lunchAfter: { 1: 4, 2: 4, 3: 4 }, creative: { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, byGroup: true },
-      homerooms: { "2-1": "k2" }, rules: { maxHours: 20, gap: "soft" }, venues: { 체육: 2 } } },
+      rules: { maxHours: 20, gap: "soft" }, venues: { 체육: 2 }, openDepartments: ["교양", "정보"] } },
     stats: { items: [item("1", "1", "통합과학", 2, 2, { department: "과학-공통" }), item("2", "1", "체육", 2, 4, { department: "체육", expanded: 4, autoClasses: 3 }),
       item("2", "1", "심화 영어", 3, 0, { kind: "선택", designated: false, basis: "두 학기 편성 · 4단계 학기 미정" }), item("2", "1", "물리학", 3, 2, { kind: "선택", designated: false }), item("2", "1", "화학", 3, 1, { kind: "선택", designated: false })] } });
-  const { input, assumptions } = plain(ctx.timetableInput("1", "1"));
-  assert.deepEqual([input.periodsByDay, input.lunchAfter, input.rules, input.venues], [{ 수: 6 }, { 1: 4, 2: 4, 3: 4 }, { maxHours: 20, gap: "soft" }, { 과학실: 1, 체육: 2 }]);
+  // 담임은 6단계 교사 명단의 '담임'(내년 학년-반) 한 곳에서 읽는다. 없는 반(9-9, 2-7)은 쓰지 않는다.
+  ctx.classSectionsSettings().teachers[1].homeroom = "2-1";
+  ctx.classSectionsSettings().teachers[2].homeroom = "2-7";
+  const prepared = plain(ctx.timetableInput("1", "1"));
+  const { input, assumptions } = prepared;
+  // 담임 명단이 있으면 담임 규칙은 '최대한'(직접 고르면 그 값)
+  assert.deepEqual([input.periodsByDay, input.lunchAfter, input.rules, input.venues], [{ 수: 6 }, { 1: 4, 2: 4, 3: 4 }, { maxHours: 20, gap: "soft", homeroom: "soft" }, { 과학실: 1, 체육: 2 }]);
+  assert.deepEqual([prepared.homeroomCount, prepared.openDepartments, input.teachers.find((teacher) => teacher.id === "p1").homeroom], [1, ["교양", "정보"], ""]);
+  assert.deepEqual(input.notes.homerooms, ["담임이 정해지지 않은 반 7개(1-1, 1-2, 2-2, 2-3, 3-1, 3-2 …) — 그 반은 담임 규칙을 적용하지 않습니다."]);
   assert.deepEqual(input.creative, { school: 1, schoolTimes: ["금7"], grade: { 1: 1, 2: 1, 3: 1 }, gradeTimes: {}, byGroup: true, expected: { 1: 2, 2: 2, 3: 2 } });
   assert.equal(input.teachers.find((teacher) => teacher.id === "k2").homeroom, "2-1");
   assert.deepEqual([input.notes.undecided, input.notes.staleSections, input.notes.expandedClasses], [["2학년 심화 영어"], ["현1 → 2학년 1학기 · 2-1 택2"], true]);

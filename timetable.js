@@ -741,6 +741,7 @@ function timetablePrecheck(source) {
   const placeholders = model.teachers.filter((teacher) => teacher.placeholder).length;
   if (placeholders) add("P10", "warn", `실제 이름이 아닌 교사 ${placeholders}명(5단계 교사 수로 만든 자리) — 불가 시간·출근 요일을 모릅니다.`, timetableWhere("teachers", "교사 명단"));
   for (const item of model.notes.teacherCounts || []) add("P10", "warn", `${item}`, [timetableWhere("teachers", "교사 명단"), timetableWhere("hours", "교사 수")]);
+  for (const item of model.notes.homerooms || []) add("P10", "warn", `${item}`, timetableWhere("teachers", "담임"));
   if (model.notes.expandedClasses) add("P10", "warn", "5단계 확대학급(수준별 이동수업)이 켜져 있습니다 — 시간표에는 아직 반영하지 않습니다(5단계 시수와 어긋날 수 있음).", timetableWhere("hours", "확대학급"));
   for (const item of model.notes.undecided || []) add("P10", "warn", `${item}: 개설 학기가 정해지지 않아 시간표에 넣지 않았습니다.`, timetableWhere("aggregate", "개설 학기"));
   for (const item of model.notes.staleSections || []) add("P10", "warn", `${item}: 분반 편성 입력이 바뀌었습니다(6단계에서 다시 계산).`, timetableWhere("sections"));

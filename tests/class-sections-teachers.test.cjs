@@ -48,8 +48,8 @@ test("양식 내려받기 → 이름만 실제 이름으로 고쳐 올리면 번
     { id: "t-사회-지리-2", department: "사회-지리", name: "사회(지리) 2", unavailable: [] },
     { id: "t-과학-물리-1", department: "과학-물리", name: "과학(물리) 1", unavailable: [] }];
   const rows = plain(ctx.classSectionsTeacherSheetRows(existing, { days: ["월", "화", "수", "목", "금"], periods: 7 }));
-  assert.deepEqual(rows[0], ["이름", "담당 교과", "담당 과목", "불가 시간", "사유", "비고", "번호(고치지 마세요)"]);
-  assert.deepEqual(rows[1], ["사회(지리) 1", "사회-지리", "", "월7", "육아시간", "", "t-사회-지리-1"]);
+  assert.deepEqual(rows[0], ["이름", "담당 교과", "담당 과목", "불가 시간", "사유", "비고", "번호(고치지 마세요)", "담임(내년 학년-반)"]);
+  assert.deepEqual(rows[1], ["사회(지리) 1", "사회-지리", "", "월7", "육아시간", "", "t-사회-지리-1", ""]);
   // 사용자: 1행 이름을 실제 이름으로, 불가 시간 추가 · 2행 그대로 · 3행 삭제 · 새 교사 한 줄(교과는 화면 이름으로 써도 됨)
   const edited = [rows[0], ["김가상", "사회-지리", "", "월7,목", "육아시간", "", "t-사회-지리-1"], rows[2], ["이가상", "국어", "", "", "", "순회", ""], ["박가상", "모르는교과", "", "", "", "", ""]];
   const read = plain(ctx.classSectionsTeacherReadRows(edited, existing, { departments: Object.keys(labels), labelOf, days: ["월", "화", "수", "목", "금"], periods: 7, newId: (n) => `new${n}` }));
@@ -93,4 +93,22 @@ test("화면 연결: 교사·시간 창 처리기·블록표 제목·출력물�
   assert.match(teachersSource, /function classSectionsTeacherNameWarnings\(\) \{/);
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   assert.ok(html.indexOf("class-sections-teachers.js") > html.indexOf("class-sections-view.js"));
+});
+
+test("담임 열: '2-3'·'2학년 3반'을 '2-3'으로 맞춰 읽고, 읽지 못하거나 겹치면 확인 항목, 담임 열이 없는 예전 양식은 담임을 그대로 둔다", () => {
+  const ctx = context();
+  assert.deepEqual(["2-3", "2학년 3반", " 3학년11반 ", "", "4-1", "2반", "2-0"].map((value) => ctx.classSectionsTeacherHomeroom(value)), ["2-3", "2-3", "3-11", "", null, null, null]);
+  const existing = [{ id: "a", name: "가", department: "국어", unavailable: [], homeroom: "1-1" }, { id: "b", name: "나", department: "국어", unavailable: [] }, { id: "c", name: "다", department: "국어", unavailable: [] }];
+  const rows = plain(ctx.classSectionsTeacherSheetRows(existing));
+  assert.deepEqual(rows[1].slice(-2), ["a", "1-1"]);
+  const edited = [rows[0], ["가", "국어", "", "", "", "", "a", "2학년 3반"], ["나", "국어", "", "", "", "", "b", "2-3"], ["다", "국어", "", "", "", "", "c", "삼반"]];
+  const read = plain(ctx.classSectionsTeacherReadRows(edited, existing, { departments: ["국어"] }));
+  assert.deepEqual(read.teachers.map((teacher) => teacher.homeroom || ""), ["2-3", "", ""]);
+  assert.deepEqual(read.problems, ["3행 나: 담임 2-3이 가 교사와 겹칩니다(뒤의 것은 비움)", "4행 다: 담임 '삼반'를 읽지 못했습니다(예: 2-3 = 내년 2학년 3반)"]);
+  assert.equal(read.text, "교사 명단: 추가 0·갱신 1·유지 2");
+  // 담임 열이 없는 예전 양식을 올려도 넣어 둔 담임은 그대로
+  const old = [rows[0].slice(0, 7), ["가", "국어", "", "", "", "", "a"]];
+  assert.equal(plain(ctx.classSectionsTeacherReadRows(old, existing, { departments: ["국어"] })).teachers[0].homeroom, "1-1");
+  // 담임을 비우면 지운다
+  assert.equal(plain(ctx.classSectionsTeacherReadRows([rows[0], ["가", "국어", "", "", "", "", "a", ""]], existing, { departments: ["국어"] })).teachers[0].homeroom, undefined);
 });

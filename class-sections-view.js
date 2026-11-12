@@ -1252,7 +1252,7 @@ function renderClassSectionsTeachers() {
     if (!shown(teacher)) return "";
     const deptOptions = [`<option value="">교과 선택</option>`, ...departments.map((item) => `<option value="${esc(item.id)}"${teacher.department === item.id ? " selected" : ""}>${esc(typeof hoursDepartmentName === "function" ? hoursDepartmentName(item.id) : item.id)}</option>`)].join("");
     const open = CLASS_SECTIONS_VIEW.teacherSlot === index;
-    const grid = open ? `<tr class="cs-grid-row"><td colspan="7"><table class="cs-grid" aria-label="${esc(teacher.name)} 불가 시간"><thead><tr><th></th>${CLASS_SECTIONS_DAY_NAMES.map((day) => `<th>${day}</th>`).join("")}</tr></thead><tbody>
+    const grid = open ? `<tr class="cs-grid-row"><td colspan="8"><table class="cs-grid" aria-label="${esc(teacher.name)} 불가 시간"><thead><tr><th></th>${CLASS_SECTIONS_DAY_NAMES.map((day) => `<th>${day}</th>`).join("")}</tr></thead><tbody>
       ${Array.from({ length: CLASS_SECTIONS_PERIODS }, (_, p) => `<tr><th>${p + 1}교시</th>${CLASS_SECTIONS_DAY_NAMES.map((day) => {
         const slot = `${day}${p + 1}`;
         return `<td><input type="checkbox" data-cs-t-slot="${index}|${slot}"${(teacher.unavailable || []).includes(slot) ? " checked" : ""} aria-label="${esc(teacher.name)} ${day}요일 ${p + 1}교시 불가"></td>`;
@@ -1264,6 +1264,7 @@ function renderClassSectionsTeachers() {
       <td><input class="cs-text" type="text" value="${esc(teacher.courses || "")}" placeholder="비우면 교과 전체" data-cs-t="${index}|courses" data-focus-key="cs-t-courses-${index}" aria-label="교사 ${index + 1} 담당 과목 좁히기"></td>
       <td><button class="button" type="button" data-cs-t-grid="${index}" aria-expanded="${open}">${(teacher.unavailable || []).length ? `불가 ${(teacher.unavailable || []).length}시간` : "불가 시간"}</button></td>
       <td><input class="cs-text" type="text" value="${esc(teacher.reason || "")}" placeholder="육아시간·순회" data-cs-t="${index}|reason" data-focus-key="cs-t-reason-${index}" aria-label="교사 ${index + 1} 불가 사유"></td>
+      <td><input class="cs-text cs-homeroom" type="text" value="${esc(teacher.homeroom || "")}" placeholder="2-3" data-cs-t="${index}|homeroom" data-focus-key="cs-t-homeroom-${index}" aria-label="교사 ${index + 1} 담임 반(내년 학년-반)"></td>
       <td><button class="button" type="button" data-cs-t-remove="${index}" aria-label="교사 ${index + 1} 삭제">삭제</button></td></tr>${grid}`;
   }).join("");
   const fixed = settings.fixedSlots.map((slot, index) => `<tr>
@@ -1274,13 +1275,14 @@ function renderClassSectionsTeachers() {
   body.innerHTML = `
     <section><h3>교사 <span class="cs-note">${settings.teachers.length}명 · 교과 단위가 기본, 과목으로 좁힐 수 있음</span></h3>
       ${CLASS_SECTIONS_VIEW.teacherIdWarning ? `<p class="cs-note is-warn" id="classSectionsTeacherIdWarning">${esc(CLASS_SECTIONS_VIEW.teacherIdWarning)}</p>` : ""}
+      ${CLASS_SECTIONS_VIEW.teacherMessage ? `<p class="cs-note is-warn" id="classSectionsTeacherMessage" role="alert">${esc(CLASS_SECTIONS_VIEW.teacherMessage)}</p>` : ""}
       <div class="cs-fields"><label>교과 거르기 <select id="classSectionsTeacherFilter" aria-label="교사 목록 교과 거르기"><option value="">전체</option>${[...new Set(settings.teachers.map((teacher) => teacher.department).filter(Boolean))].map((id) => `<option value="${esc(id)}"${filter.department === id ? " selected" : ""}>${esc(typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id)}</option>`).join("")}</select></label>
         <label><input type="checkbox" id="classSectionsTeacherUnavailableOnly"${filter.unavailableOnly ? " checked" : ""}> 불가 시간 있는 교사만</label>
         <span class="cs-note">${settings.teachers.filter(shown).length}/${settings.teachers.length}명 보임</span></div>
       <div class="cs-actions"><button class="button" type="button" id="classSectionsTeacherAdd">교사 추가</button>
       <button class="button" type="button" id="classSectionsTeacherFromHours">5단계 교사 수로 명단 만들기</button></div>
       ${typeof classSectionsTeacherToolsHtml === "function" ? classSectionsTeacherToolsHtml() : ""}
-      <div class="cs-scroll" data-scroll-key="cs-teachers"><table class="cs-table"><thead><tr><th>이름</th><th>별칭</th><th>교과</th><th>과목(선택)</th><th>불가 시간</th><th>사유</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7">교사 명단이 없습니다. 없으면 5단계 교과별 교사 수만으로 블록당 분반을 제한합니다.</td></tr>'}</tbody></table></div>
+      <div class="cs-scroll" data-scroll-key="cs-teachers"><table class="cs-table"><thead><tr><th>이름</th><th>별칭</th><th>교과</th><th>과목(선택)</th><th>불가 시간</th><th>사유</th><th title="내년에 담임을 맡을 반(예: 2-3). 7단계 시간표의 담임 규칙에 씁니다.">담임</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8">교사 명단이 없습니다. 없으면 5단계 교과별 교사 수만으로 블록당 분반을 제한합니다.</td></tr>'}</tbody></table></div>
     </section>
     <section><h3>고정 시간 <span class="cs-note">창체·진로, 스포츠 + 창체 묶음 등</span></h3>
       <div class="cs-actions"><button class="button" type="button" id="classSectionsFixedAdd">고정 시간 추가</button>
@@ -1479,7 +1481,18 @@ function classSectionsHandleTeacherEvent(event) {
     }
     if (data.csT) {
       const [index, field] = data.csT.split("|");
-      settings.teachers[Number(index)][field] = target.value.trim();
+      const teacher = settings.teachers[Number(index)];
+      if (field === "homeroom") {
+        // 담임 반은 '2-3'(내년 학년-반)으로 맞춰 적는다. 읽지 못하거나 다른 교사와 겹치면 받지 않는다.
+        const value = typeof classSectionsTeacherHomeroom === "function" ? classSectionsTeacherHomeroom(target.value) : target.value.trim();
+        const other = value ? settings.teachers.find((item) => item && item !== teacher && item.homeroom === value) : null;
+        // 안내는 설정 창 안(교사 표 위)에 보인다.
+        CLASS_SECTIONS_VIEW.teacherMessage = "";
+        if (value === null) CLASS_SECTIONS_VIEW.teacherMessage = `담임 '${target.value.trim()}'를 읽지 못했습니다. '2-3'(내년 2학년 3반)처럼 적어 주세요.`;
+        else if (other) CLASS_SECTIONS_VIEW.teacherMessage = `담임 ${value}은 이미 ${other.name || other.id} 교사입니다. 한 반의 담임은 한 명만 적을 수 있습니다.`;
+        else if (value) teacher.homeroom = value;
+        else delete teacher.homeroom;
+      } else teacher[field] = target.value.trim();
     } else if (data.csTSlot) {
       const [index, slot] = data.csTSlot.split("|");
       const teacher = settings.teachers[Number(index)];

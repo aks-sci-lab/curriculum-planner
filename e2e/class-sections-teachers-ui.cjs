@@ -54,7 +54,7 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
     const blob = createWorkbookBlob([{ name: "교사 명단", rows }]);
     return { header: rows[0], changed, bytes: [...new Uint8Array(await blob.arrayBuffer())] };
   }, [...fs.readFileSync(file)]);
-  check(edited.header.join("|") === "이름|담당 교과|담당 과목|불가 시간|사유|비고|번호(고치지 마세요)", "양식 머리글", edited.header);
+  check(edited.header.join("|") === "이름|담당 교과|담당 과목|불가 시간|사유|비고|번호(고치지 마세요)|담임(내년 학년-반)", "양식 머리글", edited.header);
   check(edited.changed.length === count, `자리 이름 ${count}명을 실제 이름으로 고침`, edited.changed.length);
   const editedFile = path.join(OUT, "downloads", "teachers-edited.xlsx");
   fs.writeFileSync(editedFile, Buffer.from(edited.bytes));

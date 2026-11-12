@@ -2371,6 +2371,7 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-fields { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; margin:8px 0; font-size:12px; }
     .cs-fields label { display:inline-flex; align-items:center; gap:6px; }
     .cs-num { width:64px; height:30px; padding:0 6px; border:1px solid var(--line); border-radius:6px; font-size:12px; }
+    .cs-text.cs-homeroom { width:56px; min-width:0; }
     .cs-text { width:120px; height:30px; padding:0 6px; border:1px solid var(--line); border-radius:6px; font-size:12px; }
     .cs-text.cs-wide { width:200px; }
     .cs-card select, .cs-dialog select { height:30px; border:1px solid var(--line); border-radius:6px; font-size:12px; background:#fff; }

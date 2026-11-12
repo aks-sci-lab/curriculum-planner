@@ -185,14 +185,17 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
 
   // ---- 교사 ----
   const departmentName = (id) => (typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id);
-  const homeroomOf = new Map(Object.entries(tt.homerooms || {}).map(([room, id]) => [String(id), room]));
-  if (!homeroomOf.size) assume("homeroom", "담임 명단 없음 → 담임 규칙(담임반 배정, 학년별 창체 시간 담임 비움)은 쓰지 않음", "teachers", "담임");
   const rawOf = new Map(cs.teachers.filter(Boolean).map((teacher) => [String(teacher.id), teacher]));
+  // 담임: 6단계 교사 명단의 '담임'(내년 학년-반 '2-3') 한 곳. 그 학년·반이 없으면 쓰지 않는다.
+  const homeroomValue = (value) => {
+    const match = String(value || "").match(/^([1-3])-(\d{1,2})$/);
+    return match && Number(match[2]) >= 1 && Number(match[2]) <= (Number(classCounts[match[1]]) || 0) ? `${match[1]}-${Number(match[2])}` : "";
+  };
   let teachers = classSectionsTeacherList(cs).map((teacher) => {
     const raw = rawOf.get(teacher.id) || {};
     return { id: teacher.id, name: teacher.name, departments: teacher.departments, courses: teacher.courses,
       unavailable: teacher.unavailable.map((slot) => ({ day: slot.day, period: slot.period })), maxHours: Number(raw.maxHours) > 0 ? Number(raw.maxHours) : undefined,
-      days: Array.isArray(raw.days) && raw.days.length ? raw.days : undefined, homeroom: homeroomOf.get(teacher.id) || "",
+      days: Array.isArray(raw.days) && raw.days.length ? raw.days : undefined, homeroom: homeroomValue(raw.homeroom),
       placeholder: typeof classSectionsTeacherPlaceholder === "function" && classSectionsTeacherPlaceholder(raw, departmentName) };
   });
   if (!teachers.length) {
@@ -201,6 +204,13 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
       for (let n = 1; n <= Math.floor(Number(value) || 0); n += 1) teachers.push({ id: `t-${department}-${n}`, name: `${departmentName(department)} ${n}`, departments: [department], courses: [], unavailable: [], homeroom: "", placeholder: true });
     }
     if (teachers.length) assume("teachers", `교사 명단 없음 → 5단계 교과별 교사 수(${teachers.length}명)로 자리 교사를 만들어 계산(불가 시간·출근 요일 모름)`, "teachers", "교사 명단");
+  }
+  const homeroomCount = teachers.filter((teacher) => teacher.homeroom).length;
+  if (!homeroomCount) assume("homeroom", "담임 명단 없음 → 담임 규칙(담임반 배정, 학년별 창체 시간 담임 비움)은 쓰지 않음", "teachers", "담임");
+  else {
+    const taken = new Set(teachers.map((teacher) => teacher.homeroom).filter(Boolean));
+    const open = grades.flatMap((item) => Array.from({ length: item.classes }, (_, index) => `${item.grade}-${index + 1}`)).filter((room) => !taken.has(room));
+    if (open.length) notes.homerooms = [`담임이 정해지지 않은 반 ${open.length}개(${open.slice(0, 6).join(", ")}${open.length > 6 ? " …" : ""}) — 그 반은 담임 규칙을 적용하지 않습니다.`];
   }
   // 5단계 교과별 교사 수와 6단계 명단이 다르면 알림만(시간표는 명단으로 계산)
   if (teachers.length && !teachers.every((teacher) => teacher.placeholder) && stats?.settings?.teachers) {
@@ -396,9 +406,10 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   const venues = Object.fromEntries(Object.entries({ ...(cs.rooms || {}), ...(tt.venues || {}) }).map(([key, value]) => [key, Number(value) || 0]));
   const input = {
     semester, days: cs.gridDays, periods: Number(cs.gridPeriods) || 7, periodsByDay: tt.periodsByDay || {}, lunchAfter: tt.lunchAfter || TIMETABLE_DEFAULT_LUNCH,
-    grades, creative, fixedSlots, teachers, lessons, blocks, venues, rules: tt.rules || {}, missing, notes
+    // 담임 규칙: 직접 고르지 않았으면 담임 명단이 있을 때 '최대한', 없으면 끔
+    grades, creative, fixedSlots, teachers, lessons, blocks, venues, rules: { ...(tt.rules || {}), homeroom: tt.rules?.homeroom ?? (homeroomCount ? "soft" : "off") }, missing, notes
   };
-  return { input, assumptions, year, round, semester, creativeTotal,
+  return { input, assumptions, year, round, semester, creativeTotal, homeroomCount, openDepartments: [...openDepartments],
     splits: splits.map((group) => ({ key: group.key, label: group.label, grade: group.grade, crossed: group.crossed, base: group.base, source: group.source, errors: group.errors,
       members: group.members.map((member) => ({ subject: member.subject, count: member.counts[group.base], classes: group.classes[group.base]?.[member.subject] || [], here: group.classes[semester]?.[member.subject] || [] })) })) };
 }
@@ -484,7 +495,8 @@ function timetableChoicesFor(result, prepared, settings, preview) {
   };
   for (const issue of result.issues) {
     if (issue.level !== "fail" || !issue.relax?.length) continue;
-    const open = /교양/.test(String(issue.data?.department || "")) || (issue.data?.departments || []).some((department) => /교양/.test(department)) || /^교양/.test(issue.cause);
+    const openList = prepared.openDepartments || ["교양"];
+    const open = openList.includes(String(issue.data?.department || "")) || (issue.data?.departments || []).some((department) => openList.includes(department));
     const list = [];
     for (const key of TIMETABLE_CHOICE_ORDER) {
       const choice = TIMETABLE_CHOICES[key];
@@ -600,7 +612,7 @@ function timetableConditionsHtml(prepared) {
   const cs = classSectionsSettings();
   const input = prepared.input;
   const days = String(cs.gridDays || "").split(/[,\s]+/).filter(Boolean);
-  const rules = { ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}), departmentMax: { ...TIMETABLE_DEFAULT_RULES.departmentMax, ...(tt.rules?.departmentMax || {}) } };
+  const rules = { ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}), departmentMax: { ...TIMETABLE_DEFAULT_RULES.departmentMax, ...(tt.rules?.departmentMax || {}) }, homeroom: input.rules.homeroom };
   const lunch = tt.lunchAfter || TIMETABLE_DEFAULT_LUNCH;
   const creative = input.creative;
   const timesText = (list) => (Array.isArray(list) ? list.map((time) => (typeof time === "string" ? time : `${time.day}${time.period}`)).join(",") : String(list || ""));
@@ -633,7 +645,7 @@ function timetableConditionsHtml(prepared) {
   // 규칙
   const ruleRows = TIMETABLE_RULE_FIELDS.map((field) => {
     const value = timetableRuleValue(rules, field.key);
-    const fallback = timetableRuleDefault(field.key);
+    const fallback = field.key === "homeroom" ? (prepared.homeroomCount ? "soft" : "off") : timetableRuleDefault(field.key);
     const control = field.level
       ? `<select data-tt-field="rules.${field.key}" data-focus-key="tt-rule-${field.key}" aria-label="${timetableEsc(field.label)}">${TIMETABLE_LEVELS.map(([level, label]) => `<option value="${level}"${value === level ? " selected" : ""}>${label}</option>`).join("")}</select>`
       : `<input class="cs-num" type="number" min="${field.min}" max="${field.max}" value="${timetableEsc(value)}" data-tt-field="rules.${field.key}" data-focus-key="tt-rule-${field.key}" aria-label="${timetableEsc(field.label)}"> ${field.unit}`;
@@ -646,12 +658,19 @@ function timetableConditionsHtml(prepared) {
 
   // 교사: 주어진 명단 안에서만 편성한다(교사를 늘리는 입력은 없다). 후보 = 6단계 명단의 담당 교과·담당 과목.
   const listed = classSectionsTeacherList(cs).length;
-  const counts = prepared.input.notes.teacherCounts || [];
+  const counts = [...(prepared.input.notes.teacherCounts || []), ...(prepared.input.notes.homerooms || [])];
+  const departmentIds = typeof HOURS_DEPARTMENTS !== "undefined" ? HOURS_DEPARTMENTS.filter((department) => !department.common).map((department) => department.id) : prepared.openDepartments;
+  const departmentName = (id) => (typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id);
   const teachersBody = `
     <p class="cs-note">시간표는 <strong>주어진 교사 명단 안에서만</strong> 편성합니다. 한 과목을 맡을 수 있는 교사는 6단계 교사 명단에서 <strong>담당 교과</strong>가 그 과목의 담당 교과이거나 <strong>담당 과목</strong>에 그 과목이 적힌 교사뿐입니다(전공 일치).
       한 교사가 두 교과를 함께 맡으면(예: 정보 교사가 기술·가정 과목도 담당) 명단의 '담당 과목'에 그 과목 이름을 적으세요. 다른 교과 교사가 맡을 수 있는 것은 교양 과목뿐이고, 5단계 과목별 상세의 '담당 교과'에서 정합니다.</p>
     <div class="tt-row"><span class="tt-label">교사 명단</span><span class="tt-fields"><span id="timetableTeacherCount">${listed ? `6단계 명단 ${listed}명` : `6단계 명단 없음 — 5단계 교과별 교사 수로 만든 자리 교사 ${input.teachers.length}명으로 계산`}</span>
       ${timetableWhereButtons([timetableWhere("teachers", "교사 명단"), timetableWhere("hours", "과목별 상세 · 담당 교과")])}</span></div>
+    <div class="tt-row"><span class="tt-label">담임</span><span class="tt-fields"><span id="timetableHomeroomCount">${prepared.homeroomCount ? `담임 ${prepared.homeroomCount}명(6단계 교사 명단의 '담임' 칸)` : "담임 명단 없음 — 6단계 교사 명단의 '담임' 칸에 내년 학년-반(예: 2-3)을 적으면 담임 규칙을 씁니다"}</span>
+      ${timetableWhereButtons([timetableWhere("teachers", "담임")])}</span></div>
+    <div class="tt-row" id="timetableOpenDepartments"><span class="tt-label">다른 교과 교사가<br>맡을 수 있는 교과</span><span class="tt-fields">
+      ${departmentIds.map((id) => `<label><input type="checkbox" data-tt-field="open:${timetableEsc(id)}" data-focus-key="tt-open-${timetableEsc(id)}"${prepared.openDepartments.includes(id) ? " checked" : ""}> ${timetableEsc(departmentName(id))}</label>`).join("")}
+      <span class="cs-note" style="flex-basis:100%">기본은 교양뿐입니다. 고른 교과의 과목만 5단계 '담당 교과' 지정으로 다른 교과 교사가 맡을 수 있고, 그 밖의 과목은 전공이 다른 교사가 맡으면 조건 위반입니다.</span></span></div>
     ${counts.map((text) => `<p class="cs-note is-warn">${timetableEsc(text)}</p>`).join("")}`;
 
   // 반 일부만 듣는 과목(교차집중·분할 편성) 반 배정
@@ -741,6 +760,12 @@ function timetableApplyField(field, target) {
     else { const value = whole(0, 20); if (value === null) return fail("동시에 수업할 수 있는 반 수를 숫자로 넣어 주세요."); venues[key] = value; }
     settings.venues = venues;
     return `${key} 장소 ${venues[key] ?? "점검 안 함"}`;
+  }
+  if (name === "open") {
+    const current = Array.isArray(settings.openDepartments) ? settings.openDepartments.map(String) : ["교양"];
+    const next = target.checked ? [...new Set([...current, key])] : current.filter((id) => id !== key);
+    if (next.length === 1 && next[0] === "교양") delete settings.openDepartments; else settings.openDepartments = next;
+    return `다른 교과 교사가 맡을 수 있는 교과: ${next.length ? next.join(", ") : "없음"}`;
   }
   if (name === "blocks.free") {
     if (target.checked) settings.freeBlockTimes = true; else delete settings.freeBlockTimes;
