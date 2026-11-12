@@ -399,6 +399,30 @@ test("P8·P9·P10: 장소 수용, 창체 시수와 칸, 알림(블록 안 학점
   assert.ok(result.issues.every((issue) => issue.where.every((where) => where.step && where.label)), "모든 항목에 고칠 곳");
 });
 
+test("반군 엇갈림 견적: 블록을 반 묶음마다 따로 분반하면 늘어나는 분반 수·소인수 분반 수, 덜 늘어나는 블록부터 k개", () => {
+  const ctx = context();
+  const classes = ["3-1", "3-2", "3-3", "3-4"];
+  const estimate = plain(ctx.timetableStaggerEstimate({ classes, capacity: 30, minSize: 12, blocks: [
+    // a블록: 물리학 50명(2분반)이 앞 묶음 40·뒤 묶음 10 → 2 + 1 = 3분반(+1, 뒤 묶음 10명은 소인수), 화학 28명(1분반)이 14·14 → 2분반(+1)
+    { id: "a", label: "a블록", courses: [{ name: "물리학", sections: 2, byClass: { "3-1": 20, "3-2": 20, "3-3": 6, "3-4": 4 } }, { name: "화학", sections: 1, byClass: { "3-1": 7, "3-2": 7, "3-3": 7, "3-4": 7 } }] },
+    // b블록: 생명과학 60명(2분반)이 30·30 → 그대로 2분반, 지구과학 20명(1분반)이 모두 앞 묶음 → 그대로 1분반
+    { id: "b", label: "b블록", courses: [{ name: "생명과학", sections: 2, byClass: { "3-1": 15, "3-2": 15, "3-3": 15, "3-4": 15 } }, { name: "지구과학", sections: 1, byClass: { "3-1": 12, "3-2": 8 } }] },
+    // c블록: 과목 정원 20인 일본어 30명(2분반)이 20·10 → 1 + 1 = 2분반(그대로, 뒤 묶음 10명은 소인수)
+    { id: "c", label: "c블록", courses: [{ name: "일본어", sections: 2, capacity: 20, byClass: { "3-1": 10, "3-2": 10, "3-3": 5, "3-4": 5 } }] }
+  ] }));
+  assert.deepEqual(estimate.groups, { A: ["3-1", "3-2"], B: ["3-3", "3-4"] });
+  // 늘어나는 분반이 적은 블록부터(같으면 소인수가 적은 것 먼저)
+  assert.deepEqual(estimate.blocks.map((block) => [block.id, block.now, block.next, block.extra, block.small]), [["b", 3, 3, 0, 0], ["c", 2, 2, 0, 1], ["a", 3, 5, 2, 1]]);
+  assert.deepEqual(estimate.blocks[2].courses, [{ name: "물리학", now: 2, next: 3, extra: 1, sizes: { A: 40, B: 10 }, small: 1 }, { name: "화학", now: 1, next: 2, extra: 1, sizes: { A: 14, B: 14 }, small: 0 }]);
+  assert.deepEqual(estimate.plans, [{ k: 1, blocks: ["b"], extra: 0, small: 0 }, { k: 2, blocks: ["b", "c"], extra: 0, small: 1 }, { k: 3, blocks: ["b", "c", "a"], extra: 2, small: 2 }]);
+  // 반 묶음을 직접 주면 그 묶음으로(계열별): 물리학을 듣는 반끼리 묶으면 a블록이 덜 늘어난다
+  const custom = plain(ctx.timetableStaggerEstimate({ classes, capacity: 30, groups: { 이과: ["3-1", "3-2", "3-3"], 문과: ["3-4"] }, blocks: [{ id: "a", courses: [{ name: "물리학", sections: 2, byClass: { "3-1": 20, "3-2": 20, "3-3": 6, "3-4": 4 } }] }] }));
+  assert.deepEqual([custom.blocks[0].courses[0].sizes, custom.blocks[0].extra], [{ 이과: 46, 문과: 4 }, 1]);
+  // 지금 분반 수보다 줄지는 않는다(견적은 '늘어나는 수'만), 빈 입력
+  assert.equal(plain(ctx.timetableStaggerEstimate({ classes, blocks: [{ id: "x", courses: [{ name: "가", sections: 3, byClass: { "3-1": 10 } }] }] })).blocks[0].extra, 0);
+  assert.deepEqual(plain(ctx.timetableStaggerEstimate({})), { groups: { A: [], B: [] }, blocks: [], plans: [] });
+});
+
 test("최대 유량 묶음: 모자란 묶음을 같은 교사로 이어진 것끼리 뭉쳐 돌려준다", () => {
   const ctx = context();
   const cover = plain(ctx.timetableCoverage([

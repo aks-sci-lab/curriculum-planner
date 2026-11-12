@@ -829,6 +829,44 @@ function timetablePrecheckDepartments(spec) {
   return { slots: Number(spec.slots) || 0, fixed: Number(spec.fixed) || 0, blockHours: Number(spec.blockHours) || 0, free, rows, issues, teachersKnown: Boolean(spec.teachers) };
 }
 
+// ---- 반군 엇갈림 견적(순수, 설계 7절 T7a) ----
+// 학년을 반 묶음(반군)으로 나누고 블록 k개를 묶음마다 따로 분반하면(엇갈림) 분반이 얼마나 늘어나는지 어림한다. 6단계 편성을 바꾸지 않고 읽기만 한다.
+// spec = { groups: { A: ['3-1', …], B: [...] } (없으면 classes를 앞·뒤 절반으로), classes: [반…], capacity: 분반 정원(기본), minSize: 이보다 적으면 소인수 분반,
+//          blocks: [{ id, label, courses: [{ name, sections: 지금 분반 수, capacity?: 과목 정원, byClass: { 반: 그 블록에서 이 과목을 듣는 학생 수 } }] }] }
+// 돌려주는 값: { groups, blocks: [{ id, label, now, next, extra, small, courses: [{ name, now, next, extra, sizes: { 묶음: 인원 }, small }] }](늘어나는 분반이 적은 순),
+//               plans: [{ k, blocks: [id…], extra, small }] (k = 1 … 블록 수: 늘어나는 분반이 적은 블록부터 k개를 엇갈릴 때) }
+function timetableStaggerEstimate(spec = {}) {
+  const classes = (spec.classes || []).map(String);
+  let groups = spec.groups && Object.keys(spec.groups).length ? Object.fromEntries(Object.entries(spec.groups).map(([key, list]) => [key, (list || []).map(String)])) : null;
+  if (!groups) { const half = Math.ceil(classes.length / 2); groups = { A: classes.slice(0, half), B: classes.slice(half) }; }
+  const groupOf = new Map();
+  for (const [key, list] of Object.entries(groups)) for (const classId of list) groupOf.set(classId, key);
+  const capacity = Number(spec.capacity) > 0 ? Number(spec.capacity) : 30;
+  const minSize = Number(spec.minSize) > 0 ? Number(spec.minSize) : 0;
+  const blocks = (spec.blocks || []).map((block) => {
+    const courses = (block.courses || []).map((course) => {
+      const cap = Number(course.capacity) > 0 ? Number(course.capacity) : capacity;
+      const sizes = Object.fromEntries(Object.keys(groups).map((key) => [key, 0]));
+      let outside = 0;
+      for (const [classId, count] of Object.entries(course.byClass || {})) { const key = groupOf.get(String(classId)); if (key === undefined) outside += Number(count) || 0; else sizes[key] += Number(count) || 0; }
+      const now = Math.max(0, Math.floor(Number(course.sections) || 0));
+      // 묶음마다 따로 분반: 학생이 있는 묶음은 최소 1개. 묶음에 넣지 못한 반의 학생(자료 누락)은 가장 큰 묶음에 더해 어림한다.
+      if (outside) { const biggest = Object.keys(sizes).reduce((a, b) => (sizes[b] > sizes[a] ? b : a)); sizes[biggest] += outside; }
+      const parts = Object.values(sizes).filter((count) => count > 0).map((count) => { const sections = Math.ceil(count / cap); return { sections, smallest: Math.floor(count / sections) }; });
+      const next = Math.max(now, parts.reduce((sum, part) => sum + part.sections, 0));
+      const small = minSize ? parts.filter((part) => part.smallest < minSize).length : 0;
+      return { name: String(course.name || ""), now, next, extra: next - now, sizes, small };
+    });
+    const total = (pick) => courses.reduce((sum, course) => sum + pick(course), 0);
+    return { id: String(block.id ?? ""), label: String(block.label || block.id || ""), now: total((course) => course.now), next: total((course) => course.next), extra: total((course) => course.extra), small: total((course) => course.small), courses };
+  }).sort((a, b) => a.extra - b.extra || a.small - b.small || a.id.localeCompare(b.id));
+  const plans = blocks.map((_, index) => {
+    const picked = blocks.slice(0, index + 1);
+    return { k: index + 1, blocks: picked.map((block) => block.id), extra: picked.reduce((sum, block) => sum + block.extra, 0), small: picked.reduce((sum, block) => sum + block.small, 0) };
+  });
+  return { groups, blocks, plans };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { TIMETABLE_DEFAULT_RULES, TIMETABLE_WHERE, timetableWhere, timetableParseTime, timetableTimes, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck, timetablePrecheckDepartments });
+  Object.assign(module.exports, { TIMETABLE_DEFAULT_RULES, TIMETABLE_WHERE, timetableWhere, timetableParseTime, timetableTimes, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck, timetablePrecheckDepartments, timetableStaggerEstimate });
 }
