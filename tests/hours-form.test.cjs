@@ -240,6 +240,37 @@ test("확대학급(수준별 이동수업): 꺼짐이면 완전 연동, 켜면 �
   assert.equal(english(ctx.computeHoursStats("2027")).classes, 11);
   ctx.updateHoursSetting(target({ hoursExpandedOn: "1" }, "on", true));
   assert.equal(english(ctx.computeHoursStats("2027")).classes, 13);
+  // 6) 운영 교과(사용자 결정 '확대학급을 운영하는 교과를 설정'): 고르지 않은 예전 자료는 모든 교과(지금 동작 그대로).
+  assert.equal(ctx.hoursExpandedDepartments(settings["2027"]), null);
+  stats = ctx.computeHoursStats("2027");
+  const html = ctx.hoursExpandedDepartmentsHtml(stats);
+  const all = [...html.matchAll(/data-hours-expanded-department="([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(all.includes("영어") && all.length >= 2, "학교 지정 과목이 있는 교과만 체크 목록에");
+  assert.ok([...html.matchAll(/<input[^>]*data-hours-expanded-department[^>]*>/g)].every((match) => / checked/.test(match[0])), "고르지 않음 = 모두 체크");
+  assert.match(html, /고르지 않음 = 모든 교과/);
+  const department = (id, checked) => target({ hoursExpandedDepartment: id, hoursExpandedAll: all.join(",") }, "on", checked);
+  // 영어를 끄면: 목록은 나머지 교과, 영어독해 확대 값(13)은 지우지 않고 쓰지 않음 + 안내 한 줄, 과목별 상세 칸은 '13 (운영 교과 아님)'
+  assert.equal(ctx.updateHoursSetting(department("영어", false)), true);
+  assert.deepEqual(plain(settings["2027"].expandedDepartments), all.filter((id) => id !== "영어"));
+  stats = ctx.computeHoursStats("2027");
+  assert.deepEqual(plain([english(stats).classes, english(stats).expanded ?? null, english(stats).expandedOff, settings["2027"].expandedClasses["2|1|영어독해"]]), [11, null, true, 13]);
+  assert.equal(issue(stats, /^확대학급 운영 교과가 아닌 과목/).text, "확대학급 운영 교과가 아닌 과목의 확대 값 1개는 쓰지 않음(2학년 1학기 영어독해 13). 시수 설정의 '확대학급 운영 교과'에서 그 교과를 고르면 다시 씁니다.");
+  assert.match(ctx.hoursExpandedCell(english(stats), settings["2027"]), /13 \(운영 교과 아님\)/);
+  assert.doesNotMatch(ctx.hoursExpandedCell(english(stats), settings["2027"]), /<input/);
+  assert.match(ctx.hoursExpandedDepartmentsHtml(stats), new RegExp(`data-count="${all.length - 1}"`));
+  // 다시 켜면 13, 그 교과 과목에만 입력 칸
+  ctx.updateHoursSetting(department("영어", true));
+  stats = ctx.computeHoursStats("2027");
+  assert.deepEqual(plain([english(stats).classes, english(stats).expanded]), [13, 13]);
+  assert.match(ctx.hoursExpandedCell(english(stats), settings["2027"]), /<input[^>]*data-hours-expanded="2\|1\|영어독해"/);
+  // 모두 끄면 운영 교과 없음(빈 목록) — 예전 자료의 '고르지 않음'과 다르다
+  for (const id of all) ctx.updateHoursSetting(department(id, false));
+  assert.deepEqual(plain(settings["2027"].expandedDepartments), []);
+  assert.equal(english(ctx.computeHoursStats("2027")).classes, 11);
+  // 운영을 끄면 교과 목록은 보이지 않고 저장은 그대로
+  ctx.updateHoursSetting(target({ hoursExpandedOn: "1" }, "on", false));
+  assert.equal(ctx.hoursExpandedDepartmentsHtml(ctx.computeHoursStats("2027")), "");
+  assert.deepEqual(plain(settings["2027"].expandedDepartments), []);
   // 분할·교차집중 과목의 하한 문구는 그 과목의 편제표 값.
   assert.equal(ctx.hoursExpandedMinimumText({ autoClasses: 5, planClasses: 11 }), "확대학급은 편제표 값(5반, 학급 수 11)보다 커야 합니다");
 });

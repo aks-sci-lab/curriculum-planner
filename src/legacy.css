@@ -1917,6 +1917,9 @@
 .hf-link.is-expanded::after { content: "확대"; margin-left: 2px; padding: 0 2px; border-radius: 3px; background: #e3eaff; color: #1f3f9a; font-size: 9px; font-weight: 600; vertical-align: 1px; }
 .hours-expanded-toggle { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: 10px 0; }
 .hours-expanded-toggle label { font-weight: 600; }
+.hours-expanded-departments { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: -4px 0 10px; padding: 8px 10px; border-radius: 8px; background: #f7f9fd; font-size: 13px; }
+.hours-expanded-departments label { display: inline-flex; align-items: center; gap: 4px; }
+.hours-expanded-departments .hours-note { flex-basis: 100%; }
 .hours-expanded-note { display: block; max-width: 220px; margin-top: 2px; color: #a44939; font-size: 12px; line-height: 1.3; }
 .aggregate-form td.is-flash { box-shadow: inset 0 0 0 3px #3b68e8; transition: box-shadow .3s; }
 .hours-detail-table tr.is-differ td { color: #9a4a00; }
