@@ -2,7 +2,7 @@
 // ① '시간표 계산' → 진행 표시 → 결과 요약(반드시 위반·담당 교사 없음)·반 시간표·교사 시간표 ② 반·교사 고르기, 학기 탭
 // ③ 조건을 바꾸면 '바뀌기 전 결과' 표시 → 다시 계산하면 사라짐 ④ 계산 중 '중단' → 그때까지 가장 좋은 답
 // ④-1 직접 고치기: 블록 한 시간 옮기기(그 블록을 듣는 모든 반 함께), 반 시간표의 두 칸 맞바꾸기(창체 칸·교사 겹침은 이유와 함께 거절), 되돌리기
-// ④-1b 칸 고정 → 고정을 지키며 다시 계산(고정한 칸은 맞바꿀 수 없음), 고정 모두 풀기
+// ④-1b 칸 고정 · 담당 교사 바꾸기 → 교사 고정 → 고정을 지키며 다시 계산(고정한 칸은 맞바꿀 수 없음, 고정한 교사는 바꿀 수 없음), 고정 모두 풀기
 // ④-2 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(6단계 결과는 '입력 변경됨'이 되지 않음)
 // ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '교사 규칙 양보' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-solve-ui.cjs /tmp/tt-solve-ui /tmp/e2e/downloads/workspace-backup.json.gz
@@ -335,6 +335,45 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const pinMarks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => ({ can: el.dataset.ttCan === "1", title: el.title })));
   check(pinMarks.length > 0 && pinMarks.every((mark) => !mark.can) && pinMarks.some((mark) => /고정한 칸/.test(mark.title)), "고정한 칸을 누르면 맞바꿀 수 있는 칸이 없고 이유는 '고정한 칸'", pinMarks.slice(0, 2));
   await cellAt(pinTarget.slot).click(); await sleep(200);
+  // 담당 교사 바꾸기·교사 고정: 반 수업 칸을 고르면 후보(전공 일치 교사)가 나오고, 설 수 있는 교사로 바꾼 뒤 그 교사로 고정
+  console.log("▶ 담당 교사 바꾸기 → 교사 고정");
+  const partsAt = async (slot) => cellAt(slot).evaluate((td) => ({ subject: td.querySelector("strong")?.textContent.trim() || "", teacher: td.querySelector("small")?.textContent.trim() || "" }));
+  const lessonParts = async () => panel.locator("#timetableGrid tbody td[data-tt-slot]").evaluateAll((els) => els.map((td) => ({ slot: td.dataset.ttSlot, subject: td.querySelector("strong")?.textContent.trim() || "", teacher: td.querySelector("small")?.textContent.trim() || "" })));
+  const teacherOptions = async () => panel.locator("#timetableTeacherPick option").evaluateAll((els) => els.map((el) => ({ value: el.value, ok: el.dataset.ok === "1", selected: el.selected, disabled: el.disabled, text: el.textContent.trim(), title: el.title })));
+  let teacherChange = null; const teacherSeen = [];
+  for (const cell of pinCells.filter((item) => item.slot !== pinTarget.slot)) {
+    await cellAt(cell.slot).click(); await sleep(500);
+    if (!(await panel.locator("#timetableTeacherBox").count())) { await cellAt(cell.slot).click(); await sleep(150); continue; }
+    const options = await teacherOptions();
+    teacherSeen.push({ slot: cell.slot, options: options.length, able: options.filter((option) => option.ok && !option.selected && option.value).length, refused: options.filter((option) => option.disabled).map((option) => option.title.slice(0, 50))[0] || "" });
+    const able = options.find((option) => option.ok && !option.selected && option.value);
+    if (!able || (await panel.locator("#timetableTeacherChange").isDisabled())) { await cellAt(cell.slot).click(); await sleep(150); continue; }
+    const before = await partsAt(cell.slot);
+    await panel.locator("#timetableTeacherPick").selectOption(able.value);
+    await panel.locator("#timetableTeacherChange").click(); await sleep(500);
+    teacherChange = { slot: cell.slot, before, able, status: await editStatus(), after: await partsAt(cell.slot) };
+    break;
+  }
+  report.checks.teacherChange = { change: teacherChange, seen: teacherSeen.slice(0, 8) };
+  check(teacherSeen.length > 0 && teacherSeen.every((item) => item.options >= 2), `반 수업 칸을 고르면 담당 교사 후보 목록(예: ${teacherSeen[0]?.slot} 후보 ${teacherSeen[0]?.options}개, 바꿀 수 있는 교사 ${teacherSeen[0]?.able}명${teacherSeen.find((item) => item.refused) ? `, 안 되는 이유 예: ${teacherSeen.find((item) => item.refused).refused}` : ""})`);
+  check(Boolean(teacherChange) && /^담당 교사를 바꿨습니다 — .+반 .+ 담당 교사 .+ → .+/.test(teacherChange.status) && teacherChange.after.subject === teacherChange.before.subject && teacherChange.after.teacher !== teacherChange.before.teacher
+    && teacherChange.able.text.startsWith(teacherChange.after.teacher), `담당 교사 바꾸기: ${teacherChange?.status.slice(0, 110)}`, teacherChange);
+  let teacherPinned = null;
+  if (teacherChange) {
+    check((await panel.locator("#timetableValidation").count()) === 0 && (await bar.getAttribute("data-state")) === "done" && Number(await panel.locator("#timetableEdits").getAttribute("data-count")) >= 1, "교사를 바꾼 뒤에도 검증 오류 없음·지금 조건의 결과·'직접 고침' 표시");
+    // 같은 과목의 다른 시간도 같은 교사로 바뀌었다(그 반·그 과목 전체)
+    const sameSubject = (await lessonParts()).filter((cell) => cell.subject === teacherChange.after.subject);
+    check(sameSubject.length >= 1 && sameSubject.every((cell) => cell.teacher === teacherChange.after.teacher), `그 반 ${teacherChange.after.subject} ${sameSubject.length}시간 모두 ${teacherChange.after.teacher}`);
+    await cellAt(teacherChange.slot).click(); await sleep(500);
+    await panel.locator("#timetableTeacherPin").click(); await sleep(400);
+    teacherPinned = { subject: teacherChange.after.subject, teacher: teacherChange.after.teacher };
+    check(/담당 교사를 .+ 교사로 고정했습니다 — 다시 계산해도 이 반 이 과목은 이 교사가 맡습니다/.test(await editStatus()) && (await panel.locator("#timetableTeacherPinCount").getAttribute("data-count")) === "1" && (await bar.getAttribute("data-state")) === "done",
+      `교사 고정: ${(await editStatus()).slice(0, 90)} — 결과는 '바뀌기 전 결과'가 되지 않음`);
+    await cellAt(teacherChange.slot).click(); await sleep(500);
+    check((await panel.locator("#timetableTeacherPick").isDisabled()) && (await panel.locator("#timetableTeacherChange").isDisabled()) && /교사 고정 풀기/.test(clean(await panel.locator("#timetableTeacherPin").innerText())), "교사를 고정한 수업은 고정을 풀기 전에는 바꿀 수 없음");
+    await cellAt(teacherChange.slot).click(); await sleep(200);
+    await page.screenshot({ path: path.join(OUT, "03d-teacher-pin.png"), fullPage: true });
+  }
   // 다시 계산해도 그 수업은 그 칸에
   await panel.locator("#timetableRun").click();
   await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 1500 }).catch(() => {});
@@ -344,8 +383,13 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const afterSubject = clean(await cellAt(pinTarget.slot).locator("strong").first().innerText());
   check(pinSubject.length > 0 && afterSubject === pinSubject && (await cellAt(pinTarget.slot).getAttribute("data-tt-pinned")) === "1" && (await panel.locator("#timetableValidation").count()) === 0,
     `다시 계산해도 ${pinTarget.slot}에 ${pinSubject} 그대로(담당 교사는 다시 정해질 수 있음): ${afterPin.text.slice(0, 30)}`, { before: pinTarget.text, after: afterPin.text });
+  if (teacherPinned) {
+    const kept = (await lessonParts()).filter((cell) => cell.subject === teacherPinned.subject);
+    check(kept.length >= 1 && kept.every((cell) => cell.teacher === teacherPinned.teacher) && (await panel.locator("#timetableTeacherPinCount").getAttribute("data-count")) === "1",
+      `다시 계산해도 ${teacherPinned.subject}은 고정한 ${teacherPinned.teacher} 교사(${kept.length}시간)`, kept);
+  }
   await panel.locator("#timetablePinsClear").click(); await sleep(400);
-  check((await panel.locator("#timetablePinCount").count()) === 0 && (await cellAt(pinTarget.slot).getAttribute("data-tt-pinned")) === null && (await bar.getAttribute("data-state")) === "done", "고정 모두 풀기 → 표시 사라짐(결과는 그대로)");
+  check((await panel.locator("#timetablePinCount").count()) === 0 && (await panel.locator("#timetableTeacherPinCount").count()) === 0 && (await cellAt(pinTarget.slot).getAttribute("data-tt-pinned")) === null && (await bar.getAttribute("data-state")) === "done", "고정 모두 풀기 → 칸·교사 고정 표시 사라짐(결과는 그대로)");
   const latest = await summaryOf();
 
   console.log("▶ 백업 내려받기 → 복원 뒤에도 결과 유지");

@@ -286,6 +286,62 @@ test("직접 고치기(두 학기 뼈대): 한 학기에서 옮긴 수업은 다
   assert.equal(plain(ctx.timetableValidate(inputs, blockDone.result)).ok, true);
 });
 
+test("직접 고치기: 담당 교사 바꾸기 — 전공 일치 후보만, 그 수업의 모든 시간에 설 수 있어야 하고 필수 상한을 넘지 않아야 한다, 담당 교사 없음으로 비우기", () => {
+  const ctx = context();
+  // 1학년 2반, 월요일 3교시. 국어(1시간)·문학(1시간, 국어 교과)·수학(1시간). 이국어는 필수 상한 2시간.
+  const make = (semester) => ({ semester, days: "월", periods: 3, grades: [{ grade: "1", classes: 2 }],
+    teachers: [{ id: "k1", name: "김국어", departments: ["국어"] }, { id: "k2", name: "이국어", departments: ["국어"], maxHours: 2 }, { id: "m1", name: "박수학", departments: ["수학"] }],
+    lessons: [{ id: "국어", grade: "1", subject: "국어", department: "국어", hours: 1 }, { id: "문학", grade: "1", subject: "문학", department: "국어", hours: 1 }, { id: "수학", grade: "1", subject: "수학", department: "수학", hours: 1 }],
+    blocks: [], rules: {} });
+  const layerOf = (frame) => ({ blocks: {}, creative: [], lessons: Object.fromEntries(Object.entries({
+    "국어@1-1": ["월1", "k1"], "수학@1-1": ["월2", "m1"], "문학@1-1": ["월3", "k1"], "국어@1-2": ["월1", "k2"], "문학@1-2": ["월2", "k2"], "수학@1-2": ["월3", "m1"]
+  }).map(([id, [slot, teacherId]]) => [id, { slots: [slot], teacherId, ...(frame ? { frame: true } : {}) }])) });
+  const inputs = { 1: make("1") };
+  const result = { layers: { 1: layerOf(false) }, violations: [], noTeacher: [], metrics: { noTeacherHours: 0 } };
+  assert.equal(plain(ctx.timetableValidate(inputs, result)).ok, true);
+  assert.deepEqual(["k1", "k2", "m1"].map((id) => ctx.timetableTeacherHours(result.layers["1"], id)), [2, 2, 2]);
+  const change = (res, lessonId, teacherId, semester = "1", data = inputs) => plain(ctx.timetableEditTeacher(data, res, { semester, lessonId, teacherId }));
+  // 거절: 같은 교사 · 전공이 다른 교사 · 그 시간에 다른 반에 있는 교사(이유 = 검증기의 문장) · 필수 상한
+  assert.equal(change(result, "국어@1-1", "k1").reason, "지금 담당 교사와 같습니다.");
+  assert.equal(change(result, "국어@1-1", "m1").reason, "박수학 교사는 국어의 담당 후보(전공 일치)가 아닙니다.");
+  assert.match(change(result, "국어@1-2", "k1").reason, /^김국어 교사 월1: .*겹칩니다\.$/);
+  assert.equal(change(result, "문학@1-1", "k2").reason, "이국어 교사는 1학기 주 2시간 — 1시간을 더하면 필수 상한 2시간을 넘습니다.");
+  assert.equal(change(result, "없는 수업", "k1").reason, "이 학기의 계산 결과에 없는 수업입니다.");
+  // 담당 교사 없음으로 비우기: 담당 교사 없음 목록·시간이 늘고(직접 비움), 원래 결과는 그대로
+  const cleared = change(result, "국어@1-1", "");
+  assert.deepEqual([cleared.ok, cleared.text, cleared.result.edits, cleared.result.layers["1"].lessons["국어@1-1"].teacherId], [true, "1-1반 국어 담당 교사 김국어 → 담당 교사 없음", 1, null]);
+  assert.deepEqual([cleared.result.noTeacher, cleared.result.metrics.noTeacherHours], [[{ semester: "1", kind: "lesson", grade: "1", classId: "1-1", subject: "국어", hours: 1, reason: "manual" }], 1]);
+  assert.equal(result.layers["1"].lessons["국어@1-1"].teacherId, "k1");
+  assert.equal(plain(ctx.timetableValidate(inputs, cleared.result)).ok, true);
+  // 김국어가 월1에 비었으니 이제 1-2반 국어를 김국어로 바꿀 수 있다 → 이국어는 1시간이 되어 1-1반 문학을 맡을 수 있다
+  const moved = change(cleared.result, "국어@1-2", "k1");
+  assert.deepEqual([moved.ok, moved.text, moved.result.edits], [true, "1-2반 국어 담당 교사 이국어 → 김국어", 2]);
+  const taken = change(moved.result, "문학@1-1", "k2");
+  assert.deepEqual([taken.ok, ctx.timetableTeacherHours(taken.result.layers["1"], "k2"), ctx.timetableTeacherHours(taken.result.layers["1"], "k1")], [true, 2, 1]);
+  // 비운 수업에 다시 교사를 넣으면 담당 교사 없음 목록에서 빠진다
+  const back = change(taken.result, "국어@1-1", "k2");
+  assert.equal(back.ok, false); // 이국어는 월1에 없지만 이미 2시간(필수 상한)
+  const refill = change(moved.result, "국어@1-1", "k2");
+  assert.deepEqual([refill.ok, refill.result.noTeacher, refill.result.metrics.noTeacherHours], [true, [], 0]);
+  assert.equal(plain(ctx.timetableValidate(inputs, refill.result)).ok, true);
+  // 두 학기 같은 자리 묶음 수업은 두 학기 함께 바뀐다(묶음은 그대로)
+  const both = { 1: make("1"), 2: make("2") };
+  const framed = { layers: { 1: layerOf(true), 2: layerOf(true) }, violations: [], noTeacher: [], metrics: { noTeacherHours: 0 } };
+  assert.equal(plain(ctx.timetableValidate(both, framed)).ok, true);
+  const pair = change(framed, "국어@1-1", "", "1", both);
+  assert.deepEqual([pair.ok, pair.text, pair.semesters, pair.result.layers["1"].lessons["국어@1-1"].teacherId, pair.result.layers["2"].lessons["국어@1-1"].teacherId, pair.result.layers["2"].lessons["국어@1-1"].frame, pair.result.metrics.noTeacherHours],
+    [true, "1-1반 국어 담당 교사 김국어 → 담당 교사 없음(두 학기 함께)", ["1", "2"], null, null, true, 2]);
+  assert.equal(plain(ctx.timetableValidate(both, pair.result)).ok, true);
+  // 고정한 교사(입력 pins.teachers)가 있는 수업은 고정을 푼 뒤에만 바꾼다, 6단계·5단계가 정한 교사는 바꿀 수 없다
+  const pinnedInputs = { 1: { ...make("1"), pins: { teachers: { "국어@1-1": "k1" } } } };
+  assert.equal(change(result, "국어@1-1", "", "1", pinnedInputs).reason, "1-1반 국어 수업은 담당 교사를 고정해 두었습니다 — 교사 고정을 푼 뒤 바꾸세요.");
+  const fixedInputs = { 1: make("1") };
+  fixedInputs[1].lessons[0].teacherByClass = { "1-1": "k1" };
+  assert.match(change(result, "국어@1-1", "", "1", fixedInputs).reason, /담당 교사가 정해져 있습니다\(김국어/);
+  // 고정이 결과에서 지켜지는지: 담당 교사 고정도 함께 본다
+  assert.deepEqual([ctx.timetablePinsHeld(result, {}, { 1: { "국어@1-1": "k1" } }), ctx.timetablePinsHeld(result, {}, { 1: { "국어@1-1": "k2" } }), ctx.timetablePinsHeld(result, {}, { 1: { "없는 수업": "k2" } })], [true, false, true]);
+});
+
 test("칸 고정 도우미: 고정이 결과에서 지켜지는지, 그 칸의 반 수업 id", () => {
   const ctx = context();
   const result = { layers: { 1: { lessons: { "1|국어@1-1": { slots: ["월2", "수3"] }, "1|통합과학|1@1-1#2": { slots: ["화1"] }, "1|음악@1-2": { slots: ["금6"], pinMissed: ["월1"] } }, blocks: {}, creative: [] } } };

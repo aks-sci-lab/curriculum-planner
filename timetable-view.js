@@ -382,13 +382,82 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
 }
 
 // 칸 고정(순수): 고정한 칸이 결과에서 지켜지고 있는지. pins = { 학기: { 수업 id: ['월3', …] } }. 결과에 없는 수업·못 지켰다고 표시된 칸(pinMissed)은 따지지 않는다.
-function timetablePinsHeld(result, pins) {
+function timetablePinsHeld(result, pins, teacherPins) {
   for (const [semester, lessons] of Object.entries(pins || {})) for (const [id, keys] of Object.entries(lessons || {})) {
     const item = result?.layers?.[semester]?.lessons?.[id];
     if (!item) continue;
     for (const key of keys || []) if (!item.slots.includes(key) && !(item.pinMissed || []).includes(key)) return false;
   }
+  // 고정한 담당 교사(teacherPins = { 학기: { 수업 id: 교사 id } })도 결과와 같아야 한다
+  for (const [semester, lessons] of Object.entries(teacherPins || {})) for (const [id, teacherId] of Object.entries(lessons || {})) {
+    const item = result?.layers?.[semester]?.lessons?.[id];
+    if (item && teacherId && item.teacherId !== teacherId) return false;
+  }
   return true;
+}
+
+// 그 학기 결과에서 교사가 서는 시간 수(반 수업 + 블록 분반 + 담임 창체, 교사 없이 놓은 시간 제외)
+function timetableTeacherHours(layer, teacherId) {
+  let hours = 0;
+  const taught = (item) => (item.slots || []).filter(Boolean).length - (item.bareSlots || []).length;
+  for (const item of Object.values(layer?.lessons || {})) if (item.teacherId === teacherId) hours += taught(item);
+  for (const item of Object.values(layer?.blocks || {})) hours += Object.values(item.teachers || {}).filter((id) => id === teacherId).length * taught(item);
+  for (const item of layer?.creative || []) if (item.teacherId === teacherId && item.scope === "class") hours += (item.slots || []).filter(Boolean).length;
+  return hours;
+}
+
+// 직접 고치기(순수): 반 수업 하나(그 반·그 과목의 모든 시간)의 담당 교사를 바꾼다. teacherId = 새 교사 id, "" = 담당 교사 없음.
+// 새 교사는 그 수업의 후보(전공 일치)여야 하고, 그 수업의 모든 시간에 설 수 있어야 한다(겹침·불가 시간은 검증기가 보고 이유와 함께 거절), 필수 시수 상한도 넘지 않아야 한다.
+// 두 학기 같은 자리 묶음 수업은 두 학기 함께 바꾼다(다른 학기에서 안 되면 거절). 6단계가 정한 교사·고정한 교사가 있는 수업은 검증기가 거절한다.
+// 돌려주는 값: { ok: true, result, text } 또는 { ok: false, reason }.
+function timetableEditTeacher(inputs, result, { semester, lessonId, teacherId }) {
+  const refuse = (reason) => ({ ok: false, reason });
+  const modelOf = (key) => (inputs?.[key] ? (inputs[key].gradeOf instanceof Map ? inputs[key] : timetableModel(inputs[key])) : null);
+  const model = modelOf(semester);
+  const item = result?.layers?.[semester]?.lessons?.[lessonId];
+  const lesson = model?.lessons.find((entry) => entry.id === lessonId);
+  if (!model || !item || !lesson) return refuse("이 학기의 계산 결과에 없는 수업입니다.");
+  const wanted = teacherId ? String(teacherId) : null;
+  const nameOf = (id) => (id ? model.teacherOf.get(id)?.name || id : "담당 교사 없음");
+  if ((item.teacherId || null) === wanted && !(item.bareSlots || []).length) return refuse("지금 담당 교사와 같습니다.");
+  if (lesson.fixedTeacher && wanted !== lesson.fixedTeacher) return refuse(lesson.teacherPinned ? `${lesson.classId}반 ${lesson.subject} 수업은 담당 교사를 고정해 두었습니다 — 교사 고정을 푼 뒤 바꾸세요.` : `${lesson.classId}반 ${lesson.subject} 수업은 담당 교사가 정해져 있습니다(${nameOf(lesson.fixedTeacher)} — 6단계·5단계에서 정한 교사).`);
+  if (wanted && !lesson.candidates.includes(wanted)) return refuse(`${nameOf(wanted)} 교사는 ${lesson.subject}의 담당 후보(전공 일치)가 아닙니다.`);
+  const before = timetableValidate(inputs, result);
+  const next = JSON.parse(JSON.stringify(result));
+  // 바꿀 수업: 이 학기의 그 수업 + 두 학기 묶음이면 다른 학기의 짝(같은 반·같은 칸·같은 교사)
+  const targets = [[semester, lessonId, lesson]];
+  if (item.frame) {
+    const same = item.slots.slice().sort().join(",");
+    for (const [other, otherLayer] of Object.entries(next.layers)) {
+      if (other === semester) continue;
+      const mate = Object.entries(otherLayer.lessons || {}).find(([key, value]) => value.frame && String(key.split("@")[1] || "").split("#")[0] === lesson.classId && value.teacherId === item.teacherId && value.slots.slice().sort().join(",") === same);
+      const mateLesson = mate && modelOf(other)?.lessons.find((entry) => entry.id === mate[0]);
+      if (mate && mateLesson) targets.push([other, mate[0], mateLesson]);
+    }
+  }
+  for (const [key, id, entry] of targets) {
+    const value = next.layers[key].lessons[id];
+    if (wanted && !entry.candidates.includes(wanted)) return refuse(`${key}학기 ${entry.classId} ${entry.subject}: ${nameOf(wanted)} 교사는 담당 후보(전공 일치)가 아닙니다(두 학기 묶음 수업은 함께 바꿉니다).`);
+    if (wanted) {
+      const cap = model.teacherOf.get(wanted)?.maxHours;
+      const now = timetableTeacherHours(next.layers[key], wanted);
+      if (Number.isFinite(cap) && now + entry.hours > cap) return refuse(`${nameOf(wanted)} 교사는 ${key}학기 주 ${now}시간 — ${entry.hours}시간을 더하면 필수 상한 ${cap}시간을 넘습니다.`);
+    }
+    value.teacherId = wanted;
+    delete value.bareSlots; // 새 교사가 모든 시간에 선다(못 서는 시간이 있으면 검증기가 거절)
+    next.noTeacher = (next.noTeacher || []).filter((row) => !(String(row.semester) === key && row.kind === "lesson" && row.classId === entry.classId && row.subject === entry.subject && (lesson.part ? Number(row.hours) <= entry.hours : true)));
+    if (!wanted) next.noTeacher.push({ semester: key, kind: "lesson", grade: entry.grade, classId: entry.classId, subject: entry.subject, hours: entry.hours, reason: "manual" });
+  }
+  const check = timetableValidate(inputs, next);
+  const known = new Set(before.errors.map((error) => `${error.semester}|${error.text}`));
+  const fresh = check.errors.filter((error) => !known.has(`${error.semester}|${error.text}`));
+  if (fresh.length) return refuse(fresh.slice(0, 2).map((error) => error.text).join(" / "));
+  const soft = (result.violations || []).filter((entry) => !["gap", "oncePerDay", "run", "maxPerDay", "lunch", "frame"].includes(entry.rule));
+  next.violations = [...check.violations, ...soft];
+  next.metrics = { ...next.metrics, hard: check.violations.filter((entry) => entry.level === "hard").reduce((sum, entry) => sum + entry.amount, 0), gap: check.counts.gap, oncePerDay: check.counts.oncePerDay, run: check.counts.run,
+    maxPerDay: check.counts.maxPerDay, lunch: check.counts.lunch, noTeacherHours: next.noTeacher.reduce((sum, row) => sum + (Number(row.hours) || 0), 0) };
+  next.edits = (Number(result.edits) || 0) + 1;
+  return { ok: true, teacher: true, result: next, semesters: targets.map(([key]) => key), text: `${lesson.classId}반 ${lesson.subject} 담당 교사 ${nameOf(item.teacherId)} → ${nameOf(wanted)}${targets.length > 1 ? "(두 학기 함께)" : ""}` };
 }
 
 // 그 반 그 칸에 놓인 반 수업의 id(없으면 ""). 블록·창체·빈칸은 ""
@@ -721,7 +790,10 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   const doubles = new Set((Array.isArray(tt.doubleSubjects) ? tt.doubleSubjects : []).map(courseKey));
   if (doubles.size) for (const lesson of lessons) if (doubles.has(courseKey(lesson.subject))) lesson.double = true;
   const venues = Object.fromEntries(Object.entries({ ...(cs.rooms || {}), ...(tt.venues || {}) }).map(([key, value]) => [key, Number(value) || 0]));
-  const pinned = tt.pins?.[semester] && Object.keys(tt.pins[semester]).length ? { lessons: JSON.parse(JSON.stringify(tt.pins[semester], typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined)) } : null;
+  const plainOf = (value) => JSON.parse(JSON.stringify(value, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined));
+  const pinnedSlots = tt.pins?.[semester] && Object.keys(tt.pins[semester]).length ? plainOf(tt.pins[semester]) : null;
+  const pinnedTeachers = tt.teacherPins?.[semester] && Object.keys(tt.teacherPins[semester]).length ? plainOf(tt.teacherPins[semester]) : null; // 고정한 담당 교사 { 수업 id: 교사 id }
+  const pinned = pinnedSlots || pinnedTeachers ? { ...(pinnedSlots ? { lessons: pinnedSlots } : {}), ...(pinnedTeachers ? { teachers: pinnedTeachers } : {}) } : null;
   const input = {
     ...(pinned ? { pins: pinned } : {}), // 교사가 고정한 반 수업 칸(없으면 넣지 않는다 — 입력 서명이 그대로)
     semester, days: cs.gridDays, periods: Number(cs.gridPeriods) || 7, periodsByDay: tt.periodsByDay || {}, lunchAfter: tt.lunchAfter || TIMETABLE_DEFAULT_LUNCH,
@@ -745,7 +817,7 @@ var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, resu
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
 var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
-var TIMETABLE_NO_TEACHER_REASONS = { none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
+var TIMETABLE_NO_TEACHER_REASONS = { manual: "직접 비움", none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
 var TIMETABLE_RESULT_CHOICES = { gap: ["releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules", "frameOrder"], maxPerDay: ["teacherRules"], lunch: ["frameOrder"] };;
 var TIMETABLE_LEVELS = [["hard", "반드시"], ["soft", "최대한"], ["off", "끔"]];
@@ -1352,6 +1424,20 @@ function timetableEditClick(slot) {
     }
     TIMETABLE_VIEW.editPick = slot;
     TIMETABLE_VIEW.editTargets = targets;
+    // 반 수업 칸이면 담당 교사를 바꿀 수 있는 후보(전공 일치 교사)마다 그 수업의 모든 시간에 설 수 있는지 미리 본다
+    TIMETABLE_VIEW.teacherOptions = null;
+    const pickedId = timetableLessonAt(plainResult.layers?.[semester], TIMETABLE_VIEW.pick.class, slot);
+    const pickedModel = pickedId ? inputs[semester].lessons.find((lesson) => lesson.id === pickedId) : null;
+    if (pickedModel) {
+      const item = plainResult.layers[semester].lessons[pickedId];
+      const options = [...new Set([item.teacherId, ...pickedModel.candidates].filter(Boolean))].map((id) => {
+        const current = id === item.teacherId;
+        let outcome = { ok: true };
+        if (!current) { try { outcome = timetableEditTeacher(inputs, plainResult, { semester, lessonId: pickedId, teacherId: id }); } catch (error) { outcome = { ok: false, reason: error?.message || String(error) }; } }
+        return { id, name: inputs[semester].teacherOf.get(id)?.name || id, hours: timetableTeacherHours(plainResult.layers[semester], id), current, ok: current || outcome.ok, reason: outcome.ok ? "" : outcome.reason };
+      }).sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0) || (b.ok ? 1 : 0) - (a.ok ? 1 : 0) || a.hours - b.hours || a.name.localeCompare(b.name));
+      TIMETABLE_VIEW.teacherOptions = { slot, lessonId: pickedId, classId: TIMETABLE_VIEW.pick.class, subject: pickedModel.subject, current: item.teacherId || "", fixed: Boolean(pickedModel.fixedTeacher) && !pickedModel.teacherPinned, options };
+    }
     const able = Object.values(targets).filter((value) => value === true).length;
     const pickedBlock = inputs[semester].blocks.find((block) => block.classIds.includes(TIMETABLE_VIEW.pick.class) && (plainResult.layers?.[semester]?.blocks?.[block.id]?.slots || []).includes(slot));
     TIMETABLE_VIEW.editStatus = pickedBlock
@@ -1404,6 +1490,55 @@ function timetablePinToggle() {
   renderTimetable();
 }
 
+// 고른 반 수업의 담당 교사를 고른 교사로 바꾼다(그 반·그 과목의 모든 시간). 고른 값은 #timetableTeacherPick.
+function timetableTeacherChange() {
+  const round = timetableRound();
+  const saved = timetableSaved(round);
+  const box = TIMETABLE_VIEW.teacherOptions;
+  const select = document.querySelector("#timetableTeacherPick");
+  if (!saved || !box || !select || TIMETABLE_RUN) return;
+  const semester = TIMETABLE_VIEW.semester;
+  const inputs = {};
+  for (const key of Object.keys(saved.result.layers || {})) inputs[key] = timetableModel(timetableInput(round, key).input);
+  const plainResult = JSON.parse(JSON.stringify(saved.result, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined));
+  let outcome;
+  try { outcome = timetableEditTeacher(inputs, plainResult, { semester, lessonId: box.lessonId, teacherId: select.value }); } catch (error) { outcome = { ok: false, reason: error?.message || String(error) }; }
+  TIMETABLE_VIEW.editPick = "";
+  TIMETABLE_VIEW.editTargets = null;
+  TIMETABLE_VIEW.teacherOptions = null;
+  if (!outcome.ok) { TIMETABLE_VIEW.editStatus = `바꾸지 않았습니다 — ${outcome.reason}`; TIMETABLE_VIEW.editError = true; renderTimetable(); return; }
+  TIMETABLE_VIEW.undo.push({ round, result: plainResult, text: outcome.text });
+  if (TIMETABLE_VIEW.undo.length > 30) TIMETABLE_VIEW.undo.shift();
+  state.timetable[round].result = outcome.result;
+  TIMETABLE_VIEW.editStatus = `담당 교사를 바꿨습니다 — ${outcome.text}`;
+  TIMETABLE_VIEW.editError = false;
+  if (typeof persistStateSoon === "function") persistStateSoon();
+  renderTimetable();
+}
+
+// 고른 반 수업의 지금 담당 교사를 고정하거나 고정을 푼다(다시 계산해도 그 반 그 과목은 그 교사). settings.teacherPins[학기][수업 id] = 교사 id
+function timetableTeacherPinToggle() {
+  const box = TIMETABLE_VIEW.teacherOptions;
+  if (!box || !timetableSaved(timetableRound())) return;
+  const semester = TIMETABLE_VIEW.semester;
+  const settings = timetableSettingsEdit();
+  const pins = JSON.parse(JSON.stringify(settings.teacherPins || {}, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined));
+  const had = Boolean(pins[semester]?.[box.lessonId]);
+  if (!had && !box.current) return;
+  if (had) delete pins[semester][box.lessonId];
+  else { if (!pins[semester]) pins[semester] = {}; pins[semester][box.lessonId] = box.current; }
+  if (pins[semester] && !Object.keys(pins[semester]).length) delete pins[semester];
+  if (Object.keys(pins).length) settings.teacherPins = pins; else delete settings.teacherPins;
+  const name = box.options.find((option) => option.id === box.current)?.name || box.current;
+  TIMETABLE_VIEW.editPick = "";
+  TIMETABLE_VIEW.editTargets = null;
+  TIMETABLE_VIEW.teacherOptions = null;
+  TIMETABLE_VIEW.editStatus = had ? `${box.classId}반 ${box.subject} 담당 교사 고정을 풀었습니다.` : `${box.classId}반 ${box.subject} 담당 교사를 ${name} 교사로 고정했습니다 — 다시 계산해도 이 반 이 과목은 이 교사가 맡습니다.`;
+  TIMETABLE_VIEW.editError = false;
+  if (typeof persistStateSoon === "function") persistStateSoon();
+  renderTimetable();
+}
+
 function timetableEditUndo() {
   const last = TIMETABLE_VIEW.undo.pop();
   const round = timetableRound();
@@ -1424,7 +1559,7 @@ function timetableStudentLessons(round, grade, semester) {
     const saved = timetableSaved(round);
     const layer = saved?.result?.layers?.[String(semester)];
     if (!layer) return null;
-    if (timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, timetableSettings().pins)) return null;
+    if (timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, timetableSettings().pins, timetableSettings().teacherPins)) return null;
     if (timetableBlockTimeChanges(round).some((change) => String(change.semester) === String(semester))) return null;
     const tables = timetableResultTables(timetableInput(round, String(semester)).input, layer);
     const out = {};
@@ -1526,6 +1661,16 @@ function timetableGridHtml(tables, stale = false) {
   const pinnedSlots = new Set(view === "class" ? Object.entries(pinsNow).filter(([id]) => String(id.split("@")[1] || "").split("#")[0] === picked.id).flatMap(([, keys]) => keys) : []);
   const pinTotal = Object.values(timetableSettings().pins || {}).reduce((sum, lessons) => sum + Object.values(lessons || {}).reduce((count, keys) => count + keys.length, 0), 0);
   const pickedLesson = view === "class" && TIMETABLE_VIEW.editPick ? (picked.cells[TIMETABLE_VIEW.editPick] || []).find((entry) => entry.kind === "lesson") : null;
+  // 고른 반 수업의 담당 교사 바꾸기·고정(후보 = 전공 일치 교사, 설 수 없는 교사는 이유와 함께 흐리게)
+  const teacherPinsNow = timetableSettings().teacherPins || {};
+  const teacherPinTotal = Object.values(teacherPinsNow).reduce((sum, lessons) => sum + Object.keys(lessons || {}).length, 0);
+  const box = pickedLesson && !stale && TIMETABLE_VIEW.teacherOptions && TIMETABLE_VIEW.teacherOptions.slot === TIMETABLE_VIEW.editPick && TIMETABLE_VIEW.teacherOptions.classId === picked.id ? TIMETABLE_VIEW.teacherOptions : null;
+  const boxPinned = box ? Boolean(teacherPinsNow[TIMETABLE_VIEW.semester]?.[box.lessonId]) : false;
+  const short = (text) => (String(text).length > 46 ? `${String(text).slice(0, 45)}…` : String(text));
+  const teacherBox = box ? `<span class="tt-teacher-box" id="timetableTeacherBox" data-lesson="${timetableEsc(box.lessonId)}" data-pinned="${boxPinned ? "1" : "0"}"><label>${timetableEsc(box.subject)} 담당 교사
+      <select id="timetableTeacherPick" aria-label="${timetableEsc(`${picked.id}반 ${box.subject} 담당 교사`)}"${box.fixed || boxPinned ? " disabled" : ""}>${box.options.map((option) => `<option value="${timetableEsc(option.id)}"${option.current ? " selected" : ""}${option.ok ? "" : " disabled"} data-ok="${option.ok ? "1" : "0"}" title="${timetableEsc(option.reason)}">${timetableEsc(`${option.name} · 주 ${option.hours}시간${option.current ? "(지금)" : option.ok ? "" : ` — ${short(option.reason)}`}`)}</option>`).join("")}<option value=""${box.current ? "" : " selected"}>담당 교사 없음</option></select></label>
+      <button class="button" type="button" id="timetableTeacherChange"${box.fixed || boxPinned ? ` disabled title="${box.fixed ? "6단계·5단계에서 정한 교사입니다" : "교사 고정을 푼 뒤 바꾸세요"}"` : ""}>담당 교사 바꾸기</button>
+      <button class="button" type="button" id="timetableTeacherPin" data-pinned="${boxPinned ? "1" : "0"}"${box.fixed || (!box.current && !boxPinned) ? " disabled" : ""}>${boxPinned ? "교사 고정 풀기" : "이 교사로 고정"}</button></span>` : "";
   const cellHtml = (entries, sub) => (entries || []).map((entry) => `<span class="tt-cell-entry" data-kind="${timetableEsc(entry.kind || "lesson")}"${entry.noTeacher ? ' data-no-teacher="1"' : ""}><strong>${timetableEsc(entry.text)}</strong>${sub(entry) ? `<small>${timetableEsc(sub(entry))}</small>` : ""}</span>`).join("");
   let body = "";
   if (view === "class") {
@@ -1539,10 +1684,12 @@ function timetableGridHtml(tables, stale = false) {
     <button class="button" type="button" id="timetablePrintOne"${stale ? " disabled" : ""}>이 ${view === "teacher" ? "교사" : "반"} 인쇄</button>
     <button class="button" type="button" id="timetablePrintAll"${stale ? " disabled" : ""}>${view === "teacher" ? "교사" : "반"} 전체 인쇄(${list.length}${view === "teacher" ? "명" : "개 반"})</button>
     <button class="button" type="button" id="timetableDownload"${stale ? ' disabled title="다시 계산한 뒤 내려받으세요"' : ""}>엑셀로 내려받기(학급·교사 전체 시간표)</button></div>
-    ${view === "class" && !stale ? `<p class="cs-note" id="timetableEditHelp">직접 고치기: 칸을 누르면 맞바꿀 수 있는 칸이 초록으로 표시됩니다 — 그 칸을 누르면 두 칸을 맞바꿉니다. 블록 칸을 누르면 그 블록 한 시간을 옮길 수 있는 칸이 표시되고, 옮기면 그 블록을 듣는 모든 반이 함께 옮겨집니다(그 칸의 반 수업은 블록 자리로, 같은 반들의 다른 블록과는 자리 맞바꿈). 창체 칸, 교사가 그 시간에 다른 반에 있는 칸은 안 되고 이유는 칸에 마우스를 올리면 보입니다.
+    ${view === "class" && !stale ? `<p class="cs-note" id="timetableEditHelp">직접 고치기: 칸을 누르면 맞바꿀 수 있는 칸이 초록으로 표시됩니다 — 그 칸을 누르면 두 칸을 맞바꿉니다. 블록 칸을 누르면 그 블록 한 시간을 옮길 수 있는 칸이 표시되고, 옮기면 그 블록을 듣는 모든 반이 함께 옮겨집니다(그 칸의 반 수업은 블록 자리로, 같은 반들의 다른 블록과는 자리 맞바꿈). 창체 칸, 교사가 그 시간에 다른 반에 있는 칸은 안 되고 이유는 칸에 마우스를 올리면 보입니다. 반 수업 칸을 고르면 그 수업의 담당 교사를 전공이 맞는 다른 교사로 바꾸거나 지금 교사로 고정할 수 있습니다.
       <button class="button" type="button" id="timetableEditUndo"${TIMETABLE_VIEW.undo.length ? "" : " disabled"}>고친 것 되돌리기${TIMETABLE_VIEW.undo.length ? `(${TIMETABLE_VIEW.undo.length})` : ""}</button>
       ${pickedLesson ? `<button class="button" type="button" id="timetablePin" data-pinned="${pinnedSlots.has(TIMETABLE_VIEW.editPick) ? "1" : "0"}">${pinnedSlots.has(TIMETABLE_VIEW.editPick) ? `${timetableEsc(TIMETABLE_VIEW.editPick)} 고정 풀기` : `${timetableEsc(TIMETABLE_VIEW.editPick)} ${timetableEsc(pickedLesson.text)} 이 칸에 고정`}</button>` : ""}
-      ${pinTotal ? `<span id="timetablePinCount" data-count="${pinTotal}">고정 ${pinTotal}칸(다시 계산해도 그 자리)</span> <button class="button" type="button" id="timetablePinsClear">고정 모두 풀기</button>` : ""}</p>` : ""}
+      ${teacherBox}
+      ${pinTotal ? `<span id="timetablePinCount" data-count="${pinTotal}">고정 ${pinTotal}칸(다시 계산해도 그 자리)</span>` : ""}${teacherPinTotal ? ` <span id="timetableTeacherPinCount" data-count="${teacherPinTotal}">교사 고정 ${teacherPinTotal}개(다시 계산해도 그 교사)</span>` : ""}
+      ${pinTotal || teacherPinTotal ? ` <button class="button" type="button" id="timetablePinsClear">고정 모두 풀기</button>` : ""}</p>` : ""}
     ${TIMETABLE_VIEW.editStatus ? `<p class="tt-status${TIMETABLE_VIEW.editError ? " is-error" : ""}" id="timetableEditStatus" role="status">${timetableEsc(TIMETABLE_VIEW.editStatus)}</p>` : ""}
     <div class="table-wrap"><table class="tt-table tt-grid" id="timetableGrid" data-view="${view}" data-id="${timetableEsc(picked.id)}">${head}<tbody>${body}</tbody></table></div>`;
 }
@@ -1671,7 +1818,7 @@ function renderTimetableView() {
   const choices = timetableChoicesFor(result, prepared, settings, preview);
   const saved = timetableSaved(round);
   let stale = false;
-  if (saved && !TIMETABLE_RUN) { try { stale = timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, settings.pins); } catch { stale = true; } }
+  if (saved && !TIMETABLE_RUN) { try { stale = timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, settings.pins, settings.teacherPins); } catch { stale = true; } }
   const status = TIMETABLE_VIEW.runStatus ? `<p class="tt-status${TIMETABLE_VIEW.runError ? " is-error" : ""}" id="timetableRunStatus" role="status">${timetableEsc(TIMETABLE_VIEW.runStatus)}</p>` : "";
   body.innerHTML = `${timetableVerdictHtml(result)}${timetableRunBarHtml(result, saved, stale)}${status}${timetableChangeHtml(TIMETABLE_VIEW.changeInfo)}${timetableResultHtml(saved, stale, semester, prepared)}${timetableConditionsHtml(prepared)}${timetableIssuesHtml(result, choices)}${timetableAssumptionsHtml(prepared)}${timetableGradesHtml(result)}`;
 }
@@ -1885,9 +2032,13 @@ function timetableHandleClick(event) {
   if (target.closest?.("#timetablePrintAll")) { timetablePrint(true); return; }
   if (target.closest?.("#timetableEditUndo")) { timetableEditUndo(); return; }
   if (target.closest?.("#timetablePin")) { timetablePinToggle(); return; }
+  if (target.closest?.("#timetableTeacherChange")) { timetableTeacherChange(); return; }
+  if (target.closest?.("#timetableTeacherPin")) { timetableTeacherPinToggle(); return; }
   if (target.closest?.("#timetablePinsClear")) {
     const settings = timetableSettingsEdit();
     delete settings.pins;
+    delete settings.teacherPins;
+    TIMETABLE_VIEW.teacherOptions = null;
     TIMETABLE_VIEW.editPick = ""; TIMETABLE_VIEW.editTargets = null; TIMETABLE_VIEW.editStatus = "고정을 모두 풀었습니다."; TIMETABLE_VIEW.editError = false;
     if (typeof persistStateSoon === "function") persistStateSoon();
     renderTimetable();

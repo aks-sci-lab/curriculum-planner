@@ -373,6 +373,10 @@ test("칸 고정: settings.pins[학기]가 그 학기 입력의 pins.lessons로 
   const ctx = world({ timetable: { settings: { pins: { 1: { "1|공통국어@1-1": ["월2"] }, 2: { "2|독서@2-1": ["화3"] } } } } });
   assert.deepEqual(plain(ctx.timetableInput("1", "1")).input.pins, { lessons: { "1|공통국어@1-1": ["월2"] } });
   assert.deepEqual(plain(ctx.timetableInput("1", "2")).input.pins, { lessons: { "2|독서@2-1": ["화3"] } });
+  // 담당 교사 고정(settings.teacherPins[학기])도 그 학기 입력의 pins.teachers로 실린다(칸 고정이 없어도)
+  const teacherCtx = world({ timetable: { settings: { teacherPins: { 1: { "1|공통국어@1-1": "t-국어-1" } } } } });
+  assert.deepEqual(plain(teacherCtx.timetableInput("1", "1")).input.pins, { teachers: { "1|공통국어@1-1": "t-국어-1" } });
+  assert.equal("pins" in plain(teacherCtx.timetableInput("1", "2")).input, false);
   // 모형: 그 반 수업에만 고정이 붙는다(격자에 없는 칸은 버림)
   const model = ctx.timetableModel(ctx.timetableInput("1", "1").input);
   assert.deepEqual(plain(model.lessons.filter((lesson) => lesson.pins.length).map((lesson) => [lesson.id, lesson.pins])), [["1|공통국어@1-1", ["월2"]]]);

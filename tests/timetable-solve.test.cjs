@@ -238,6 +238,29 @@ test("칸 고정(input.pins.lessons): 고정한 반 수업 시간은 그 칸에 
   assert.equal(plain(ctx.timetableValidate(both, split)).ok, true);
 });
 
+test("담당 교사 고정(input.pins.teachers): 후보(전공 일치)인 교사만 고정되고, 풀이기는 그 수업을 그 교사에게 맡긴다", () => {
+  const ctx = context();
+  const make = (pins) => ({ semester: "1", days: "월,화", periods: 4, grades: [{ grade: "1", classes: 2 }],
+    teachers: [{ id: "k1", name: "김국어", departments: ["국어"] }, { id: "k2", name: "이국어", departments: ["국어"] }, { id: "m1", name: "박수학", departments: ["수학"] }],
+    lessons: [{ id: "국어", grade: "1", subject: "국어", department: "국어", hours: 2 }, { id: "수학", grade: "1", subject: "수학", department: "수학", hours: 2 }],
+    blocks: [], rules: {}, ...(pins ? { pins } : {}) });
+  // 모형: 고정한 교사가 후보면 그 교사만 후보·정해진 교사로, 전공이 다른 교사·명단에 없는 교사는 무시
+  const lessonsOf = (pins) => Object.fromEntries(plain(ctx.timetableModel(make(pins)).lessons).map((lesson) => [lesson.id, [lesson.candidates, lesson.fixedTeacher, lesson.teacherPinned]]));
+  const pinned = lessonsOf({ teachers: { "국어@1-1": "k2", "국어@1-2": "m1", "수학@1-1": "없는 교사" } });
+  assert.deepEqual([pinned["국어@1-1"], pinned["국어@1-2"], pinned["수학@1-1"]], [[["k2"], "k2", true], [["k1", "k2"], "", false], [["m1"], "", false]]);
+  // 풀이기: 두 반 국어를 모두 이국어에게 고정하면 둘 다 이국어가 맡는다(고정이 없으면 시수를 고르게 나눠 한 반씩)
+  const free = plain(ctx.timetableSolve({ 1: make() }, { seed: 1, iterations: 4000, rounds: 1 }));
+  assert.deepEqual([free.layers["1"].lessons["국어@1-1"].teacherId, free.layers["1"].lessons["국어@1-2"].teacherId].sort(), ["k1", "k2"]);
+  const inputs = { 1: make({ teachers: { "국어@1-1": "k2", "국어@1-2": "k2" } }) };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 4000, rounds: 1 }));
+  assert.deepEqual([result.layers["1"].lessons["국어@1-1"].teacherId, result.layers["1"].lessons["국어@1-2"].teacherId], ["k2", "k2"]);
+  assert.deepEqual([plain(ctx.timetableValidate(inputs, result)).ok, result.metrics.hard], [true, 0]);
+  // 검증기: 고정한 교사와 다른 교사가 배정된 결과는 오류
+  const wrong = JSON.parse(JSON.stringify(result));
+  wrong.layers["1"].lessons["국어@1-1"].teacherId = "k1";
+  assert.ok(plain(ctx.timetableValidate(inputs, wrong)).errors.some((error) => error.type === "fixedTeacher" || /정해진 교사와 다른 교사/.test(error.text)));
+});
+
 test("창체 교시 범위·하루 최소 교시: 시간을 정하지 않은 창체는 n교시 이후에만(검증기도 확인), 일찍 끝나는 날은 '최대한' 위반으로", () => {
   const ctx = context();
   // 학년별 창체 2시간(시간 미정) + 전교 동시 없음, 4교시 이후에만

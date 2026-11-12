@@ -186,6 +186,7 @@ function timetableDayCapacity(available, positions, rules, lunchPositions) {
 //   lessons: [{ id, grade, classes: 생략 = 학년 전체 | ["1", "3-2"], subject, department, hours, teacherId, teacherIds, teacherByClass, venue, double,
 //               parts: [{ department, hours, teacherId, teacherIds }] }],          // 반 수업(parts = 통합과학처럼 교사 여럿이 나눠 맡는 수업)
 //   blocks: [{ id, grade, label, hours, classes, times, sections: [{ id, subject, department, credits, teacherId, teacherIds, venue }] }],
+//   pins: { lessons: { 수업 id: ['월3', …] }, teachers: { 수업 id: 교사 id } }(교사가 고정한 칸·담당 교사 — 수업 id = '과목 id@반'),
 //   venues: { 체육: 3 }, rules, missing: [{ level, cause, where }], notes: { expandedClasses, undecided: [..], staleSections: [..] }
 // }
 function timetableModel(input = {}) {
@@ -269,12 +270,16 @@ function timetableModel(input = {}) {
         if (!hours) return;
         const merged = part ? { subject: lesson.subject, department: part.department ?? lesson.department, teacherId: part.teacherId, teacherIds: part.teacherIds } : lesson;
         const fixedId = part ? part.teacherId : lesson.teacherByClass?.[classId] || lesson.teacherByClass?.[classId.split("-")[1]] || lesson.teacherId;
-        const candidates = candidatesFor(merged, fixedId);
+        let candidates = candidatesFor(merged, fixedId);
         const lessonId = `${lesson.id || `L${index + 1}`}@${classId}${part ? `#${partIndex + 1}` : ""}`;
+        // 고정한 담당 교사(input.pins.teachers[수업 id] = 교사 id): 그 교사가 이 수업의 후보(전공 일치)일 때만 — 그 수업은 그 교사만 맡는다
+        const pinnedTeacher = String(input.pins?.teachers?.[lessonId] || "");
+        const teacherPinned = Boolean(pinnedTeacher) && !(fixedId && candidates.length === 1) && candidates.includes(pinnedTeacher);
+        if (teacherPinned) candidates = [pinnedTeacher];
         // 고정한 칸(input.pins.lessons[수업 id] = ['월3', …]): 그 수업의 시간 가운데 그만큼은 그 칸에 둔다(격자에 없는 칸·시수보다 많은 것은 버림)
         const pins = [...new Set((input.pins?.lessons?.[lessonId] || []).map(String))].filter((key) => grade.slotByKey.has(key)).slice(0, hours);
         lessons.push({ id: lessonId, pins, grade: grade.grade, classId, subject: String(lesson.subject || ""),
-          department: String(merged.department || ""), hours, candidates, fixedTeacher: fixedId && candidates.length === 1 ? candidates[0] : "", unknownTeacher: Boolean(fixedId) && !candidates.length,
+          department: String(merged.department || ""), hours, candidates, fixedTeacher: (fixedId || teacherPinned) && candidates.length === 1 ? candidates[0] : "", teacherPinned, unknownTeacher: Boolean(fixedId) && !candidates.length,
           venue: String(lesson.venue || ""), double: Boolean(lesson.double), part: part ? partIndex + 1 : 0, mismatch: Boolean(lesson.teacherMismatch) && Boolean(fixedId) });
       });
     }
