@@ -793,7 +793,7 @@ function classSectionsSaveResult(entry, result, input, group, source, batch = ""
 
 // ---- 시간표 미리 점검 ----
 // 규칙은 timetable.js(app.js보다 먼저 로드) timetablePrecheckDepartments 한 곳: 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간,
-// 교과마다 그 학년 반 수업 시수 ÷ 교사 수가 빈 칸을 넘으면 경고(최소 ⌈시수 ÷ 빈 칸⌉명). 학교 지정 과목 반 수업은 6단계 자료에 없어 넣지 않는다(7단계 시간표 사전 점검에서).
+// 교과마다 그 학년 반 수업 시수가 교사 수 × 빈 칸보다 많으면 경고(교사를 늘리라는 문구는 쓰지 않는다). 학교 지정 과목 반 수업은 6단계 자료에 없어 넣지 않는다(7단계 시간표 사전 점검에서).
 // spec: { slots: 주 교시 수, fixed: 고정 시간 수, blockHours, lessons: [{ department, label, hours }], teachers: { 교과: 명 } | null }
 function classSectionsTimetablePrecheck(spec) {
   return timetablePrecheckDepartments(spec);

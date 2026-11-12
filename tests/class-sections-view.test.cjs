@@ -601,21 +601,22 @@ test("학급 단위로만 운영되는 그룹: 블록 시간 없음('반 수업'
   assert.match(view, /!classSectionsClassUnitOnly\(item, classSectionsEntry\(round, item\.key, false\), settings\)\)/, "블록 시간 추천에서 뺌");
 });
 
-test("시간표 미리 점검: 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간, 반 수업 시수 ÷ 교사 수가 넘으면 경고(최소 교사 수)", () => {
+test("시간표 미리 점검: 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간, 반 수업 시수가 교사 수 × 빈 칸보다 많으면 경고(교사를 늘리라는 문구 없음)", () => {
   const ctx = context();
-  // 예: 3학년 주 35교시 − 블록 20(택5 블록 5개 × 4) − 고정 2 = 13칸, 정보 인공지능 기초 7반 × 4시간 = 28시간, 교사 2명 → 14 > 13 → 최소 3명
+  // 예: 3학년 주 35교시 − 블록 20(택5 블록 5개 × 4) − 고정 2 = 13칸, 정보 인공지능 기초 7반 × 4시간 = 28시간, 교사 2명 × 13칸 = 26 < 28
   const check = plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 2, blockHours: 20, label: "3학년 1학기",
     lessons: [{ department: "정보", label: "인공지능 기초 7반 × 4시간", hours: 28 }, { department: "제2외국어", label: "일본어 4반 × 2시간", hours: 8 }],
     teachers: { 정보: 2, 제2외국어: 1 } }));
   assert.equal(check.free, 13);
   assert.equal(check.issues.length, 1);
-  assert.deepEqual([check.issues[0].department, check.issues[0].need], ["정보", 3]);
-  assert.match(check.issues[0].message, /3학년 1학기 정보: 반 수업 인공지능 기초 7반 × 4시간 28시간 ÷ 교사 2명 = 14시간이 블록 밖 빈 칸 13칸보다 많습니다 → 최소 3명 필요/);
+  assert.deepEqual([check.issues[0].department, check.issues[0].capacity, check.issues[0].shortage], ["정보", 26, 2]);
+  assert.equal(check.issues[0].message, "3학년 1학기 정보: 교사 2명으로는 블록 밖 빈 칸 13칸에 반 수업 인공지능 기초 7반 × 4시간 28시간을 넣을 수 없습니다(한 칸에 한 반, 2명 × 13칸 = 26시간) → 2시간이 남습니다(블록 밖 빈 칸을 늘리거나 블록 수·학급 단위 운영을 바꾸기).");
+  assert.doesNotMatch(check.issues[0].message, /명 필요|증원|강사|순회/);
   assert.equal(plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 2, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: { 정보: 3 } })).issues.length, 0);
   // 교사 수를 모르면 점검하지 않음(행만), 명단에 0명이면 경고
   const unknown = plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 0, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: null }));
-  assert.deepEqual([unknown.issues.length, unknown.teachersKnown, unknown.rows[0].need], [0, false, 2]);
-  assert.match(plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 0, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: { 정보: 0 } })).issues[0].message, /맡을 교사가 명단에 없습니다 → 최소 2명/);
+  assert.deepEqual([unknown.issues.length, unknown.teachersKnown, unknown.rows[0].capacity], [0, false, null]);
+  assert.match(plain(ctx.classSectionsTimetablePrecheck({ slots: 35, fixed: 0, blockHours: 20, lessons: [{ department: "정보", label: "x", hours: 28 }], teachers: { 정보: 0 } })).issues[0].message, /정보: 반 수업 x 28시간을 맡을 수 있는 교사가 명단에 없습니다\(담당 교사 없음/);
   // 앱: 저장할 때 그 학년·학기 점검을 결과에 붙이고 상태 줄에 알림(학급 단위 그룹 + 교사 명단)
   const group = ctx.classSectionsSource("1").groups[0];
   const entry = ctx.classSectionsEntry("1", group.key, true);

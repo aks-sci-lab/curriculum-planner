@@ -754,7 +754,7 @@ function timetablePrecheck(source) {
 
 // ---- 6단계 '시간표 미리 점검' 규칙(class-sections-view.js classSectionsTimetablePrecheck가 부른다) ----
 // 학년·학기마다 블록 밖 빈 칸 = 주 교시 − 블록 시수 − 고정 시간. 교과마다 그 학년 반 수업 시수(학급 단위 과목: 반 수 × 학점)를
-// 그 교과 교사 수로 나눈 값이 빈 칸을 넘으면 경고(교사 한 사람이 같은 시간에 두 반을 못 맡음 → 최소 ⌈시수 ÷ 빈 칸⌉명) — P7을 교과 단위로 본 것.
+// 교사 수 × 빈 칸보다 많으면 경고(교사 한 사람이 같은 시간에 두 반을 못 맡음) — P7을 교과 단위로 본 것. 교사를 늘리라는 문구는 쓰지 않는다.
 // spec: { slots: 주 교시 수, fixed: 고정 시간 수, blockHours, lessons: [{ department, label, hours }], teachers: { 교과: 명 } | null }
 function timetablePrecheckDepartments(spec) {
   const free = Math.max(0, (Number(spec.slots) || 0) - (Number(spec.blockHours) || 0) - (Number(spec.fixed) || 0));
@@ -770,15 +770,16 @@ function timetablePrecheckDepartments(spec) {
   const issues = [];
   for (const item of byDepartment.values()) {
     const teachers = spec.teachers ? Number(spec.teachers[item.department]) || 0 : null;
-    const need = free > 0 ? Math.ceil(item.hours / free) : Infinity;
-    const row = { ...item, teachers, need: Number.isFinite(need) ? need : null, perTeacher: teachers ? Math.round((item.hours / teachers) * 10) / 10 : null };
+    // capacity = 그 교과 교사들이 블록 밖 빈 칸에 넣을 수 있는 시간(한 칸에 한 반). 교사 수를 모르면 null.
+    const capacity = teachers === null ? null : teachers * free;
+    const row = { ...item, teachers, capacity, perTeacher: teachers ? Math.round((item.hours / teachers) * 10) / 10 : null };
     rows.push(row);
     if (teachers === null) continue;
-    if (free <= 0 || !teachers || item.hours / teachers > free) {
-      issues.push({ type: "timetable-precheck", severity: "warn", department: item.department, hours: item.hours, teachers, free, need: row.need,
-        message: teachers === 0 && free > 0 ? `${spec.label || ""} ${item.department}: 반 수업 ${item.labels.join(", ")} ${item.hours}시간을 맡을 교사가 명단에 없습니다 → 최소 ${row.need}명 필요.`.trim()
+    if (item.hours > capacity) {
+      issues.push({ type: "timetable-precheck", severity: "warn", department: item.department, hours: item.hours, teachers, free, capacity, shortage: item.hours - capacity,
+        message: teachers === 0 && free > 0 ? `${spec.label || ""} ${item.department}: 반 수업 ${item.labels.join(", ")} ${item.hours}시간을 맡을 수 있는 교사가 명단에 없습니다(담당 교사 없음 — 교사 명단의 담당 교과·담당 과목을 확인하세요).`.trim()
           : free <= 0 ? `${spec.label || ""} 블록 밖 빈 칸이 없어(주 ${spec.slots}교시 − 블록 ${spec.blockHours} − 고정 ${spec.fixed}) ${item.department} 반 수업 ${item.hours}시간을 둘 곳이 없습니다.`.trim()
-          : `${spec.label || ""} ${item.department}: 반 수업 ${item.labels.join(", ")} ${item.hours}시간 ÷ 교사 ${teachers}명 = ${row.perTeacher}시간이 블록 밖 빈 칸 ${free}칸보다 많습니다 → 최소 ${row.need}명 필요(또는 블록 수·학급 단위 운영을 바꾸기).`.trim() });
+          : `${spec.label || ""} ${item.department}: 교사 ${teachers}명으로는 블록 밖 빈 칸 ${free}칸에 반 수업 ${item.labels.join(", ")} ${item.hours}시간을 넣을 수 없습니다(한 칸에 한 반, ${teachers}명 × ${free}칸 = ${capacity}시간) → ${item.hours - capacity}시간이 남습니다(블록 밖 빈 칸을 늘리거나 블록 수·학급 단위 운영을 바꾸기).`.trim() });
     }
   }
   return { slots: Number(spec.slots) || 0, fixed: Number(spec.fixed) || 0, blockHours: Number(spec.blockHours) || 0, free, rows, issues, teachersKnown: Boolean(spec.teachers) };

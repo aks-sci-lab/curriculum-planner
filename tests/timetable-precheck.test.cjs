@@ -385,7 +385,7 @@ test("6단계 시간표 미리 점검은 timetable.js 규칙 하나를 쓴다", 
   const view = fs.readFileSync(path.join(root, "class-sections-view.js"), "utf8");
   assert.match(view, /function classSectionsTimetablePrecheck\(spec\) \{\n  return timetablePrecheckDepartments\(spec\);\n\}/);
   const check = plain(ctx.timetablePrecheckDepartments({ slots: 35, fixed: 2, blockHours: 20, label: "3학년 1학기", lessons: [{ department: "정보", label: "인공지능 기초 7반 × 4시간", hours: 28 }], teachers: { 정보: 2 } }));
-  assert.deepEqual([check.free, check.issues.length, check.issues[0].need, check.teachersKnown], [13, 1, 3, true]);
+  assert.deepEqual([check.free, check.issues.length, check.issues[0].capacity, check.issues[0].shortage, check.teachersKnown], [13, 1, 26, 2, true]);
   // 같은 상황을 7단계 사전 점검(P7)으로 보면 같은 결론(2명 × 13칸 = 26시간 < 28시간)
   const input = { grades: [{ grade: "3", classes: 7 }], creative: { school: 2 }, teachers: [{ id: "a", departments: ["정보"] }, { id: "b", departments: ["정보"] }, { id: "z", departments: ["기타"] }],
     lessons: [{ grade: "3", subject: "인공지능 기초", department: "정보", hours: 4 }], blocks: ["a", "b", "c", "d", "e"].map((id) => ({ id, grade: "3", hours: 4, sections: [{ subject: "기타", department: "기타", credits: 4 }] })) };
