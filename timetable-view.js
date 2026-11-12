@@ -322,7 +322,7 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
   const known = new Set(before.errors.map((item) => `${item.semester}|${item.text}`));
   const fresh = check.errors.filter((item) => !known.has(`${item.semester}|${item.text}`));
   if (fresh.length) return refuse(fresh.slice(0, 2).map((item) => item.text).join(" / "));
-  const soft = (result.violations || []).filter((item) => !["gap", "oncePerDay", "run", "maxPerDay", "lunch"].includes(item.rule)); // 검증기가 세지 않는 '최대한' 조건은 그대로 둔다(다시 계산하면 갱신)
+  const soft = (result.violations || []).filter((item) => !["gap", "oncePerDay", "run", "maxPerDay", "lunch", "frame"].includes(item.rule)); // 검증기가 세지 않는 '최대한' 조건은 그대로 둔다(다시 계산하면 갱신)
   next.violations = [...check.violations, ...soft];
   next.metrics = { ...next.metrics, hard: check.violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + item.amount, 0), gap: check.counts.gap, oncePerDay: check.counts.oncePerDay, run: check.counts.run,
     maxPerDay: check.counts.maxPerDay, lunch: check.counts.lunch, frameBroken: (next.metrics?.frameBroken || 0) + broken };
@@ -674,7 +674,7 @@ var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으�
 var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
 var TIMETABLE_NO_TEACHER_REASONS = { none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
-var TIMETABLE_RESULT_CHOICES = { gap: ["releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules"], maxPerDay: ["teacherRules"] };;
+var TIMETABLE_RESULT_CHOICES = { gap: ["releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules", "frameOrder"], maxPerDay: ["teacherRules"], lunch: ["frameOrder"] };;
 var TIMETABLE_LEVELS = [["hard", "반드시"], ["soft", "최대한"], ["off", "끔"]];
 var TIMETABLE_RULE_FIELDS = [
   { key: "maxHours", label: "교사 주당 시수 참고 상한(넘어도 편성 · 알림만)", min: 1, max: 40, unit: "시간" },
@@ -689,7 +689,8 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "homeroom", label: "담임이 그 학년 반 수업을 맡으면 담임반 포함", level: true, later: true },
   { key: "minPerDay", label: "반 하루 최소 교시(수업이 있는 날)", min: 1, max: 9, unit: "교시" },
   { key: "shortDay", label: "반 하루 최소 교시 지키기(반마다 끝나는 시간이 들쭉날쭉하지 않게)", level: true, later: true },
-  { key: "semesterFrame", label: "2학기는 1학기와 같은 뼈대(블록 자리 · 교사–반 짝 · 요일·교시)", level: true, later: true },
+  { key: "semesterFrame", label: "2학기는 1학기와 같은 뼈대(블록 자리 · 교사–반 짝 · 요일·교시)", level: true, later: true,
+    levels: [["hard", "같은 칸(블록·이어지는 수업 모두)"], ["order", "블록은 같은 시간대만(순서는 학기마다 달라도 됨)"], ["soft", "최대한(학기마다 따로)"], ["off", "끔"]] },
   { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true }
 ];
 var TIMETABLE_ISSUE_LABELS = { block: "계산 불가", fail: "조건 위반", warn: "확인", info: "참고" };
@@ -725,6 +726,9 @@ var TIMETABLE_CHOICES = {
   gaps: { label: "반 공강 허용(최대한 줄이고 끝 교시 쪽으로)", gives: "어떤 반은 하루 가운데에 빈 시간이 생길 수 있습니다.",
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).gap !== "hard",
     patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), gap: "soft" } }) },
+  frameOrder: { label: "2학기 블록 순서를 학기마다 다르게 허용(블록 시간대는 그대로)", gives: "블록이 놓이는 요일·교시 묶음은 두 학기 같고, 그 안에서 어느 블록이 어느 칸인지는 학기마다 달라질 수 있습니다. 이어지는 반 수업은 그대로 두 학기 같은 칸·같은 교사입니다.",
+    skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).semesterFrame !== "hard",
+    patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), semesterFrame: "order" } }) },
   releaseTeacher: { label: "공강·하루 두 번이 남으면 그 수업은 '담당 교사 없음'으로 두기(공강 먼저)", gives: "교사를 세우면 공강이나 하루 두 번이 생기는 반 수업은 담당 교사 칸을 비웁니다 — '담당 교사 없음' 시간이 늘어납니다.",
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).cover === "soft",
     patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), cover: "soft" } }) },

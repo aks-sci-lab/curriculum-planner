@@ -266,6 +266,33 @@ test("창체 교시 범위·하루 최소 교시: 시간을 정하지 않은 창
   assert.deepEqual([vm.runInContext("TIMETABLE_DEFAULT_RULES.minPerDay", ctx), vm.runInContext("TIMETABLE_DEFAULT_RULES.shortDay", ctx)], [4, "soft"]);
 });
 
+test("두 학기 뼈대 '블록은 같은 시간대만'(order): 블록 칸 집합은 두 학기 같고 순서는 달라도 됨, 이어지는 수업은 같은 칸·같은 교사, 어긋나면 '반드시' 위반", () => {
+  const ctx = context();
+  const make = (semester) => small((input) => { input.semester = semester; input.rules = { semesterFrame: "order" }; });
+  const inputs = { 1: make("1"), 2: make("2") };
+  const result = plain(ctx.timetableSolve(inputs, { seed: 5, iterations: 120000, rounds: 2 }));
+  const check = plain(ctx.timetableValidate(inputs, result));
+  assert.deepEqual([check.ok, check.errors], [true, []]);
+  assert.deepEqual([result.metrics.frame, result.metrics.frameMode, result.metrics.frameZone, result.metrics.unplacedHours], [true, "order", 0, 0]);
+  // 블록 칸 집합(학년별)은 두 학기 같다 — 블록마다의 자리는 묶이지 않는다(frame 표시 없음)
+  const zone = (semester, grade) => Object.entries(result.layers[semester].blocks).filter(([id]) => id.startsWith(grade)).flatMap(([, item]) => item.slots).sort().join(",");
+  for (const grade of ["2", "3"]) assert.equal(zone("1", grade), zone("2", grade), `${grade}학년 블록 시간대`);
+  assert.ok(Object.values(result.layers["1"].blocks).every((item) => item.frame === undefined));
+  // 이어지는 반 수업·창체는 같은 칸·같은 교사
+  for (const id of ["1국어@1-1", "2영어@2-1", "3체육@3-2"]) assert.deepEqual([result.layers["2"].lessons[id].slots.slice().sort(), result.layers["2"].lessons[id].teacherId, result.layers["2"].lessons[id].frame], [result.layers["1"].lessons[id].slots.slice().sort(), result.layers["1"].lessons[id].teacherId, true], id);
+  assert.deepEqual(result.layers["2"].creative, result.layers["1"].creative);
+  assert.equal(check.violations.some((item) => item.rule === "frame"), false);
+  // 검증기: 한 학기의 블록 한 시간이 다른 시간대로 가면 '두 학기 뼈대' 위반으로 센다(풀이기 결과에는 없던 것)
+  const moved = plain(result);
+  const taken = new Set([...Object.values(moved.layers["2"].blocks).flatMap((item) => item.slots), ...Object.entries(moved.layers["2"].lessons).filter(([id]) => /@3-/.test(id)).flatMap(([, item]) => item.slots), "월1"]);
+  const free = ["월", "화", "수", "목", "금"].flatMap((day) => [1, 2, 3, 4, 5, 6].map((period) => `${day}${period}`)).find((key) => !taken.has(key));
+  const was = moved.layers["2"].blocks["3a"].slots[0];
+  moved.layers["2"].blocks["3a"].slots[0] = free;
+  const off = plain(ctx.timetableValidate(inputs, moved)).violations.filter((item) => item.rule === "frame");
+  assert.ok(off.length >= 1 && off.every((item) => item.level === "hard" && /두 학기의 블록 시간대가 다릅니다/.test(item.cause)), JSON.stringify(off));
+  assert.equal(off.reduce((sum, item) => sum + item.amount, 0), was[0] === free[0] ? 2 : 2);
+});
+
 test("창체: 학년별(시간은 계산이 정함)·반군별 허용(반마다 따로)·전교 동시 시간 미정", () => {
   const ctx = context();
   const grade = { 1: small((input) => { input.creative = { school: 1, grade: 1 }; }) };
