@@ -50,7 +50,11 @@ test("작은 학교: 필수 조건을 모두 지킨 시간표, 검증기와 같�
   const check = plain(ctx.timetableValidate(inputs, result));
   assert.deepEqual([check.ok, check.errors], [true, []]);
   assert.deepEqual([result.metrics.hard, result.metrics.noTeacherHours, result.metrics.unplacedHours, result.violations.filter((item) => item.level === "hard")], [0, 0, 0, []]);
-  assert.deepEqual(check.counts, { gap: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 });
+  assert.deepEqual([check.counts.gap, check.counts.oncePerDay, check.counts.run, check.counts.maxPerDay, check.counts.lunch], [0, 0, 0, 0, 0]);
+  // 검증기는 '최대한' 조건(하루 최소 교시·점심 앞뒤·같은 날 같은 과목)도 풀이기와 같은 수로 센다 — 직접 고친 뒤 다시 셀 때 쓴다
+  const amountOf = (list, rule) => list.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0);
+  for (const rule of ["shortDay", "lunchSide", "sameSubjectDay"]) assert.equal(check.counts[rule], amountOf(result.violations, rule), rule);
+  assert.deepEqual(check.violations.map((item) => [item.semester, item.rule, item.level, item.kind, item.id, item.day, item.amount, item.cause]).sort(), result.violations.map((item) => [item.semester, item.rule, item.level, item.kind, item.id, item.day, item.amount, item.cause]).sort());
   // 반마다 주간 수업 수 그대로: (24 + 14 + 3) × 3반 + 블록(2 × 3 + 3 × 4) × 3반 + 창체 9
   assert.equal(check.hours["1"], (24 + 14 + 3) * 3 + (6 + 12) * 3 + 9);
   assert.equal(hoursOf(result.layers["1"]), (24 + 14 + 3) * 3);

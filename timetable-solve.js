@@ -1394,7 +1394,7 @@ function timetableSolve(inputs, options = {}) {
 // 돌려주는 값: { ok(절대 조건 위반 없음), errors: [{ type, semester, text }], counts: { gap, oncePerDay, run, maxPerDay, lunch }, hours: { 학기: 놓인 시수 } }
 function timetableValidate(inputs, result) {
   const errors = [];
-  const counts = { gap: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0 };
+  const counts = { gap: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0, shortDay: 0, lunchSide: 0, sameSubjectDay: 0 };
   const hours = {};
   const frames = [];
   const zones = {}; // 학기 → 대표 반(블록의 첫 반) → 블록이 놓인 칸 집합(뼈대 order의 '같은 시간대' 확인)
@@ -1411,6 +1411,7 @@ function timetableValidate(inputs, result) {
     zones[semester] = new Map();
     const classCells = new Map(); // 반|칸 → 이름
     const teacherCells = new Map(); // 교사|실제 시각 → 이름
+    const teacherLessons = new Map(); // 교사|실제 시각 → { id, subject }(반 수업·담임 창체만)
     const venueCells = new Map();
     const pairs = new Map(); // 반|요일 → [{ key, period, double, id }]
     let placed = 0;
@@ -1422,13 +1423,14 @@ function timetableValidate(inputs, result) {
       classCells.set(cell, name);
       return slot;
     };
-    const teach = (teacherId, slot, name, key) => {
+    const teach = (teacherId, slot, name, key, info) => {
       const teacher = model.teacherOf.get(teacherId);
       if (!teacher) { fail("teacher", `${name}: 명단에 없는 교사 ${teacherId}.`); return; }
       if (teacher.blocked.has(slot.abs)) fail("blocked", `${teacher.name} 교사 ${key}(${name})는 불가 시간입니다.`);
       const cell = `${teacherId}|${slot.abs}`;
       if (teacherCells.has(cell)) fail("teacherClash", `${teacher.name} 교사 ${key}: ${teacherCells.get(cell)}와 ${name}이 겹칩니다.`);
       teacherCells.set(cell, name);
+      if (info) teacherLessons.set(cell, info); // 반 수업이면 { id, subject } — '같은 날 같은 과목' 세기용
     };
     const useVenue = (venue, slot, name) => {
       if (!venue) return;
@@ -1464,7 +1466,7 @@ function timetableValidate(inputs, result) {
         placed += 1;
         const teacherId = otherOf.get(key) || item.teacherId;
         const taught = teacherId && !bare.has(key);
-        if (taught) { teach(teacherId, slot, name, key); useVenue(lesson.venue, slot, name); }
+        if (taught) { teach(teacherId, slot, name, key, { id: `${lesson.id}|${teacherId}`, subject: lesson.subject }); useVenue(lesson.venue, slot, name); }
         notePair(lesson.classId, slot, taught ? `t:${teacherId}` : `l:${lesson.id}`, lesson.double, lesson.id);
       }
     }
@@ -1515,7 +1517,7 @@ function timetableValidate(inputs, result) {
         if (!slot) continue;
         placed += 1;
         creativeHours.set(classId, (creativeHours.get(classId) || 0) + 1);
-        if (item.scope === "class" && item.teacherId) teach(item.teacherId, slot, `${classId} 창체`, key);
+        if (item.scope === "class" && item.teacherId) teach(item.teacherId, slot, `${classId} 창체`, key, { id: `창체@${classId}`, subject: "창체" });
       }
     }
     for (const grade of model.grades) for (const classId of grade.classes) {
@@ -1534,6 +1536,12 @@ function timetableValidate(inputs, result) {
           counts.gap += empty.length;
           if (empty.length) violations.push({ semester, rule: "gap", level: rules.gap, kind: "class", id: classId, day: model.days[d], amount: empty.length, cause: `${classId}반 ${model.days[d]}요일 ${empty.join("·")}교시가 비었습니다(공강 ${empty.length}칸).` });
         }
+        // 하루 최소 교시(수업이 있는 날인데 n교시보다 일찍 끝남) — 풀이기와 같은 셈
+        const minPerDay = Number(rules.minPerDay) > 1 ? Math.min(Number(rules.minPerDay), periods.length) : 0;
+        if (last >= 0 && minPerDay && (rules.shortDay === "hard" || rules.shortDay === "soft") && last + 1 < minPerDay) {
+          counts.shortDay += minPerDay - last - 1;
+          violations.push({ semester, rule: "shortDay", level: rules.shortDay, kind: "class", id: classId, day: model.days[d], amount: minPerDay - last - 1, cause: `${classId}반 ${model.days[d]}요일은 ${periods[last].period}교시에 끝납니다(하루 최소 ${Number(rules.minPerDay)}교시).` });
+        }
         if (rules.oncePerDay === "off") continue;
         const list = (pairs.get(`${classId}|${d}`) || []).sort((a, b) => a.period - b.period);
         const seen = [];
@@ -1547,6 +1555,35 @@ function timetableValidate(inputs, result) {
       }
     }
     const lunch = model.lunchPositions;
+    const sideOn = rules.lunchSide === "hard" || rules.lunchSide === "soft";
+    const sameOn = rules.sameSubjectDay === "hard" || rules.sameSubjectDay === "soft";
+    for (const teacher of model.teachers) {
+      // '최대한' 조건(점심 앞뒤 수업, 같은 날 같은 과목)은 교사마다 한 줄 — 풀이기와 같은 셈
+      const sideDays = [];
+      const sameDays = [];
+      for (let d = 0; d < model.days.length; d += 1) {
+        const busy = Array.from({ length: model.positions }, (_, pos) => teacherCells.has(`${teacher.id}|${d * model.positions + pos}`));
+        if (!busy.some(Boolean)) continue;
+        if (sideOn && lunch.length) {
+          let side = 99;
+          for (const pos of lunch) { if (busy[pos]) continue; side = Math.min(side, (pos > 0 && busy[pos - 1] ? 1 : 0) + (pos + 1 < model.positions && busy[pos + 1] ? 1 : 0)); }
+          if (side === 2) sideDays.push(model.days[d]);
+        }
+        if (sameOn) {
+          const seen = new Set();
+          let same = false;
+          for (let pos = 0; pos < model.positions; pos += 1) {
+            const info = teacherLessons.get(`${teacher.id}|${d * model.positions + pos}`);
+            if (!info) continue;
+            if (seen.has(info.subject) && teacherLessons.get(`${teacher.id}|${d * model.positions + pos - 1}`)?.id !== info.id) same = true;
+            seen.add(info.subject);
+          }
+          if (same) sameDays.push(model.days[d]);
+        }
+      }
+      if (sideDays.length) { counts.lunchSide += sideDays.length; violations.push({ semester, rule: "lunchSide", level: rules.lunchSide, kind: "teacher", id: teacher.id, day: sideDays.join("·"), amount: sideDays.length, cause: `${teacher.name} 교사 ${sideDays.join("·")}요일: 점심 바로 앞뒤로 모두 수업이 있습니다.` }); }
+      if (sameDays.length) { counts.sameSubjectDay += sameDays.length; violations.push({ semester, rule: "sameSubjectDay", level: rules.sameSubjectDay, kind: "teacher", id: teacher.id, day: sameDays.join("·"), amount: sameDays.length, cause: `${teacher.name} 교사 ${sameDays.join("·")}요일: 같은 과목 수업이 하루에 여러 번 있습니다.` }); }
+    }
     for (const teacher of model.teachers) for (let d = 0; d < model.days.length; d += 1) {
       const busy = Array.from({ length: model.positions }, (_, pos) => teacherCells.has(`${teacher.id}|${d * model.positions + pos}`));
       const total = busy.filter(Boolean).length;

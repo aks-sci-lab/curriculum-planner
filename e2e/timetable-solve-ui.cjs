@@ -112,7 +112,8 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   let blockMoved = null; const blockTried = [];
   for (const cell of blockCells.slice(0, 12)) {
     await cellAt(cell.slot).click(); await sleep(500);
-    const marks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => ({ slot: el.dataset.ttEdit, can: el.dataset.ttCan === "1", title: el.title, text: el.textContent.replace(/\s+/g, " ").trim() })));
+    const marks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => { const copy = el.cloneNode(true); copy.querySelectorAll(".tt-change-badge").forEach((node) => node.remove());
+      return { slot: el.dataset.ttEdit, can: el.dataset.ttCan === "1", change: el.dataset.ttChange === undefined ? null : Number(el.dataset.ttChange), more: el.dataset.ttMore === "1", badge: el.querySelector(".tt-change-badge")?.textContent || "", title: el.title, text: copy.textContent.replace(/\s+/g, " ").trim() }; }));
     const able = marks.filter((mark) => mark.can);
     blockTried.push({ slot: cell.slot, able: able.length, reasons: [...new Set(marks.filter((mark) => !mark.can).map((mark) => mark.title.slice(0, 60)))].slice(0, 3) });
     if (!able.length) { await cellAt(cell.slot).click(); await sleep(150); continue; }
@@ -153,7 +154,8 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   let swapped = null; const refusals = [];
   for (const lesson of lessons) {
     await cellAt(lesson.slot).click(); await sleep(400);
-    const marks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => ({ slot: el.dataset.ttEdit, can: el.dataset.ttCan === "1", title: el.title, text: el.textContent.replace(/\s+/g, " ").trim() })));
+    const marks = await panel.locator("#timetableGrid td[data-tt-can]").evaluateAll((els) => els.map((el) => { const copy = el.cloneNode(true); copy.querySelectorAll(".tt-change-badge").forEach((node) => node.remove());
+      return { slot: el.dataset.ttEdit, can: el.dataset.ttCan === "1", change: el.dataset.ttChange === undefined ? null : Number(el.dataset.ttChange), more: el.dataset.ttMore === "1", badge: el.querySelector(".tt-change-badge")?.textContent || "", title: el.title, text: copy.textContent.replace(/\s+/g, " ").trim() }; }));
     const able = marks.filter((mark) => mark.can && mark.text && mark.text !== lesson.text);
     const blocked = marks.find((mark) => !mark.can && mark.text && !/블록|창체/.test(mark.text) && /겹칩니다|불가 시간/.test(mark.title));
     if (!able.length) { await cellAt(lesson.slot).click(); await sleep(150); continue; } // 취소하고 다음 칸
@@ -165,9 +167,23 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
       check(/^바꾸지 않았습니다 — .+(겹칩니다|불가 시간)/.test(refusals[0]) && blocked.title.length > 5, `표시 안 된 칸을 누르면 거절 + 이유: ${refusals[0].slice(0, 90)}`);
       await cellAt(lesson.slot).click(); await sleep(400);
     }
-    await cellAt(able[0].slot).click(); await sleep(300);
+    // 위반 미리보기: 옮길 수 있는 칸마다 '반드시' 위반이 몇 건 늘거나 주는지(늘지 않음 = 초록, 늘어남 = 노랑 + '+n' + 설명)
+    const canMarks = marks.filter((mark) => mark.can);
+    const moreMarks = canMarks.filter((mark) => mark.change > 0);
+    report.checks.editPreview = { able: canMarks.length, clean: canMarks.filter((mark) => mark.change <= 0).length, more: moreMarks.length, example: moreMarks[0] ? { badge: moreMarks[0].badge, title: moreMarks[0].title } : null };
+    check(canMarks.every((mark) => Number.isFinite(mark.change) && mark.more === (mark.change > 0) && /'반드시' 위반/.test(mark.title))
+      && moreMarks.every((mark) => mark.badge === `+${mark.change}` && new RegExp(`'반드시' 위반이 ${mark.change}건 늘어납니다`).test(mark.title))
+      && /초록 = '반드시' 위반이 늘지 않는 칸 \d+곳/.test(await editStatus()),
+    `위반 미리보기: 늘지 않는 칸 ${canMarks.length - moreMarks.length}곳(초록) · 늘어나는 칸 ${moreMarks.length}곳(노랑${moreMarks[0] ? `, 예: ${moreMarks[0].slot} ${moreMarks[0].badge} — ${moreMarks[0].title.slice(0, 60)}` : ""})`);
+    const hardBefore = (await summaryOf()).hard;
+    const pickedTarget = able.find((mark) => mark.change <= 0) || able[0];
+    await cellAt(pickedTarget.slot).click(); await sleep(300);
     const text = await editStatus();
-    if (/^맞바꿨습니다/.test(text)) swapped = { a: lesson, b: { slot: able[0].slot, text: able[0].text }, text };
+    if (/^맞바꿨습니다/.test(text)) swapped = { a: lesson, b: { slot: pickedTarget.slot, text: pickedTarget.text }, text };
+    // 미리 본 수만큼 실제 요약이 바뀐다(이 학기 요약은 그 학기 위반만 세므로 두 학기 합계 변화 이하), 상태 줄에 변화가 적힌다
+    const hardAfter = (await summaryOf()).hard;
+    check(/'반드시' 위반 (수는 그대로|\d+ → \d+건)/.test(text) && (pickedTarget.change === 0 ? hardAfter === hardBefore : Math.abs(hardAfter - hardBefore) <= Math.abs(pickedTarget.change)),
+      `고친 뒤 상태 줄에 위반 변화: ${text.slice(text.indexOf(" · ") + 3, text.indexOf(" · ") + 70)} (요약 ${hardBefore} → ${hardAfter}건, 미리보기 ${pickedTarget.change >= 0 ? "+" : ""}${pickedTarget.change})`);
     break;
   }
   report.checks.edit = { swapped, refusals };

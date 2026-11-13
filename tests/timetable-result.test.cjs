@@ -202,6 +202,12 @@ test("직접 고치기: 반 시간표의 두 칸 맞바꾸기 — 절대 조건�
   // 검증기의 위반 목록은 풀이기 결과와 같은 수
   const counted = plain(ctx.timetableValidate(inputs, result));
   for (const rule of ["gap", "oncePerDay", "run", "maxPerDay", "lunch"]) assert.equal(counted.violations.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0), result.metrics[rule], rule);
+  // '최대한' 조건도 같은 수(하루 최소 교시·점심 앞뒤·같은 날 같은 과목) — 그래서 고친 뒤에는 위반 목록 전체를 검증기 값으로 바꾼다
+  for (const rule of ["shortDay", "lunchSide", "sameSubjectDay"]) assert.equal(counted.violations.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0), result.violations.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0), rule);
+  assert.deepEqual(done.result.violations, check.violations);
+  // 고치기 전과 견준 변화: '반드시' 위반이 몇 건 늘거나 줄었는지와 규칙별 내역
+  assert.deepEqual([typeof done.change.hard, typeof done.change.soft, Array.isArray(done.change.parts)], ["number", "number", true]);
+  assert.equal(done.change.hard, done.result.metrics.hard - result.metrics.hard);
 });
 
 test("직접 고치기: 블록 한 시간 옮기기 — 그 블록을 듣는 모든 반에서 함께, 옮겨 갈 칸의 반 수업은 블록 자리로, 같은 반들의 다른 블록과는 맞바꿈", () => {
