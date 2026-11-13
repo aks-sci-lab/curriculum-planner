@@ -129,6 +129,41 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   for (const row of rows) { const key = `${row[10]}|${String(row[5]).charAt(0)}`; if (roomOf.has(key)) clash += 1; roomOf.set(key, row[5]); }
   check(clash === 0, "나이스: 한 학생이 같은 블록에 두 과목 없음(강의실 첫 글자 = 블록)", clash);
 
+  console.log("▶ 합친 그룹의 교실 배정·출력물·직접 고치기");
+  {
+    const save = async (action, name) => { const dl = page.waitForEvent("download", { timeout: 60000 }); await action(); await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 1500 }).catch(() => {}); const file = path.join(OUT, "downloads", name); await (await dl).saveAs(file); return file; };
+    const sheetsOf = (file) => page.evaluate(async (bytes) => (await parseWorkbook(new Uint8Array(bytes).buffer)).map((sheet) => ({ name: sheet.name, rows: sheet.rows })), [...fs.readFileSync(file)]);
+    // 교실: 분반마다 교실, 같은 블록에서 교실이 겹치지 않음
+    const roomErrors = Number(await page.locator("#classSectionsRoomSummary").getAttribute("data-errors").catch(() => "-1"));
+    check(roomErrors === 0, "교실 배정 오류 0", { roomErrors, text: clean(await page.locator("#classSectionsRoomSummary").innerText().catch(() => "")).slice(0, 160) });
+    const blockRows = (await exportSheets("#classSectionsExportBlocks", "blocks-rooms"))[0].rows.slice(2).filter((row) => /^[a-f]블록$/.test(String(row[0] || "")));
+    const roomUse = new Map();
+    for (const row of blockRows) { const key = `${row[0]}|${row[7]}`; roomUse.set(key, (roomUse.get(key) || 0) + 1); }
+    check(blockRows.length === 66 && blockRows.every((row) => String(row[7] || "").trim()) && [...roomUse.values()].every((count) => count === 1), "블록표: 분반 66개 모두 교실이 있고 같은 블록에서 겹치지 않음", [...roomUse].filter(([, count]) => count > 1).slice(0, 4));
+    // 이동 출석부(이 그룹 파일): 분반마다 한 장
+    const attendance = await sheetsOf(await save(() => page.getByRole("button", { name: "출석부 이 그룹 파일" }).click(), "attendance-merged.xlsx"));
+    check(attendance.length === 66, `출석부 이 그룹 파일: 분반 ${attendance.length}장`, attendance.slice(0, 3).map((sheet) => sheet.name));
+    check((await page.locator("#classSectionsAttendanceTable").count()) === 1, "출석부 미리 보기 표");
+    // 담임반 현황·학생 배부용 쪽지(출석부 보기 범위 = 담임반별)
+    await page.getByLabel("출석부 보기 범위").selectOption("homeroom"); await sleep(800);
+    check((await page.locator("#classSectionsHomeroomTable").count()) === 1 && (await page.locator("#classSectionsHandoutPreview").count()) === 1, "담임반 현황 표·학생 배부용 쪽지 미리 보기");
+    const slip = clean(await page.locator("#classSectionsHandoutPreview").innerText().catch(() => ""));
+    check(new Set((slip.match(/[a-f]블록/g) || [])).size === 6, "배부용 쪽지에 블록 6개(a~f)", slip.slice(0, 200));
+    await page.getByLabel("출석부 보기 범위").selectOption({ index: 0 }); await sleep(500);
+    // 학생 시간표: 학생 찾기 → 미리 보기(1학기 칸에 이동 수업)
+    await page.getByLabel("학생 찾기(현학년-반-번호)").fill("2-1-1"); await page.getByLabel("학생 찾기(현학년-반-번호)").press("Enter"); await sleep(700);
+    const preview = page.locator("#classSectionsTimetablePreview");
+    const previewText = clean(await preview.innerText().catch(() => ""));
+    check((await preview.count()) === 1 && /현 2학년 → 3학년 이동수업 시간표/.test(previewText), "학생 시간표 미리 보기(현 2학년 → 3학년)", previewText.slice(0, 120));
+    // 직접 고치기: 과목 × 블록 분반 수 표(과목 12 × 블록 6), 배정 결과 엑셀
+    const place = await page.locator("#classSectionsPlacementTable").evaluate((table) => ({ rows: table.querySelectorAll("tbody tr").length, inputs: table.querySelectorAll("tbody tr:first-child input[data-cs-place-course]").length })).catch(() => null);
+    check(place && place.rows === 12 && place.inputs === 6, "직접 고치기 표: 과목 12줄 × 블록 6칸", place);
+    const assignSheets = await sheetsOf(await save(() => page.locator("#classSectionsAssignExport").click(), "assign-merged.xlsx"));
+    const assignRows = assignSheets[0].rows.filter((row) => /^2-\d+-\d+$/.test(String(row[0] || "")) || row.some((cell) => /^2-\d+-\d+$/.test(String(cell || ""))));
+    check(assignRows.length >= 300, `배정 결과 엑셀: 학생 ${assignRows.length}줄`, assignSheets.map((sheet) => [sheet.name, sheet.rows.length]));
+    check(!logs.length, "출력물 확인까지 페이지 오류 없음", logs);
+  }
+
   console.log("▶ 전 학년 함께 다시 계산");
   await solve("#classSectionsSolveSemester");
   const joint = await status();

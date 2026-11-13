@@ -46,7 +46,7 @@
 | 차수 확정 | `buildRoundSnapshot` = 같은 `aggregateRecords` | 행 = 현학년·학기·그룹·`subjectName` | 확정 시점 `classCount` | 확정하면 고정. 확정 뒤 자료와 달라지면 `roundSnapshotStale`이 과목을 알려 줌 |
 | **한 출처** | `courseOpeningRound()` = **맨 위에서 고른 차수**(`state.currentRound`, 아래 '차수별 흐름' 참고) | — | `courseOpeningSnapshot(차수)`: 확정 스냅샷 또는 지금 4단계 기준 스냅샷(`cachedByStateRevision`) | — |
 | 5 시수 | 편제표 학기 항목(학점) + 한 출처 스냅샷 행 | `정규화 이름` + 학기 | 같은 학기 행의 `classCount` 합. **두 학기 편성 과목**: 다른 학기에만 행이 있으면 이 학기 0(근거 '두 학기 편성 · n학기만 개설'), 학기 미정 행은 어느 학기에도 넣지 않고 경고(4단계에서 학기 정하기). **2·3학년 선택과목은 4단계 연동**(시수표 칸은 값 단추 → 누르면 4단계 그 과목 칸 `focusAggregateCourse`, 예전 직접 입력 `classOverrides`는 지우지 않고 무시 + 참고 안내 '4단계와 다른 직접 입력 n개를 4단계 값으로 바꿨습니다'), 4단계 집계에 없는 선택과목만 직접 입력('4단계에 없는 과목 · 직접 입력'). **학교 지정 과목은 편제표 × 내년 학급 수 연동**(`hoursDesignatedShare`: 분할 편성·교차집중 홀수 학급 `crossExtra`; 값 단추 → 시수 설정 학급 수 칸, 교차집중 홀수는 1단계 편제표; 예전 직접 입력은 무시 + '편제표와 다른 직접 입력 n개를 편제표 값으로 바꿨습니다'). 단 **확대학급**(수준별 이동수업, 시수 설정 체크 `expandedClassesOn`을 켜고 그 과목의 담당 교과가 운영 교과 `expandedDepartments`일 때만 — 고른 적 없으면 모든 교과): 과목별 상세의 확대 값 `expandedClasses[과목 키]`이 편제표 값보다 크면 그 값(작아지면 쓰지 않고 경고, 끄면 저장만), **5단계 시수에만 반영 · 6단계 분반은 그대로**. 1학년 선택과목만 직접 입력 | `computeHoursStats`(`hoursStatsCached`) |
-| 6 분반 | 같은 차수 자료(학생 명단) + 확정 스냅샷 학급 수 | 그룹 키 `현학년:학기:택n`, 과목 키 `subjectName` | 스냅샷 `classCount`(없으면 지금 4단계), 6단계 직접 입력은 '4단계와 다름' 표시 | `classSectionsSource`(차수 = 맨 위 차수, 6단계 차수 선택 상자 없음) |
+| 6 분반 | 같은 차수 자료(학생 명단) + 확정 스냅샷 학급 수 | 그룹 키 `현학년:학기:택n`, 과목 키 `subjectName`. **이동수업 그룹 합치기**(`classSections.settings.mergeGroups["현학년:학기"]`, 기본 꺼짐)를 켜면 그 학기의 그룹들이 한 그룹(키 `현학년:학기:그룹A+그룹B`, 택 수·과목·학생 합침, 과목은 모두 이동)으로 — 4단계 그룹·개설 학급 수는 그대로 읽고 6단계 편성 단위만 바뀜(`classSectionsMergeGroups`, 설계 `docs/timetable-design.md` 9절) | 스냅샷 `classCount`(없으면 지금 4단계), 6단계 직접 입력은 '4단계와 다름' 표시 | `classSectionsSource`(차수 = 맨 위 차수, 6단계 차수 선택 상자 없음) |
 
 ## 찾은 불일치와 고친 곳
 
@@ -107,7 +107,7 @@
 | 반 수업(학교 지정 과목) | 5단계 `computeHoursStats` 항목(그 학기, `designated`) — 반 수는 편제표 값 `autoClasses`(확대학급은 넣지 않고 알림) | 과목명·담당 교과 `item.department` | 신입생 편제표가 없으면 올해 1학년 편제표의 1학년 과목(가정) |
 | 반 일부만 듣는 지정 과목(교차집중·분할 편성) | 반 수 = 5단계 항목(`autoClasses`, 1단계 `crossSplit` 반영) · 묶음 = `item.split`(같은 편제표 행) · 어느 반인지 = `state.timetable.settings.splitClasses[학년|과목↔과목]` | 반 수가 편제표와 같을 때만 씀, 교차집중은 다른 학기에 맞바꿈 | 앞 반부터 차례로(가정) |
 | 공통 과목 반별 담당(통합과학 조각) | 5단계 `hoursCommonClassAssignment(학년, 학기)` | 과목 → 반 → 교과별 시간 | 교과군 세부 교과 교사 모두 후보(가정) |
-| 이동수업 블록·분반·분반 교사·특별실 | 6단계 `sectionResult`(그룹 = 현학년:학기:택n), 블록 시간은 지금 6단계 입력 칸 `blockTimes` | 분반 id, 과목 키 | 계산 막음(P0), 입력이 바뀌었으면 알림 |
+| 이동수업 블록·분반·분반 교사·특별실 | 6단계 `sectionResult`(그룹 = 현학년:학기:택n, 합친 그룹이면 `현학년:학기:그룹A+그룹B` — `classSectionsSource`의 그룹 목록 그대로), 블록 시간은 지금 6단계 입력 칸 `blockTimes` | 분반 id, 과목 키 | 계산 막음(P0), 입력이 바뀌었으면 알림 |
 | 학급 단위 과목(반 → 과목) | 6단계 `classSectionsClassUnitPlan` | 내년 반 번호 | 내년 반 배정표가 없으면 6단계 자동 배정(가정) |
 | 교사(담당 교과·담당 과목·불가 시간·출근 요일 `days`·교사별 상한 `maxHours`·담임 `homeroom` '2-3') | 6단계 `settings.teachers` — **교사 후보의 한 출처**(전공 일치: 담당 교과가 과목의 담당 교과이거나 담당 과목에 그 과목이 있음, 두 교과를 맡는 교사는 '담당 과목'에 적음). 시간표에는 교사를 넣는 화면이 없다(주어진 명단 안에서만 편성). 교양 과목만 다른 교과 교사가 맡을 수 있고 5단계 '담당 교과'로 정한다 | 교사 id, 과목명은 `normalizeResultCourseName` | 5단계 교과별 교사 수로 자리 교사(가정). 5단계 교사 수 ≠ 명단 인원이면 알림만. 수업이 있는데 교사 0명인 교과는 1명(`hoursTimetableTeacherCounts` — 6단계 명단 만들기와 7단계가 같은 값, 자리 이름 `t-교과-1`) |
 | 요일·교시 격자, 전교 고정 시간 | 6단계 `gridDays`·`gridPeriods`·`fixedSlots`('창체' 이름은 전교 동시 창체로) | — | 월~금 7교시 |
