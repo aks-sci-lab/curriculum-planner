@@ -668,6 +668,65 @@ function classSectionsJointTeachers(inputs) {
 
 // 같은 차수·학기의 모든 그룹(학년)을 함께 푼다(classSectionsSolveAll). 그룹 순서는 화면 순서(학기·학년·그룹)로 고정이라
 // 어느 그룹 화면에서 누르든 결과가 같다. 교사는 모든 그룹을 함께 배정한다.
+// 한 주에 블록을 놓을 수 있는 칸 수(7단계 사전 점검 P5의 '주 n칸'과 같은 값): 요일별 교시 합 − 전 교사가 묶이는 칸.
+function classSectionsWeekCells(settings = classSectionsSettings()) {
+  if (typeof timetableWeekCells === "function") return timetableWeekCells();
+  const days = String(settings.gridDays || "").split(/[,\s]+/).filter(Boolean);
+  const busy = new Set();
+  for (const slot of settings.fixedSlots || []) if (slot.allTeachers !== false) for (const time of classSectionsParseTimes(slot.times)) busy.add(`${time.day}${time.period}`);
+  return days.length * (Number(settings.gridPeriods) || 7) - busy.size;
+}
+
+// 학년 간 겹치는 블록 쌍(같은 시간에 열 블록): settings.blockPairs[차수] = [{ a: '내년 학년:블록 글자', b: … }].
+// '전 학년 함께 다시 계산'이 정해 적고(classSectionsPairBlocks), 다른 학기를 계산할 때 같은 쌍을 먼저 쓴다(두 학기가 같은 칸을 쓸 수 있게).
+function classSectionsBlockPairs(round, settings = classSectionsSettings()) {
+  const list = classSectionsPlain(settings.blockPairs) ? settings.blockPairs[String(round)] : null;
+  return Array.isArray(list) ? list.filter((pair) => pair && typeof pair.a === "string" && typeof pair.b === "string") : [];
+}
+
+// 지금 저장된 결과에서 그 학기의 블록 쌍이 교사가 겹치지 않는지: [{ text, shared: [교사 이름], mine: 이 그룹 블록 글자 }] — 이 그룹이 낀 쌍만.
+// 그 학기의 블록 칸 수 합이 주 칸 수를 넘지 않으면(쌍이 필요 없으면) 빈 목록.
+function classSectionsPairStatus(round, group, source = classSectionsSource(round), settings = classSectionsSettings()) {
+  const pairs = classSectionsBlockPairs(round, settings);
+  if (!pairs.length) return [];
+  const blocks = new Map(); // '내년 학년:블록 글자' → { teachers:Set, hours, key }
+  let hours = 0;
+  let untimed = 0;
+  for (const item of source.groups.filter((other) => other.semester === group.semester)) {
+    const saved = classSectionsEntry(round, item.key, false)?.sectionResult;
+    if (!saved?.blocks) continue;
+    const credits = new Map(item.courses.map((course) => [course.key, Number(course.credits) || 0]));
+    for (const block of saved.blocks) {
+      const sections = (saved.sections || []).filter((section) => section.blockId === block.id);
+      if (!sections.length) continue;
+      if (!(block.times || []).length) untimed += 1;
+      const blockHours = Math.max(0, ...sections.map((section) => credits.get(section.courseKey) || 0));
+      hours += blockHours;
+      blocks.set(`${item.targetGrade}:${block.letter}`, { teachers: new Set(sections.map((section) => section.teacherId || saved.teacherOf?.[section.id]).filter(Boolean)), key: item.key });
+    }
+  }
+  if (!untimed || hours <= classSectionsWeekCells(settings)) return []; // 모든 블록에 시간이 있으면 시간으로 겹침을 본다
+  const nameOf = new Map(classSectionsTeacherList(settings).map((teacher) => [teacher.id, teacher.name]));
+  const out = [];
+  for (const pair of pairs) {
+    const a = blocks.get(pair.a);
+    const b = blocks.get(pair.b);
+    if (!a || !b || (a.key !== group.key && b.key !== group.key)) continue;
+    const label = (name) => `${name.split(":")[0]}학년 ${name.split(":")[1]}블록`;
+    out.push({ text: `${label(pair.a)} × ${label(pair.b)}`, shared: [...a.teachers].filter((id) => b.teachers.has(id)).map((id) => nameOf.get(id) || id) });
+  }
+  return out;
+}
+
+function classSectionsPairNoteHtml(round, group, source) {
+  const esc = classSectionsEsc;
+  const list = classSectionsPairStatus(round, group, source);
+  if (!list.length) return "";
+  return `<div id="classSectionsPairs">${list.map((pair) => (pair.shared.length
+    ? `<p class="cs-note is-warn" data-cs-pair="${esc(pair.text)}" data-shared="${pair.shared.length}">같은 시간에 열 블록 쌍 ${esc(pair.text)}: 두 블록에 같은 교사 ${pair.shared.length}명(${esc(pair.shared.slice(0, 4).join(", "))}${pair.shared.length > 4 ? " …" : ""})이 있습니다. '전 학년 함께 다시 계산'을 누르면 겹치지 않게 다시 배정합니다.</p>`
+    : `<p class="cs-note" data-cs-pair="${esc(pair.text)}" data-shared="0">같은 시간에 열 블록 쌍 ${esc(pair.text)}: 교사가 겹치지 않습니다(두 학년 블록 칸 수 합이 한 주 칸 수보다 많아 이 두 블록은 같은 시간에 엽니다).</p>`)).join("")}</div>`;
+}
+
 async function classSectionsSolveSemesterCurrent() {
   const context = classSectionsCurrent();
   if (!context?.group || CLASS_SECTIONS_VIEW.running) return;
@@ -685,7 +744,9 @@ async function classSectionsSolveSemesterCurrent() {
   renderClassSections();
   try {
     const joint = classSectionsJointTeachers(inputs);
-    const all = await classSectionsRunSolver({ kind: "solveAll", input: { groups: inputs, teachers: joint.teachers, departmentTeachers: joint.departmentTeachers, seed: inputs[0]?.seed || 1 } });
+    const settingsNow = classSectionsSettings();
+    const all = await classSectionsRunSolver({ kind: "solveAll", input: { groups: inputs, teachers: joint.teachers, departmentTeachers: joint.departmentTeachers, seed: inputs[0]?.seed || 1,
+      pairing: { week: classSectionsWeekCells(settingsNow), forced: classSectionsBlockPairs(round, settingsNow) } } });
     let problems = 0;
     const shortageGroups = [];
     const batch = `all-${new Date().toISOString()}`;
@@ -718,7 +779,18 @@ async function classSectionsSolveSemesterCurrent() {
     }
     const orderText = (all.orders || []).length > 1 ? ` · 순서 ${all.orders.length}가지 비교 → ‘${all.chosenOrder}’` : "";
     const shortText = (all.shortages || []).length ? ` · 교사 부족 ${all.shortages.length}곳(예: ${all.shortages[0].message})` : "";
-    classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}${orderText}${shortText}.`, problems > 0 || Boolean(shortText), scope);
+    // 학년 간 겹치는 블록 쌍: 정한 쌍을 적어 두고(다른 학기도 같은 쌍으로), 다른 학기에서 정한 쌍과 달라졌으면 알린다.
+    let pairText = "";
+    if (all.pairing?.pairs?.length) {
+      const before = classSectionsBlockPairs(round, settingsNow).map((pair) => `${pair.a}×${pair.b}`).sort().join(",");
+      const pairs = all.pairing.pairs.map((pair) => ({ a: `${pair.a.grade}:${pair.a.letter}`, b: `${pair.b.grade}:${pair.b.letter}` }));
+      if (!classSectionsPlain(settingsNow.blockPairs)) settingsNow.blockPairs = {};
+      settingsNow.blockPairs[String(round)] = pairs;
+      const missing = all.pairing.pairs.reduce((sum, pair) => sum + (pair.missing || 0), 0);
+      const changed = before && before !== pairs.map((pair) => `${pair.a}×${pair.b}`).sort().join(",");
+      pairText = ` · 같은 시간에 열 블록 쌍: ${all.pairing.pairs.map((pair) => `${pair.a.grade}학년 ${pair.a.letter}블록 × ${pair.b.grade}학년 ${pair.b.letter}블록`).join(", ")}(${missing ? `분반 ${missing}개 담당 교사 비움` : "교사 겹침 없음"})${changed ? " — 앞서 정한 쌍과 달라졌습니다. 다른 학기도 '전 학년 함께 다시 계산'으로 같은 쌍에 맞추세요" : ""}`;
+    }
+    classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}${orderText}${shortText}${pairText}.`, problems > 0 || Boolean(shortText), scope);
   } catch (error) {
     classSectionsSetStatus(`함께 계산 실패: ${error?.message || error}`, true, scope);
   } finally {
@@ -1293,6 +1365,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
     <h4>편성 결과 <span class="cs-note">${esc(CLASS_SECTIONS_MODE_LABELS?.[result.mode] || result.mode)} · ${esc(classSectionsResultBasis(round, group, entry, result))} · ${esc(new Date(result.createdAt).toLocaleString("ko-KR"))}</span></h4>
     ${classSectionsOtherChangedHtml(round, group, result)}
     ${classSectionsOtherGroupNotesHtml(round, group, result)}
+    ${classSectionsPairNoteHtml(round, group)}
     <p class="cs-summary" id="classSectionsSummary" data-feasible="${explain.feasible ? "true" : "false"}">${esc(explain.summary || "")}</p>
     <p class="cs-note" id="classSectionsMetrics">미배정 ${metrics.unassignedStudents || 0}명 · <span title="같은 과목 분반 인원의 최대 − 최소(과목 중 가장 큰 값)">분반 인원 차이 최대 ${metrics.maxSpread || 0}명</span> · <span title="같은 담임반 학생이 같은 분반에 모인 비율(과목·반마다 가장 많이 모인 분반 기준)">같은 반끼리 ${Math.round((metrics.sameHomeroomRatio || 0) * 100)}%(같은 담임반 학생이 같은 분반에 모인 비율)</span>${metrics.moved !== null && metrics.moved !== undefined ? ` · 앞 편성 대비 이동 ${metrics.moved}` : ""}</p>
     ${unassigned ? `<details open id="classSectionsUnassigned"><summary>미배정 ${result.unassigned.length}건</summary><table class="cs-table"><thead><tr><th>학생</th><th>과목</th><th>사유</th></tr></thead><tbody>${unassigned}</tbody></table></details>` : ""}

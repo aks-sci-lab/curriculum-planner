@@ -108,6 +108,38 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const jointSummary = await summary();
   check(/모든 학생 배정/.test(jointSummary.text), "함께 계산 뒤에도 합친 그룹 모든 학생 배정", jointSummary);
 
+  console.log("▶ 학년 간 겹치는 블록 쌍(블록 칸 수 합 > 한 주 칸 수)");
+  check((await page.locator("#classSectionsPairs").count()) === 0 && !/같은 시간에 열 블록 쌍/.test(joint), "칸이 모자라지 않으면 블록 쌍을 정하지 않음");
+  // 전 교사 고정 시간을 10칸 더해 한 주에 블록을 놓을 칸을 줄인다(33 → 23칸) → 2학년 블록과 3학년 블록 일부는 같은 시간에 열려야 한다
+  await page.locator("#classSectionsTeachersOpen").click();
+  const dialog = page.locator("#classSectionsTeacherDialog");
+  await dialog.waitFor({ state: "visible", timeout: 10000 });
+  await dialog.locator("#classSectionsFixedAdd").click(); await sleep(300);
+  const fixedRows = await dialog.locator('[data-cs-f$="|times"]').count();
+  await dialog.locator(`[data-cs-f="${fixedRows - 1}|label"]`).fill("교직원 연수"); await dialog.locator(`[data-cs-f="${fixedRows - 1}|label"]`).press("Tab"); await sleep(200);
+  await dialog.locator(`[data-cs-f="${fixedRows - 1}|times"]`).fill("월6,월7,화6,화7,수6,수7,목6,목7,금4,금5"); await dialog.locator(`[data-cs-f="${fixedRows - 1}|times"]`).press("Tab"); await sleep(300);
+  await page.locator("#classSectionsTeacherClose").click(); await sleep(500);
+  await solve("#classSectionsSolveSemester");
+  const paired = await status();
+  check(/같은 시간에 열 블록 쌍: 2학년 [a-f]블록 × 3학년 [a-f]블록(, 2학년 [a-f]블록 × 3학년 [a-f]블록)*\((교사 겹침 없음|분반 \d+개 담당 교사 비움)\)/.test(paired), `함께 계산이 블록 쌍을 정함: ${(paired.match(/같은 시간에 열 블록 쌍[^.]*/) || [""])[0].slice(0, 110)}`, paired);
+  const pairNotes = await page.locator("#classSectionsPairs [data-cs-pair]").evaluateAll((els) => els.map((el) => ({ pair: el.dataset.csPair, shared: Number(el.dataset.shared), text: el.textContent.trim() })));
+  check(pairNotes.length >= 1 && pairNotes.every((note) => /^2학년 [a-f]블록 × 3학년 [a-f]블록$/.test(note.pair)), "결과 화면에 '같은 시간에 열 블록 쌍' 줄", pairNotes);
+  if (/교사 겹침 없음/.test(paired)) check(pairNotes.every((note) => note.shared === 0 && /교사가 겹치지 않습니다/.test(note.text)), "그 쌍의 두 블록에 같은 교사가 없음(저장된 결과에서 다시 확인)", pairNotes);
+  // 블록표로 직접 확인: 쌍의 두 블록에 같은 담당 교사 이름이 없다
+  const pairBlocks = await exportSheets("#classSectionsExportBlocks", "blocks-paired");
+  const firstPair = pairNotes[0]?.pair.match(/^2학년 ([a-f])블록 × 3학년 ([a-f])블록$/);
+  if (firstPair && /교사 겹침 없음/.test(paired)) {
+    const mine = new Set(pairBlocks[0].rows.slice(2).filter((row) => String(row[0]) === `${firstPair[2]}블록`).map((row) => String(row[6] || "")).filter(Boolean));
+    await page.locator('[data-cs-group="1:1:2-1 택3"]').click(); await sleep(500);
+    const otherBlocks = await exportSheets("#classSectionsExportBlocks", "blocks-paired-grade2");
+    const theirs = otherBlocks[0].rows.slice(2).filter((row) => String(row[0]) === `${firstPair[1]}블록`).map((row) => String(row[6] || "")).filter(Boolean);
+    check(mine.size > 0 && theirs.length > 0 && !theirs.some((name) => mine.has(name)), `블록표: 2학년 ${firstPair[1]}블록과 3학년 ${firstPair[2]}블록의 담당 교사가 겹치지 않음(${theirs.length}명 · ${mine.size}명)`, { theirs, mine: [...mine] });
+    check((await page.locator("#classSectionsPairs [data-cs-pair]").count()) >= 1, "2학년 그룹 화면에도 블록 쌍 줄");
+    await page.locator(`[data-cs-group="${mergedKey}"]`).click(); await sleep(500);
+  }
+  await shot("03-paired.png");
+  const pairedSummary = await summary();
+
   console.log("▶ 끄기 → 그룹마다 예전 결과 그대로, 다시 켜면 합친 결과 그대로");
   await page.locator('[data-cs-merge="2:1"]').uncheck(); await sleep(800);
   const off = await groups();
@@ -118,7 +150,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(again.text === oldSummary.text && again.feasible === oldSummary.feasible, "택5 그룹의 예전 편성 결과 요약이 그대로", { again, oldSummary });
   await page.locator('[data-cs-merge="2:1"]').check(); await sleep(800);
   const back = await summary();
-  check(back.text === jointSummary.text && (await groups()).some((item) => item.key === mergedKey && /편성됨|확인 필요/.test(item.text)), "다시 켜면 합친 편성 결과가 그대로", back);
+  check(back.text === pairedSummary.text && (await groups()).some((item) => item.key === mergedKey && /편성됨|확인 필요/.test(item.text)), "다시 켜면 합친 편성 결과가 그대로", back);
 
   console.log("▶ 새로고침 뒤에도 유지");
   await sleep(1200);

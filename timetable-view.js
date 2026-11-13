@@ -514,6 +514,22 @@ function timetableSettings() {
 var TIMETABLE_STAGGER_SMALL = 10; // 반군 엇갈림 견적에서 '소인수 분반'으로 세는 기준(이 인원 미만 — 막지 않고 수로만 보여 준다)
 var TIMETABLE_CREATIVE_FROM = 5; // 시간을 정하지 않은 창체(학년별·반군별·전교 동시)는 기본 5교시 이후에만 놓는다(낮 시간에 창체가 끼지 않게)
 var TIMETABLE_DEFAULT_LUNCH = { 1: 4, 2: 4, 3: 3 }; // 사용자 학교: 3학년은 3교시 뒤, 1·2학년은 4교시 뒤
+// 한 주에 블록을 놓을 수 있는 칸 수(사전 점검 P5의 '주 n칸'과 같은 규칙): 요일별 교시 합 − 전 교사가 묶이는 칸(전교 고정 시간·전교 동시 창체 시간).
+// 6단계 '전 학년 함께 다시 계산'이 학년 간 겹치는 블록 쌍이 필요한지 볼 때 읽는다.
+function timetableWeekCells() {
+  const cs = classSectionsSettings();
+  const tt = timetableSettings();
+  const days = String(cs.gridDays || "").split(/[,\s]+/).filter(Boolean);
+  const periodsOf = (day) => Math.min(12, Number(tt.periodsByDay?.[day]) > 0 ? Math.floor(Number(tt.periodsByDay[day])) : Number(cs.gridPeriods) || 7);
+  const creativeSlots = (cs.fixedSlots || []).filter((slot) => TIMETABLE_CREATIVE_LABEL.test(String(slot.label || "")));
+  const busy = new Set();
+  const add = (times) => { for (const time of timetableTimes(times)) if (days.includes(time.day) && time.period >= 1 && time.period <= periodsOf(time.day)) busy.add(`${time.day}${time.period}`); };
+  for (const slot of cs.fixedSlots || []) if (!creativeSlots.includes(slot) && slot.allTeachers !== false) add(slot.times);
+  if (tt.creative && typeof tt.creative === "object") add(tt.creative.schoolTimes || []);
+  else for (const slot of creativeSlots) add(slot.times);
+  return days.reduce((sum, day) => sum + periodsOf(day), 0) - busy.size;
+}
+
 // 지금 쓰는 학년별 점심(몇 교시 뒤). 6단계가 학년을 적은 교사 불가 시간('월4(3학년)')이 어느 학년 블록에 걸리는지 볼 때도 읽는다.
 function timetableLunchSetting() {
   return { ...TIMETABLE_DEFAULT_LUNCH, ...(timetableSettings().lunchAfter || {}) };

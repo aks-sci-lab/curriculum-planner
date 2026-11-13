@@ -200,6 +200,64 @@ test("teacher unavailable time limits the block and the teacher is not assigned 
   assert.ok(untimed.issues.some((issue) => issue.type === "no-times" && issue.severity === "info"));
 });
 
+test("solveAll 블록 쌍: 블록 시간이 없고 두 학년 블록 칸 수 합이 주 칸 수를 넘으면 같은 시간에 열 쌍을 정하고 그 쌍은 교사가 겹치지 않게", () => {
+  const ctx = context();
+  const make = () => {
+    const g2 = synthetic({ courses: SCIENCE, choose: 2, students: 100, capacity: 30, sizeFor: 27, seed: 31, grade: 1 });
+    g2.groupId = "1:1:2-1"; g2.label = "2학년 1학기";
+    const g3 = synthetic({ courses: SCIENCE, choose: 3, students: 60, capacity: 30, sizeFor: 27, seed: 32, grade: 2 });
+    g3.groupId = "1:2:3-1"; g3.label = "3학년 1학기";
+    return [g2, g3];
+  };
+  const teachers = ["물리", "화학", "생명", "지구"].flatMap((name) => [1, 2, 3].map((n) => ({ id: `${name}${n}`, name: `${name}${n}`, departments: [name] })));
+  // 블록 2개 + 3개, 과목 3학점 → 15칸. 주 12칸이면 3칸이 모자라 한 쌍(3칸)이 같은 시간에 열려야 한다.
+  const teachersOf = (all, groupId, letter) => {
+    const group = all.groups.find((item) => item.groupId === groupId);
+    const block = group.result.blocks.find((item) => item.letter === letter);
+    return new Set(group.result.sections.filter((section) => section.blockId === block.id).map((section) => group.result.teacherOf[section.id]).filter(Boolean));
+  };
+  const shared = (all, pair) => [...teachersOf(all, pair.a.groupId, pair.a.letter)].filter((id) => teachersOf(all, pair.b.groupId, pair.b.letter).has(id));
+  const none = plain(ctx.classSectionsSolveAll({ groups: make(), teachers, seed: 3 }));
+  assert.equal(none.pairing, null, "pairing을 넘기지 않으면 예전과 같다");
+  assert.equal(plain(ctx.classSectionsSolveAll({ groups: make(), teachers, seed: 3, pairing: { week: 15 } })).pairing, null, "칸이 모자라지 않으면 쌍 없음");
+  const all = plain(ctx.classSectionsSolveAll({ groups: make(), teachers, seed: 3, pairing: { week: 12 } }));
+  assert.deepEqual([all.pairing.week, all.pairing.hours, all.pairing.need, all.pairing.pairs.length], [12, 15, 0, 1]);
+  const pair = all.pairing.pairs[0];
+  assert.deepEqual([pair.a.grade, pair.b.grade, pair.forced, pair.missing], ["2", "3", false, 0]);
+  assert.deepEqual(shared(all, pair), [], "쌍의 두 블록에 같은 교사가 없다");
+  for (const group of all.groups) assert.ok(group.result.sections.every((section) => group.result.teacherOf[section.id] && section.teacherId === group.result.teacherOf[section.id]), "모든 분반에 교사");
+  assert.deepEqual(all.issues.filter((issue) => issue.type === "block-pair"), []);
+  // 쌍이 아닌 블록끼리는 같은 교사를 써도 된다(겹치는 쌍이 하나쯤은 있다 — 교사 12명이 15분반을 맡으므로)
+  // 다른 학기에서 정한 쌍(forced)이 있으면 그 쌍을 먼저 쓴다
+  const other = pair.a.letter === "b" && pair.b.letter === "c" ? { a: "2:a", b: "3:a" } : { a: "2:b", b: "3:c" };
+  const forced = plain(ctx.classSectionsSolveAll({ groups: make(), teachers, seed: 3, pairing: { week: 12, forced: [other] } }));
+  assert.deepEqual(forced.pairing.pairs.map((item) => [`${item.a.grade}:${item.a.letter}`, `${item.b.grade}:${item.b.letter}`, item.forced, item.missing]), [[other.a, other.b, true, 0]]);
+  assert.deepEqual(shared(forced, forced.pairing.pairs[0]), []);
+  // 칸이 더 모자라면 쌍을 더(블록은 한 쌍에만) — 2학년 블록이 2개뿐이라 두 쌍까지
+  const two = plain(ctx.classSectionsSolveAll({ groups: make(), teachers, seed: 3, pairing: { week: 9 } }));
+  assert.equal(two.pairing.pairs.length, 2);
+  assert.equal(new Set(two.pairing.pairs.flatMap((item) => [`${item.a.grade}:${item.a.letter}`, `${item.b.grade}:${item.b.letter}`])).size, 4);
+  for (const item of two.pairing.pairs) assert.deepEqual(shared(two, item), []);
+  const three = plain(ctx.classSectionsSolveAll({ groups: make(), teachers, seed: 3, pairing: { week: 6 } }));
+  assert.deepEqual([three.pairing.pairs.length, three.pairing.need], [2, 3]);
+  assert.match(three.issues.find((issue) => issue.type === "block-pair").message, /블록 시수 합 15칸이 한 주 6칸보다 많은데, 같은 시간에 열 블록 쌍을 더 만들 수 없습니다/);
+  // 교사가 교과마다 한 명뿐이면 어느 쌍도 겹치지 않게 만들 수 없다 → 가장 나은 쌍 + 원인 알림(담당 교사가 빈 분반 수)
+  const few = plain(ctx.classSectionsSolveAll({ groups: make(), teachers: teachers.filter((teacher) => /1$/.test(teacher.id)), seed: 3, pairing: { week: 12 } }));
+  assert.equal(few.pairing.pairs.length, 1);
+  assert.ok(few.pairing.pairs[0].missing > 0);
+  const issue = few.issues.find((item) => item.type === "block-pair");
+  assert.match(issue.message, /^같은 시간에 열 블록 쌍\(2학년 [a-c]블록 × 3학년 [a-c]블록\)을 교사가 겹치지 않게 만들지 못했습니다: 분반 \d+개의 담당 교사가 비었습니다\(.+ 교사가 두 블록에 동시에 필요\)\.$/);
+  assert.deepEqual(issue.groups.slice().sort(), ["1:1:2-1", "1:2:3-1"]);
+  // 모든 블록에 시간이 있으면 시간으로 겹침을 보므로 쌍을 정하지 않는다. 일부 그룹에만 시간이 있으면(합친 그룹은 아직 없음) 쌍을 정한다
+  const timed = make();
+  timed[0].blocks = [{ id: "a", times: ["월1", "수2", "금3"] }, { id: "b", times: ["화3", "목4", "금4"] }];
+  const partly = plain(ctx.classSectionsSolveAll({ groups: timed, teachers, seed: 3, pairing: { week: 12 } }));
+  assert.equal(partly.pairing.pairs.length, 1);
+  assert.deepEqual(shared(partly, partly.pairing.pairs[0]), []);
+  timed[1].blocks = [{ id: "a", times: ["월2", "수3", "금5"] }, { id: "b", times: ["화4", "목5", "금6"] }, { id: "c", times: ["월3", "화5", "수4"] }];
+  assert.equal(plain(ctx.classSectionsSolveAll({ groups: timed, teachers, seed: 3, pairing: { week: 12 } })).pairing, null);
+});
+
 test("solveAll: teachers shared by grade 2 and grade 3 blocks at the same time are not double-booked", () => {
   const ctx = context();
   const g2 = synthetic({ courses: SCIENCE, choose: 2, students: 100, capacity: 30, sizeFor: 27, seed: 31, grade: 1 });
