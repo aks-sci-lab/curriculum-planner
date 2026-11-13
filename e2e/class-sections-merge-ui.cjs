@@ -1,5 +1,6 @@
-// 6단계 '이동수업 그룹 합치기' 화면 확인(사용자처럼 클릭): 하네스 백업 복원 → 6단계 → 합치기 켜기(현2 → 3학년 1학기 택5 + 택1) →
-// 합친 그룹(블록 6개·과목 모두 이동) → 편성 계산 → 블록표·명렬·나이스 내보내기 → 전 학년 함께 다시 계산 → 끄기 → 그룹마다 예전 결과 그대로 → 다시 켜면 합친 결과 그대로.
+// 6단계 '이동수업 그룹 합치기' 화면 확인(사용자처럼 클릭): 하네스 백업 복원 → 6단계 → (자리 교사 보충 안내) → 합치기 켜기(현2 → 3학년 1학기 택5 + 택1) →
+// 합친 그룹(블록 6개·과목 모두 이동) → 편성 계산 → 블록표·명렬·나이스 내보내기 → 전 학년 함께 다시 계산 → 학년 간 겹치는 블록 쌍(칸이 모자랄 때) →
+// 2학기도 합침 → 7단계 사전 점검·시간표 계산(블록 6개) → 끄기 → 그룹마다 예전 결과 그대로 → 다시 켜면 합친 결과 그대로 → 새로고침.
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/class-sections-merge-ui.cjs /tmp/cs-merge /tmp/e2e/downloads/workspace-backup.json.gz
 const path = require("path"), fs = require("fs");
 const ROOT = path.join(__dirname, "..");
@@ -165,12 +166,59 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
     await page.locator(`[data-cs-group="${mergedKey}"]`).click(); await sleep(500);
   }
   await shot("03-paired.png");
+  // 더한 고정 시간을 지우고(주 33칸) 다시 함께 계산 → 칸이 모자라지 않으면 쌍 줄은 사라진다
+  await page.locator("#classSectionsTeachersOpen").click();
+  await dialog.waitFor({ state: "visible", timeout: 10000 });
+  await dialog.locator(`[data-cs-f-remove="${fixedRows - 1}"]`).click(); await sleep(300);
+  await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 1500 }).catch(() => {});
+  await page.locator("#classSectionsTeacherClose").click(); await sleep(500);
+  await solve("#classSectionsSolveSemester");
+  check((await page.locator("#classSectionsPairs").count()) === 0, "칸이 모자라지 않게 되면 블록 쌍 줄이 사라짐");
+
+  console.log("▶ 2학기도 합쳐 편성 → 7단계 시간표가 합친 결과(블록 6개)로 계산");
+  await page.locator('[data-cs-merge="2:2"]').check(); await sleep(800);
+  await solve();
+  await solve("#classSectionsSolveSemester");
+  check(/2학기 전 학년 \d+개 그룹을 함께 다시 계산했습니다/.test(await status()), `2학기 함께 계산: ${(await status()).slice(0, 80)}`);
+  await page.locator(`[data-cs-group="${mergedKey}"]`).click(); await sleep(500);
   const pairedSummary = await summary();
+  await page.getByRole("button", { name: /7\. 시간표/ }).click(); await sleep(1500);
+  const tt = page.locator("#workflowStep6Panel");
+  const gradeRow = async () => tt.locator("#timetableGrades tbody tr").evaluateAll((rows) => rows.map((row) => [...row.children].map((cell) => cell.textContent.trim())).find((cells) => /^3학년/.test(cells[0])) || []);
+  for (const semester of ["1", "2"]) {
+    await tt.locator(`[data-tt-semester="${semester}"]`).click(); await sleep(900);
+    const row = await gradeRow();
+    const verdict = clean(await tt.locator("#timetableVerdict").innerText());
+    check(!/계산 불가 [1-9]/.test(verdict) && row.length > 4, `7단계 ${semester}학기 사전 점검이 합친 결과를 읽음(계산을 막는 누락 없음) · 3학년 줄: ${row.slice(0, 6).join(" | ")}`, { verdict, row });
+    const stale = clean(await tt.locator("#timetablePrecheck").innerText());
+    check(!/분반 결과가 없|6단계 분반 편성 결과가 없/.test(stale), `7단계 ${semester}학기: '분반 결과 없음' 알림 없음`);
+    const mismatch = await tt.locator("#timetablePrecheck li[data-tt-issue]").evaluateAll((els) => els.map((el) => el.textContent.replace(/\s+/g, " ")).filter((text) => /5단계 선택과목 시수/.test(text) && /3학년/.test(text)));
+    check(mismatch.length === 0, `7단계 ${semester}학기: 3학년 5단계 선택과목 시수 = 6단계 분반 시수(어긋남 알림 없음)`, mismatch);
+  }
+  await tt.locator('[data-tt-semester="1"]').click(); await sleep(600);
+  await tt.locator("#timetableRun").click();
+  await tt.locator("#timetableRunProgress").waitFor({ timeout: 15000 });
+  await sleep(12000);
+  await tt.locator("#timetableStop").click().catch(() => {});
+  await tt.locator("#timetableRunBar[data-state='done'], #timetableRunBar[data-state='stale']").waitFor({ timeout: 240000 }); await sleep(500);
+  const ttSummary = clean(await tt.locator("#timetableResultSummary").innerText().catch(() => ""));
+  check(/^1학기 — /.test(ttSummary) && (await tt.locator("#timetableValidation").count()) === 0, `7단계 계산 결과(검증 오류 없음): ${ttSummary.slice(0, 90)}`, ttSummary);
+  // 3학년 반 시간표: 합친 블록 6개(a~f)가 모두 보인다
+  await tt.locator('[data-tt-view="class"]').click().catch(() => {}); await sleep(300);
+  const pick = tt.locator("#timetableGridPick");
+  const third = await pick.locator("option").evaluateAll((els) => els.map((el) => el.value).find((value) => /^3-/.test(value)));
+  await pick.selectOption(third); await sleep(500);
+  const cellTexts = await tt.locator("#timetableGrid tbody td[data-tt-slot]").evaluateAll((els) => els.map((el) => el.textContent.replace(/\s+/g, " ").trim()));
+  const blockLetters = new Set(cellTexts.map((text) => (text.match(/([a-f])블록/) || [])[1]).filter(Boolean));
+  check(blockLetters.size === 6, `3학년 반 시간표에 합친 그룹의 블록 6개(${[...blockLetters].sort().join("")})`, cellTexts.filter(Boolean).slice(0, 8));
+  await page.screenshot({ path: path.join(OUT, "04-timetable.png"), fullPage: true });
+  await page.getByRole("button", { name: /6\. 분반 편성/ }).click(); await sleep(800);
+  await page.locator(`[data-cs-group="${mergedKey}"]`).click(); await sleep(500);
 
   console.log("▶ 끄기 → 그룹마다 예전 결과 그대로, 다시 켜면 합친 결과 그대로");
   await page.locator('[data-cs-merge="2:1"]').uncheck(); await sleep(800);
   const off = await groups();
-  check(off.length === before.length && off.filter((item) => item.key.startsWith("2:1:")).every((item, index) => item.text === parts[index].text), "끄면 두 그룹이 예전 상태 그대로", off.filter((item) => item.key.startsWith("2:1:")).map((item) => item.text));
+  check(off.filter((item) => item.key.startsWith("2:1:")).length === 2 && off.filter((item) => item.key.startsWith("2:1:")).every((item, index) => item.text === parts[index].text), "끄면 두 그룹이 예전 상태 그대로", off.filter((item) => item.key.startsWith("2:1:")).map((item) => item.text));
   check(/합치기를 껐습니다/.test(await status()), "상태 줄 안내(끔)");
   await page.locator('[data-cs-group="2:1:3-1 택5"]').click(); await sleep(500);
   const again = await summary();

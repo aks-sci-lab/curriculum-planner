@@ -451,6 +451,36 @@ test("반군 엇갈림 견적(T7a): 6단계 분반 결과를 읽어 블록 k개�
   assert.equal(ctx.timetableStaggerPrecheck({ ...input, semester: "2" }, ctx.timetableStaggerFor("1", "3", 4, {}), "3", 1), null);
 });
 
+test("사전 점검 P6 선택지: 그 학년 반 수업 과목의 '2시간 연속 수업 허용' — 나아지는 과목만, 예상 효과와 함께(그룹을 합쳐 반 수업이 스포츠 생활만 남은 3학년)", () => {
+  const ctx = world();
+  const view = read("timetable-view.js");
+  // 3학년 11반: 블록 6개 × 4시간, 반 수업은 스포츠 생활 2시간(체육 3명)뿐, 창체 금6·7 → 같은 교사는 한 반에 하루 한 번이라 하루 끝 쪽 칸 × 3명만 들어간다
+  const make = (double) => ({
+    semester: "1", days: ["월", "화", "수", "목", "금"], periods: 7, lunchAfter: { 3: 4 }, grades: [{ grade: "3", classes: 11 }],
+    teachers: [...[1, 2, 3].map((n) => ({ id: `pe${n}`, name: `체육${n}`, departments: ["체육"] })), ...Array.from({ length: 11 }, (_, n) => ({ id: `s${n + 1}`, name: `선택${n + 1}`, departments: ["선택"] }))],
+    lessons: [{ id: "스포츠", grade: "3", subject: "스포츠 생활", department: "체육", hours: 2, ...(double ? { double: true } : {}) }],
+    blocks: Array.from({ length: 6 }, (_, index) => ({ id: `b${index}`, grade: "3", label: `${"abcdef"[index]}블록`, times: "", sections: Array.from({ length: 11 }, (_, n) => ({ subject: `선택 과목 ${index + 1}`, department: "선택", credits: 4, teacherId: `s${n + 1}` })) })),
+    creative: { school: 2, schoolTimes: ["금6", "금7"], grade: 0 }, rules: {}
+  });
+  const input = make(false);
+  const result = plain(ctx.timetablePrecheck(input));
+  const p6 = result.issues.find((issue) => issue.id === "P6" && issue.level === "fail");
+  assert.ok(p6 && p6.data.need === 22 && p6.data.capacity < 22, JSON.stringify(result.issues.map((issue) => [issue.id, issue.level, issue.cause]).slice(0, 6)));
+  const previewed = [];
+  const preview = (key) => { previewed.push(key); return key === "double:스포츠 생활" ? ctx.timetablePrecheck(make(true)) : null; };
+  const choices = plain(ctx.timetableChoicesFor(result, { round: "1", input }, {}, preview).get(ctx.timetableIssueKey(p6)));
+  const double = choices.find((choice) => choice.key === "double:스포츠 생활");
+  assert.ok(double, JSON.stringify(choices.map((choice) => choice.key)));
+  assert.deepEqual([double.label, double.kind, double.effect.solved, double.effect.failBefore > double.effect.failAfter], ["'스포츠 생활' 2시간 연속 수업 허용", "setting", true, true]);
+  // 이미 허용한 과목·1시간짜리·조각 수업은 선택지에 없다, 나아지지 않으면 넣지 않는다
+  assert.deepEqual(plain(ctx.timetableChoicesFor(result, { round: "1", input }, { doubleSubjects: ["스포츠 생활"] }, preview).get(ctx.timetableIssueKey(p6))).filter((choice) => String(choice.key).startsWith("double:")), []);
+  const same = plain(ctx.timetableChoicesFor(result, { round: "1", input }, {}, () => ctx.timetablePrecheck(make(false))).get(ctx.timetableIssueKey(p6)));
+  assert.deepEqual(same.filter((choice) => String(choice.key).startsWith("double:")), []);
+  // 고르면 조건에 그 과목이 들어간다(계산 뒤 선택지와 같은 경로)
+  assert.deepEqual(plain(ctx.timetableChoiceOf("double:스포츠 생활").patch({ doubleSubjects: ["체육"] })), { doubleSubjects: ["체육", "스포츠 생활"] });
+  assert.match(view, /timetableChoiceOf\(key\)\.patch\(settings, prepared\)/, "예상 효과 미리보기도 과목별 선택지를 읽는다");
+});
+
 test("2시간 연속 수업 허용 과목: 고른 과목의 반 수업에만 double 표시(과목명 표기 차이는 맞춰 봄), 조건 칸으로 넣고 뺀다", () => {
   const ctx = world({ timetable: { settings: { doubleSubjects: ["체 육"] } } });
   const { input } = plain(ctx.timetableInput("1", "1"));

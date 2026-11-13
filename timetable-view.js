@@ -1058,6 +1058,35 @@ function timetableChoicesFor(result, prepared, settings, preview) {
         list.push(item);
       }
     }
+    // 학년 반 수업 동시성(P6): 그 학년의 반 수업 과목을 '2시간 연속 수업 허용'으로 두면 한 반이 하루에 받을 수 있는 시간이 늘어난다
+    // (예: 그룹을 합쳐 3학년 반 수업이 스포츠 생활 2시간만 남은 경우 — 같은 교사가 그 반에 하루 한 번이라 하루 끝 쪽 칸 × 교사 수만큼만 들어감).
+    // 나아지는 과목만(이 항목이 풀리거나, 조건 위반이 줄거나, 들어가는 반 수업 시간이 늘어남) 시수가 많은 순으로 3개까지.
+    if (issue.id === "P6" && issue.data?.grade && issue.relax.includes("oncePerDay")) {
+      const hoursOf = new Map();
+      for (const lesson of prepared.input?.lessons || []) {
+        if (String(lesson.grade) !== String(issue.data.grade) || lesson.double || Array.isArray(lesson.parts) || !(Number(lesson.hours) >= 2)) continue;
+        const classes = Array.isArray(lesson.classes) ? lesson.classes.length : Number(issue.data.classes) || 1;
+        hoursOf.set(lesson.subject, (hoursOf.get(lesson.subject) || 0) + Number(lesson.hours) * classes);
+      }
+      const number = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
+      let added = 0;
+      for (const [subject] of [...hoursOf].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), "ko"))) {
+        if (added >= 3) break;
+        const key = `double:${subject}`;
+        const choice = timetableChoiceOf(key);
+        if (choice.skip?.(settings, prepared)) continue;
+        const after = effectOf(key);
+        if (!after) continue;
+        const rest = after.issues.find((other) => other.level === "fail" && timetableIssueKey(other) === timetableIssueKey(issue))
+          || after.issues.find((other) => other.level === "fail" && other.id === "P6" && String(other.data?.grade) === String(issue.data.grade));
+        const failAfter = after.counts.fail + after.counts.block;
+        const more = rest && number(issue.data.capacity) !== null && number(rest.data?.capacity) !== null && rest.data.capacity > issue.data.capacity;
+        if (rest && failAfter >= failBefore && !more) continue;
+        list.push({ key, label: choice.label, gives: choice.gives, kind: "setting",
+          effect: { solved: !rest, failBefore, failAfter, ...(more ? { note: `들어가는 반 수업 ${issue.data.capacity} → ${rest.data.capacity}시간(필요 ${rest.data.need}시간)` } : {}) } });
+        added += 1;
+      }
+    }
     if (list.length) out.set(timetableIssueKey(issue), list);
   }
   return out;
@@ -1114,7 +1143,7 @@ function timetableChoicesHtml(list) {
   if (!list?.length) return "";
   const row = (choice) => {
     const effect = choice.kind !== "setting" ? ""
-      : `<span class="tt-effect" data-solved="${choice.effect.solved}">${choice.effect.solved ? "이 항목 풀림" : "이 항목은 그대로"} · 조건 위반 ${choice.effect.failBefore} → ${choice.effect.failAfter}건</span>`;
+      : `<span class="tt-effect" data-solved="${choice.effect.solved}">${choice.effect.solved ? "이 항목 풀림" : `이 항목은 그대로${choice.effect.note ? `(${timetableEsc(choice.effect.note)})` : ""}`} · 조건 위반 ${choice.effect.failBefore} → ${choice.effect.failAfter}건</span>`;
     const action = choice.kind === "setting" ? `<button class="button" type="button" data-tt-choice="${choice.key}">이 선택으로 다시 점검</button>` : timetableWhereButtons([choice.where]);
     const estimate = choice.estimate ? `<div class="tt-gives tt-estimate" data-tt-stagger="${timetableEsc(choice.estimate.grade)}">예상(${timetableEsc(choice.estimate.grade)}학년 반 묶음 ${timetableEsc(choice.estimate.label)}, 6단계 분반 결과로 어림 · 두 학기 중 큰 쪽)${choice.estimate.mapped ? "" : " — 내년 반 배정표가 없어 지금 반 기준입니다"}
       <ul class="tt-estimate-list">${choice.estimate.plans.map((plan) => `<li data-k="${plan.k}" data-extra="${plan.extra}" data-small="${plan.small}">블록 ${plan.k}개 엇갈림 → 분반 <strong>+${plan.extra}</strong>${plan.small ? ` · ${TIMETABLE_STAGGER_SMALL}명 미만 분반 ${plan.small}개` : ""} <span class="tt-estimate-blocks">(${timetableEsc(Object.entries(plan.blocks).map(([semester, labels]) => `${semester}학기 ${labels.join("·")}`).join(", "))})</span>${plan.effect ? ` <span class="tt-effect" data-tt-stagger-effect="${plan.k}" data-solved="${plan.effect.solved}" data-fail-after="${plan.effect.failAfter}">${plan.effect.solved ? "이 항목 풀림" : `이 항목은 그대로${plan.effect.note ? `(${timetableEsc(plan.effect.note)})` : ""}`} · 조건 위반 ${plan.effect.failBefore} → ${plan.effect.failAfter}건</span>` : ""}</li>`).join("")}</ul>
@@ -1943,7 +1972,7 @@ function renderTimetableView() {
   TIMETABLE_VIEW.result = result;
   const settings = timetableSettings();
   const preview = (key) => {
-    try { return timetablePrecheck(timetableInputCompute(String(round), semester, prepared.year, TIMETABLE_CHOICES[key].patch(settings, prepared)).input); } catch { return null; }
+    try { return timetablePrecheck(timetableInputCompute(String(round), semester, prepared.year, timetableChoiceOf(key).patch(settings, prepared)).input); } catch { return null; }
   };
   const choices = timetableChoicesFor(result, prepared, settings, preview);
   const saved = timetableSaved(round);
