@@ -753,7 +753,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   for (const group of source.groups.filter((item) => String(item.semester) === semester)) {
     const grade = String(group.targetGrade);
     const entry = classSectionsEntry(round, group.key, false);
-    const modes = classSectionsCourseConf(cs, "courseModes", group.grade);
+    const modes = classSectionsCourseModes(cs, group);
     const departments = classSectionsCourseConf(cs, "courseDepartments", group.grade);
     const rooms = classSectionsCourseConf(cs, "courseRooms", group.grade);
     const courseOf = new Map(group.courses.map((course) => [course.key, course]));

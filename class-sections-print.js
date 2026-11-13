@@ -1053,7 +1053,7 @@ function classSectionsTimetableSemesterModels(round, group, keys, semester = gro
   try { classLessons = typeof timetableStudentLessons === "function" ? timetableStudentLessons(round, group.targetGrade, semester) : null; } catch { classLessons = null; }
   const prepared = groups.map(({ group: item, entry }) => {
     const result = entry.sectionResult;
-    const unitPlan = typeof classSectionsClassUnitPlan === "function" && item.courses.some((course) => classSectionsCourseConf(settings, "courseModes", item.grade)[course.key] === "class")
+    const unitPlan = typeof classSectionsClassUnitPlan === "function" && item.courses.some((course) => classSectionsCourseModes(settings, item)[course.key] === "class")
       ? classSectionsClassUnitPlan(item, entry, settings) : null;
     return { item, result, sectionById: new Map(result.sections.map((section) => [section.id, section])), blockById: new Map((result.blocks || []).map((block) => [block.id, block])), unitPlan,
       courseName: new Map(item.courses.map((course) => [course.key, course.name])) };
@@ -1323,7 +1323,7 @@ function classSectionsHomeroomData(round, group) {
         const name = courseName.get(miss.courseKey) || miss.courseKey;
         if (!list.some((x) => x.courseName === name)) list.push({ courseName: name, reason: reasons[miss.reason] || miss.reason });
       }
-      const unitCourses = item.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", item.grade)[course.key] === "class");
+      const unitCourses = item.courses.filter((course) => classSectionsCourseModes(settings, item)[course.key] === "class");
       if (unitCourses.length && effective.map && typeof classSectionsClassUnitPlan === "function") {
         const plan = classSectionsClassUnitPlan(item, entry, settings);
         for (const student of item.gradeStudents || item.students) {

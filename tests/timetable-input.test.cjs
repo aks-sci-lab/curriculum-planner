@@ -72,6 +72,7 @@ function world(overrides = {}) {
     classSectionsSource: () => ({ groups }),
     classSectionsEntry: (round, key) => entries[key] || null,
     classSectionsCourseConf: (cs, kind, grade) => (kind === "courseModes" && grade === "2" ? { 일본어: "class", 중국어: "class" } : kind === "courseRooms" && grade === "1" ? { 물리학: "과학실" } : {}),
+    classSectionsCourseModes: (cs, group) => (group.merged ? {} : group.grade === "2" ? { 일본어: "class", 중국어: "class" } : {}),
     classSectionsClassUnitOnly: (group) => Boolean(group.unitOnly),
     classSectionsClassUnitPlan: () => ({ assign: { 1: "일본어", 2: "일본어", 3: "중국어" }, mapped: Boolean(overrides.mapped) }),
     classSectionsSignature: () => overrides.signature || "sig",

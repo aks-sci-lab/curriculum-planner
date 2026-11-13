@@ -71,6 +71,13 @@ function classSectionsCourseConf(settings, kind, grade) {
   return store[key];
 }
 
+// 과목 운영 방식(이동/학급 단위) 읽기: 합친 그룹(이동수업 그룹 합치기)은 모든 과목이 이동 분반 — 저장된 학급 단위 설정은 지우지 않고 쓰지 않는다
+// (합치기를 끄면 예전 그대로). 고치는 곳은 classSectionsCourseConf(settings, "courseModes", 학년) 그대로.
+var CLASS_SECTIONS_NO_MODES = Object.freeze({});
+function classSectionsCourseModes(settings, group) {
+  return group?.merged ? CLASS_SECTIONS_NO_MODES : classSectionsCourseConf(settings, "courseModes", group.grade);
+}
+
 function classSectionsEntry(round, groupKey, create = true) {
   const store = classSectionsStore();
   if (!classSectionsPlain(store[round])) { if (!create) return null; store[round] = {}; }
@@ -245,7 +252,48 @@ function classSectionsSourceCompute(round, thresholds) {
   // 현 학년별로 묶고 그 안에서 학기 순(현1 → 2-1 택3, 2-1 택1, 2-2 …; 현2 → …).
   const choiceOf = (group) => -group.choice;
   groups.sort((a, b) => a.grade.localeCompare(b.grade) || a.semester.localeCompare(b.semester) || choiceOf(a) - choiceOf(b) || a.category.localeCompare(b.category, "ko"));
-  return { groups, locked, maxClassSize: Number(snapshot?.maxClassSize) || Number($("#maxClassSize")?.value) || 34 };
+  // 이동수업 그룹 합치기(6단계만 — 편제표·2단계 그룹·4단계 집계는 그대로): 켠 현 학년·학기의 그룹들을 한 블록 세트로.
+  const merged = classSectionsMergeGroups(groups, typeof classSectionsSettings === "function" ? classSectionsSettings().mergeGroups : null);
+  return { groups: merged.groups, mergeable: merged.mergeable, locked, maxClassSize: Number(snapshot?.maxClassSize) || Number($("#maxClassSize")?.value) || 34 };
+}
+
+// 이동수업 그룹 합치기(순수): 같은 현 학년·학기의 그룹이 둘 이상이고 merge["현학년:학기"]가 켜져 있으면 한 그룹으로 합친다.
+//   합친 그룹 키 = '현학년:학기:그룹A+그룹B'(원래 그룹 키와 겹치지 않아 저장 칸이 따로 — 켜고 꺼도 서로의 편성 결과를 지우지 않음),
+//   과목 = 두 그룹 과목을 차례로(course.from = 원래 그룹), 학생 = 두 그룹에서 고른 과목을 합침(택5 + 택1 → 6과목, 블록마다 한 과목),
+//   choice = 합(블록 수 기본값), merged = [{ key, category, choice, courses: [과목 키] }]. 과목 키가 두 그룹에 겹치면 합치지 않고 problem으로 알린다.
+// 돌려주는 값: { groups, mergeable: [{ id: '현학년:학기', grade, targetGrade, semester, parts: [그룹 이름], on, key, problem }] }
+function classSectionsMergeGroups(groups, merge) {
+  const sets = new Map();
+  for (const group of groups || []) {
+    const id = `${group.grade}:${group.semester}`;
+    if (!sets.has(id)) sets.set(id, []);
+    sets.get(id).push(group);
+  }
+  const out = [];
+  const mergeable = [];
+  for (const [id, parts] of sets) {
+    if (parts.length < 2) { out.push(...parts); continue; }
+    const first = parts[0];
+    const category = parts.map((group) => group.category).join("+");
+    const info = { id, grade: first.grade, targetGrade: first.targetGrade, semester: first.semester, parts: parts.map((group) => group.category), on: Boolean(merge && merge[id]), key: `${id}:${category}`, problem: "" };
+    mergeable.push(info);
+    if (!info.on) { out.push(...parts); continue; }
+    const seen = new Map();
+    const twice = [];
+    for (const group of parts) for (const course of group.courses) { if (seen.has(course.key)) twice.push(course.name); else seen.set(course.key, group.category); }
+    if (twice.length) { info.problem = `같은 과목(${[...new Set(twice)].join(", ")})이 두 그룹에 모두 있어 합치지 못했습니다.`; out.push(...parts); continue; }
+    const students = new Map();
+    for (const group of parts) for (const student of group.students) {
+      const have = students.get(student.key);
+      if (have) have.courses.push(...student.courses.filter((key) => !have.courses.includes(key)));
+      else students.set(student.key, { ...student, courses: [...student.courses] });
+    }
+    out.push({ ...first, key: info.key, category, choice: parts.reduce((sum, group) => sum + group.choice, 0),
+      courses: parts.flatMap((group) => group.courses.map((course) => ({ ...course, from: group.category }))), students: [...students.values()],
+      label: `현${first.grade} → ${first.targetGrade}학년 ${first.semester}학기 · ${parts.map((group) => group.category).join(" + ")}(합침)`,
+      merged: parts.map((group) => ({ key: group.key, category: group.category, choice: group.choice, courses: group.courses.map((course) => course.key) })) });
+  }
+  return { groups: out, mergeable };
 }
 
 function classSectionsParseTimes(text) {
@@ -295,7 +343,7 @@ function classSectionsTimesText(times) {
 // 블록 수 제안: 학급 단위 반이 내년 모든 반을 덮으면(반마다 한 과목) 그 한 칸만큼 이동 블록이 줄고(택n−1),
 // '이동' 반이 남으면 그 반 학생은 택n 과목을 모두 이동으로 들으므로 블록 수는 택n 그대로.
 function classSectionsSuggestedBlocks(group, settings = classSectionsSettings(), entry = null) {
-  const unitCourses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class");
+  const unitCourses = group.courses.filter((course) => classSectionsCourseModes(settings, group)[course.key] === "class");
   if (!unitCourses.length) return { blocks: group.choice, removed: 0 };
   const plan = classSectionsClassUnitPlan(group, entry || classSectionsEntry(CLASS_SECTIONS_VIEW.round || classSectionsDefaultRound() || "1", group.key, true), settings);
   const covered = plan.homerooms.length > 0 && plan.homerooms.every((room) => plan.assign[room]);
@@ -322,7 +370,7 @@ function classSectionsHomeroomStudents(group) {
 // 검증기용 unitOf(학생 → 학급 단위 과목)를 함께 넘겨 학생별 그룹 과목 수가 택n을 넘지 않는지 확인한다.
 function classSectionsClassUnitInput(group, entry, settings) {
   const students = classSectionsHomeroomStudents(group);
-  const unitKeys = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class").map((course) => course.key);
+  const unitKeys = group.courses.filter((course) => classSectionsCourseModes(settings, group)[course.key] === "class").map((course) => course.key);
   if (!unitKeys.length || !classSectionsEffectiveClassMap(group).map || typeof classSectionsClassUnitStudents !== "function") return { students };
   const plan = classSectionsClassUnitPlan(group, entry, settings);
   const moved = classSectionsClassUnitStudents({ students, choose: group.choice, unitKeys, byClass: plan.assign });
@@ -407,7 +455,7 @@ function classSectionsCommonDepartmentFallback(courses, teachers, departmentTeac
 // (그 시간에 맞추면 그 과목 교사가 반 수만큼 동시에 필요). 화면·블록 시간 추천·다른 그룹 겹침 점검·출력물은 '반 수업(시간표에서 배치)'.
 // 일부 반만 학급 단위인 그룹은 이동 분반이 있으니 블록 시간을 그대로 둔다.
 function classSectionsClassUnitOnly(group, entry, settings = classSectionsSettings()) {
-  const modes = classSectionsCourseConf(settings, "courseModes", group.grade);
+  const modes = classSectionsCourseModes(settings, group);
   const open = (group.courses || []).filter((course) => !course.closed
     && (entry?.classCounts?.[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : Number(course.classCount) || 0) > 0);
   return open.length > 0 && open.every((course) => modes[course.key] === "class");
@@ -429,7 +477,7 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
     const capacities = String(entry.capacities[course.key] || "").split(/[,\s]+/).map(Number).filter((value) => value > 0);
     return { key: course.key, name: course.name, sections, capacity: base.capacity, capacities,
       department: classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] || course.department, room: classSectionsCourseConf(settings, "courseRooms", group.grade)[course.key] || "",
-      credits: course.credits, mode: classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class" ? "class" : "move" };
+      credits: course.credits, mode: classSectionsCourseModes(settings, group)[course.key] === "class" ? "class" : "move" };
   });
   const teachers = classSectionsTeacherList(settings, group.targetGrade);
   let departmentTeachers = null;
@@ -661,7 +709,7 @@ async function classSectionsSolveSemesterCurrent() {
       const saved = entry.sectionResult;
       try {
         const check = await classSectionsRunSolver({ kind: "solve", input: classSectionsBuildInput(round, groups[index], entry) });
-        const fresh = (check.explain?.suggestions || []).filter((item) => ["more-blocks", "class-unit", "class-unit-rooms", "recommend-times", "check-teachers"].includes(item.type));
+        const fresh = classSectionsGroupSuggestions(groups[index], check.explain?.suggestions || []).filter((item) => ["more-blocks", "class-unit", "class-unit-rooms", "recommend-times", "check-teachers"].includes(item.type));
         const fallback = [{ type: "check-teachers", verified: false, message: `교사 명단·5단계 교사 수를 확인하세요: ${[...new Set((saved.issues || []).filter((issue) => issue.type === "teacher-shortage").map((issue) => issue.department))].join(", ")} 교사가 그 시간에 모자랍니다.` }];
         const have = new Set((saved.explain?.suggestions || []).map((item) => item.type));
         const merged = [...(saved.explain?.suggestions || []), ...(fresh.length ? fresh : fallback).filter((item) => !have.has(item.type))];
@@ -698,7 +746,7 @@ function classSectionsBlockDemand(round, group, entry, settings) {
   } else {
     let turn = 0;
     for (const course of group.courses) {
-      if (classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class") continue;
+      if (classSectionsCourseModes(settings, group)[course.key] === "class") continue;
       const count = entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount;
       const dept = departmentOf(course.key);
       for (let k = 0; k < count; k += 1) {
@@ -812,9 +860,15 @@ function classSectionsCarryRoomPins(previous, next) {
   return dropped;
 }
 
+// 합친 그룹은 모든 과목이 이동 분반이라 '학급 단위로 운영하면' 제안을 보이지 않는다.
+function classSectionsGroupSuggestions(group, list) {
+  return group?.merged ? (list || []).filter((item) => !/^class-unit/.test(String(item?.type || ""))) : list || [];
+}
+
 function classSectionsSaveResult(entry, result, input, group, source, batch = "") {
   const previous = entry.sectionResult;
   entry.sectionResult = classSectionsCompactResult(result, input, !source.locked);
+  if (group?.merged && Array.isArray(entry.sectionResult.explain?.suggestions)) entry.sectionResult.explain = { ...entry.sectionResult.explain, suggestions: classSectionsGroupSuggestions(group, entry.sectionResult.explain.suggestions) };
   const dropped = classSectionsCarryRoomPins(previous, entry.sectionResult);
   const tails = [];
   if (dropped) tails.push(`교실 고정 ${dropped}개 해제(없어진 분반)`);
@@ -850,7 +904,7 @@ function classSectionsTimetablePrecheckFor(source, group, round = CLASS_SECTIONS
   const lessons = [];
   for (const item of source.groups.filter((other) => other.grade === group.grade && other.semester === group.semester)) {
     const entry = classSectionsEntry(round, item.key, false) || {};
-    const modes = classSectionsCourseConf(settings, "courseModes", item.grade);
+    const modes = classSectionsCourseModes(settings, item);
     const departments = classSectionsCourseConf(settings, "courseDepartments", item.grade);
     const credit = (course) => Number(course.credits) || Number(course.planCredits) || 0;
     if (!classSectionsClassUnitOnly(item, entry, settings)) {
@@ -920,6 +974,31 @@ function classSectionsCurrent() {
   return { round, source, group, entry: classSectionsEntry(round, group.key, true) };
 }
 
+// 이동수업 그룹 합치기 켜기·끄기: 설정만 바꾼다(두 그룹과 합친 그룹의 편성 결과는 저장 칸이 달라 서로 지우지 않음). 고르던 그룹이 없어지면 그 학기의 그룹으로.
+function classSectionsMergeToggle(id, on) {
+  const settings = classSectionsSettings();
+  if (!classSectionsPlain(settings.mergeGroups)) settings.mergeGroups = {};
+  if (on) settings.mergeGroups[id] = true; else delete settings.mergeGroups[id];
+  const source = classSectionsSource(CLASS_SECTIONS_VIEW.round || classSectionsDefaultRound());
+  const item = (source.mergeable || []).find((entry) => entry.id === id);
+  const here = source.groups.find((group) => `${group.grade}:${group.semester}` === id);
+  if (here) CLASS_SECTIONS_VIEW.group = here.key;
+  classSectionsSetStatus(item?.problem ? item.problem : on ? "그룹을 합쳤습니다. 블록 수·분반 수를 확인하고 '편성 계산'을 누르세요(그룹마다 편성한 예전 결과는 그대로 있습니다)." : "합치기를 껐습니다. 그룹마다 편성한 결과가 그대로 보입니다(합친 편성 결과도 지우지 않았습니다).", Boolean(item?.problem));
+  if (typeof persistStateSoon === "function") persistStateSoon(); else if (typeof persistState === "function") persistState();
+  renderClassSections();
+}
+
+// 이동수업 그룹 합치기 줄: 같은 현 학년·학기에 그룹이 둘 이상일 때만(택5 + 택1 → 블록 6개). 편제표·4단계 집계는 그대로, 6단계 편성만 합친다.
+function classSectionsMergeHtml(source) {
+  const esc = classSectionsEsc;
+  const list = source.mergeable || [];
+  if (!list.length) return "";
+  return `<div class="cs-merge" id="classSectionsMerge"><strong>이동수업 그룹 합치기</strong>
+    ${list.map((item) => `<label><input type="checkbox" data-cs-merge="${esc(item.id)}"${item.on ? " checked" : ""}> 현${esc(item.grade)} → ${esc(item.targetGrade)}학년 ${esc(item.semester)}학기 (${esc(item.parts.join(" + "))})</label>`).join("")}
+    <span class="cs-note">켜면 그 학기의 그룹들을 한 블록 세트로 편성합니다(학생은 그룹마다 고른 과목을 서로 다른 블록에서, 과목은 모두 이동 분반). 편제표·4단계 집계는 바뀌지 않고, 끄면 그룹마다 편성한 예전 결과가 그대로 있습니다.</span>
+    ${list.filter((item) => item.problem).map((item) => `<p class="cs-note is-warn" data-cs-merge-problem="${esc(item.id)}">${esc(item.problem)}</p>`).join("")}</div>`;
+}
+
 // ---- 그리기 ----
 function renderClassSections() {
   if (typeof deferRenderUntilStepVisible === "function" && deferRenderUntilStepVisible(8, "renderClassSections", renderClassSections)) return;
@@ -967,13 +1046,18 @@ function renderClassSectionsView() {
     const deptOptions = (typeof HOURS_DEPARTMENTS !== "undefined" ? HOURS_DEPARTMENTS : []).map((item) =>
       `<option value="${esc(item.id)}"${item.id === department ? " selected" : ""}>${esc(typeof hoursDepartmentName === "function" ? hoursDepartmentName(item.id) : item.id)}</option>`).join("");
     const key = esc(course.key);
+    // 합친 그룹: 분반 수는 4단계 개설 학급 수 그대로 쓰되(자료 한 출처), 학급 단위로 운영하던 과목(개설 학급 수 = 반 수 기준)이
+    // 정원으로 보면 더 적은 분반이면 되는 경우는 안내만 한다(줄이려면 4단계에서).
+    const needed = Math.ceil((Number(course.enrollment) || 0) / (base.capacity || 34));
+    const fewer = group.merged && !course.closed && classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class" && needed > 0 && needed < sections ? needed : 0;
     return `<tr${differs ? ' class="is-changed"' : ""}>
       <th scope="row">${esc(course.name)}${course.closed ? ' <span class="cs-tag">폐강</span>' : ""}</th>
       <td>${course.enrollment}</td>
       <td>${course.classCount}</td>
       <td><input class="cs-num" type="number" min="0" max="30" value="${sections}" data-cs-sections="${key}" data-focus-key="cs-sections-${key}" aria-label="${key} 6단계 분반 수">${differs ? `<span class="cs-diff" title="4단계 확정 ${course.classCount}개">4단계와 다름</span>` : ""}</td>
       <td><input class="cs-text" type="text" inputmode="numeric" value="${esc(entry.capacities[course.key] || "")}" placeholder="${base.capacity}" data-cs-capacities="${key}" data-focus-key="cs-cap-${key}" aria-label="${key} 분반별 정원(쉼표로 구분)"></td>
-      <td><select data-cs-mode="${key}" data-focus-key="cs-mode-${key}" aria-label="${key} 운영 방식"><option value="move">이동</option><option value="class"${classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class" ? " selected" : ""}>학급 단위</option></select></td>
+      <td>${group.merged ? `<span class="cs-note" data-cs-merged-mode="${key}" title="합친 그룹의 과목은 모두 이동 분반입니다(원래 그룹: ${esc(course.from || "")})">이동</span>${fewer ? ` <span class="cs-note" data-cs-fewer="${key}" title="학급 단위로 운영하던 과목입니다. 분반 수는 4단계 개설 학급 수(${course.classCount})를 그대로 씁니다. 줄이려면 4단계에서 개설 학급 수를 바꾸세요.">정원으로 보면 ${fewer}분반이면 됩니다</span>` : ""}`
+        : `<select data-cs-mode="${key}" data-focus-key="cs-mode-${key}" aria-label="${key} 운영 방식"><option value="move">이동</option><option value="class"${classSectionsCourseModes(settings, group)[course.key] === "class" ? " selected" : ""}>학급 단위</option></select>`}</td>
       <td><select data-cs-dept="${key}" data-focus-key="cs-dept-${key}" aria-label="${key} 담당 교과">${deptOptions}</select></td>
       <td><input class="cs-text" type="text" value="${esc(classSectionsCourseConf(settings, "courseRooms", group.grade)[course.key] || "")}" placeholder="없음" data-cs-room="${key}" data-focus-key="cs-room-${key}" aria-label="${key} 특별실"></td>
     </tr>`;
@@ -994,6 +1078,7 @@ function renderClassSectionsView() {
   const teacherNote = classSectionsTeacherNote(settings, group, input);
   panel.innerHTML = `${basis}
     <div class="cs-groups" role="group" aria-label="편성할 그룹">${groupsHtml}</div>
+    ${classSectionsMergeHtml(source)}
     <div class="cs-badges">
       ${source.locked ? "" : '<span class="cs-badge" data-state="draft">확정 전 시안</span>'}
       ${stale ? '<span class="cs-badge" data-state="stale" id="classSectionsStale">입력 변경됨, 재계산 필요</span>' : ""}
@@ -1237,7 +1322,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
 }
 
 function classSectionsClassUnitHtml(group, entry, settings) {
-  const courses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class");
+  const courses = group.courses.filter((course) => classSectionsCourseModes(settings, group)[course.key] === "class");
   if (!courses.length) return "";
   const esc = classSectionsEsc;
   const split = classSectionsClassUnitPlan(group, entry, settings);
@@ -1263,7 +1348,7 @@ function classSectionsClassUnitHtml(group, entry, settings) {
 }
 
 function classSectionsClassUnitPlan(group, entry, settings) {
-  const courses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class").map((course) => ({ key: course.key, name: course.name,
+  const courses = group.courses.filter((course) => classSectionsCourseModes(settings, group)[course.key] === "class").map((course) => ({ key: course.key, name: course.name,
     sections: entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount }));
   const count = group.nextClasses || group.rosterClasses || group.classes || 0;
   const homerooms = Array.from({ length: count }, (_, index) => String(index + 1));
@@ -1453,6 +1538,7 @@ function classSectionsHandleClick(event) {
 function classSectionsHandleChange(event) {
   const target = event.target;
   if (typeof classSectionsEditChange === "function" && classSectionsEditChange(target)) return;
+  if (target.dataset.csMerge !== undefined) return void classSectionsMergeToggle(target.dataset.csMerge, target.checked);
   const context = classSectionsCurrent();
   if (!context?.entry) return;
   const { entry } = context;
@@ -1679,7 +1765,7 @@ function classSectionsExport(kind) {
     return downloadBlob(createWorkbookBlob([{ name: "내년 반 배정", rows, widths: [10, 10, 10, 10, 10], freeze: "A2", orientation: "portrait" }]), `${year}_현${group.grade}학년_내년반배정표.xlsx`);
   }
   const settingsForUnits = classSectionsSettings();
-  const hasClassUnit = group.courses.some((course) => classSectionsCourseConf(settingsForUnits, "courseModes", group.grade)[course.key] === "class");
+  const hasClassUnit = group.courses.some((course) => classSectionsCourseModes(settingsForUnits, group)[course.key] === "class");
   // 학급 단위 과목만 있는 그룹은 이동 편성 결과가 없어도 내보낼 수 있다.
   if (!result && !hasClassUnit) return;
   if (!result) result = { blocks: [], sections: [], assign: {}, unassigned: [], draft: true, explain: { summary: "이동 수업 편성 없음(학급 단위 과목만)" } };
@@ -1727,7 +1813,7 @@ function classSectionsExport(kind) {
     const effective = classSectionsEffectiveClassMap(group);
     const map = effective.map || {};
     const students = (group.gradeStudents || group.students).map((student) => ({ key: student.key, classroom: map[student.key]?.classroom || "", number: map[student.key]?.number || "", name: names.get(student.key) || "" }));
-    const unitCourses = group.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", group.grade)[course.key] === "class");
+    const unitCourses = group.courses.filter((course) => classSectionsCourseModes(settings, group)[course.key] === "class");
     const classUnit = unitCourses.length ? { byClass: classSectionsClassUnitPlan(group, entry, settings).assign,
       courses: Object.fromEntries(unitCourses.map((course) => [course.key, { name: course.name, ...courses[course.key] }])) } : null;
     const { rows, warnings } = classSectionsNeisExport(result, { year, semester: group.semester, targetGrade: group.targetGrade, courses, students, classUnit });
