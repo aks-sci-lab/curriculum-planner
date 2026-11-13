@@ -169,6 +169,17 @@ function schoolGuideSteps(facts = {}) {
   ];
 }
 
+// 웹 수강신청을 만들기 전에 보여 주는 안내(서버에 무엇이 저장되는지·누가 보는지·보관·삭제). 순수.
+function courseServerNoticeLines(schoolName = "") {
+  return [
+    `웹 수강신청을 만들면 ${schoolName ? `${schoolName} ` : ""}학생의 성명·현재 학년·반·번호(학번을 넣었으면 학번)와 선택 과목·제출 시각이 이 앱의 공용 서버에 저장됩니다.`,
+    "· 볼 수 있는 사람: 신청을 만든 교사(지금 로그인한 구글 계정)만 앱 화면에서 봅니다. 다른 학교·다른 교사에게는 보이지 않습니다. 서버 운영자(이 앱을 운영하는 학교의 담당 교사)는 서버 관리 화면에서 자료에 접근할 수 있습니다.",
+    "· 보관 기간: 신청 카드의 '명렬·결과 영구 삭제'를 누를 때까지 서버에 남습니다. 다음 해 3월 1일부터는 접속이 막혀 이 화면에서 지울 수 없으니, 신청이 끝나고 결과를 이 PC로 가져온 뒤에 지워 주세요.",
+    "· 편제표·집계·시수·분반·시간표 자료는 서버로 가지 않고 이 PC에만 있습니다.",
+    "· 학생 개인정보를 외부 서버에 두는 일이므로 학교의 개인정보 처리 절차(내부 결재, 학생·학부모 안내)를 먼저 확인하세요. 곤란하면 웹 수강신청 대신 다른 프로그램의 결과 엑셀을 2단계에 올려 쓸 수 있습니다(서버 사용 없음).",
+  ];
+}
+
 // ---- 앱 연결 ----
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {
@@ -240,6 +251,20 @@ if (typeof document !== "undefined" && typeof window !== "undefined") {
     }
     if (typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
   };
+
+  // 웹 수강신청 생성 전 확인. 같은 브라우저·같은 학년도에서는 한 번만 묻는다(안내 글은 생성 단추 아래에 늘 보인다).
+  window.confirmCourseServerNotice = async function confirmCourseServerNotice(schoolYear = "", schoolName = "") {
+    const key = `curriculum-server-notice:${schoolYear}`;
+    try { if (window.localStorage.getItem(key) === "1") return true; } catch { /* 저장소를 못 쓰면 매번 묻는다 */ }
+    const text = `${courseServerNoticeLines(schoolName).join("\n\n")}\n\n위 내용을 확인했고 수강신청을 만들까요?`;
+    const ok = typeof appConfirm === "function"
+      ? await appConfirm(text, { title: "학생 정보가 서버에 저장됩니다", ok: "확인했습니다 · 만들기", cancel: "취소" })
+      : window.confirm(text);
+    if (ok) { try { window.localStorage.setItem(key, "1"); } catch { /* 다음에 다시 묻는다 */ } }
+    return ok;
+  };
+  const serverNote = document.getElementById("cloudServerNotice");
+  if (serverNote) serverNote.innerHTML = `<summary>학생 정보의 서버 저장·보관·삭제 안내</summary>${courseServerNoticeLines().map((line) => `<p class="note">${escapeText(line)}</p>`).join("")}`;
 
   // 학년도 기본값: 저장된 자료가 없을 때 쓰는 칸의 처음 값을 오늘 날짜 기준으로(저장된 학년도가 있으면 app.js가 그 값으로 덮어쓴다).
   const yearInput = document.getElementById("schoolYear");

@@ -23,9 +23,12 @@
 4. `02-next-round-student-id.sql` — 다음 차수 생성 시 학번이 이어지게 합니다(`upgrade-stable-student-ids.sql` 필요).
 5. `03-retention-purge.sql` — (선택) 학년도 종료 +180일 뒤 자동 삭제. `pg_cron` 예약은 주석 안내.
 
+6. `04-multi-school-limits.sql` — (여러 학교가 함께 쓸 때) 학교 이름 2~60자, 계정당 수강신청 30개·학생 합계 20,000명 제한(`course_limits`에서 조정), 학년도가 끝난 신청도 만든 교사가 보고 지우는 입구(`list_own_course_events`·`delete_own_course_event`·`delete_all_own_course_events`). 01·03 없이도 실행됩니다. 앱 화면 연결은 적용 뒤에 합니다(`docs/multi-school.md`). 검증: `tests/multi-school-sql.test.cjs`.
+
 ## 되돌리기
 - 01: `01-rollback.sql` 실행 + 이전 앱으로 되돌린 뒤 각 신청에서 **"전체 학생 코드 재발급"** 을 눌러 새 코드를 나눠 주세요(원본 코드는 저장하지 않아 복원 불가). 컬럼(`code_hmac` 등)은 남겨도 무해합니다.
 - 02: 파일 안의 `old_text`/`new_text` 를 서로 바꿔 다시 실행.
+- 04: 파일 맨 아래 주석.
 - 03: `drop trigger course_events_purge_after on public.course_events; drop function public.purge_expired_course_events(); alter table public.course_events drop column purge_after;` 와 `cron.unschedule`.
 
 ## 잠금 방식 비교

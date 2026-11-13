@@ -685,7 +685,7 @@ var updateRetakeReadiness;
         if (section.querySelector(".course-code-locks")) await showStudentAccessPanel(event, section);
       }), "button button-quiet"));
       section.appendChild(button("명렬·결과 영구 삭제", () => teacherAction(async () => {
-        if (!window.confirm(`${event.school_name} ${event.round}차의 모든 명렬과 신청을 영구 삭제할까요? 복구할 수 없습니다.`)) {
+        if (!window.confirm(`${event.school_name} ${event.round}차의 모든 명렬과 신청을 서버에서 영구 삭제할까요? 복구할 수 없습니다. 결과를 이 PC로 가져왔는지(집계표 연동·엑셀 저장) 먼저 확인하세요.`)) {
           byId("cloudTeacherMessage").textContent = "삭제를 취소했습니다.";
           return;
         }
@@ -1244,7 +1244,13 @@ var updateRetakeReadiness;
         byId("cloudTeacherMessage").textContent = "생성을 취소했습니다. 이전 코드를 먼저 저장하세요.";
         return;
       }
+      if (byId("schoolName").value.trim().length < 2) throw new Error("학교 이름을 먼저 입력하세요(맨 위 '학교·학년도 설정'). 학생 화면과 서버 기록에 학교 이름이 들어갑니다.");
       const setup = applicationSetup(pendingRoster, byId("schoolName").value.trim());
+      // 학생 성명·학년·반·번호·선택이 공용 서버에 저장된다는 것을 만들기 전에 알리고 확인받는다(school-guide.js).
+      if (typeof confirmCourseServerNotice === "function" && !(await confirmCourseServerNotice(setup.schoolYear, setup.schoolName))) {
+        byId("cloudTeacherMessage").textContent = "수강신청 생성을 취소했습니다. 서버에 보낸 자료는 없습니다.";
+        return;
+      }
       latestCodes = await rpc("create_course_event", { p_setup: setup }, true);
       latestCodesMeta = { schoolName: setup.schoolName, schoolYear: setup.schoolYear, round: String(setup.round) };
       // 명렬(현 학년 전체, 미제출 포함)을 이 PC에만 저장한다(담임반 현황·출석부용). 서버로 새로 보내는 것은 없다.

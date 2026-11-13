@@ -6206,7 +6206,7 @@
       const grade = String(state.applicationMenuGrade || "1");
       const entry = applicationRosterFor(grade);
       box.textContent = entry
-        ? `이 PC에 저장한 현 ${grade}학년 명렬: ${entry.students.length}명 · ${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} (담임반 현황·출석부의 미제출 학생 확인용, 서버로 보내지 않음)`
+        ? `이 PC에 저장한 현 ${grade}학년 명렬: ${entry.students.length}명 · ${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} (담임반 현황·출석부의 미제출 학생 확인용 · 이 올리기는 이 PC에만 저장)`
         : `이 PC에 저장한 현 ${grade}학년 명렬이 없습니다. 웹 신청을 쓰지 않았거나 이미 만든 신청이면 '명렬 올리기'로 같은 명렬 파일을 올리세요(서버 변경 없음).`;
     }
 
