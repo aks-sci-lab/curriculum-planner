@@ -1119,7 +1119,7 @@ function planComplianceDialogs() {
   <dialog class="curriculum-subject-dialog plan-compliance-settings-dialog" id="planComplianceSettingsDialog" aria-labelledby="planComplianceSettingsTitle">
     <form method="dialog" id="planComplianceSettingsForm">
       <h2 id="planComplianceSettingsTitle">편제 점검 기준 설정</h2>
-      <p class="note">울산광역시교육청 편제 점검 프로그램(2026) 지침의 기준값입니다. 교육청 기준이 다르면 고치세요. 입력하면 바로 저장되고 모든 편제표 점검에 반영됩니다.</p>
+      <p class="note">울산광역시교육청 편제 점검 프로그램(2026) 지침의 기준값입니다(2022 개정 교육과정 일반고 기준). 학교 유형이 다르거나 지침이 바뀌면 고치세요. 입력하면 바로 저장되고 모든 편제표 점검에 반영됩니다.</p>
       <p class="note plan-compliance-shared-note">교과(군)별 필수 이수 학점·교과 총 이수 학점·창의적 체험활동·국어·수학·영어 상한은 <b>2단계 학생 위계·이수학점 점검</b>(결과 검증·확인서 점검란·4단계 요약)도 같은 값을 씁니다. 여기 한 곳에서만 고칩니다.</p>
       <div id="planComplianceSettingsBody"></div>
       <div class="curriculum-version-dialog-actions">

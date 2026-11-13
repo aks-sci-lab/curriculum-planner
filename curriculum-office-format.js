@@ -823,13 +823,13 @@ function buildCurriculumOfficeExport() {
     const missing = [1, 2, 3].filter((grade) => !layouts[grade]?.planData).map((grade) => `${grade}학년(${year - grade + 1} 입학생)`);
     if (missing.length === 3) throw new Error("전학년 편제표를 만들 입학생 편제표가 없습니다.");
     const sheet = curriculumOfficeAnnualSheet(layouts, { year, school });
-    return { sheet, fileName: `${year}학년도_전학년_편제표_교육청양식.xlsx`, missing };
+    return { sheet, fileName: `${year}학년도_전학년_편제표_울산편제점검양식.xlsx`, missing };
   }
   const layout = curriculumOfficeCohortLayout(String(year));
   if (!layout?.planData) throw new Error("편제표 데이터가 없습니다. 편제표를 다시 업로드하세요.");
   const school = curriculumOfficeSchoolName([layout]);
   const sheet = curriculumOfficeCohortSheet(layout, { year, grade: schoolYear + 2 - year, school });
-  return { sheet, fileName: `${year}학년도_입학생_편제표_교육청양식.xlsx`, missing: [] };
+  return { sheet, fileName: `${year}학년도_입학생_편제표_울산편제점검양식.xlsx`, missing: [] };
 }
 
 function buildCurriculumBasicWorkbook(layout) {
@@ -980,9 +980,9 @@ if (typeof document !== "undefined") {
     try {
       const { sheet, fileName, missing } = buildCurriculumOfficeExport();
       curriculumOfficeDownload(createXlsxBlob(curriculumOfficeWorkbookFiles([sheet])), fileName);
-      curriculumOfficeStatus(`교육청 양식(울산 편제 점검 프로그램 「${sheet.name}」 모양)으로 저장했습니다.${missing.length ? ` ${missing.join("·")} 편제표가 없어 그 학년은 비어 있습니다.` : ""}`, true);
+      curriculumOfficeStatus(`울산 편제 점검 프로그램 양식(「${sheet.name}」 모양)으로 저장했습니다.${missing.length ? ` ${missing.join("·")} 편제표가 없어 그 학년은 비어 있습니다.` : ""}`, true);
     } catch (error) {
-      curriculumOfficeStatus(`교육청 양식 내보내기 실패: ${error?.message || error}`, false);
+      curriculumOfficeStatus(`울산 편제 점검 양식 내보내기 실패: ${error?.message || error}`, false);
     } finally {
       button.disabled = false;
     }

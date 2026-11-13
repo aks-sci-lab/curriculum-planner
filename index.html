@@ -145,6 +145,7 @@
         <button class="button button-primary" id="workflowNextAction" type="button">다음 작업</button>
       </section>
       <section class="workflow-step-panel hidden" id="workflowStep1Panel">
+        <section class="school-start-guide hidden" id="schoolStartGuide" aria-label="처음 시작 안내"></section>
         <div class="curriculum-heading-row">
         <h3>1단계 · 편제표 관리</h3>
         <details class="curriculum-workflow-help">
@@ -156,7 +157,7 @@
           <button class="button" id="openCurriculumGuide" type="button" title="올릴 수 있는 파일(울산 편제 점검 프로그램 파일·학교 편제표 엑셀)과 예시·빈 양식">편제표 넣는 방법</button>
           <button class="button button-danger" id="clearCurriculumPlan" type="button">편제표 초기화</button>
           <button class="button" id="exportCurriculumPlan" type="button">엑셀 내보내기</button>
-          <button class="button" id="exportCurriculumOfficePlan" type="button" title="울산광역시교육청 편제 점검 프로그램의 「N학년_편제표」·「편제표통합」과 같은 양식으로 저장합니다.">교육청 양식으로 내보내기</button>
+          <button class="button" id="exportCurriculumOfficePlan" type="button" title="울산광역시교육청 편제 점검 프로그램의 「N학년_편제표」·「편제표통합」과 같은 양식으로 저장합니다(울산 편제 점검 프로그램용, 다른 시도 양식은 없습니다).">울산 편제 점검 양식으로 내보내기</button>
           <input class="hidden" id="curriculumPlanInput" type="file" accept=".xlsx,.xlsb">
         </div>
         </div>
@@ -1068,6 +1069,7 @@ function courseClient_() {
   <script src="timetable.js?v=20261111-release4" defer></script>
   <script src="timetable-solve.js?v=20261111-release4" defer></script>
   <script src="round-copy.js?v=20261111-release4" defer></script>
+  <script src="school-guide.js?v=20261111-release4" defer></script>
   <script defer src="app.js?v=20261111-release4"></script>
   <script src="xlsx-parser.js?v=20261111-release4" defer></script>
   <script src="course-groups.js?v=20261111-release4" defer></script>
@@ -1079,7 +1081,6 @@ function courseClient_() {
   <script src="round-status.js?v=20261111-release4" defer></script>
   <script src="curriculum-versions.js?v=20261111-release4" defer></script>
   <script src="curriculum-reconvert.js?v=20261111-release4" defer></script>
-  <script src="school-guide.js?v=20261111-release4" defer></script>
   <script src="hours-stats.js?v=20261111-release4" defer></script>
   <script src="class-sections-view.js?v=20261111-release4" defer></script>
   <script src="class-sections-edit.js?v=20261111-release4" defer></script>

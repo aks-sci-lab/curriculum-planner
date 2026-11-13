@@ -1,5 +1,5 @@
 // 다른 학교에서 처음 쓸 때 막히지 않게 돕는 안내: 편제표를 읽지 못한 이유, 편제표를 넣는 두 가지 길,
-// 예시·빈 양식(가상 과목, 앱이 그 자리에서 만듦), 첫 실행 안내, 학년도 기본값. app.js 뒤에 로드한다.
+// 예시·빈 양식(가상 과목, 앱이 그 자리에서 만듦), 첫 실행 안내, 학년도 기본값. app.js 앞에 로드한다(앱 함수는 부를 때 typeof로 확인).
 // 위쪽은 순수 계산(DOM·state 없음), '// ---- 앱 연결' 아래가 화면 연결이다. 계획·정한 것: docs/multi-school.md
 
 // 학년도 기본값: 새 학년도는 3월에 시작한다(1·2월은 아직 전 학년도).
@@ -241,7 +241,46 @@ if (typeof document !== "undefined" && typeof window !== "undefined") {
     if (typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
   };
 
+  // 학년도 기본값: 저장된 자료가 없을 때 쓰는 칸의 처음 값을 오늘 날짜 기준으로(저장된 학년도가 있으면 app.js가 그 값으로 덮어쓴다).
+  const yearInput = document.getElementById("schoolYear");
+  if (yearInput) { yearInput.value = schoolGuideDefaultYear(); yearInput.defaultValue = yearInput.value; }
+
+  // 처음 시작 안내(1단계 맨 위): 학교 이름·편제표·결과가 갖춰지거나 '안내 닫기'를 누르면 사라진다.
+  const START_GUIDE_KEY = "curriculum-start-guide-closed";
+  const startGuideClosed = () => { try { return window.localStorage.getItem(START_GUIDE_KEY) === "1"; } catch { return false; } };
+  window.renderSchoolStartGuide = function renderSchoolStartGuide() {
+    const box = document.getElementById("schoolStartGuide");
+    if (!box || typeof state === "undefined") return;
+    const schoolYear = Number(document.getElementById("schoolYear")?.value);
+    const loaded = Object.entries(state.curriculumCohorts || {}).filter(([, plan]) => plan?.fileName).map(([year]) => year);
+    if (state.curriculumPlanType !== "annual" && state.curriculumPlanFileName) loaded.push(String(state.curriculumCohortYear));
+    const steps = schoolGuideSteps({
+      schoolName: document.getElementById("schoolName")?.value || "", schoolYear: Number.isInteger(schoolYear) ? schoolYear : "",
+      cohortsNeeded: Number.isInteger(schoolYear) ? [schoolYear + 1, schoolYear, schoolYear - 1] : [], cohortsLoaded: loaded,
+      hasResults: Boolean(state.students?.length),
+    });
+    const hide = startGuideClosed() || steps.every((step) => step.done);
+    box.classList.toggle("hidden", hide);
+    if (hide) { box.innerHTML = ""; return; }
+    const action = { school: '<button class="button" type="button" data-open-dialog="workspaceSettingsDialog" data-start-guide="school">학교·학년도 설정</button>',
+      plans: '<button class="button" type="button" data-open-curriculum-guide data-start-guide="plans">편제표 넣는 방법</button>', results: "" };
+    box.innerHTML = `<div class="school-start-guide-head"><strong>처음 시작 안내</strong>
+        <span class="note">학교 학년도는 지금 학년도(수강신청을 받는 해)입니다. 올해 재학생이 내년 과목을 신청합니다. 편제표·결과·집계 자료는 이 PC에만 저장됩니다(웹 수강신청을 만들 때만 서버를 씁니다).</span>
+        <button class="button" type="button" id="schoolStartGuideClose">안내 닫기</button></div>
+      <ol>${steps.map((step) => `<li data-start-step="${step.key}" data-done="${step.done ? "1" : "0"}"><span class="school-start-guide-mark">${step.done ? "✓" : "·"}</span>
+        <span><strong>${escapeText(step.label)}</strong> — ${escapeText(step.detail)}</span>${step.done ? "" : action[step.key]}</li>`).join("")}</ol>`;
+  };
+  document.addEventListener("input", (event) => {
+    if (event.target?.id === "schoolName" || event.target?.id === "schoolYear") window.renderSchoolStartGuide();
+  });
+
   document.addEventListener("click", (event) => {
+    if (event.target.closest?.("#schoolStartGuideClose")) {
+      try { window.localStorage.setItem(START_GUIDE_KEY, "1"); } catch { /* 저장 못 해도 이번에는 닫는다 */ }
+      const box = document.getElementById("schoolStartGuide");
+      if (box) { box.classList.add("hidden"); box.innerHTML = ""; }
+      return;
+    }
     const errorButton = event.target.closest?.("[data-plan-error-cohort]");
     if (errorButton) {
       const year = errorButton.dataset.planErrorCohort;

@@ -2201,6 +2201,13 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
 .curriculum-cross-split-options small { color: #6b7890; }
 .curriculum-cross-split .note { margin: 4px 0 0; }
 .curriculum-reconvert-button { border-color: #f0b37a !important; background: #fff5eb !important; color: #9a3412 !important; font-weight: 600; }
+.school-start-guide { margin: 0 0 12px; padding: 10px 14px; border: 1px solid #c7d7f5; border-radius: 10px; background: #f3f7ff; font-size: 13px; }
+.school-start-guide-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.school-start-guide-head .note { flex: 1 1 320px; margin: 0; }
+.school-start-guide ol { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.school-start-guide li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.school-start-guide li[data-done="1"] { color: #287956; }
+.school-start-guide-mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 1px solid #c7d7f5; font-weight: 700; }
 .curriculum-plan-error-button { border-color: #e2a59a !important; background: #fdf0ed !important; color: #a44939 !important; font-weight: 600; }
 .curriculum-guide-dialog { max-width: 720px; }
 .curriculum-guide-dialog .curriculum-guide-ways { margin: 8px 0; padding-left: 20px; display: grid; gap: 10px; }

@@ -5428,6 +5428,7 @@
         <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
       </article>`;
       $("#curriculumCohortUploads").innerHTML = cohortCards + annualCard;
+      if (typeof renderSchoolStartGuide === "function") renderSchoolStartGuide();
     }
 
     function syncActiveCurriculumCohort() {

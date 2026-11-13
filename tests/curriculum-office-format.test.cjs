@@ -297,7 +297,7 @@ test("xlsb 리더는 시트 이름·공유 문자열·숫자(RK·실수)·문자
 
 test("교육청 양식 단추·불러오기 확인 창이 화면에 있고 새 파일을 불러온다", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  assert.match(html, /id="exportCurriculumOfficePlan"[^>]*>교육청 양식으로 내보내기</);
+  assert.match(html, /id="exportCurriculumOfficePlan"[^>]*>울산 편제 점검 양식으로 내보내기</);
   assert.match(html, /id="curriculumPlanInput" type="file" accept="\.xlsx,\.xlsb"/);
   assert.match(html, /id="curriculumOfficeImportDialog"/);
   assert.ok(html.indexOf("curriculum-office-format.js") > html.indexOf("curriculum-data-export.js"));
