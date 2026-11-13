@@ -183,11 +183,14 @@ function timetableResultTables(input, layer) {
     const item = result.lessons?.[lesson.id];
     if (!item) continue;
     const bare = new Set(item.bareSlots || []);
+    const otherOf = new Map(); // 나눠 맡긴 수업: 그 칸을 맡은 다른 교사
+    for (const part of item.others || []) for (const key of part.slots || []) otherOf.set(key, part.teacherId);
     for (const key of item.slots || []) {
       if (!key) continue;
-      const none = !item.teacherId || bare.has(key);
-      classCell(lesson.classId, key, { kind: "lesson", text: lesson.subject, teacher: none ? "" : nameOf(item.teacherId), noTeacher: none });
-      if (!none) teacherCell(item.teacherId, absOf.get(lesson.grade).get(key), { text: lesson.subject, where: lesson.classId });
+      const teacherId = otherOf.get(key) || item.teacherId;
+      const none = !teacherId || bare.has(key);
+      classCell(lesson.classId, key, { kind: "lesson", text: lesson.subject, teacher: none ? "" : nameOf(teacherId), noTeacher: none });
+      if (!none) teacherCell(teacherId, absOf.get(lesson.grade).get(key), { text: lesson.subject, where: lesson.classId });
     }
   }
   for (const block of model.blocks) {
@@ -336,6 +339,7 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b }) {
     }
     item.slots = item.slots.map((key) => (key === from ? to : key));
     if (item.bareSlots) item.bareSlots = item.bareSlots.map((key) => (key === from ? to : key));
+    for (const part of item.others || []) part.slots = part.slots.map((key) => (key === from ? to : key)); // 나눠 맡긴 수업: 그 칸을 맡은 교사가 함께 옮겨 간다
   };
   // 블록 한 시간을 옮긴다. 두 학기 같은 자리 묶음이면 다른 학기의 짝 블록(같은 반들·같은 칸)도 묶음 표시를 푼다.
   const moveBlock = (block, from, to) => {
@@ -400,7 +404,11 @@ function timetablePinsHeld(result, pins, teacherPins) {
 function timetableTeacherHours(layer, teacherId) {
   let hours = 0;
   const taught = (item) => (item.slots || []).filter(Boolean).length - (item.bareSlots || []).length;
-  for (const item of Object.values(layer?.lessons || {})) if (item.teacherId === teacherId) hours += taught(item);
+  for (const item of Object.values(layer?.lessons || {})) {
+    const shared = (item.others || []).reduce((sum, part) => sum + part.slots.length, 0); // 나눠 맡긴 수업: 다른 교사가 맡은 시간
+    if (item.teacherId === teacherId) hours += taught(item) - shared;
+    for (const part of item.others || []) if (part.teacherId === teacherId) hours += part.slots.length;
+  }
   for (const item of Object.values(layer?.blocks || {})) hours += Object.values(item.teachers || {}).filter((id) => id === teacherId).length * taught(item);
   for (const item of layer?.creative || []) if (item.teacherId === teacherId && item.scope === "class") hours += (item.slots || []).filter(Boolean).length;
   return hours;
@@ -419,7 +427,7 @@ function timetableEditTeacher(inputs, result, { semester, lessonId, teacherId })
   if (!model || !item || !lesson) return refuse("이 학기의 계산 결과에 없는 수업입니다.");
   const wanted = teacherId ? String(teacherId) : null;
   const nameOf = (id) => (id ? model.teacherOf.get(id)?.name || id : "담당 교사 없음");
-  if ((item.teacherId || null) === wanted && !(item.bareSlots || []).length) return refuse("지금 담당 교사와 같습니다.");
+  if ((item.teacherId || null) === wanted && !(item.bareSlots || []).length && !(item.others || []).length) return refuse("지금 담당 교사와 같습니다.");
   if (lesson.fixedTeacher && wanted !== lesson.fixedTeacher) return refuse(lesson.teacherPinned ? `${lesson.classId}반 ${lesson.subject} 수업은 담당 교사를 고정해 두었습니다 — 교사 고정을 푼 뒤 바꾸세요.` : `${lesson.classId}반 ${lesson.subject} 수업은 담당 교사가 정해져 있습니다(${nameOf(lesson.fixedTeacher)} — 6단계·5단계에서 정한 교사).`);
   if (wanted && !lesson.candidates.includes(wanted)) return refuse(`${nameOf(wanted)} 교사는 ${lesson.subject}의 담당 후보(전공 일치)가 아닙니다.`);
   const before = timetableValidate(inputs, result);
@@ -441,10 +449,13 @@ function timetableEditTeacher(inputs, result, { semester, lessonId, teacherId })
     if (wanted) {
       const cap = model.teacherOf.get(wanted)?.maxHours;
       const now = timetableTeacherHours(next.layers[key], wanted);
-      if (Number.isFinite(cap) && now + entry.hours > cap) return refuse(`${nameOf(wanted)} 교사는 ${key}학기 주 ${now}시간 — ${entry.hours}시간을 더하면 필수 상한 ${cap}시간을 넘습니다.`);
+      const already = timetableTeacherHours({ lessons: { [id]: value } }, wanted); // 이 수업에서 이미 맡고 있는 시간(나눠 맡긴 수업·교사 없이 놓은 시간이 있을 때)
+      const more = entry.hours - already;
+      if (Number.isFinite(cap) && now + more > cap) return refuse(`${nameOf(wanted)} 교사는 ${key}학기 주 ${now}시간 — ${more}시간을 더하면 필수 상한 ${cap}시간을 넘습니다.`);
     }
     value.teacherId = wanted;
     delete value.bareSlots; // 새 교사가 모든 시간에 선다(못 서는 시간이 있으면 검증기가 거절)
+    delete value.others; // 나눠 맡긴 수업도 한 교사로`
     next.noTeacher = (next.noTeacher || []).filter((row) => !(String(row.semester) === key && row.kind === "lesson" && row.classId === entry.classId && row.subject === entry.subject && (lesson.part ? Number(row.hours) <= entry.hours : true)));
     if (!wanted) next.noTeacher.push({ semester: key, kind: "lesson", grade: entry.grade, classId: entry.classId, subject: entry.subject, hours: entry.hours, reason: "manual" });
   }
@@ -836,7 +847,8 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "shortDay", label: "반 하루 최소 교시 지키기(반마다 끝나는 시간이 들쭉날쭉하지 않게)", level: true, later: true },
   { key: "semesterFrame", label: "2학기는 1학기와 같은 뼈대(블록 자리 · 교사–반 짝 · 요일·교시)", level: true, later: true,
     levels: [["hard", "같은 칸(블록·이어지는 수업 모두)"], ["order", "블록은 같은 시간대만(순서는 학기마다 달라도 됨)"], ["soft", "최대한(학기마다 따로)"], ["off", "끔"]] },
-  { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true }
+  { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true },
+  { key: "splitLesson", label: "한 교사가 한 반의 과목을 모두 맡을 시간이 없을 때", level: true, levels: [["allow", "같은 전공 교사 둘이 나눠서 모두 맡을 수 있으면 나눠 맡음"], ["off", "나누지 않음(그 수업은 담당 교사 없음)"]], later: true }
 ];
 var TIMETABLE_ISSUE_LABELS = { block: "계산 불가", fail: "조건 위반", warn: "확인", info: "참고" };
 

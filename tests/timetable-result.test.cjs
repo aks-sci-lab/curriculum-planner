@@ -342,6 +342,27 @@ test("직접 고치기: 담당 교사 바꾸기 — 전공 일치 후보만, 그
   assert.deepEqual([ctx.timetablePinsHeld(result, {}, { 1: { "국어@1-1": "k1" } }), ctx.timetablePinsHeld(result, {}, { 1: { "국어@1-1": "k2" } }), ctx.timetablePinsHeld(result, {}, { 1: { "없는 수업": "k2" } })], [true, false, true]);
 });
 
+test("나눠 맡긴 수업(others): 표는 칸마다 그 칸의 교사, 맞바꾸면 그 칸의 교사가 함께 옮겨 가고, 교사를 바꾸면 한 교사로 합쳐진다", () => {
+  const ctx = context();
+  const input = { semester: "1", days: "월", periods: 3, grades: [{ grade: "1", classes: 1 }],
+    teachers: [{ id: "k1", name: "김국어", departments: ["국어"] }, { id: "k2", name: "이국어", departments: ["국어"], maxHours: 1 }],
+    lessons: [{ id: "국어", grade: "1", subject: "국어", department: "국어", hours: 2 }], blocks: [], rules: {} };
+  const inputs = { 1: input };
+  const result = { layers: { 1: { blocks: {}, creative: [], lessons: { "국어@1-1": { slots: ["월1", "월2"], teacherId: "k1", others: [{ teacherId: "k2", slots: ["월2"] }] } } } }, violations: [], noTeacher: [], metrics: { noTeacherHours: 0 } };
+  assert.equal(plain(ctx.timetableValidate(inputs, result)).ok, true);
+  const tables = plain(ctx.timetableResultTables(input, result.layers["1"]));
+  assert.deepEqual([tables.classes[0].cells["월1"][0].teacher, tables.classes[0].cells["월2"][0].teacher, tables.teachers.map((row) => [row.name, row.hours])], ["김국어", "이국어", [["김국어", 1], ["이국어", 1]]]);
+  assert.deepEqual(["k1", "k2"].map((id) => ctx.timetableTeacherHours(result.layers["1"], id)), [1, 1]);
+  // 월2(이국어가 맡은 시간)를 빈칸 월3과 맞바꾸면 이국어의 칸도 월3으로
+  const swapped = plain(ctx.timetableEditSwap(inputs, result, { semester: "1", classId: "1-1", a: "월2", b: "월3" }));
+  assert.deepEqual([swapped.ok, swapped.result.layers["1"].lessons["국어@1-1"].slots, swapped.result.layers["1"].lessons["국어@1-1"].others], [true, ["월1", "월3"], [{ teacherId: "k2", slots: ["월3"] }]]);
+  assert.equal(plain(ctx.timetableValidate(inputs, swapped.result)).ok, true);
+  // 담당 교사를 김국어로 바꾸면(이미 1시간을 맡고 있음) 한 교사가 2시간 모두 — others가 없어진다. 이국어는 필수 상한 1시간이라 2시간을 다 맡을 수 없다
+  const unified = plain(ctx.timetableEditTeacher(inputs, result, { semester: "1", lessonId: "국어@1-1", teacherId: "k1" }));
+  assert.deepEqual([unified.ok, unified.result.layers["1"].lessons["국어@1-1"].others, ctx.timetableTeacherHours(unified.result.layers["1"], "k1"), ctx.timetableTeacherHours(unified.result.layers["1"], "k2")], [true, undefined, 2, 0]);
+  assert.equal(plain(ctx.timetableEditTeacher(inputs, result, { semester: "1", lessonId: "국어@1-1", teacherId: "k2" })).reason, "이국어 교사는 1학기 주 1시간 — 1시간을 더하면 필수 상한 1시간을 넘습니다.");
+});
+
 test("칸 고정 도우미: 고정이 결과에서 지켜지는지, 그 칸의 반 수업 id", () => {
   const ctx = context();
   const result = { layers: { 1: { lessons: { "1|국어@1-1": { slots: ["월2", "수3"] }, "1|통합과학|1@1-1#2": { slots: ["화1"] }, "1|음악@1-2": { slots: ["금6"], pinMissed: ["월1"] } }, blocks: {}, creative: [] } } };

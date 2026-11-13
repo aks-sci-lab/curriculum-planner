@@ -17,7 +17,8 @@ const TIMETABLE_DEFAULT_RULES = {
   semesterFrame: "hard", // 2학기는 1학기와 같은 뼈대(블록 자리, 이어지는 과목의 교사–반 짝과 요일·교시)
   minPerDay: 4, // 반 하루 최소 교시(수업이 있는 날) — shortDay 규칙의 기준
   shortDay: "soft", // 하루 최소 교시를 지킬지(반마다 하루 길이가 들쭉날쭉하지 않게)
-  cover: "hard" // 교사를 세우는 것과 공강·하루 두 번 없애기가 부딪칠 때: hard = 교사 먼저(위반이 남을 수 있음), soft = 공강 먼저(그 수업은 담당 교사 없음으로)
+  cover: "hard", // 교사를 세우는 것과 공강·하루 두 번 없애기가 부딪칠 때: hard = 교사 먼저(위반이 남을 수 있음), soft = 공강 먼저(그 수업은 담당 교사 없음으로)
+  splitLesson: "allow" // 한 반의 한 과목을 한 교사가 통째로 맡을 수 없을 때(남은 시간이 모자람): allow = 같은 전공 교사 둘이 나눠서 모두 맡을 수 있으면 나눠 맡음, off = 나누지 않음(그 수업은 담당 교사 없음)
 };
 
 // 고칠 곳: step = 내부 단계 번호(1 편제표, 4 집계, 7 = 5단계 시수, 8 = 6단계 분반, 6 = 7단계 시간표).
@@ -786,6 +787,8 @@ function timetablePrecheck(source) {
     // 반군이 여럿이면 교사는 다른 반군이 블록일 때도 반 수업을 할 수 있다 → 모든 반이 함께 듣는 블록만 뺀다.
     if (groups.size > 1) widest = grade.slotCount - creative.total - sum(model.blocks.filter((block) => block.grade === grade.grade && block.classIds.length === grade.classes.length), (block) => block.hours);
     if (model.creative.byGroup) widest += creative.grade;
+    // 이 학년에서 한 교사가 반 수업으로 설 수 있는 칸 수(한 칸에 한 반) — 풀이기가 교사를 정할 때 쓰는 한계(반군별 창체·반 묶음별 블록이면 늘어난다)
+    { const row = gradeRows.find((item) => item.grade === grade.grade); if (row) row.lessonCells = widest; }
     // P7: 교사 한 사람이 이 학년 반 수업으로 가르칠 수 있는 시간 ≤ 반 수업 칸 수(한 칸에 한 반)
     const lessonGroups = new Map();
     for (const lesson of model.lessons) {
