@@ -369,6 +369,23 @@ test("나눠 맡긴 수업(others): 표는 칸마다 그 칸의 교사, 맞바�
   assert.equal(plain(ctx.timetableEditTeacher(inputs, result, { semester: "1", lessonId: "국어@1-1", teacherId: "k2" })).reason, "이국어 교사는 1학기 주 1시간 — 1시간을 더하면 필수 상한 1시간을 넘습니다.");
 });
 
+test("결과 요약의 구조상 하한 줄: 실제 수와 '피할 수 없는 수'를 나란히(하한이 없거나 실제 수가 0이면 내지 않음, 실제 수보다 크게 적지 않음)", () => {
+  const ctx = context();
+  const result = { violations: [
+    { semester: "1", rule: "gap", level: "hard", kind: "class", id: "3-1", amount: 2 }, { semester: "1", rule: "gap", level: "hard", kind: "class", id: "2-1", amount: 1 },
+    { semester: "1", rule: "oncePerDay", level: "hard", kind: "class", id: "3-2", amount: 12 }, { semester: "2", rule: "gap", level: "hard", kind: "class", id: "3-1", amount: 9 }],
+  noTeacher: [{ semester: "1", kind: "lesson", grade: "3", classId: "3-1", subject: "생태와 환경", hours: 10, reason: "capacity" }, { semester: "1", kind: "section", grade: "2", classId: "a블록", subject: "기술", hours: 8, reason: "none" }, { semester: "2", kind: "lesson", grade: "3", hours: 5 }] };
+  const lines = plain(ctx.timetableBoundLines({ noTeacher: 10, gap: 5, squeeze: [{ grade: "3", short: 18, need: 66, capacity: 48 }, { grade: "1", short: 4, need: 30, capacity: 26 }] }, result, "1"));
+  assert.deepEqual(lines.map((line) => [line.kind, line.grade, line.actual, line.min]), [["noTeacher", undefined, 18, 10], ["gap", undefined, 3, 3], ["squeeze", "3", 24, 18]]);
+  assert.equal(lines[0].text, "담당 교사 없음 18시간 — 그중 10시간은 지금 명단·조건에서 피할 수 없습니다(맡을 교사가 명단에 없거나, 교사가 설 수 있는 시간·칸이 모자람).");
+  assert.equal(lines[1].text, "공강 3칸 — 모두 정해진 블록·창체 시간 사이에 낀 칸이라 피할 수 없습니다.");
+  assert.equal(lines[2].text, "3학년 반 수업 66시간 가운데 공강 없이·하루 한 번을 지키며 넣을 수 있는 것은 48시간 — 나머지 18시간은 담당 교사 없음·공강·하루 두 번 가운데 하나가 될 수밖에 없습니다(지금 24: 담당 교사 없음 10 + 공강 2 + 하루 두 번 12 — 그중 18은 피할 수 없음).");
+  // 하한이 없으면 줄이 없다, 다른 학기는 그 학기 수로
+  assert.deepEqual(plain(ctx.timetableBoundLines({ noTeacher: 0, gap: 0, squeeze: [] }, result, "1")), []);
+  assert.deepEqual(plain(ctx.timetableBoundLines({ noTeacher: 10, gap: 0, squeeze: [] }, result, "2")).map((line) => [line.kind, line.actual, line.min]), [["noTeacher", 5, 5]]);
+  assert.deepEqual(plain(ctx.timetableBoundLines(null, result, "1")), []);
+});
+
 test("칸 고정 도우미: 고정이 결과에서 지켜지는지, 그 칸의 반 수업 id", () => {
   const ctx = context();
   const result = { layers: { 1: { lessons: { "1|국어@1-1": { slots: ["월2", "수3"] }, "1|통합과학|1@1-1#2": { slots: ["화1"] }, "1|음악@1-2": { slots: ["금6"], pinMissed: ["월1"] } }, blocks: {}, creative: [] } } };

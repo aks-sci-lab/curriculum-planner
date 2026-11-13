@@ -913,6 +913,32 @@ function timetablePrecheckDepartments(spec) {
   return { slots: Number(spec.slots) || 0, fixed: Number(spec.fixed) || 0, blockHours: Number(spec.blockHours) || 0, free, rows, issues, teachersKnown: Boolean(spec.teachers) };
 }
 
+// ---- 구조상 하한(순수): 사전 점검 결과에서 '지금 조건에서 피할 수 없는 수'를 모은다 ----
+// 결과 화면이 실제 수와 나란히 보여 준다('담당 교사 없음 18시간 — 그중 10시간은 피할 수 없음'). 모두 필요조건에서 나온 값이라 실제 수보다 클 수 없다.
+// 돌려주는 값: { noTeacher: 담당 교사 없음 시간의 하한(맡을 교사가 명단에 없음 + 교사가 설 수 있는 시간·칸이 모자람: P2·P3·P7),
+//   gap: 공강 칸의 하한(정해진 블록·창체 시간 사이에 낀 칸: P11),
+//   squeeze: [{ grade, short, need, capacity }] — 그 학년 반 수업 가운데 공강 없음·하루 한 번을 지키며 넣을 수 없는 시간(P6): 담당 교사 없음·공강·하루 두 번 가운데 하나가 된다 }
+function timetableLowerBounds(check) {
+  const number = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+  let none = 0; // 맡을 교사가 명단에 없는 수업
+  let cover = 0; // 교사가 설 수 있는 시간(칸·필수 상한)이 모자란 시간
+  let cells = 0; // 한 칸에 한 반만 가르칠 수 있어 모자란 시간(학년 반 수업 칸)
+  let gap = 0;
+  const squeeze = [];
+  for (const issue of check?.issues || []) {
+    if (issue.level !== "fail") continue;
+    const data = issue.data || {};
+    if (issue.id === "P2" && data.shortage !== undefined) cover += number(data.shortage);
+    else if (issue.id === "P2" && data.department !== undefined && data.hours !== undefined) none += number(data.hours);
+    else if (issue.id === "P3" && data.fixed !== undefined && data.capacity !== undefined) cover += Math.max(0, number(data.fixed) - number(data.capacity));
+    else if (issue.id === "P7" && data.shortage !== undefined) cells += number(data.shortage);
+    else if (issue.id === "P11") gap += number(data.gaps);
+    else if (issue.id === "P6" && data.need !== undefined && data.capacity !== undefined && number(data.need) > number(data.capacity)) squeeze.push({ grade: String(data.grade ?? ""), short: number(data.need) - number(data.capacity), need: number(data.need), capacity: number(data.capacity) });
+  }
+  // 교사 시간 부족(P2·P3)과 학년 칸 부족(P7)은 같은 수업을 두 번 셀 수 있어 큰 쪽만
+  return { noTeacher: none + Math.max(cover, cells), gap, squeeze };
+}
+
 // ---- 반군 엇갈림 견적(순수, 설계 7절 T7a) ----
 // 학년을 반 묶음(반군)으로 나누고 블록 k개를 묶음마다 따로 분반하면(엇갈림) 분반이 얼마나 늘어나는지 어림한다. 6단계 편성을 바꾸지 않고 읽기만 한다.
 // spec = { groups: { A: ['3-1', …], B: [...] } (없으면 classes를 앞·뒤 절반으로), classes: [반…], capacity: 분반 정원(기본), minSize: 이보다 적으면 소인수 분반,
@@ -994,6 +1020,6 @@ function timetableStaggerInput(input = {}, spec = {}) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  Object.assign(module.exports, { timetableStaggerInput });
+  Object.assign(module.exports, { timetableStaggerInput, timetableLowerBounds });
   Object.assign(module.exports, { TIMETABLE_DEFAULT_RULES, TIMETABLE_WHERE, timetableWhere, timetableParseTime, timetableTimes, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck, timetablePrecheckDepartments, timetableStaggerEstimate });
 }

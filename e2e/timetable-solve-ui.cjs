@@ -4,6 +4,7 @@
 // ④-1 직접 고치기: 블록 한 시간 옮기기(그 블록을 듣는 모든 반 함께), 반 시간표의 두 칸 맞바꾸기(창체 칸·교사 겹침은 이유와 함께 거절), 되돌리기
 // ④-1b 칸 고정 · 담당 교사 바꾸기 → 교사 고정 → 고정을 지키며 다시 계산(고정한 칸은 맞바꿀 수 없음, 고정한 교사는 바꿀 수 없음), 고정 모두 풀기
 // ④-2 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(6단계 결과는 '입력 변경됨'이 되지 않음)
+// ①-2 구조상 하한 줄(실제 수 — 그중 피할 수 없는 수), 더 오래 계산(다른 씨앗으로 한 번 더, 나아질 때만 바꿈)
 // ⑤ 계산 뒤 선택지: 남은 '반드시' 위반에 '교사 규칙 양보' 등을 고르면 그 조건으로 다시 계산, 앞 결과와 견줌, 고른 내역·되돌리기 ⑥ 새로고침·백업 복원 뒤에도 결과 유지 ⑦ 콘솔 오류 없음
 // 사용: node e2e/run.cjs --seed 11 --out /tmp/e2e  →  node e2e/timetable-solve-ui.cjs /tmp/tt-solve-ui /tmp/e2e/downloads/workspace-backup.json.gz
 const path = require("path"), fs = require("fs");
@@ -75,6 +76,28 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(tries.length >= 2 && Boolean(pickedTry) && pickedTry.hard === Math.min(...tries.map((item) => item.hard)), `일꾼별 '반드시' 위반: ${tries.map((item) => `씨앗 ${item.seed} ${item.hard}건${item.picked ? "(고름)" : ""}`).join(" · ")} — 가장 적은 답을 고름`, tries);
   const openGoto = await panel.locator("#timetableNoTeacher [data-tt-open-department] .tt-goto").count();
   check(openGoto >= 1, `담당 교사 없음 목록의 교양 과목에 '5단계 담당 교과' 바로가기(${openGoto}개)`);
+
+  // 구조상 하한: 결과 요약 아래에 '실제 수 — 그중 피할 수 없는 수'(사전 점검이 계산한 값)
+  const bounds = await panel.locator("#timetableBounds li").evaluateAll((els) => els.map((el) => ({ kind: el.dataset.bound, actual: Number(el.dataset.actual), min: Number(el.dataset.min), text: el.textContent.replace(/\s+/g, " ").trim() })));
+  report.checks.bounds = bounds;
+  const noTeacherBound = bounds.find((line) => line.kind === "noTeacher");
+  check(Boolean(noTeacherBound) && noTeacherBound.actual === first.noTeacher && noTeacherBound.min >= 1 && noTeacherBound.min <= noTeacherBound.actual && /담당 교사 없음 \d+시간 — (모두|그중 \d+시간은) 지금 명단·조건에서 피할 수 없습니다/.test(noTeacherBound.text),
+    `구조상 하한: ${noTeacherBound?.text.slice(0, 70)}`, bounds);
+
+  console.log("▶ 더 오래 계산(다른 씨앗으로 한 번 더 — 나아질 때만 바꿈)");
+  await panel.locator("#timetableRunMore").click();
+  await panel.locator("#timetableRunProgress").waitFor({ timeout: 10000 });
+  await sleep(4000);
+  await panel.locator("#timetableStop").click().catch(() => {}); // 오래 기다리지 않게 중단(그때까지 가장 좋은 답으로 견줌)
+  await waitResult(120000);
+  const more = await panel.locator("#timetableMore").evaluate((el) => ({ replaced: el.dataset.replaced === "1", tried: Number(el.dataset.tried), text: el.textContent.replace(/\s+/g, " ").trim() }));
+  const afterMore = await summaryOf();
+  const moreTries = await panel.locator("#timetableTries span[data-seed]").evaluateAll((els) => els.map((el) => Number(el.dataset.seed)));
+  report.checks.more = { more, afterMore, moreTries };
+  check(more.tried >= 1 && /^더 오래 계산\(씨앗 \d+~\d+, \d+개/.test(more.text) && (more.replaced ? /더 나은 답으로 바꿨습니다/.test(more.text) : /더 나은 답이 없어 지금 결과를 그대로 뒀습니다/.test(more.text)), `더 오래 계산: ${more.text.slice(0, 120)}`);
+  check(moreTries.length === tries.length + more.tried && new Set(moreTries).size === moreTries.length && Math.min(...moreTries.slice(tries.length)) > Math.max(...tries.map((item) => item.seed)), `씨앗이 겹치지 않게 이어서 계산(${tries.length}개 → ${moreTries.length}개)`, moreTries);
+  check((more.replaced || afterMore.text.replace(/ · \d+월.*$/, "") === first.text.replace(/ · \d+월.*$/, "")) && (await bar.getAttribute("data-state")) === "done" && (await panel.locator("#timetableValidation").count()) === 0,
+    more.replaced ? "더 나은 답으로 바뀜(검증 오류 없음)" : "더 나은 답이 없으면 결과는 그대로(검증 오류 없음)");
 
   console.log("▶ 반 시간표·교사 시간표");
   const classGrid = await gridOf();
@@ -280,7 +303,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await page.reload(); await page.waitForLoadState("networkidle"); await sleep(2000);
   await openStep();
   const reloaded = await summaryOf();
-  check(reloaded.text === first.text && (await bar.getAttribute("data-state")) === "done", "새로고침 뒤 같은 결과 요약(바뀌기 전 표시 없음)", { reloaded: reloaded.text.slice(0, 120) });
+  check(reloaded.text === afterMore.text && (await bar.getAttribute("data-state")) === "done" && (await panel.locator("#timetableMore").count()) === 1, "새로고침 뒤 같은 결과 요약(바뀌기 전 표시 없음, 더 오래 계산 기록 유지)", { reloaded: reloaded.text.slice(0, 120) });
 
   console.log("▶ 조건을 바꾸면 '바뀌기 전 결과' → 중단으로 다시 계산");
   const section = panel.locator('[data-tt-section="rules"]');

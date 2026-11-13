@@ -1295,14 +1295,19 @@ function timetableRunPaint() {
   if (label) label.textContent = text;
 }
 
-function timetableRunStart(choiceLabel = "") {
+// options.more = '더 오래 계산': 지금 결과는 그대로 두고 아직 안 쓴 씨앗으로 한 번 더 — 끝나면 더 나은 답일 때만 바꾼다(timetableRunFinish).
+function timetableRunStart(choiceLabel = "", options = {}) {
   if (TIMETABLE_RUN) return;
   let prepared;
   try { prepared = timetableSolveInputs(); } catch (error) { TIMETABLE_VIEW.runStatus = `시간표 자료를 모으지 못했습니다: ${error?.message || error}`; TIMETABLE_VIEW.runError = true; renderTimetable(); return; }
   if (prepared.blocked.length) { TIMETABLE_VIEW.runStatus = `계산을 시작할 수 없습니다 — ${prepared.blocked[0].semester}학기: ${prepared.blocked[0].cause}`; TIMETABLE_VIEW.runError = true; renderTimetable(); return; }
   const settings = timetableSettings();
-  const plans = timetableWorkerPlans(timetableWorkerCount(), Number(settings.seed) > 0 ? Math.floor(Number(settings.seed)) : 1);
-  const run = { round: timetableRound(), signature: prepared.signature, inputs: prepared.inputs, plans, workers: [], progress: plans.map(() => null), results: plans.map(() => null), failed: 0, startedAt: Date.now(), stopping: false, timer: 0, choice: choiceLabel || "" };
+  const current = options.more ? timetableSaved(timetableRound()) : null;
+  const more = Boolean(current && current.signature === prepared.signature);
+  const usedSeeds = more ? [Number(current.result?.seed) || 0, ...(current.tries || []).map((item) => Number(item.seed) || 0)] : [];
+  const firstSeed = more ? Math.max(0, ...usedSeeds) + 1 : Number(settings.seed) > 0 ? Math.floor(Number(settings.seed)) : 1;
+  const plans = timetableWorkerPlans(timetableWorkerCount(), firstSeed);
+  const run = { round: timetableRound(), signature: prepared.signature, inputs: prepared.inputs, plans, workers: [], progress: plans.map(() => null), results: plans.map(() => null), failed: 0, startedAt: Date.now(), stopping: false, timer: 0, choice: choiceLabel || "", more };
   TIMETABLE_RUN = run;
   TIMETABLE_VIEW.runStatus = "";
   TIMETABLE_VIEW.runError = false;
@@ -1377,11 +1382,32 @@ function timetableRunFinish(run) {
   catch (error) { validation = { ok: false, errors: [{ semester: "", text: `검증하지 못했습니다: ${error?.message || error}` }] }; }
   if (!state.timetable || typeof state.timetable !== "object") state.timetable = {};
   const before = timetableSaved(run.round);
+  if (run.more && before && before.signature === run.signature) {
+    // '더 오래 계산': 지금 결과와 견줘 더 나은 답(못 넣은 시간 → '반드시' 위반 → 담당 교사 없음 → 비용 순)일 때만 바꾼다
+    const kept = timetableBestResult([before.result, best]) !== best;
+    const seeds = run.plans.map((plan) => plan.seed);
+    const moreTries = run.results.map((item, index) => (item && !item.failed ? { seed: item.seed, hard: item.metrics?.hard ?? null, noTeacherHours: item.metrics?.noTeacherHours ?? null, long: Boolean(run.plans[index].long), more: true } : { seed: run.plans[index].seed, failed: true, more: true }));
+    const info = { at: new Date().toISOString(), seeds: [Math.min(...seeds), Math.max(...seeds)], tried: moreTries.filter((item) => !item.failed).length, hard: best.metrics?.hard ?? null, noTeacherHours: best.metrics?.noTeacherHours ?? null,
+      from: { hard: before.result?.metrics?.hard ?? null, noTeacherHours: before.result?.metrics?.noTeacherHours ?? null }, replaced: !kept, seconds: Math.round((Date.now() - run.startedAt) / 100) / 10, stopped: run.stopping };
+    const allTries = [...(Array.isArray(before.tries) ? JSON.parse(JSON.stringify(before.tries, typeof stateJsonReplacer === "function" ? stateJsonReplacer : undefined)) : []), ...moreTries];
+    if (kept) {
+      state.timetable[run.round].tries = allTries;
+      state.timetable[run.round].more = info;
+      state.timetable[run.round].tried = allTries.filter((item) => !item.failed).length;
+      if (typeof persistStateSoon === "function") persistStateSoon();
+      TIMETABLE_VIEW.runStatus = "";
+      TIMETABLE_VIEW.runError = false;
+      renderTimetable();
+      return;
+    }
+    run.moreInfo = info;
+    run.moreTries = allTries;
+  }
   const previous = before?.result?.metrics ? { hard: before.result.metrics.hard, noTeacherHours: before.result.metrics.noTeacherHours, at: before.at } : undefined;
   // 일꾼마다의 답(씨앗별 '반드시' 위반·담당 교사 없음) — 여러 씨앗 가운데 고른 효과를 화면에서 볼 수 있게
   const tries = run.results.map((item, index) => (item && !item.failed ? { seed: item.seed, hard: item.metrics?.hard ?? null, noTeacherHours: item.metrics?.noTeacherHours ?? null, long: Boolean(run.plans[index].long) } : { seed: run.plans[index].seed, failed: true }));
-  state.timetable[run.round] = { at: new Date().toISOString(), tries, ...(previous ? { previous } : {}), ...(run.choice ? { choice: run.choice } : {}), seconds: Math.round((Date.now() - run.startedAt) / 100) / 10, tried: run.results.filter((item) => item && !item.failed).length, stopped: run.stopping,
-    signature: run.signature, validation, result: best };
+  state.timetable[run.round] = { at: new Date().toISOString(), tries: run.moreTries || tries, ...(previous ? { previous } : {}), ...(run.choice ? { choice: run.choice } : {}), ...(run.moreInfo ? { more: run.moreInfo } : {}), seconds: Math.round((Date.now() - run.startedAt) / 100) / 10,
+    tried: (run.moreTries || tries).filter((item) => !item.failed).length, stopped: run.stopping, signature: run.signature, validation, result: best };
   TIMETABLE_VIEW.undo = []; // 새로 계산하면 직접 고친 것의 되돌리기 기록은 비운다
   TIMETABLE_VIEW.editPick = "";
   TIMETABLE_VIEW.editTargets = null;
@@ -1678,6 +1704,7 @@ function timetableRunBarHtml(result, saved, stale) {
       : result.counts.fail ? "조건을 다 지킬 수 없어도 계산은 됩니다 — 못 지킨 조건은 결과에 목록으로 나옵니다." : "두 학기를 함께 계산합니다(보통 1분 안, 길어도 3분).";
   return `<section class="tt-run" id="timetableRunBar" data-state="${blocked ? "blocked" : saved ? (stale ? "stale" : "done") : "idle"}">
     <button class="button primary" type="button" id="timetableRun"${blocked ? " disabled" : ""}>${saved ? "시간표 다시 계산" : "시간표 계산"}</button>
+    ${saved && !stale && !blocked ? '<button class="button" type="button" id="timetableRunMore" title="지금 결과는 그대로 두고 다른 씨앗으로 한 번 더 계산합니다. 더 나은 답이 나올 때만 바꿉니다.">더 오래 계산(나아질 때만 바꿈)</button>' : ""}
     <span class="cs-note${stale ? " is-warn" : ""}" id="timetableRunNote">${timetableEsc(note)}</span></section>`;
 }
 
@@ -1736,6 +1763,39 @@ function timetableGridHtml(tables, stale = false) {
 }
 
 // 계산 결과 영역: 요약 → 남은 위반 → 담당 교사 없음 → 알림 → 반·교사 표. 고른 학기 것만 보여 준다.
+// 결과 요약에 붙이는 '구조상 하한' 줄(순수): 사전 점검이 계산한 '피할 수 없는 수'(timetableLowerBounds)를 이 학기 결과의 실제 수와 나란히.
+// 돌려주는 값: [{ kind: 'noTeacher' | 'gap' | 'squeeze', grade?, actual, min, text }] — 하한이 0이거나 실제 수가 0인 줄은 내지 않는다.
+function timetableBoundLines(bounds, result, semester) {
+  if (!bounds || !result) return [];
+  const mine = (item) => String(item.semester) === String(semester);
+  const amount = (list) => list.reduce((sum, item) => sum + (Number(item.amount ?? item.hours) || 0), 0);
+  const violations = (result.violations || []).filter(mine);
+  const noTeacher = (result.noTeacher || []).filter(mine);
+  const lines = [];
+  const rest = (actual, min) => (min >= actual ? "모두" : `그중 ${min}`);
+  const noTeacherHours = amount(noTeacher);
+  if (bounds.noTeacher > 0 && noTeacherHours > 0) {
+    const min = Math.min(bounds.noTeacher, noTeacherHours);
+    lines.push({ kind: "noTeacher", actual: noTeacherHours, min, text: `담당 교사 없음 ${noTeacherHours}시간 — ${rest(noTeacherHours, min)}${min >= noTeacherHours ? "" : "시간은"} 지금 명단·조건에서 피할 수 없습니다(맡을 교사가 명단에 없거나, 교사가 설 수 있는 시간·칸이 모자람).` });
+  }
+  const gaps = amount(violations.filter((item) => item.rule === "gap"));
+  if (bounds.gap > 0 && gaps > 0) {
+    const min = Math.min(bounds.gap, gaps);
+    lines.push({ kind: "gap", actual: gaps, min, text: `공강 ${gaps}칸 — ${rest(gaps, min)}${min >= gaps ? "" : "칸은"} 정해진 블록·창체 시간 사이에 낀 칸이라 피할 수 없습니다.` });
+  }
+  for (const item of bounds.squeeze || []) {
+    const inGrade = (id) => String(id).startsWith(`${item.grade}-`);
+    const none = amount(noTeacher.filter((row) => row.kind === "lesson" && String(row.grade) === item.grade));
+    const gap = amount(violations.filter((row) => row.rule === "gap" && inGrade(row.id)));
+    const twice = amount(violations.filter((row) => row.rule === "oncePerDay" && inGrade(row.id)));
+    const actual = none + gap + twice;
+    if (!actual) continue;
+    const min = Math.min(item.short, actual);
+    lines.push({ kind: "squeeze", grade: item.grade, actual, min, text: `${item.grade}학년 반 수업 ${item.need}시간 가운데 공강 없이·하루 한 번을 지키며 넣을 수 있는 것은 ${item.capacity}시간 — 나머지 ${item.short}시간은 담당 교사 없음·공강·하루 두 번 가운데 하나가 될 수밖에 없습니다(지금 ${actual}: 담당 교사 없음 ${none} + 공강 ${gap} + 하루 두 번 ${twice} — ${rest(actual, min)}${min >= actual ? "" : "은"} 피할 수 없음).` });
+  }
+  return lines;
+}
+
 // 계산 뒤 선택지 목록(순수): 남은 '반드시' 위반의 규칙 → 선택지 이름(조건이 이미 그 값이면 뺌) + 과목별 '2시간 연속 수업 허용'.
 // 두 학기 같은 칸(뼈대 hard) 결과에 교사 점심·연강이 남아 있으면 '블록 순서를 학기마다 다르게 허용'을 맨 앞에 추천으로 둔다
 // (학기마다 블록 분반 교사가 달라 같은 칸에서는 남기 쉬운 위반 — 실제 자료에서 이 선택으로 풀렸다).
@@ -1764,7 +1824,7 @@ function timetableResultChoiceKeys(result, settings, prepared) {
   return { keys, recommended, lunch, run };
 }
 
-function timetableResultHtml(saved, stale, semester, prepared) {
+function timetableResultHtml(saved, stale, semester, prepared, precheck) {
   if (!saved) return "";
   const result = saved.result;
   const metrics = result.metrics || {};
@@ -1781,8 +1841,17 @@ function timetableResultHtml(saved, stale, semester, prepared) {
     <strong>${semester}학기 — ${count(hard) ? `'반드시' 조건을 못 지킨 곳 ${count(hard)}건` : "'반드시' 조건을 모두 지켰습니다"} · 담당 교사 없음 ${noTeacherHours}시간</strong>
     <span class="cs-note">'최대한' 조건 ${count(soft)}건${metrics.frame ? ` · 두 학기 같은 자리 ${metrics.frameActs}묶음${metrics.frameBroken ? `(벗어난 칸 ${metrics.frameBroken})` : ""}` : ""}${metrics.blockTimesChanged ? ` · 6단계 블록 시간과 다른 블록 ${metrics.blockTimesChanged}개` : ""}
       · ${timetableEsc(time)} 계산(${saved.seconds}초, ${saved.tried}개 중 가장 좋은 답${saved.stopped ? ", 중단함" : ""})${result.edits ? ` · <span id="timetableEdits" data-count="${result.edits}">직접 고침 ${result.edits}번</span>` : ""}</span></p>`;
+  // 구조상 하한: 사전 점검이 계산한 '지금 조건에서 피할 수 없는 수'를 실제 수와 나란히(바뀌기 전 결과에는 붙이지 않는다)
+  let boundLines = [];
+  if (!stale && precheck && typeof timetableLowerBounds === "function") { try { boundLines = timetableBoundLines(timetableLowerBounds(precheck), result, semester); } catch { boundLines = []; } }
+  const boundsHtml = boundLines.length ? `<ul class="tt-bounds" id="timetableBounds">${boundLines.map((line) => `<li data-bound="${line.kind}"${line.grade ? ` data-grade="${timetableEsc(line.grade)}"` : ""} data-actual="${line.actual}" data-min="${line.min}">${timetableEsc(line.text)}</li>`).join("")}</ul>` : "";
   const previous = saved.previous;
   const compare = previous ? `<p class="cs-note" id="timetableResultCompare" data-hard-before="${previous.hard}" data-hard-after="${metrics.hard}">앞 결과와 견줌(두 학기 합계): '반드시' 조건 ${previous.hard} → ${metrics.hard}건 · 담당 교사 없음 ${previous.noTeacherHours} → ${metrics.noTeacherHours}시간${saved.choice ? ` — 고른 선택: ${timetableEsc(saved.choice)}` : ""}</p>` : "";
+  // '더 오래 계산'의 결과 한 줄: 바꿨는지, 그대로 뒀는지
+  const more = saved.more;
+  const moreHtml = more ? `<p class="cs-note" id="timetableMore" data-replaced="${more.replaced ? "1" : "0"}" data-tried="${more.tried}">더 오래 계산(씨앗 ${more.seeds[0]}~${more.seeds[1]}, ${more.tried}개, ${more.seconds}초${more.stopped ? ", 중단함" : ""}): ${more.replaced
+    ? `더 나은 답으로 바꿨습니다 — '반드시' ${more.from.hard} → ${more.hard}건 · 담당 교사 없음 ${more.from.noTeacherHours} → ${more.noTeacherHours}시간(두 학기 합계)`
+    : `더 나은 답이 없어 지금 결과를 그대로 뒀습니다(새로 나온 가장 좋은 답: '반드시' ${more.hard}건 · 담당 교사 없음 ${more.noTeacherHours}시간)`}</p>` : "";
   const tries = Array.isArray(saved.tries) ? saved.tries.filter((item) => !item.failed) : [];
   const triesHtml = tries.length > 1 ? `<p class="cs-note" id="timetableTries" data-best="${result.seed}">함께 푼 ${tries.length}개의 '반드시' 위반(두 학기 합계): ${tries.map((item) => `<span data-seed="${item.seed}" data-hard="${item.hard}"${item.seed === result.seed ? ' data-picked="1"' : ""}>${item.seed === result.seed ? "<strong>" : ""}씨앗 ${item.seed}${item.long ? "(길게)" : ""} ${item.hard}건${item.seed === result.seed ? " ← 고른 답</strong>" : ""}</span>`).join(" · ")}</p>` : "";
   const invalid = saved.validation && !saved.validation.ok ? `<div class="cs-note is-warn" id="timetableValidation">결과 검증에서 오류 ${saved.validation.errors.length}건 — 이 결과는 쓰지 말고 다시 계산하세요: ${timetableEsc(saved.validation.errors.slice(0, 3).map((item) => item.text).join(" / "))}</div>` : "";
@@ -1825,7 +1894,7 @@ function timetableResultHtml(saved, stale, semester, prepared) {
     ? `<p class="cs-note" id="timetableBlockNote" data-count="${blockChanges.length}">시간표가 정한 블록 자리가 6단계 블록 시간과 다른 블록 ${blockChanges.length}개(두 학기).
       <button class="button" type="button" id="timetableWriteBlockTimes"${stale ? " disabled" : ""}>6단계 블록 시간에 적어 넣기</button> 분반·학생 배정·분반 교사는 그대로이고, 6단계 블록 시간 칸과 출력물(교실 카드·학생 시간표)의 요일·교시만 바뀝니다.</p>`
     : '<p class="cs-note" id="timetableBlockNote" data-count="0">6단계 블록 시간과 시간표의 블록 자리가 같습니다.</p>';
-  return `<section class="cs-card tt-result" id="timetableResult" data-stale="${stale ? "1" : "0"}"><h4>계산 결과${stale ? ' <span class="cs-note is-warn" id="timetableResultStale">조건·자료가 바뀌기 전 결과</span>' : ""}</h4>${summary}${compare}${triesHtml}${invalid}${grid}${blockNote}</section>${violationHtml}${noTeacherHtml}${notesHtml}`;
+  return `<section class="cs-card tt-result" id="timetableResult" data-stale="${stale ? "1" : "0"}"><h4>계산 결과${stale ? ' <span class="cs-note is-warn" id="timetableResultStale">조건·자료가 바뀌기 전 결과</span>' : ""}</h4>${summary}${boundsHtml}${compare}${moreHtml}${triesHtml}${invalid}${grid}${blockNote}</section>${violationHtml}${noTeacherHtml}${notesHtml}`;
 }
 
 function renderTimetableView() {
@@ -1861,7 +1930,7 @@ function renderTimetableView() {
   let stale = false;
   if (saved && !TIMETABLE_RUN) { try { stale = timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, settings.pins, settings.teacherPins); } catch { stale = true; } }
   const status = TIMETABLE_VIEW.runStatus ? `<p class="tt-status${TIMETABLE_VIEW.runError ? " is-error" : ""}" id="timetableRunStatus" role="status">${timetableEsc(TIMETABLE_VIEW.runStatus)}</p>` : "";
-  body.innerHTML = `${timetableVerdictHtml(result)}${timetableRunBarHtml(result, saved, stale)}${status}${timetableChangeHtml(TIMETABLE_VIEW.changeInfo)}${timetableResultHtml(saved, stale, semester, prepared)}${timetableConditionsHtml(prepared)}${timetableIssuesHtml(result, choices)}${timetableAssumptionsHtml(prepared)}${timetableGradesHtml(result)}`;
+  body.innerHTML = `${timetableVerdictHtml(result)}${timetableRunBarHtml(result, saved, stale)}${status}${timetableChangeHtml(TIMETABLE_VIEW.changeInfo)}${timetableResultHtml(saved, stale, semester, prepared, result)}${timetableConditionsHtml(prepared)}${timetableIssuesHtml(result, choices)}${timetableAssumptionsHtml(prepared)}${timetableGradesHtml(result)}`;
 }
 
 // 조건 한 칸을 저장한다. 돌려주는 값: 바꾼 것 이름(화면의 '방금 바꾼 조건'), 못 쓰는 값이면 ""(상태 줄에 이유).
@@ -2053,6 +2122,12 @@ function timetableHandleClick(event) {
   const target = event.target;
   const tab = target.closest?.("[data-tt-semester]");
   if (tab) { TIMETABLE_VIEW.editPick = ""; TIMETABLE_VIEW.editTargets = null; TIMETABLE_VIEW.editStatus = ""; TIMETABLE_VIEW.semester = tab.dataset.ttSemester === "2" ? "2" : "1"; TIMETABLE_VIEW.changeInfo = null; TIMETABLE_VIEW.status = ""; renderTimetable(); return; }
+  if (target.closest?.("#timetableRunMore")) {
+    const edits = Number(timetableSaved(timetableRound())?.result?.edits) || 0;
+    if (!edits || typeof appConfirm !== "function") { timetableRunStart("", { more: true }); return; }
+    appConfirm(`더 나은 답을 찾으면 직접 고친 ${edits}곳이 사라집니다(더 나은 답이 없으면 그대로 둡니다). 계속할까요?`, { title: "더 오래 계산", ok: "계산" }).then((ok) => { if (ok) timetableRunStart("", { more: true }); });
+    return;
+  }
   if (target.closest?.("#timetableRun")) {
     const edits = Number(timetableSaved()?.result?.edits) || 0;
     if (!edits || typeof appConfirm !== "function") { timetableRunStart(); return; }

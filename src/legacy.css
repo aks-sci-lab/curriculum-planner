@@ -2351,6 +2351,8 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-sub { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; color:#526078; }
     .tt-presets { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
     .tt-presets .button[aria-pressed="true"], #timetableSemesterTabs .button[aria-pressed="true"] { background:var(--blue); border-color:var(--blue); color:#fff; }
+    .tt-bounds { margin:2px 0 8px; padding:6px 10px 6px 26px; border-radius:8px; background:#f7f9fd; color:#33415c; font-size:12px; line-height:1.6; }
+    .tt-bounds li { list-style:disc; }
     .tt-teacher-box { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; margin:4px 0; padding:4px 8px; border:1px solid #d9e1ee; border-radius:8px; background:#f7f9fd; color:#33415c; }
     .tt-teacher-box select { max-width:420px; }
     .tt-status { min-height:0; margin:0 0 4px; font-size:12px; color:#526078; }

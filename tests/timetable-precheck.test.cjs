@@ -458,6 +458,27 @@ test("엇갈린 구조로 다시 점검(T7a-2): 블록을 반 묶음별 블록�
   assert.equal(ctx.timetableStaggerInput(input, { grade: "3", groups: { A: groups.A }, blocks: spec.blocks }), input);
 });
 
+test("구조상 하한: 사전 점검 결과에서 '지금 조건에서 피할 수 없는 수'(담당 교사 없음 시간·공강 칸·학년 반 수업에서 못 넣는 시간)를 모은다", () => {
+  const ctx = context();
+  // 13칸 문제(P6): 3학년 반 수업 66시간 가운데 56시간만 조건을 지키며 들어간다 → 10시간은 담당 교사 없음·공강·하루 두 번 가운데 하나
+  const tight = plain(ctx.timetableLowerBounds(ctx.timetablePrecheck(school({ pe3: 3, info3: 4 }))));
+  assert.deepEqual(tight, { noTeacher: 0, gap: 0, squeeze: [{ grade: "3", short: 10, need: 66, capacity: 56 }] });
+  // 맡을 교사가 명단에 없는 과목(기술 3반 × 2시간... 11반 × 2 = 22시간) + 교사 한 명에 몰린 반 수업(P7)
+  const lacking = school();
+  lacking.lessons.push({ id: "3기술", grade: "3", subject: "기술", department: "기술", hours: 2 });
+  const none = plain(ctx.timetableLowerBounds(ctx.timetablePrecheck(lacking)));
+  assert.equal(none.noTeacher, 22);
+  // 사전 점검에 조건 위반이 없으면 하한도 없다, 빈 입력도 안전
+  assert.deepEqual(plain(ctx.timetableLowerBounds(ctx.timetablePrecheck(school()))), { noTeacher: 0, gap: 0, squeeze: [] });
+  assert.deepEqual(plain(ctx.timetableLowerBounds(null)), { noTeacher: 0, gap: 0, squeeze: [] });
+  // 교사 시간 부족(P2·P3)과 학년 칸 부족(P7)은 큰 쪽만, 공강(P11)은 따로, '확인' 수준은 세지 않는다
+  const mixed = plain(ctx.timetableLowerBounds({ issues: [
+    { id: "P2", level: "fail", data: { shortage: 6 } }, { id: "P3", level: "fail", data: { fixed: 20, capacity: 17 } }, { id: "P7", level: "fail", data: { shortage: 12 } },
+    { id: "P2", level: "fail", data: { department: "기술", hours: 4 } }, { id: "P2", level: "warn", data: { shortage: 99 } }, { id: "P11", level: "fail", data: { gaps: 5 } }, { id: "P11", level: "warn", data: { gaps: 7 } },
+    { id: "P6", level: "fail", data: { grade: "2", need: 40, capacity: 40 } }] }));
+  assert.deepEqual(mixed, { noTeacher: 4 + 12, gap: 5, squeeze: [] });
+});
+
 test("최대 유량 묶음: 모자란 묶음을 같은 교사로 이어진 것끼리 뭉쳐 돌려준다", () => {
   const ctx = context();
   const cover = plain(ctx.timetableCoverage([
