@@ -5406,7 +5406,7 @@
           <h4>${year}학년도 입학생 · ${grade === "0" ? "내년도 신입생" : `현 ${grade}학년`}</h4>
           <p title="${escapeHtml(`${cohortSubtitle} · ${description}`)}">${cohortSubtitle}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("cohort", year, Boolean(fileName)) : ""}
           <p class="curriculum-cohort-file" title="${escapeHtml(fileName || "미업로드 · 1~3학년 전체 편제표 필요")}">${escapeHtml(fileName || "미업로드")}</p>${fileName && typeof curriculumArchiveNote === "function" ? curriculumArchiveNote(active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}
-          <div>${typeof curriculumReconvertCardHtml === "function" ? curriculumReconvertCardHtml(year, active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}<button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
+          <div>${fileName && typeof curriculumPlanErrorCardHtml === "function" ? curriculumPlanErrorCardHtml(year, active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}${typeof curriculumReconvertCardHtml === "function" ? curriculumReconvertCardHtml(year, active ? state.curriculumImportedLayout : state.curriculumCohorts?.[year]?.importedLayout) : ""}<button class="button${fileName ? "" : " button-primary"}" type="button" data-cohort-upload="${year}" aria-label="${year}학년도 신입생 3개년 편제표 ${fileName ? "원본 교체" : "업로드"}">${fileName ? "원본 교체" : "업로드"}</button>
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
         </article>`;
       }).join("");
@@ -8096,7 +8096,7 @@
       if (!file.name.toLowerCase().endsWith(".xlsx")) {
         restoreCurriculumUploadCard();
         status.style.color = "#a44939";
-        status.textContent = "편제표는 .xlsx 형식만 지원합니다.";
+        status.textContent = "편제표는 엑셀(.xlsx)과 울산 편제 점검 프로그램 파일(.xlsb)만 읽습니다. 한글(.hwp)·옛 엑셀(.xls)은 엑셀에서 .xlsx로 저장해 올리세요. 표 위 '편제표 넣는 방법'에 예시 양식이 있습니다.";
         return;
       }
       const importRevision = ++curriculumImportRevision;
@@ -8128,6 +8128,7 @@
           let plan = [];
           let importedLayout = null;
           let parseError = null;
+          let importedScore = -1;
           for (const sheet of sheets) {
             let layout = null;
             try {
@@ -8147,11 +8148,20 @@
               parseError = error;
             }
             if (!sheetPlan.length) sheetPlan = planRowsFromImportedLayout(layout);
-            if (sheetPlan.length || !importedLayout) {
+            // 시트가 여럿이면 과목 데이터로 읽힌 시트 > 학기 열이 있는 표 > 과목 행만 있는 표 순으로 고른다
+            // (안내문 시트에 '세부과목' 같은 낱말이 있어 편제표 시트를 밀어내던 문제).
+            let sheetScore = layout.planData ? 4 : 0;
+            if (!sheetScore) {
+              let semesterFound = false;
+              try { semesterFound = importedPlanColumnMap(layout).semesters.some((column) => column >= 0); } catch { semesterFound = false; }
+              sheetScore = (semesterFound ? 2 : 0) + (sheetPlan.length ? 1 : 0);
+            }
+            if (!importedLayout || sheetScore > importedScore) {
               importedLayout = layout;
+              importedScore = sheetScore;
               plan = sheetPlan;
             }
-            if (plan.length) break;
+            if (plan.length && importedLayout.planData) break;
           }
           if (!importedLayout) throw parseError || new Error("편제표 시트를 찾지 못했습니다.");
           // 다른 입학연도 편제표를 이 카드에 올리는 실수를 막는다(제목의 'YYYY학년도 신입생'과 카드 연도 대조).
@@ -8190,20 +8200,23 @@
           curriculumUploadReturn = null;
           renderCurriculumStep();
           persistState();
-          status.style.color = plan.length ? "#287956" : "#a44939";
+          // 과목 데이터로 바꾸지 못한 편제표는 표로만 남는다 — 조용히 넘어가지 않고 이유와 해결 방법을 알린다(school-guide.js).
+          const planReadError = typeof curriculumPlanErrorStatus === "function" ? curriculumPlanErrorStatus(importedLayout) : "";
+          status.style.color = plan.length && !planReadError ? "#287956" : "#a44939";
           const repairNotes = typeof curriculumDataRepairNotes === "function" ? curriculumDataRepairNotes(importedLayout) : [];
           const autoNames = typeof curriculumAutoNameList === "function" ? curriculumAutoNameList(importedLayout) : [];
           if (autoNames.length) repairNotes.push(`공식 과목명으로 ${autoNames.length}곳 자동 수정(${autoNames.slice(0, 4).map((item) => `${item.from} → ${item.to}`).join(", ")}${autoNames.length > 4 ? " 등" : ""} · 표 위 '자동 수정' 안내에서 되돌리기)`);
           // 표 위 'n개 과목 표시'와 같은 기준(과목 행 수). plan은 '가, 나' 행을 과목마다 세어 수가 달랐다.
           const subjectRows = typeof planDataSubjects === "function" && importedLayout.planData ? planDataSubjects(importedLayout.planData).length : plan.length;
-          status.textContent = plan.length
+          status.textContent = planReadError ? planReadError : plan.length
             ? `${state.curriculumCohortYear}학년도 ${planType === "annual" ? "전학년" : "신입생 3개년"} 편제표 ${subjectRows}개 과목을 불러왔습니다.${repairNotes.length ? ` ${repairNotes.join(" / ")}` : ""}`
             : "편제표 표는 불러왔지만 과목 열을 인식하지 못했습니다. 표를 확인해 주세요.";
         } catch (error) {
           const message = error?.message || "편제표 파일 처리 중 오류가 발생했습니다.";
           restoreCurriculumUploadCard();
           status.style.color = "#a44939";
-          status.textContent = message;
+          status.textContent = /편제표|시트|데이터가 없습니다/.test(message) && !/바뀌었|다시 업로드/.test(message)
+            ? `${message} 표 위 '편제표 넣는 방법'에서 올릴 수 있는 파일과 예시 양식을 확인하세요.` : message;
         }
       };
       reader.readAsArrayBuffer(file);

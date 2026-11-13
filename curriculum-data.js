@@ -958,6 +958,7 @@ function ensureCurriculumPlanData(layout) {
     const { data, template, repairs } = curriculumDataFromLayout(layout);
     applyCurriculumData(layout, data, template);
     planDataRepairNotes.set(layout, repairs || []);
+    delete layout.planDataError;
     return true;
   } catch (error) {
     layout.planDataError = error?.message || String(error);
