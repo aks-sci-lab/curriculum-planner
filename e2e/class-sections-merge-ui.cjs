@@ -174,13 +174,19 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   console.log("▶ 학년 간 겹치는 블록 쌍(블록 칸 수 합 > 한 주 칸 수)");
   check((await page.locator("#classSectionsPairs").count()) === 0 && !/같은 시간에 열 블록 쌍/.test(joint), "칸이 모자라지 않으면 블록 쌍을 정하지 않음");
   // 전 교사 고정 시간을 10칸 더해 한 주에 블록을 놓을 칸을 줄인다(33 → 23칸) → 2학년 블록과 3학년 블록 일부는 같은 시간에 열려야 한다
+  // 더할 고정 시간은 2학년 그룹에 이미 적힌 블록 시간과 겹치지 않게 고른다(겹치면 그 블록은 담당 교사를 못 붙여 아래 블록표 확인이 비게 됨 — 씨앗마다 블록 시간이 다름)
+  await page.locator('[data-cs-group="1:1:2-1 택3"]').click(); await sleep(500);
+  const takenTimes = new Set((await page.locator("[data-cs-block-times]").evaluateAll((els) => els.map((el) => el.value || ""))).join(",").split(",").map((text) => text.trim()).filter(Boolean));
+  await page.locator(`[data-cs-group="${mergedKey}"]`).click(); await sleep(500);
+  const extraFixed = ["월6", "월7", "화6", "화7", "수6", "수7", "목6", "목7", "금4", "금5", "월5", "화5", "수5", "목5", "월4", "화4", "수4", "목4", "금3", "월3", "화3", "수3", "목3"].filter((slot) => !takenTimes.has(slot)).slice(0, 10);
+  check(extraFixed.length === 10, "블록 시간과 겹치지 않는 고정 시간 10칸을 고름", { taken: [...takenTimes], extraFixed });
   await page.locator("#classSectionsTeachersOpen").click();
   const dialog = page.locator("#classSectionsTeacherDialog");
   await dialog.waitFor({ state: "visible", timeout: 10000 });
   await dialog.locator("#classSectionsFixedAdd").click(); await sleep(300);
   const fixedRows = await dialog.locator('[data-cs-f$="|times"]').count();
   await dialog.locator(`[data-cs-f="${fixedRows - 1}|label"]`).fill("교직원 연수"); await dialog.locator(`[data-cs-f="${fixedRows - 1}|label"]`).press("Tab"); await sleep(200);
-  await dialog.locator(`[data-cs-f="${fixedRows - 1}|times"]`).fill("월6,월7,화6,화7,수6,수7,목6,목7,금4,금5"); await dialog.locator(`[data-cs-f="${fixedRows - 1}|times"]`).press("Tab"); await sleep(300);
+  await dialog.locator(`[data-cs-f="${fixedRows - 1}|times"]`).fill(extraFixed.join(",")); await dialog.locator(`[data-cs-f="${fixedRows - 1}|times"]`).press("Tab"); await sleep(300);
   await page.locator("#classSectionsTeacherClose").click(); await sleep(500);
   await solve("#classSectionsSolveSemester");
   const paired = await status();
