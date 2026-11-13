@@ -1286,6 +1286,19 @@
       /* A4 세로(273mm × 182mm 인쇄 영역) 한 장에 한 학생. 높이를 고정하지 않아 빈 장이 생기지 않는다. */
       .print-page { width: 182mm; min-height: 0; padding: 3mm 5mm 0; page-break-after: always; break-after: page; color: #111; }
       .print-page:last-child { page-break-after: auto; break-after: auto; }
+      /* 7단계 시간표 낱장: A4 세로 한 장에 2개 */
+      .tt-print-card { margin: 0 0 9mm; break-inside: avoid; page-break-inside: avoid; }
+      .tt-print-card h3 { margin: 0 0 2mm; font-size: 15px; }
+      .tt-print-card h3 small { font-weight: 400; font-size: 11px; }
+      .tt-print-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+      .tt-print-table th, .tt-print-table td { border: 1px solid #333; height: 13mm; padding: .5mm 1mm; text-align: center; vertical-align: middle; line-height: 1.25; }
+      .tt-print-table thead th { height: 6mm; background: #eee; }
+      .tt-print-table th:first-child { width: 22mm; background: #f4f4f4; font-size: 10px; }
+      .tt-print-table strong { display: block; font-size: 11px; }
+      .tt-print-table small { display: block; font-size: 9.5px; color: #333; }
+      .tt-print-table hr { border: 0; border-top: 1px dashed #999; margin: .5mm 0; }
+      .tt-print-table .tt-print-lunch th, .tt-print-table .tt-print-lunch td { height: 4mm; background: #f1f1f1; font-size: 9px; }
+      .tt-print-page[data-per="2"] .tt-print-table td { height: 12mm; }
       .print-page .paper { width: 100%; min-height: 0; padding: 0; box-shadow: none; }
       .print-page .paper-title { margin: 0 0 6mm; font-size: 24px; letter-spacing: 5px; }
       .print-page .paper-meta { margin-bottom: 2mm; font-size: 12px; }
@@ -1913,6 +1926,14 @@
 .hours-form .hf-input.is-differ { box-shadow: inset 0 0 0 2px #e07a16; }
 .hf-link { width: 100%; min-height: 22px; padding: 0 2px; border: 0; border-bottom: 1px dotted currentColor; background: none; color: inherit; font: inherit; text-align: center; cursor: pointer; }
 .hf-link:hover, .hf-link:focus-visible { background: #fff3c4; outline: 1px solid #b8c4dc; }
+.hf-link.is-expanded { color: #1f3f9a; border-bottom-style: solid; }
+.hf-link.is-expanded::after { content: "확대"; margin-left: 2px; padding: 0 2px; border-radius: 3px; background: #e3eaff; color: #1f3f9a; font-size: 9px; font-weight: 600; vertical-align: 1px; }
+.hours-expanded-toggle { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: 10px 0; }
+.hours-expanded-toggle label { font-weight: 600; }
+.hours-expanded-departments { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: -4px 0 10px; padding: 8px 10px; border-radius: 8px; background: #f7f9fd; font-size: 13px; }
+.hours-expanded-departments label { display: inline-flex; align-items: center; gap: 4px; }
+.hours-expanded-departments .hours-note { flex-basis: 100%; }
+.hours-expanded-note { display: block; max-width: 220px; margin-top: 2px; color: #a44939; font-size: 12px; line-height: 1.3; }
 .aggregate-form td.is-flash { box-shadow: inset 0 0 0 3px #3b68e8; transition: box-shadow .3s; }
 .hours-detail-table tr.is-differ td { color: #9a4a00; }
 .aggregate-course-menu-prereq { width: 100%; min-height: 30px; margin-top: 8px; font-size: 12px; }
@@ -2308,11 +2329,105 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-note { color:var(--muted); font-size:11px; }
     .cs-note.is-warn { color:#a44939; font-weight:700; }
     .cs-card { margin:12px 0; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+    /* 7단계 시간표: 조건 설정·사전 점검 */
+    .tt-verdict { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; margin:10px 0; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:#f3f8f4; color:#1f6a45; font-size:14px; }
+    .tt-verdict[data-state="fail"] { background:#fff6e6; border-color:#f0d49a; color:#8a5a00; }
+    .tt-verdict[data-state="block"] { background:#fdecea; border-color:#f1c1ba; color:#a44939; }
+    .tt-change { margin:10px 0; padding:10px 14px; border:1px solid #c9d8f7; border-radius:10px; background:#f4f7ff; font-size:13px; }
+    .tt-change h4 { margin:0 0 6px; font-size:13px; }
+    .tt-change ul { margin:4px 0 8px; padding-left:18px; }
+    .tt-change [data-kind="resolved"] strong { color:#1f6a45; }
+    .tt-change [data-kind="added"] strong { color:#a44939; }
+    .tt-change [data-kind="changed"] strong { color:#8a5a00; }
+    .tt-section { border-top:1px solid var(--line); padding:8px 0; }
+    .tt-section > summary { cursor:pointer; font-size:13px; padding:4px 0; }
+    .tt-section-body { padding:6px 0 2px; }
+    .tt-row { display:grid; grid-template-columns:minmax(120px, 200px) 1fr; gap:6px 14px; align-items:start; padding:6px 0; font-size:13px; }
+    .tt-row + .tt-row { border-top:1px dashed #e6eaf2; }
+    .tt-label { font-weight:700; color:#33415c; }
+    .tt-fields { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; }
+    .tt-fields label { display:inline-flex; align-items:center; gap:5px; }
+    .tt-fields .cs-text { min-width:150px; }
+    .tt-sub { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; color:#526078; }
+    .tt-presets { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
+    .tt-presets .button[aria-pressed="true"], #timetableSemesterTabs .button[aria-pressed="true"] { background:var(--blue); border-color:var(--blue); color:#fff; }
+    .tt-bounds { margin:2px 0 8px; padding:6px 10px 6px 26px; border-radius:8px; background:#f7f9fd; color:#33415c; font-size:12px; line-height:1.6; }
+    .tt-bounds li { list-style:disc; }
+    .tt-teacher-box { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; margin:4px 0; padding:4px 8px; border:1px solid #d9e1ee; border-radius:8px; background:#f7f9fd; color:#33415c; }
+    .tt-teacher-box select { max-width:420px; }
+    .tt-status { min-height:0; margin:0 0 4px; font-size:12px; color:#526078; }
+    .tt-status.is-error { color:#a44939; font-weight:700; }
+    .tt-issues { list-style:none; margin:0; padding:0; }
+    .tt-issue { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; padding:8px 0; border-top:1px solid #edf0f6; font-size:13px; line-height:1.5; }
+    .tt-issue:first-child { border-top:0; }
+    .tt-level { align-self:start; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; background:#eef2f9; color:#5d6a82; }
+    .tt-level[data-level="block"] { background:#fde8e4; color:#a44939; }
+    .tt-level[data-level="fail"] { background:#fff0d2; color:#8a5a00; }
+    .tt-level[data-level="warn"] { background:#eef2f9; color:#33415c; }
+    .tt-where { grid-column:2; display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:#6a768c; font-size:12px; }
+    .tt-goto { padding:2px 8px; border:1px solid #c9d3e6; border-radius:999px; background:#fff; color:var(--blue); font-size:12px; cursor:pointer; }
+    .tt-goto:hover { background:#eef3ff; }
+    .tt-info { margin-top:8px; font-size:12px; }
+    .tt-estimate { color:#33415c; }
+    .tt-estimate strong { color:#8a5a00; }
+    .tt-choices .tt-estimate-list { display:grid; gap:4px; margin:4px 0; padding:0 0 0 14px; list-style:disc; }
+    .tt-choices .tt-estimate-list li { display:list-item; padding:0; border:0; }
+    .tt-estimate-blocks { color:#6a768c; }
+    .tt-double { flex-basis:100%; }
+    .tt-double > summary { cursor:pointer; color:var(--blue); }
+    .tt-double-list { display:flex; flex-wrap:wrap; gap:4px 16px; padding:6px 0; }
+    .tt-run { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin:10px 0; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+    .tt-run[data-state="running"] { background:#f4f7ff; border-color:#c9d8f7; }
+    .tt-run-progress { display:flex; flex:1 1 320px; align-items:center; gap:10px; font-size:13px; }
+    .tt-run-progress progress { width:180px; height:10px; }
+    .tt-result .tt-verdict { margin-top:0; }
+    .tt-grid-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin:8px 0; font-size:13px; }
+    .tt-grid-tools .tt-presets { flex-basis:auto; }
+    .tt-grid { width:100%; table-layout:fixed; }
+    .tt-grid th:first-child { width:120px; background:#f5f7fb; font-size:12px; }
+    .tt-grid td { height:44px; vertical-align:middle; padding:3px 4px; }
+    .tt-grid td[data-clash] { outline:2px solid #d9534f; outline-offset:-2px; }
+    .tt-grid td[data-tt-edit] { cursor:pointer; }
+    .tt-grid td[data-tt-edit]:hover, .tt-grid td[data-tt-edit]:focus-visible { background:#f2f6ff; outline:1px solid #9db6ee; outline-offset:-1px; }
+    .tt-grid td[data-tt-pinned] { box-shadow:inset 0 0 0 2px #c8a13a; }
+    .tt-pin { display:inline-block; margin-top:1px; padding:0 5px; border-radius:999px; background:#fff3cf; color:#7a5a00; font-size:10px; font-weight:700; }
+    .tt-grid td[data-tt-can="1"] { background:#e9f7ee; outline:1px solid #7cc79a; outline-offset:-1px; }
+    .tt-grid td[data-tt-can="1"][data-tt-more="1"] { background:#fff6d9; outline-color:#e0b84a; }
+    .tt-grid td[data-tt-can="0"] { opacity:.45; }
+    .tt-grid td { position:relative; }
+    .tt-change-badge { position:absolute; top:1px; right:2px; padding:0 4px; border-radius:999px; font-size:10px; font-weight:700; line-height:14px; background:#f3d27a; color:#6b4a00; }
+    .tt-change-badge[data-sign="less"] { background:#bfe6cd; color:#1f6a45; }
+    .tt-grid td[data-tt-edit][aria-pressed="true"] { background:#dfe9ff; outline:2px solid var(--blue); outline-offset:-2px; }
+    .tt-grid .tt-lunch th, .tt-grid .tt-lunch td { height:14px; padding:0; background:#f1f3f8; font-size:11px; color:#6a768c; }
+    .tt-cell-entry { display:block; line-height:1.25; font-size:12px; }
+    .tt-cell-entry strong { display:block; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tt-cell-entry small { display:block; color:#6a768c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .tt-cell-entry[data-kind="block"] strong { color:#2c5fb8; }
+    .tt-cell-entry[data-kind="creative"] strong { color:#1f6a45; }
+    .tt-cell-entry[data-no-teacher] small { color:#a44939; font-weight:700; }
+    .tt-table { border-collapse:collapse; font-size:13px; }
+    .tt-table th, .tt-table td { padding:5px 10px; border:1px solid var(--line); text-align:center; }
+    .tt-table thead th { background:#f5f7fb; font-size:12px; }
+    .tt-choices { grid-column:2; margin-top:2px; padding:8px 10px; border-radius:8px; background:#f7f9fd; font-size:12px; }
+    .tt-choices-title { font-weight:700; color:#33415c; }
+    .tt-choices li[data-recommended="1"] { background:#f1f8f3; border-radius:8px; padding:6px 8px; }
+    .tt-level.tt-recommend { background:#e3f4ea; color:#1f6a45; align-self:center; }
+    .tt-choices ul { list-style:none; margin:6px 0 0; padding:0; }
+    .tt-choices li { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:5px 0; border-top:1px dashed #e0e6f1; }
+    .tt-choices li:first-child { border-top:0; }
+    .tt-choices .button { min-height:26px; padding:2px 10px; font-size:12px; }
+    .tt-effect { padding:1px 8px; border-radius:999px; background:#eef2f9; color:#5d6a82; font-weight:700; }
+    .tt-effect[data-solved="true"] { background:#e3f4ea; color:#1f6a45; }
+    .tt-gives { flex-basis:100%; color:#6a768c; }
+    .tt-chosen { margin:6px 0 10px; padding:8px 12px; border:1px solid #c9d8f7; border-radius:10px; background:#f4f7ff; font-size:13px; }
+    .tt-chosen ol { margin:4px 0 8px; padding-left:20px; }
+    @media (max-width: 720px) { .tt-row { grid-template-columns:1fr; } }
     .cs-card h4 { margin:0 0 10px; font-size:14px; }
     .cs-card h5 { margin:12px 0 6px; font-size:12px; }
     .cs-fields { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; margin:8px 0; font-size:12px; }
     .cs-fields label { display:inline-flex; align-items:center; gap:6px; }
     .cs-num { width:64px; height:30px; padding:0 6px; border:1px solid var(--line); border-radius:6px; font-size:12px; }
+    .cs-text.cs-homeroom { width:56px; min-width:0; }
     .cs-text { width:120px; height:30px; padding:0 6px; border:1px solid var(--line); border-radius:6px; font-size:12px; }
     .cs-text.cs-wide { width:200px; }
     .cs-card select, .cs-dialog select { height:30px; border:1px solid var(--line); border-radius:6px; font-size:12px; background:#fff; }
@@ -2324,6 +2439,9 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-table tr.is-recommended { background:#eef4ff; }
     .cs-diff { margin-left:6px; color:#2852ce; font-size:10px; font-weight:700; }
     .cs-tag { display:inline-block; padding:1px 6px; border-radius:999px; background:#eef2f9; color:#5d6a82; font-size:10px; font-weight:700; }
+    .cs-merge { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; margin:8px 0 2px; padding:8px 12px; border:1px dashed var(--line); border-radius:10px; font-size:12px; }
+    .cs-merge label { display:inline-flex; align-items:center; gap:5px; }
+    .cs-merge .cs-note { flex-basis:100%; margin:0; }
     .cs-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
     .cs-status { font-size:12px; color:#287956; }
     .cs-status[data-state="error"] { color:#a44939; }
@@ -2352,6 +2470,9 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .cs-dialog h3 { margin:16px 0 6px; font-size:14px; }
     .cs-grid { border-collapse:collapse; font-size:11px; }
     .cs-grid th, .cs-grid td { padding:2px 6px; text-align:center; border:1px solid var(--line); }
+    .cs-grid-row .cs-note { display:block; margin-top:6px; white-space:normal; text-align:left; }
+    .cs-grid-row .cs-partial input { width:220px; max-width:100%; }
+    .cs-grid td .cs-tag { margin-left:2px; }
     .cs-proposal { margin-top:10px; padding:10px; border:1px dashed #b9c6dc; border-radius:10px; background:#fbfcff; }
     .cs-proposal h5 { margin:0 0 6px; font-size:12px; }
     .cs-table tr.is-current th { color:#2852ce; }

@@ -60,7 +60,7 @@ function hoursSettings(year = hoursTargetYear(), create = false) {
     if (create && /^\d{4}$/.test(year)) state.hoursStats[year] = entry;
   }
   for (const key of ["classCounts", "teachers", "departmentOverrides", "classOverrides", "allocations", "previousAverages", "sourceRounds", "lastAverages",
-    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative", "commonModes", "commonShares"]) {
+    "nonTeaching", "nonTeachingHours", "teacherLocks", "allocationNotes", "previousTeachers", "creative", "commonModes", "commonShares", "expandedClasses"]) {
     if (!hoursPlainObject(entry[key])) entry[key] = {};
   }
   return entry;
@@ -259,6 +259,81 @@ function hoursDesignatedShare(total, entry) {
   }
   const position = alternate && String(entry.semester) === "1" ? names - 1 - index : index;
   return base + (position < extra ? 1 : 0);
+}
+
+// 연동 개설반 칸(읽기 전용 값 단추)이 누르면 갈 곳과 안내 글. 2·3학년 선택과목은 4단계 그 과목 칸(focusAggregateCourse),
+// 학교 지정 과목은 근거인 학급 수 칸(시수 설정 팝업의 내년 학급 수 = 4단계 기준 설정과 같은 값), 교차집중 홀수 학급은 1단계 편제표.
+// 확대학급 하한 안내: 전체 학급 과목은 '학급 수(11)', 분할 편성·교차집중은 그 과목의 편제표 값.
+// 확대학급 운영 교과(사용자 결정 '확대학급을 운영하는 교과를 설정'): settings.expandedDepartments = 교과 id 목록.
+// 고른 적이 없으면(예전 자료: 켜짐 + 목록 없음) null = 모든 교과(예전 동작 그대로). 빈 목록은 '운영 교과 없음'.
+function hoursExpandedDepartments(settings) {
+  return Array.isArray(settings?.expandedDepartments) ? settings.expandedDepartments.map(String) : null;
+}
+function hoursExpandedRuns(settings, department) {
+  if (settings?.expandedClassesOn !== true) return false;
+  const list = hoursExpandedDepartments(settings);
+  return !list || list.includes(String(department));
+}
+
+// 과목별 상세 '확대학급' 칸: 학교 지정 과목만. 운영을 켜고 그 과목의 담당 교과가 운영 교과이면 입력 칸, 아니면 저장된 값만 흐리게(쓰지 않음).
+function hoursExpandedCell(item, settings) {
+  if (!item.designated) return "";
+  if (settings.expandedClassesOn !== true) {
+    return item.expandedInput !== null && item.expandedInput !== undefined
+      ? `<span class="hours-note" title="확대학급 운영이 꺼져 있어 쓰지 않습니다">${item.expandedInput} (꺼짐)</span>` : '<span class="hours-note">-</span>';
+  }
+  if (!hoursExpandedRuns(settings, item.department)) {
+    return item.expandedInput !== null && item.expandedInput !== undefined
+      ? `<span class="hours-note" title="확대학급 운영 교과가 아니어서 쓰지 않습니다(시수 설정에서 교과를 고르면 다시 씁니다)">${item.expandedInput} (운영 교과 아님)</span>` : '<span class="hours-note">-</span>';
+  }
+  const rejected = hoursExpandedRejected?.key === item.key ? hoursExpandedRejected : null;
+  const note = rejected ? `<span class="hours-expanded-note" role="alert">${escapeHtml(`${rejected.text} — ${rejected.value}은(는) 받지 않았습니다`)}</span>`
+    : item.expandedInvalid ? `<span class="hours-expanded-note" role="alert">${escapeHtml(`${item.expandedInvalid} — 쓰지 않음`)}</span>` : "";
+  return `<input class="hours-small-input${item.expanded ? " is-manual" : ""}" data-hours-expanded="${escapeHtml(item.key)}" data-hours-plan="${item.autoClasses}" data-hours-plan-classes="${item.planClasses ?? ""}" data-focus-key="detail-expanded-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.expandedInput ?? ""}" placeholder="${item.autoClasses + 1}~" title="${escapeHtml(hoursExpandedMinimumText(item))}" aria-label="${escapeHtml(`${item.grade}학년 ${item.semester}학기 ${item.subject} 확대학급`)}">${note}`;
+}
+
+// 시수 설정 팝업: 확대학급 운영 교과 고르기(운영을 켰을 때만). 학교 지정 과목이 있는 교과만 보인다.
+function hoursExpandedDepartmentsHtml(stats) {
+  const settings = stats.settings;
+  if (settings.expandedClassesOn !== true) return "";
+  const used = new Set(stats.items.filter((item) => item.designated).map((item) => item.department));
+  const all = HOURS_DEPARTMENTS.map((department) => department.id).filter((id) => used.has(id));
+  const chosen = hoursExpandedDepartments(settings);
+  const boxes = all.map((id) => `<label><input type="checkbox" data-hours-expanded-department="${escapeHtml(id)}" data-hours-expanded-all="${escapeHtml(all.join(","))}" data-focus-key="expanded-department-${escapeHtml(id)}"${!chosen || chosen.includes(id) ? " checked" : ""}> ${escapeHtml(hoursDepartmentName(id))}</label>`).join("");
+  const count = chosen ? all.filter((id) => chosen.includes(id)).length : all.length;
+  return `<p class="hours-expanded-departments" id="hoursExpandedDepartments" data-count="${count}"><strong>확대학급 운영 교과</strong> ${boxes}
+    <span class="hours-note">${chosen ? `${count}개 교과` : "고르지 않음 = 모든 교과"} · 고른 교과의 학교 지정 과목에만 '확대학급' 칸이 나옵니다. 고르지 않은 교과의 확대 값은 지우지 않고 쓰지 않습니다.</span></p>`;
+}
+
+// 확대학급 칸에서 받지 않은 값(학급 수 이하): 다시 그린 표의 칸 옆에 안내한다(다음 확대학급 입력·켜고 끄기에서 지움).
+var hoursExpandedRejected = null;
+
+function hoursExpandedMinimumText(item) {
+  return item.autoClasses === item.planClasses ? `확대학급은 학급 수(${item.autoClasses})보다 커야 합니다`
+    : `확대학급은 편제표 값(${item.autoClasses}반, 학급 수 ${item.planClasses})보다 커야 합니다`;
+}
+
+function hoursClassesLink(item) {
+  const name = `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반 ${item.classes}`;
+  if (item.designated && item.expanded) {
+    return { attrs: { "data-hours-goto-classes": item.grade }, cls: "is-expanded", label: `${name} — 확대학급(편제표 ${item.autoClasses}반), 학급 수 고치기`,
+      title: `확대학급 · 편제표 ${item.autoClasses}반 → 확대 ${item.expanded}반 · ${item.planBasis || item.basis} · 확대 값은 과목별 상세에서, 누르면 ${item.grade}학년 학급 수 칸으로 갑니다` };
+  }
+  if (item.designated && item.crossPick) {
+    return { attrs: { "data-hours-cohort": item.cohortYear, "data-hours-cross": "1" }, label: `${name} — 1단계 편제표에서 고치기`,
+      title: `편제표 연동 · ${item.basis} · 누르면 1단계 편제표로 갑니다(학급 수는 시수 설정·4단계 기준 설정)` };
+  }
+  if (item.designated) {
+    return { attrs: { "data-hours-goto-classes": item.grade }, label: `${name} — 학급 수 고치기`,
+      title: `편제표 연동 · ${item.basis} · 개설반 = 편제표 × 학급 수, 누르면 ${item.grade}학년 학급 수 칸으로 갑니다(4단계 기준 설정과 같은 값)` };
+  }
+  return { attrs: { "data-hours-goto4": `${item.currentGrade}|${item.semester}|${item.subject}` }, label: `${name} — 4단계에서 고치기`,
+    title: `4단계 연동 · ${item.basis} · 누르면 4단계에서 고칩니다` };
+}
+
+function hoursClassesLinkHtml(link, value) {
+  const attrs = Object.entries(link.attrs || {}).map(([key, text]) => ` ${key}="${escapeHtml(String(text))}"`).join("");
+  return `<button class="hf-link${link.cls ? ` ${link.cls}` : ""}" type="button"${attrs} title="${escapeHtml(link.title || "")}" aria-label="${escapeHtml(link.label || "")}">${escapeHtml(String(value ?? ""))}</button>`;
 }
 
 // ---- 교사 수 추천·공통 시수 배분 (순수 계산) ----
@@ -842,6 +917,9 @@ function computeHoursStats(year = hoursTargetYear()) {
   const items = [];
   const seen = new Set();
   const ignoredOverrides = [];
+  const ignoredDesignated = [];
+  // 확대학급(수준별 이동수업, 사용자 결정 '사용 여부 확인 후 반영'): 시수 설정에서 켜면 학교 지정 과목마다 확대 개설반을 쓴다.
+  const expanded = { on: settings.expandedClassesOn === true, used: [], invalid: [], skipped: [], stored: 0 };
   for (const grade of ["1", "2", "3"]) {
     const cohortYear = String(Number(year) - Number(grade) + 1);
     const layout = curriculumCohortLayout(cohortYear);
@@ -917,11 +995,19 @@ function computeHoursStats(year = hoursTargetYear()) {
       if (entry.kind === "지정") {
         const total = classCounts[grade] || 0;
         item.autoClasses = hoursDesignatedShare(total, entry);
+        // 학교 지정 과목(사용자 결정): 개설반 = 편제표 × 학급 수(시수 설정·4단계 기준 설정의 내년 학급 수), 5단계에서 고치지 않는다.
+        item.linked = true;
+        item.designated = true;
+        // 교차집중 학급 수가 과목 수로 나눠지지 않으면 1반 더 받을 과목(1단계 교차집중 팝업)도 근거다.
+        item.planClasses = total;
+        item.crossPick = Boolean(entry.crossed && entry.names > 1 && Number(entry.crossSemesters) > 1 && total % entry.names);
+        // 반 일부만 듣는 과목(교차집중·분할 편성)의 묶음: 같은 편제표 행의 과목끼리 반을 나눈다(7단계 시간표가 반 배정에 씀).
+        if (entry.names > 1) item.split = { row: entry.rowIndex, names: Number(entry.names), index: Number(entry.nameIndex) || 0, crossed: Boolean(entry.crossed && Number(entry.crossSemesters) > 1) };
         item.basis = entry.names > 1
           ? entry.crossed
             ? `학교 지정 · 교차집중 ${total}학급이 학기마다 ${entry.names}과목을 엇갈려 이수(${entry.semester}학기 ${item.autoClasses}반${total % entry.names ? " · 1단계 교차집중 팝업에서 1반 더 받을 과목을 고릅니다" : ""})`
             : `학교 지정 · 분할 편성 ${total}학급을 ${entry.names}과목에 나눔`
-          : "학교 지정 · 전체 학급";
+          : `학교 지정 · 전체 학급 ${total}학급`;
       } else if (grade === "1") {
         item.autoClasses = 0;
         item.basis = "1학년 선택과목 · 개설반 직접 입력";
@@ -982,11 +1068,39 @@ function computeHoursStats(year = hoursTargetYear()) {
         issues.push({ level: "info", text: `${grade}학년 ${entry.semester}학기 ${entry.subject}: 학기 칸에 숫자가 없어 운영학점 ${entry.credit}을(를) 학기 시수로 썼습니다.` });
       }
       const override = hoursNumber(settings.classOverrides[item.key], { integer: true, max: 99 });
+      // 담당 교과(확대학급 운영 교과 판정에도 쓰므로 개설반보다 먼저 정한다).
+      const departmentOverride = settings.departmentOverrides[normalizeResultCourseName(item.subject)];
+      item.defaultDepartment = hoursDefaultDepartment(item.subject, item.area);
+      item.department = HOURS_DEPARTMENTS.some((department) => department.id === departmentOverride) || hoursNonTeachingId(departmentOverride)
+        ? departmentOverride : item.defaultDepartment;
       if (item.linked) {
-        // 2·3학년 선택과목(사용자 결정): 개설반 = 4단계 개설 학급 수, 5단계에서 고치지 않는다. 예전 직접 입력은 지우지 않고 쓰지 않는다.
+        // 2·3학년 선택과목(사용자 결정): 개설반 = 4단계 개설 학급 수, 학교 지정 과목: 편제표 × 학급 수. 5단계에서 고치지 않는다.
+        // 예전 직접 입력은 지우지 않고 쓰지 않는다.
         item.classes = item.autoClasses;
         item.manual = false;
-        if (override !== null && override !== item.autoClasses) ignoredOverrides.push({ item, override });
+        if (override !== null && override !== item.autoClasses) (item.designated ? ignoredDesignated : ignoredOverrides).push({ item, override });
+        if (item.designated) {
+          // 확대 값은 편제표 값(전체 학급이면 학급 수)보다 커야 쓴다. 꺼져 있거나 작아지면 지우지 않고 쓰지 않는다.
+          const value = hoursNumber(settings.expandedClasses[item.key], { integer: true, max: 99 });
+          if (value !== null) expanded.stored++;
+          item.expandedInput = value;
+          if (value !== null && expanded.on && !hoursExpandedRuns(settings, item.department)) {
+            // 운영 교과가 아닌 과목: 저장된 확대 값은 지우지 않고 쓰지 않는다.
+            item.expandedOff = true;
+            expanded.skipped.push(item);
+          } else if (value !== null && expanded.on) {
+            if (value > item.autoClasses) {
+              item.expanded = value;
+              item.classes = value;
+              item.planBasis = item.basis;
+              item.basis = `${item.basis} · 확대학급 ${value}반(편제표 ${item.autoClasses}반)`;
+              expanded.used.push(item);
+            } else {
+              item.expandedInvalid = hoursExpandedMinimumText(item);
+              expanded.invalid.push(item);
+            }
+          }
+        }
       } else {
         item.classes = override ?? item.autoClasses;
         item.manual = override !== null;
@@ -994,10 +1108,6 @@ function computeHoursStats(year = hoursTargetYear()) {
         item.missingStage4 = item.kind !== "지정" && grade !== "1" && Boolean(info.source);
         if (item.manual) item.basis = item.missingStage4 ? `4단계에 없는 과목 · 직접 입력 ${item.classes}반` : `직접 입력 (자동 ${item.autoClasses})`;
       }
-      const departmentOverride = settings.departmentOverrides[normalizeResultCourseName(item.subject)];
-      item.defaultDepartment = hoursDefaultDepartment(item.subject, item.area);
-      item.department = HOURS_DEPARTMENTS.some((department) => department.id === departmentOverride) || hoursNonTeachingId(departmentOverride)
-        ? departmentOverride : item.defaultDepartment;
       item.hours = item.credit * item.classes;
       items.push(item);
     }
@@ -1009,6 +1119,25 @@ function computeHoursStats(year = hoursTargetYear()) {
   if (ignoredOverrides.length) {
     issues.push({ level: "info", text: `4단계와 다른 직접 입력 ${ignoredOverrides.length}개를 4단계 값으로 바꿨습니다: ${resultExampleList(ignoredOverrides.map(({ item, override }) =>
       `${item.grade}학년 ${item.semester}학기 ${item.subject} ${override} → ${item.autoClasses}`), 8)}. 선택과목 개설반은 4단계 개설 학급 수를 따릅니다(저장된 직접 입력은 지우지 않았고, 4단계에 그 과목이 없을 때만 씁니다).` });
+  }
+  if (ignoredDesignated.length) {
+    issues.push({ level: "info", text: `편제표와 다른 직접 입력 ${ignoredDesignated.length}개를 편제표 값으로 바꿨습니다: ${resultExampleList(ignoredDesignated.map(({ item, override }) =>
+      `${item.grade}학년 ${item.semester}학기 ${item.subject} ${override} → ${item.autoClasses}`), 8)}. 학교 지정 과목 개설반은 편제표 × 학급 수를 따릅니다(저장된 직접 입력은 지우지 않았습니다. 학급 수는 시수 설정이나 4단계 기준 설정에서 고칩니다).` });
+  }
+  if (expanded.invalid.length) {
+    issues.push({ level: "warning", text: `확대학급 값 ${expanded.invalid.length}개를 쓰지 않았습니다(편제표 값으로 계산): ${resultExampleList(expanded.invalid.map((item) =>
+      `${item.grade}학년 ${item.semester}학기 ${item.subject} ${item.expandedInput} — ${item.expandedInvalid}`), 8)}. 과목별 상세의 확대학급 칸을 고치거나 비우세요.` });
+  }
+  if (expanded.skipped.length) {
+    issues.push({ level: "info", text: `확대학급 운영 교과가 아닌 과목의 확대 값 ${expanded.skipped.length}개는 쓰지 않음(${resultExampleList(expanded.skipped.map((item) =>
+      `${item.grade}학년 ${item.semester}학기 ${item.subject} ${item.expandedInput}`), 8)}). 시수 설정의 '확대학급 운영 교과'에서 그 교과를 고르면 다시 씁니다.` });
+  }
+  if (!expanded.on && expanded.stored) {
+    issues.push({ level: "info", text: `확대학급 운영 꺼짐 · 저장된 확대 값 ${expanded.stored}개는 쓰지 않음(시수 설정에서 켜면 다시 씁니다).` });
+  }
+  if (expanded.used.length) {
+    issues.push({ level: "info", text: `확대학급 ${expanded.used.length}과목은 5단계 시수에만 반영됩니다. 6단계 분반·시간표에는 아직 반영되지 않습니다(${resultExampleList(expanded.used.map((item) =>
+      `${item.grade}학년 ${item.semester}학기 ${item.subject} ${item.autoClasses} → ${item.expanded}반`), 8)}).` });
   }
   for (const info of grades) info.label = hoursGradeLabel(info);
   for (const item of items) {
@@ -1087,6 +1216,16 @@ function computeHoursStats(year = hoursTargetYear()) {
   if (zeroTeachers.length) {
     issues.push({ level: "warning", text: `시수가 있는데 교사 수를 0명으로 넣은 교과(1인당 평균 계산 안 함): ${zeroTeachers.map((department) => hoursDepartmentName(department.id)).join(", ")}`, action: "focus:hoursTeachers-" + zeroTeachers[0].id });
   }
+  // 시간표(6단계 명단 만들기·7단계)는 수업이 있는데 교사가 0명(빈칸 포함)인 교과에 자리 교사 1명을 두고 계산한다(사용자 결정: 증이 확실한 경우).
+  // 교양(다른 교과 교사가 맡음)·공통 교과(세부 교과 교사가 맡음)는 빼고, 교사 수 칸 자체는 바꾸지 않는다.
+  // 교사 수를 아직 하나도 넣지 않았으면(5단계를 하기 전) 적용하지 않는다 — 모든 교과를 1명으로 보면 6단계 시안 편성이 '교과마다 교사 1명'으로 막힌다.
+  const teachersEntered = departments.some((department) => department.teachers > 0);
+  const assumedTeachers = !teachersEntered ? [] : departments.filter((department) => !department.common && !department.otherTeachers && !(department.teachers > 0) && department.hours["1"] + department.hours["2"] > 0)
+    .map((department) => ({ id: department.id, hours: { ...department.hours } }));
+  if (assumedTeachers.length) {
+    issues.push({ level: "info", action: "focus:hoursTeachers-" + assumedTeachers[0].id, text: `교사 0명 교과에 수업이 있습니다(${assumedTeachers.map((item) =>
+      `${hoursDepartmentName(item.id)} 1학기 ${item.hours["1"]}·2학기 ${item.hours["2"]}시간`).join(", ")}) — 시간표(6단계 명단 만들기·7단계)는 그 교과에 교사 1명을 두고 계산합니다. 교사 수 칸은 그대로이고, 교사 수를 넣으면 이 안내가 사라집니다.` });
+  }
   for (const common of departments.filter((department) => department.common)) {
     const over = ["1", "2"].filter((semester) => common.unallocated[semester] < 0);
     if (over.length) {
@@ -1107,10 +1246,20 @@ function computeHoursStats(year = hoursTargetYear()) {
   yearChange.differences = previousSources.differences.map((item) => ({ ...item, name: HOURS_DEPARTMENTS.some((department) => department.id === item.key) ? hoursDepartmentName(item.key) : `${item.key}(교과군)` }));
   yearChange.upload = previousSources.upload ? { sheetName: previousSources.upload.sheetName, fileName: previousSources.upload.fileName, year: previousSources.upload.year, allocation: previousSources.upload.allocation } : null;
   yearChange.preferUpload = previousSources.preferUpload;
-  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, yearChange, issues };
+  return { year, settings, classCounts, totalClasses, creativeHours, creativeParts, grades, items, departments, totals, nonTeaching, staff, recommendation, yearChange, assumedTeachers, issues };
 }
 
 // 비교과 교사(보건·영양·사서·상담): 교사 수, 맡은 수업 시수(상세 표에서 담당을 비교과로 지정한 과목 + 직접 입력), 1인당 시수.
+// 시간표용 교과별 교사 수: 5단계 교사 수 + 교사 0명인데 수업이 있는 교과는 1명(computeHoursStats의 assumedTeachers).
+function hoursTimetableTeacherCounts(year = hoursTargetYear()) {
+  const settings = hoursSettings(year);
+  const counts = Object.fromEntries(Object.entries(settings.teachers || {}).map(([id, value]) => [id, Number(value) || 0]));
+  let assumed = [];
+  try { assumed = (typeof hoursStatsCached === "function" ? hoursStatsCached(year) : computeHoursStats(year)).assumedTeachers || []; } catch { assumed = []; }
+  for (const item of assumed) counts[item.id] = 1;
+  return { counts, assumed: assumed.map((item) => item.id) };
+}
+
 function hoursNonTeachingStats(items, settings, issues = []) {
   const rows = HOURS_NON_TEACHING.map((definition) => {
     const key = HOURS_NON_TEACHING_PREFIX + definition.id;
@@ -1518,7 +1667,7 @@ function renderHoursStatsView() {
     ${allocateTools}
     ${hoursPlainObject(settings.undo) ? `<button class="button button-quiet" type="button" data-hours-action="undo">되돌리기 (${escapeHtml(settings.undo.label)})</button>` : ""}
     <label class="hours-zero-toggle"><input type="checkbox" data-hours-show-zero="1" data-focus-key="show-zero"${settings.showZeroClasses ? " checked" : ""}> 개설반 0 과목도 보기</label>
-    <span class="hours-note">흰 칸(개설반·교사수·전년도 평균·배분·창체 학점·메모)은 표에서 바로 고칩니다. <span class="hours-legend-red">빨간 개설반</span>은 신청 결과, 흐린 칸은 직접 입력입니다.</span>
+    <span class="hours-note">흰 칸(교사수·전년도 평균·배분·창체 학점·메모)은 표에서 바로 고칩니다. 개설반은 연동 값(점선 밑줄 숫자, 누르면 고치는 곳으로): 검은 숫자는 편제표 × 학급 수, <span class="hours-legend-red">빨간 숫자</span>는 4단계 개설 학급 수, '확대' 표시는 확대학급(수준별 이동수업) 개설반입니다. 흐린 칸은 직접 입력입니다.</span>
   </p>`;
   const departmentOptions = (selected) => HOURS_DEPARTMENTS.map((department) =>
     `<option value="${department.id}"${department.id === selected ? " selected" : ""}>${escapeHtml(hoursDepartmentName(department.id))}</option>`).join("") +
@@ -1537,23 +1686,27 @@ function renderHoursStatsView() {
       <td>${hoursFormat(item.credit)}</td>
       <td>${item.enrollment ?? ""}</td>
       <td>${item.linked
-        ? `<button class="hf-link" type="button" data-hours-goto4="${escapeHtml(`${item.currentGrade}|${item.semester}|${item.subject}`)}" title="${escapeHtml(`4단계 연동 · ${item.basis} · 누르면 4단계에서 고칩니다`)}" aria-label="${escapeHtml(item.subject)} 개설반 ${item.classes} — 4단계에서 고치기">${item.classes}</button>`
+        ? hoursClassesLinkHtml(hoursClassesLink(item), item.classes)
         : `<input class="hours-small-input" data-hours-item-classes="${escapeHtml(item.key)}" data-hours-auto="${item.autoClasses}" data-focus-key="detail-item-${escapeHtml(item.key)}" type="number" min="0" max="99" step="1" value="${item.manual ? item.classes : ""}" placeholder="${item.autoClasses}" aria-label="${escapeHtml(item.subject)} 개설반">`}</td>
+      <td>${hoursExpandedCell(item, settings)}</td>
       <td>${item.hours}</td>
       <td>${escapeHtml(item.sourceRound)}</td>
       <td class="closure-subject hours-note">${escapeHtml(item.basis)}</td>
     </tr>`).join("");
   const detail = `<details class="hours-detail" data-hours-details="detail"${detailOpen ? " open" : ""}>
     <summary>과목별 상세 (${stats.items.length}개 항목) · 담당 교과(비교과 교사 포함)와 개설반 근거</summary>
-    <p class="note">개설반 칸을 비워 두면 자동 값(흐린 숫자)을 씁니다. 담당 교과를 바꾸면 같은 이름의 과목 전체에 적용됩니다.</p>
+    <p class="note">학교 지정 과목 개설반은 편제표 × 학급 수, 2·3학년 선택과목은 4단계 개설 학급 수와 연동돼 여기서 고치지 않습니다(값을 누르면 고치는 곳으로). 확대학급(수준별 이동수업)을 시수 설정에서 켜면 학교 지정 과목의 '확대학급' 칸에 학급 수보다 큰 개설반을 넣습니다(5단계 시수에만 반영). 입력 칸은 비워 두면 자동 값(흐린 숫자)을 씁니다. 담당 교과를 바꾸면 같은 이름의 과목 전체에 적용됩니다.</p>
     ${detailOpen ? "" : '<p class="note">펼치면 표를 그립니다.</p>'}
-    <div class="aggregate-sheet-wrap${detailOpen ? "" : " hidden"}" data-hours-scroll="detail"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">내년도<br>학년</th><th scope="col">입학<br>연도</th><th scope="col">신청<br>학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">시수</th><th scope="col">근거 차수</th><th scope="col">근거</th></tr></thead>
+    <div class="aggregate-sheet-wrap${detailOpen ? "" : " hidden"}" data-hours-scroll="detail"><table class="closure-table hours-detail-table"><thead><tr><th scope="col">내년도<br>학년</th><th scope="col">입학<br>연도</th><th scope="col">신청<br>학년</th><th scope="col">학기</th><th scope="col">과목</th><th scope="col">구분</th><th scope="col">담당 교과</th><th scope="col">학점</th><th scope="col">신청</th><th scope="col">개설반</th><th scope="col">확대학급</th><th scope="col">시수</th><th scope="col">근거 차수</th><th scope="col">근거</th></tr></thead>
     <tbody>${detailRows}</tbody></table></div>
   </details>`;
   // 설정 입력·교사 수 추천·확인 항목 전체는 팝업에 두고, 화면에는 한 줄 요약과 원래 양식 표를 둔다.
   const settingsBody = document.getElementById("hoursSettingsBody");
   if (settingsBody) {
     settingsBody.innerHTML = `<div class="hours-grade-cards">${gradeCards}</div>
+    <p class="hours-expanded-toggle"><label><input type="checkbox" id="hoursExpandedOn" data-hours-expanded-on="1" data-focus-key="expanded-on"${settings.expandedClassesOn === true ? " checked" : ""}> 확대학급(수준별 이동수업) 운영</label>
+      <span class="hours-note">켜면 운영 교과의 학교 지정 과목을 학급 수보다 많은 반으로 열 수 있습니다(과목별 상세의 '확대학급' 칸). 끄면 편제표 × 학급 수만 쓰고, 넣어 둔 확대 값은 지우지 않습니다. 5단계 시수에만 반영됩니다.</span></p>
+    ${hoursExpandedDepartmentsHtml(stats)}
     <p class="note">창체 시수(학급당 학기 자율·진로)는 시수표 맨 아래 창체 행의 학점 칸에서 고칩니다. 교과별 교사 수·전년도 평균·공통 과목 배분도 시수표 칸에서 바로 입력합니다(소수 0.5도 됨). 진로 교과(진로와 직업)는 합계와 평균에서 뺍니다.</p>
     ${hoursStaffSettings(stats)}
     ${hoursCommonSettings(stats)}
@@ -1635,6 +1788,36 @@ function updateHoursSetting(target) {
     const grade = target.dataset.hoursClasses || target.dataset.nextGrade;
     set(settings.classCounts, grade, hoursNumber(target.value, { integer: true, max: 99 }));
     return "classes";
+  }
+  if (target.dataset.hoursExpandedOn) {
+    hoursExpandedRejected = null;
+    set(settings, "expandedClassesOn", target.checked ? true : null);
+    return true;
+  }
+  if (target.dataset.hoursExpandedDepartment) {
+    // 운영 교과 체크: 처음 고칠 때는 '모든 교과'(고르지 않은 상태)에서 출발해 누른 교과만 바꾼다.
+    const id = target.dataset.hoursExpandedDepartment;
+    const all = String(target.dataset.hoursExpandedAll || "").split(",").filter(Boolean);
+    const current = hoursExpandedDepartments(settings) ?? all;
+    const next = target.checked ? [...new Set([...current, id])] : current.filter((item) => item !== id);
+    settings.expandedDepartments = [...all.filter((item) => next.includes(item)), ...next.filter((item) => !all.includes(item))];
+    hoursExpandedRejected = null;
+    return true;
+  }
+  if (target.dataset.hoursExpanded) {
+    // 확대 값은 편제표 값보다 커야 한다: 같거나 비우면 지우고, 작으면 받지 않는다(저장된 값은 그대로).
+    const key = target.dataset.hoursExpanded;
+    const value = hoursNumber(target.value, { integer: true, max: 99 });
+    const plan = hoursNumber(target.dataset.hoursPlan, { integer: true, max: 99 }) ?? 0;
+    hoursExpandedRejected = null;
+    if (value !== null && value < plan) {
+      const text = hoursExpandedMinimumText({ autoClasses: plan, planClasses: hoursNumber(target.dataset.hoursPlanClasses, { integer: true, max: 99 }) ?? plan });
+      hoursExpandedRejected = { key, value, text };
+      if (typeof hoursNotify === "function") hoursNotify(`${text}. ${value}은(는) 받지 않았습니다.`, false);
+      return true;
+    }
+    set(settings.expandedClasses, key, value === null || value === plan ? null : value);
+    return true;
   }
   if (target.dataset.hoursCreative) set(settings, "creativeHours", hoursNumber(target.value, { max: 10 }));
   else if (target.dataset.hoursCreativePart) {
@@ -2034,9 +2217,8 @@ function hoursFormModel(stats, { schoolName = "", date = new Date() } = {}) {
             put(row, column + 1, { v: item.credit, k: "cell" });
             put(row, column + 2, {
               v: item.classes, k: item.kind !== "지정" && item.grade !== "1" ? "cellRed" : "cell", item,
-              // 4단계 연동 칸은 입력 상자가 아니라 값 단추(누르면 4단계 그 과목 칸으로).
-              ...(item.linked ? { link: { value: item.classes, title: `4단계 연동 · ${item.basis} · 누르면 4단계에서 고칩니다`, grade: item.currentGrade, semester: item.semester, subject: item.subject,
-                label: `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반 ${item.classes} — 4단계에서 고치기` } } : {}),
+              // 연동 칸(2·3학년 선택 = 4단계, 학교 지정 = 편제표 × 학급 수)은 입력 상자가 아니라 값 단추(누르면 근거를 고치는 곳으로).
+              ...(item.linked ? { link: { value: item.classes, grade: item.currentGrade, semester: item.semester, subject: item.subject, ...hoursClassesLink(item) } } : {}),
               input: item.linked ? null : { type: "number", value: item.classes, cls: `${item.manual ? " is-manual" : ""}${item.missingStage4 && item.manual ? " is-differ" : ""}${item.classes === 0 ? " is-zero" : ""}`, title: item.basis,
                 attrs: { "data-hours-item-classes": item.key, "data-hours-auto": item.autoClasses, "data-focus-key": `item-${item.key}`, min: 0, max: 99, step: 1,
                   "aria-label": `${item.grade}학년 ${item.semester}학기 ${item.subject} 개설반` } }
@@ -2271,7 +2453,7 @@ function hoursFormHtml(model) {
           <textarea class="hf-input hf-textarea" data-hours-staff-memo="1" data-hours-auto-memo="${escapeHtml(cell.memo.auto)}" data-focus-key="staff-memo" rows="3" aria-label="교사 증감 메모" placeholder="예시) ◈ ${escapeHtml(String(model.year || ""))}학년도 ⇒ 국어과 1명 감 — 전년도·올해 교사 수를 넣으면 자동으로 적습니다">${escapeHtml(cell.memo.changes)}</textarea>
           ${cell.memo.edited ? '<button class="button button-quiet hf-memo-reset" type="button" data-hours-action="reset-memo">자동 문구로</button>' : ""}`;
       } else if (cell?.link) {
-        content = `<button class="hf-link" type="button" data-hours-goto4="${escapeHtml(`${cell.link.grade}|${cell.link.semester}|${cell.link.subject}`)}" title="${escapeHtml(cell.link.title || "")}" aria-label="${escapeHtml(cell.link.label)}">${escapeHtml(String(cell.link.value ?? ""))}</button>`;
+        content = hoursClassesLinkHtml(cell.link.attrs ? cell.link : { ...cell.link, attrs: { "data-hours-goto4": `${cell.link.grade}|${cell.link.semester}|${cell.link.subject}` } }, cell.link.value);
       } else if (cell?.input) content = input(cell.input);
       else content = escapeHtml(hoursFormDisplay(cell));
       html += `<td${span} class="hf-${kind}${sides.l || sides.r || sides.t || sides.b ? ` ${sideClass(sides)}` : ""}">${content}</td>`;
@@ -2615,6 +2797,17 @@ function initHoursStats() {
       else switchWorkflowStep("4");
       return;
     }
+    // 학교 지정 과목 개설반 칸: 근거인 학급 수 칸(시수 설정 팝업, 4단계 기준 설정과 같은 값)으로 간다.
+    const gotoClasses = event.target.closest("[data-hours-goto-classes]");
+    if (gotoClasses) {
+      const input = document.getElementById(`hoursClasses${gotoClasses.dataset.hoursGotoClasses}`);
+      const dialog = input?.closest?.("dialog");
+      if (dialog && !dialog.open) { if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", ""); }
+      input?.scrollIntoView?.({ block: "center" });
+      input?.focus?.();
+      input?.select?.();
+      return;
+    }
     const thresholds = event.target.closest("[data-hours-thresholds]");
     if (thresholds) {
       thresholds.closest("dialog")?.close?.();
@@ -2627,6 +2820,7 @@ function initHoursStats() {
     cohort.closest("dialog")?.close?.();
     switchWorkflowStep("1");
     switchCurriculumCohort(cohort.dataset.hoursCohort);
+    if (cohort.dataset.hoursCross && typeof showAppToast === "function") showAppToast("교차집중 띠를 눌러 학급 수가 홀수일 때 1반 더 받을 과목을 고르세요.");
   };
   const handleAction = (event) => {
     const button = event.target.closest("[data-hours-action], [data-hours-auto-allocate]");

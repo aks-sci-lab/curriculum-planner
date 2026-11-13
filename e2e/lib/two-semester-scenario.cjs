@@ -178,9 +178,11 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
   // 5단계에서 선택과목 칸을 누르면 4단계 그 과목 칸으로 · 학교 지정 과목은 직접 입력 ----------------------------------
   {
     await read5();
-    const designated = page.locator('#workflowStep7Panel .hours-form input[aria-label^="2학년 1학기 "][aria-label$=" 개설반"]').first();
+    // 학교 지정 과목 개설반은 편제표 × 학급 수 연동(읽기 전용 값 단추 → 학급 수 칸 또는 1단계 편제표), 입력 상자가 아니다.
+    const designated = page.locator('#workflowStep7Panel .hours-form button.hf-link[data-hours-goto-classes="2"], #workflowStep7Panel .hours-form button.hf-link[data-hours-cross]').first();
     const designatedLabel = (await designated.count()) ? await designated.getAttribute("aria-label") : "";
-    check(Boolean(designatedLabel) && await designated.isEditable(), `학교 지정·1학년 과목 개설반은 직접 입력 상자(${designatedLabel})`, designatedLabel);
+    const designatedInputs = await page.locator('#workflowStep7Panel .hours-form input[aria-label^="2학년 1학기 "][aria-label$=" 개설반"]').count();
+    check(/^2학년 \d학기 .+ 개설반 \d+ — /.test(designatedLabel) && designatedInputs === 0, `학교 지정 과목 개설반은 편제표 연동 값 단추(${designatedLabel})`, `${designatedLabel} · 입력 상자 ${designatedInputs}개`);
     await hoursCell("2").click(); await sleep(900);
     const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") || "");
     // 확정된 차수는 개설 학급수 칸이 잠겨 있어 그 과목 이름 단추(개설/폐강 메뉴)에 초점이 간다.

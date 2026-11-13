@@ -1127,8 +1127,8 @@ test("workflow menus reveal their matching panels without changing the selected 
   vm.runInContext(functionSource("function renderWorkflowLayout(", "function switchRound("),ctx);
   ctx.renderWorkspaceContext=()=>{};
   ctx.renderWorkflowLayout();
-  // 편제표·수강신청·확인서·집계·시수 통계·분반 편성 6개 업무 메뉴와 보류 중인 이동수업·시간표 메뉴
-  assert.deepEqual(buttons.map((button)=>button.dataset.workflowStep),["1","2","3","4","7","8","5","6"]);
+  // 편제표·수강신청·확인서·집계·시수 통계·분반 편성·시간표 7개 업무 메뉴(시간표 = 내부 단계 6)와 보류 중인 이동수업 메뉴
+  assert.deepEqual(buttons.map((button)=>button.dataset.workflowStep),["1","2","3","4","7","8","6","5"]);
   assert.equal(elements.get("#workflowStep1Panel").classList.states.hidden,false);
   ctx.switchWorkflowStep(3);
   assert.equal(elements.get("#certificatePanel").classList.states.hidden,false);
@@ -1157,8 +1157,9 @@ test("workflow menus reveal their matching panels without changing the selected 
   assert.equal(elements.get("#workflowStep6Panel").classList.states.hidden,false);
   assert.equal(state.currentRound,"4");
   assert.ok(saved>0);
-  assert.match(html,/data-workflow-step="5"[^>]*>[\s\S]*?보류/);
-  assert.match(html,/data-workflow-step="6"[^>]*>[\s\S]*?보류/);
+  assert.match(html,/data-workflow-step="5"[^>]*>[^<]*보류/);
+  assert.match(html,/data-workflow-step="6"[^>]*>7\. 시간표</);
+  assert.equal(elements.get("#workflowMenuToggle").textContent,"단계 선택 · 7단계");
 });
 
 test("application rounds start at one and can be added sequentially beyond three", () => {

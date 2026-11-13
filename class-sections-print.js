@@ -486,7 +486,8 @@ CLASS_SECTIONS_ATTENDANCE_BUNDLES.homeroomFile = (infos, options) => {
 // ---- ③ 학생 개인 이동수업 시간표 ----
 // info: { year, semester, grade, targetGrade, key, name, nextClass, nextNumber, days:["월",…], periods, fill(빈칸 글자),
 //   fixedSlots: [{ label, times }], entries: [{ blockLetter, times, courseName, sectionNo, roomName, roomLabel, teacher, groupLabel }],
-//   unitCourses: [과목명], retake: [{ courseName, reason }] }
+//   unitCourses: [과목명], retake: [{ courseName, reason }],
+//   lessons(선택): { '월3': { text, teacher } } — 7단계 시간표가 정한 내년 반의 반 수업 칸. 있으면 빈칸 글자(fill) 대신 그 칸의 과목·교사를 채운다(이동수업·고정 시간 칸은 그대로) }
 // 반환: { title, student, grid: [[{ kind, lines, block }]] | null, untimed: [문장], unitCourses, retake }
 function classSectionsStudentTimetable(info) {
   const days = (info.days || []).length ? info.days.slice() : ["월", "화", "수", "목", "금"];
@@ -520,6 +521,11 @@ function classSectionsStudentTimetable(info) {
         } else Object.assign(cell, { kind: cell.kind === "fixed" ? "clash" : "move", lines: cell.kind === "fixed" ? [...cell.lines, ...cellText(entry)] : cellText(entry), block: entry.blockLetter });
       }
     }
+    // 7단계 시간표의 반 수업: 비어 있는 칸에만 채운다
+    if (info.lessons) grid.forEach((row, p) => row.forEach((cell, d) => {
+      const lesson = cell.kind === "empty" ? info.lessons[`${days[d]}${p + 1}`] : null;
+      if (lesson && lesson.text) Object.assign(cell, { kind: "lesson", lines: [classSectionsPrintText(lesson.text), classSectionsPrintText(lesson.teacher)].filter(Boolean) });
+    }));
   } else {
     untimed.splice(0, untimed.length, ...entries.map((entry) => `${entry.blockLetter}블록: ${cellText(entry).join(" · ")}`));
   }
@@ -1042,9 +1048,12 @@ function classSectionsTimetableSemesterModels(round, group, keys, semester = gro
   const effective = typeof classSectionsEffectiveClassMap === "function" ? classSectionsEffectiveClassMap(group) : { map: null };
   const reasons = typeof CLASS_SECTIONS_UNASSIGNED_REASONS !== "undefined" ? CLASS_SECTIONS_UNASSIGNED_REASONS : {};
   const year = classSectionsPrintYear();
+  // 7단계 시간표 결과가 지금 조건의 것이고 블록 시간이 6단계에 적혀 있으면: 내년 반마다 반 수업 칸(없으면 null — 지금처럼 빈칸 글자)
+  let classLessons = null;
+  try { classLessons = typeof timetableStudentLessons === "function" ? timetableStudentLessons(round, group.targetGrade, semester) : null; } catch { classLessons = null; }
   const prepared = groups.map(({ group: item, entry }) => {
     const result = entry.sectionResult;
-    const unitPlan = typeof classSectionsClassUnitPlan === "function" && item.courses.some((course) => classSectionsCourseConf(settings, "courseModes", item.grade)[course.key] === "class")
+    const unitPlan = typeof classSectionsClassUnitPlan === "function" && item.courses.some((course) => classSectionsCourseModes(settings, item)[course.key] === "class")
       ? classSectionsClassUnitPlan(item, entry, settings) : null;
     return { item, result, sectionById: new Map(result.sections.map((section) => [section.id, section])), blockById: new Map((result.blocks || []).map((block) => [block.id, block])), unitPlan,
       courseName: new Map(item.courses.map((course) => [course.key, course.name])) };
@@ -1073,7 +1082,8 @@ function classSectionsTimetableSemesterModels(round, group, keys, semester = gro
     entries.sort((a, b) => a.blockLetter.localeCompare(b.blockLetter) || a.groupLabel.localeCompare(b.groupLabel, "ko"));
     return classSectionsStudentTimetable({ year, semester, grade: group.grade, targetGrade: group.targetGrade, key, name: names.get(key) || "",
       nextClass: effective.map?.[key]?.classroom || "", nextNumber: effective.map?.[key]?.number || "", days, periods: Number(settings.gridPeriods) || 7,
-      fill: classSectionsPrintOption("timetableFill"), fixedSlots, entries, unitCourses, retake });
+      fill: classSectionsPrintOption("timetableFill"), fixedSlots, entries, unitCourses, retake,
+      lessons: classLessons && effective.map?.[key]?.classroom ? classLessons[String(effective.map[key].classroom)] : undefined });
   });
 }
 
@@ -1313,7 +1323,7 @@ function classSectionsHomeroomData(round, group) {
         const name = courseName.get(miss.courseKey) || miss.courseKey;
         if (!list.some((x) => x.courseName === name)) list.push({ courseName: name, reason: reasons[miss.reason] || miss.reason });
       }
-      const unitCourses = item.courses.filter((course) => classSectionsCourseConf(settings, "courseModes", item.grade)[course.key] === "class");
+      const unitCourses = item.courses.filter((course) => classSectionsCourseModes(settings, item)[course.key] === "class");
       if (unitCourses.length && effective.map && typeof classSectionsClassUnitPlan === "function") {
         const plan = classSectionsClassUnitPlan(item, entry, settings);
         for (const student of item.gradeStudents || item.students) {

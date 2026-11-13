@@ -2174,6 +2174,8 @@ function classSectionsSolveAll(spec) {
   for (const item of runs) item.score = classSectionsSolveAllScore(item.run);
   runs.sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1] || a.score[2] - b.score[2] || orders.indexOf(a.order) - orders.indexOf(b.order));
   const best = runs[0].run;
+  // 학년 간 겹치는 블록 쌍(블록 시간을 정하지 않았을 때): 블록 칸 수 합이 주 칸 수를 넘으면 어떤 블록 둘은 같은 시간에 열려야 한다.
+  const pairing = classSectionsPairBlocks(best, spec, fixedSlots);
   const shortages = classSectionsTeacherShortages(best.results, spec, fixedSlots);
   const shortageIssues = shortages.map((item) => ({ type: "teacher-shortage", severity: "error", department: item.department, slot: item.slot, groups: item.groups, message: item.message }));
   // 그룹 결과 순서는 입력 순서로 돌려준다.
@@ -2181,7 +2183,7 @@ function classSectionsSolveAll(spec) {
   const ordered = base.map(({ group }) => byGroup.get(group.groupId)).filter(Boolean);
   return { groups: ordered.map(({ input, result }) => ({ groupId: input.groupId, label: input.label, result })),
     teacherOf: best.teacherResult?.teacherOf || {}, teacherLoad: best.teacherResult?.load || {},
-    issues: [...(best.teacherResult?.issues || []), ...best.across, ...shortageIssues], shortages,
+    issues: [...(best.teacherResult?.issues || []), ...best.across, ...shortageIssues, ...(pairing?.issues || [])], shortages, pairing,
     orders: runs.map((item) => ({ label: item.order.label, groups: item.order.list.map(({ group }) => group.label || group.groupId), score: item.score })),
     chosenOrder: runs[0].order.label, elapsedMs: Math.round(classSectionsNow() - start) };
 }
@@ -2198,6 +2200,95 @@ function classSectionsMergeFixed(list) {
 }
 
 // 시도할 순서들(학기 순서는 지키고 학기 안에서만 바꿈). 압박 = 교과별 (분반 수 / 교사 수)의 최댓값.
+// 학년 간 겹치는 블록 쌍. spec.pairing = { week: 한 주에 블록을 놓을 수 있는 칸 수, forced: [{ a: '학년:블록 글자', b: '학년:블록 글자' }](다른 학기에서 정한 쌍) }.
+// 시간이 없는 블록이 있고, 서로 다른 학년 블록들의 시수 합이 week를 넘으면(같은 교사를 쓰는 블록은 서로 다른 시간이어야 하므로) 모자란 칸만큼
+// '같은 시간에 열 블록 쌍'(서로 다른 학년의 블록 하나씩)을 정하고, 그 쌍은 교사가 겹치지 않게 분반 교사를 다시 배정한다(run.teacherResult·결과의 teacherOf를 바꿈).
+// 쌍 고르기: forced가 있으면 그 쌍 먼저, 아니면 모든 쌍을 시험 배정해 (교사를 못 붙인 분반·오류 수 → 교사 시수 차이)가 가장 작은 쌍. 쌍마다 줄어드는 칸 = 두 블록 시수 중 작은 쪽.
+// 돌려주는 값: null(필요 없음) 또는 { week, hours, need, pairs: [{ a: { groupId, blockId, letter, grade, label }, b, forced, missing }], issues }.
+function classSectionsPairBlocks(run, spec, fixedSlots) {
+  const pairing = spec.pairing;
+  if (!pairing || !(Number(pairing.week) > 0) || !(spec.teachers || []).length || !run.teacherResult) return null;
+  const blocks = [];
+  const sections = [];
+  for (const { input, result } of run.results) {
+    const model = classSectionsNormalize({ ...input, students: [] });
+    model.groupId = input.groupId || "";
+    const own = classSectionsTeacherSections(model, result).map((section) => ({ ...section, id: `${input.groupId || ""}::${section.id}`, groupId: input.groupId, courseName: `${input.label || input.groupId} ${section.courseName}` }));
+    sections.push(...own);
+    for (const block of result.blocks) {
+      if (!block.sectionIds.length) continue;
+      const key = `${model.groupId}:${block.id}`;
+      const hours = Math.max(0, ...own.filter((section) => section.blockKey === key).map((section) => Number(section.credits) || 0));
+      blocks.push({ key, groupId: input.groupId, blockId: block.id, letter: block.letter, grade: classSectionsText(input.targetGrade ?? input.grade), label: `${input.label || input.groupId} ${block.letter}블록`, hours, timed: block.times.length > 0 });
+    }
+  }
+  // 모든 블록에 시간이 있으면 그 시간으로 겹침을 본다(쌍을 따로 정하지 않음). 일부만 있으면(예: 합친 그룹은 아직 시간 없음) 쌍을 정한다 —
+  // 7단계 시간표는 기본으로 블록 시간을 다시 놓으므로 6단계 시간이 있는 블록도 쌍이 될 수 있다(그 블록의 시간 겹침 판단은 그대로 함께 적용).
+  if (blocks.every((block) => block.timed) || new Set(blocks.map((block) => block.grade)).size < 2) return null;
+  const hours = blocks.reduce((sum, block) => sum + block.hours, 0);
+  let need = hours - Number(pairing.week);
+  if (need <= 0) return null;
+  const qualify = (map, input) => Object.fromEntries(Object.entries(map || {}).map(([id, teacher]) => [`${input.groupId || ""}::${id}`, teacher]));
+  const pins = Object.assign({}, ...run.results.map(({ input }) => qualify(input.pins?.teachers, input)));
+  const previous = Object.assign({}, ...run.results.map(({ input }) => qualify(input.previous?.teacherOf, input)));
+  const assign = (pairs) => {
+    const slotOf = new Map();
+    pairs.forEach((pair, index) => { slotOf.set(pair.a.key, `쌍:${index + 1}`); slotOf.set(pair.b.key, `쌍:${index + 1}`); });
+    return classSectionsAssignTeachers({ teachers: spec.teachers, sections: sections.map((section) => (slotOf.has(section.blockKey) ? { ...section, times: [...(section.times || []), slotOf.get(section.blockKey)] } : section)), fixedSlots, pins, previous });
+  };
+  const badOf = (result) => sections.filter((section) => !result.teacherOf[section.id]).length + result.issues.filter((issue) => issue.severity === "error").length;
+  const spreadOf = (result) => { const loads = Object.values(result.load).filter((value) => value > 0); return loads.length ? Math.max(...loads) - Math.min(...loads) : 0; };
+  const base = badOf(run.teacherResult);
+  const nameOf = (block) => `${block.grade}:${block.letter}`;
+  const forced = (Array.isArray(pairing.forced) ? pairing.forced : []).map((item) => [classSectionsText(item?.a), classSectionsText(item?.b)]);
+  const isForced = (a, b) => forced.some(([x, y]) => (x === nameOf(a) && y === nameOf(b)) || (x === nameOf(b) && y === nameOf(a)));
+  const chosen = [];
+  let current = run.teacherResult;
+  const better = (x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+  while (need > 0) {
+    const used = new Set(chosen.flatMap((pair) => [pair.a.key, pair.b.key]));
+    let best = null;
+    for (let i = 0; i < blocks.length; i += 1) for (let j = i + 1; j < blocks.length; j += 1) {
+      const a = blocks[i];
+      const b = blocks[j];
+      if (a.grade === b.grade || used.has(a.key) || used.has(b.key)) continue;
+      const trial = assign([...chosen, { a, b }]);
+      const score = [isForced(a, b) ? 0 : 1, badOf(trial), spreadOf(trial)];
+      // 다른 학기에서 정한 쌍은 교사를 못 붙이는 분반이 늘지 않을 때만 먼저 쓴다(늘면 가장 나은 쌍으로).
+      if (score[0] === 0 && score[1] > base) score[0] = 1;
+      if (!best || better(score, best.score) < 0) best = { a, b, trial, score };
+    }
+    if (!best) break;
+    chosen.push({ a: best.a, b: best.b, forced: isForced(best.a, best.b), missing: Math.max(0, best.score[1] - base) });
+    current = best.trial;
+    need -= Math.min(best.a.hours, best.b.hours);
+  }
+  const issues = [];
+  const pairText = (pair) => `${pair.a.grade}학년 ${pair.a.letter}블록 × ${pair.b.grade}학년 ${pair.b.letter}블록`;
+  if (need > 0) issues.push({ type: "block-pair", severity: "warn", groups: [...new Set(blocks.map((block) => block.groupId))],
+    message: `블록 시수 합 ${hours}칸이 한 주 ${pairing.week}칸보다 많은데, 같은 시간에 열 블록 쌍을 더 만들 수 없습니다(다른 학년 블록이 모자람).` });
+  const short = chosen.filter((pair) => pair.missing > 0);
+  if (short.length) {
+    // 원인: 그 쌍을 같은 시간에 열면 교사가 모자라는 과목
+    const lacking = [...new Set(sections.filter((section) => !current.teacherOf[section.id] && short.some((pair) => pair.a.key === section.blockKey || pair.b.key === section.blockKey)).map((section) => section.department || section.courseKey))];
+    issues.push({ type: "block-pair", severity: "warn", groups: [...new Set(short.flatMap((pair) => [pair.a.groupId, pair.b.groupId]))],
+      message: `같은 시간에 열 블록 쌍(${short.map(pairText).join(", ")})을 교사가 겹치지 않게 만들지 못했습니다: 분반 ${short.reduce((sum, pair) => sum + pair.missing, 0)}개의 담당 교사가 비었습니다${lacking.length ? `(${lacking.join(", ")} 교사가 두 블록에 동시에 필요)` : ""}.` });
+  }
+  if (chosen.length) {
+    run.teacherResult = current;
+    for (const { input, result } of run.results) {
+      result.teacherOf = {};
+      for (const section of result.sections) {
+        section.teacherId = current.teacherOf[`${input.groupId || ""}::${section.id}`] || "";
+        if (section.teacherId) result.teacherOf[section.id] = section.teacherId;
+      }
+      classSectionsAssignRoomNames(result, undefined, classSectionsKeepMap(input));
+    }
+  }
+  return { week: Number(pairing.week), hours, need: Math.max(0, need), pairs: chosen.map((pair) => ({ a: { groupId: pair.a.groupId, blockId: pair.a.blockId, letter: pair.a.letter, grade: pair.a.grade, label: pair.a.label },
+    b: { groupId: pair.b.groupId, blockId: pair.b.blockId, letter: pair.b.letter, grade: pair.b.grade, label: pair.b.label }, forced: pair.forced, missing: pair.missing })), issues };
+}
+
 function classSectionsSolveAllOrders(base, spec) {
   const counts = new Map();
   for (const teacher of spec.teachers || []) for (const name of teacher.departments || []) counts.set(name, (counts.get(name) || 0) + 1);
@@ -2778,7 +2869,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,
     classSectionsPartialPerm, classSectionsFillCells, classSectionsAssignTeachers, classSectionsRoomName, classSectionsBuildResult, classSectionsValidate,
     classSectionsValidateAcross, classSectionsMetrics, classSectionsExplain, classSectionsCapacitySuggestion, classSectionsSuggest, classSectionsSolve,
-    classSectionsTeacherSections, classSectionsSolveAll, classSectionsMergeFixed, classSectionsSolveAllOrders, classSectionsSolveAllScore,
+    classSectionsTeacherSections, classSectionsSolveAll, classSectionsPairBlocks, classSectionsMergeFixed, classSectionsSolveAllOrders, classSectionsSolveAllScore,
     classSectionsSolveAllOnce, classSectionsSlotSupply, classSectionsTeacherShortages, classSectionsRecommendTimes, classSectionsCompare, classSectionsRecommend, classSectionsClassUnitSplit,
     classSectionsFromCombos, classSectionsHardErrors, classSectionsExplainResult, classSectionsSectionsSuggestion, classSectionsAssignRoomNames,
     classSectionsNeisExport, classSectionsNeisRows, classSectionsClassMapFromRows, classSectionsRun];
@@ -2787,7 +2878,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { classSectionsSolve, classSectionsSolveAll, classSectionsCompare, classSectionsValidate, classSectionsValidateAcross,
     classSectionsFromCombos, classSectionsClassUnitSplit, classSectionsAssignTeachers, classSectionsNeisRows, classSectionsSignature,
-    classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow, classSectionsNeisExport, classSectionsClassMapFromRows, classSectionsRecommendTimes, classSectionsTeacherShortages };
+    classSectionsChangedStudents, classSectionsRun, classSectionsWorkerSource, classSectionsMinCostFlow, classSectionsNeisExport, classSectionsClassMapFromRows, classSectionsRecommendTimes, classSectionsTeacherShortages, classSectionsPairBlocks };
 }
 
 // ---- 교실 배정 ----

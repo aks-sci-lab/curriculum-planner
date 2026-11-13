@@ -278,7 +278,7 @@ function classSectionsEditWishes(group) {
 }
 
 function classSectionsEditMoveCourses(group, settings) {
-  const modes = typeof classSectionsCourseConf === "function" ? classSectionsCourseConf(settings, "courseModes", group.grade) : {};
+  const modes = typeof classSectionsCourseModes === "function" ? classSectionsCourseModes(settings, group) : {};
   return group.courses.filter((course) => modes[course.key] !== "class").map((course) => ({ key: course.key, name: course.name }));
 }
 

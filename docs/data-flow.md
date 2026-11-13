@@ -45,8 +45,8 @@
 | 4 집계 | 지금 차수 `students`·`courses`·`classOverrides`·폐강(`roundClosures[차수]`, 새 차수를 만들 때 직전 차수에서 복사 · `effectiveRoundClosures`는 이름만 남음)·내년 학급 수 | 열 | 입력값(`classOverrides`) 또는 권장값(인원 ÷ 분반 기준), 폐강이면 0 | `aggregateRecords` 하나(화면·엑셀·스냅샷·학급수 자동 조정이 함께 씀) |
 | 차수 확정 | `buildRoundSnapshot` = 같은 `aggregateRecords` | 행 = 현학년·학기·그룹·`subjectName` | 확정 시점 `classCount` | 확정하면 고정. 확정 뒤 자료와 달라지면 `roundSnapshotStale`이 과목을 알려 줌 |
 | **한 출처** | `courseOpeningRound()` = **맨 위에서 고른 차수**(`state.currentRound`, 아래 '차수별 흐름' 참고) | — | `courseOpeningSnapshot(차수)`: 확정 스냅샷 또는 지금 4단계 기준 스냅샷(`cachedByStateRevision`) | — |
-| 5 시수 | 편제표 학기 항목(학점) + 한 출처 스냅샷 행 | `정규화 이름` + 학기 | 같은 학기 행의 `classCount` 합. **두 학기 편성 과목**: 다른 학기에만 행이 있으면 이 학기 0(근거 '두 학기 편성 · n학기만 개설'), 학기 미정 행은 어느 학기에도 넣지 않고 경고(4단계에서 학기 정하기). **2·3학년 선택과목은 4단계 연동**(시수표 칸은 값 단추 → 누르면 4단계 그 과목 칸 `focusAggregateCourse`, 예전 직접 입력 `classOverrides`는 지우지 않고 무시 + 참고 안내 '4단계와 다른 직접 입력 n개를 4단계 값으로 바꿨습니다'), 4단계 집계에 없는 선택과목만 직접 입력('4단계에 없는 과목 · 직접 입력'), 학교 지정·1학년은 직접 입력 | `computeHoursStats`(`hoursStatsCached`) |
-| 6 분반 | 같은 차수 자료(학생 명단) + 확정 스냅샷 학급 수 | 그룹 키 `현학년:학기:택n`, 과목 키 `subjectName` | 스냅샷 `classCount`(없으면 지금 4단계), 6단계 직접 입력은 '4단계와 다름' 표시 | `classSectionsSource`(차수 = 맨 위 차수, 6단계 차수 선택 상자 없음) |
+| 5 시수 | 편제표 학기 항목(학점) + 한 출처 스냅샷 행 | `정규화 이름` + 학기 | 같은 학기 행의 `classCount` 합. **두 학기 편성 과목**: 다른 학기에만 행이 있으면 이 학기 0(근거 '두 학기 편성 · n학기만 개설'), 학기 미정 행은 어느 학기에도 넣지 않고 경고(4단계에서 학기 정하기). **2·3학년 선택과목은 4단계 연동**(시수표 칸은 값 단추 → 누르면 4단계 그 과목 칸 `focusAggregateCourse`, 예전 직접 입력 `classOverrides`는 지우지 않고 무시 + 참고 안내 '4단계와 다른 직접 입력 n개를 4단계 값으로 바꿨습니다'), 4단계 집계에 없는 선택과목만 직접 입력('4단계에 없는 과목 · 직접 입력'). **학교 지정 과목은 편제표 × 내년 학급 수 연동**(`hoursDesignatedShare`: 분할 편성·교차집중 홀수 학급 `crossExtra`; 값 단추 → 시수 설정 학급 수 칸, 교차집중 홀수는 1단계 편제표; 예전 직접 입력은 무시 + '편제표와 다른 직접 입력 n개를 편제표 값으로 바꿨습니다'). 단 **확대학급**(수준별 이동수업, 시수 설정 체크 `expandedClassesOn`을 켜고 그 과목의 담당 교과가 운영 교과 `expandedDepartments`일 때만 — 고른 적 없으면 모든 교과): 과목별 상세의 확대 값 `expandedClasses[과목 키]`이 편제표 값보다 크면 그 값(작아지면 쓰지 않고 경고, 끄면 저장만), **5단계 시수에만 반영 · 6단계 분반은 그대로**. 1학년 선택과목만 직접 입력 | `computeHoursStats`(`hoursStatsCached`) |
+| 6 분반 | 같은 차수 자료(학생 명단) + 확정 스냅샷 학급 수 | 그룹 키 `현학년:학기:택n`, 과목 키 `subjectName`. **이동수업 그룹 합치기**(`classSections.settings.mergeGroups["현학년:학기"]`, 기본 꺼짐)를 켜면 그 학기의 그룹들이 한 그룹(키 `현학년:학기:그룹A+그룹B`, 택 수·과목·학생 합침, 과목은 모두 이동)으로 — 4단계 그룹·개설 학급 수는 그대로 읽고 6단계 편성 단위만 바뀜(`classSectionsMergeGroups`, 설계 `docs/timetable-design.md` 9절) | 스냅샷 `classCount`(없으면 지금 4단계), 6단계 직접 입력은 '4단계와 다름' 표시 | `classSectionsSource`(차수 = 맨 위 차수, 6단계 차수 선택 상자 없음) |
 
 ## 찾은 불일치와 고친 곳
 
@@ -61,7 +61,7 @@
 | 5 | 확정 뒤 그룹 설정·편제표·분류 규칙이 바뀌면 4단계 화면(지금 계산)과 5·6단계(확정 스냅샷)가 조용히 어긋남 | 스냅샷은 확정 시점 값 | `roundSnapshotStale` → 4단계 안내·5단계 확인 항목('확정 해제 후 다시 확정') |
 | 6 | 학기 미정으로 남은 두 학기 과목을 5단계가 1학기에 넣음(4단계는 '학기 미정' 구역) | '학기 표시 없는 결과는 앞 학기에' 규칙 | 두 학기 편성 과목이면 넣지 않고 경고(4단계 '개설 학기 바꾸기'로 정하기). 한 학기에만 편성된 과목은 예전처럼 그 학기 |
 | 7 | 2학기에만 개설한 과목의 1학기 줄이 '결과에 없어 0(과목명 불일치?)' 경고 | 두 학기 편성 여부를 보지 않음 | '두 학기 편성 · n학기만 개설'(경고 없음, 0이라 시수표에서 숨김) |
-| 8 | 5단계 직접 입력 개설반이 4단계 값을 이김(사용자 화면: 주제 탐구 독서 10·독서 토론과 글쓰기 1·지구시스템과학 2에 주황 테두리) | 직접 입력(`settings.classOverrides`)이 자동 값보다 먼저 | 사용자 결정 '4단계와 연동돼서 자동 입력': 2·3학년 선택과목 개설반은 4단계 값만(읽기 전용 값 단추, 누르면 4단계 그 과목 칸으로). 예전 직접 입력은 지우지 않고 무시하고 확인 항목(참고)에 'm → k' 목록. 4단계 집계에 없는 과목만 직접 입력 |
+| 8 | 5단계 직접 입력 개설반이 4단계 값을 이김(사용자 화면: 주제 탐구 독서 10·독서 토론과 글쓰기 1·지구시스템과학 2에 주황 테두리) | 직접 입력(`settings.classOverrides`)이 자동 값보다 먼저 | 사용자 결정 '4단계와 연동돼서 자동 입력': 2·3학년 선택과목 개설반은 4단계 값만(읽기 전용 값 단추, 누르면 4단계 그 과목 칸으로). 예전 직접 입력은 지우지 않고 무시하고 확인 항목(참고)에 'm → k' 목록. 4단계 집계에 없는 과목만 직접 입력. 뒤이어 사용자 결정 '편제표 자료를 그대로': 학교 지정 과목도 편제표 × 학급 수만(값 단추 → 학급 수 칸, 예전 직접 입력은 같은 방식으로 무시·안내) |
 | 9 | 6단계를 한 번 연 뒤 새 차수를 확정해도 6단계는 앞에 보던 차수(예: 2차 305명)를 계속 보여 줌(5단계는 새 확정 차수) | 6단계 화면 차수(`CLASS_SECTIONS_VIEW.round`)를 한 번 정하면 유지 | 기본값(`courseOpeningRound`)이 더 뒤 차수로 바뀌면 따라감(확정 해제 중에는 고른 차수 유지) — 하네스 2-7에서 발견 |
 | 10 | 4단계는 2차(확정)인데 5단계가 '현 n학년 1차 미확정'(학기 섞인 예전 값)을 읽음(사용자 화면 v2026.11.23) | 5단계 시수 설정 '선택과목 근거' 고정값(`settings.sourceRounds`, 예전에 고른 1차)이 자동 규칙보다 먼저 | 차수별 흐름 분리로 '선택과목 근거' 칸·숨은 차수 규칙을 없앰(예전 값 무시). 5·6단계는 맨 위 차수만 |
 | 11 | 2·3차 재신청 결과만 올리면 재신청하지 않은 학생·학년이 그 차수에서 빠짐(예전 2-6: 3차 3명뿐), 앞 차수 결정은 이름으로 '이어받기' | 차수가 빈 상태로 시작 | 새 차수 = 직전 차수 복사, '재신청한 학생만 있는 파일' 올리기, 열 때 예전 자료 옮기기(빈 학년 복사 · 일부 학생만이면 합칠지 묻기) |
@@ -97,6 +97,30 @@
 - 저장: `state.courseSemesterPicks[학년도][현학년][차수][courseSemesterPickKey(과목명)] = "1" | "2"`(백업·IndexedDB 조각·전체 초기화 포함). 복원 `courseSemesterPicksRestore(saved.courseSemesterPicks, saved.twoSemesterPicks)`: 차수 없는 예전 키와, 같은 기능을 먼저 만든 다른 구현(07d151c)의 `state.twoSemesterPicks`는 1차 값으로 옮깁니다(그 구현의 `switchTwoSemesterCourse`·미리보기 표·`data-two-semester-once`는 이 구현으로 합치며 지움).
 - 바꾸기: 4단계 과목 메뉴 `개설 학기 바꾸기 · N학년 1학기로 / 2학기로`(확정 잠금 따름, 확인 창) → 이 차수 고른 값 저장 → `applyTwoSemesterPick`(열 그대로 이름·학점·학기 표시를 바꾸고, 나뉜 열이 있으면 한 열로) → `classifyApplicationRecords`로 그룹 다시 정함 → 4·5·6단계·확인서·위계 점검이 같은 자료를 읽어 따라감. 그 과목의 학급수 입력·개설 결정은 지웁니다(학기가 바뀌므로).
 - 하지 않는 것(사용자 결정): 고른 학기로 택n 개수를 검사하는 기능(잘못 고르면 4단계 학년별 총 학급수 불일치로 드러남), 레이블 하나 과목을 두 학기로 나눠 여는 경우(그때는 편제표를 고침).
+
+## 7단계 시간표(구현 중)
+설계 `docs/timetable-design.md`. 지금 있는 것: 순수 계산 `timetable.js`(입력 모형 `timetableModel` + 사전 점검 `timetablePrecheck` + 반군 엇갈림 견적), 풀이기 `timetable-solve.js`(두 학기 함께 계산 + 독립 검증기), 자료 모으기·화면 `timetable-view.js`(메뉴 '7. 시간표' = 내부 단계 6: 조건 설정 → 사전 점검·선택지 → 시간표 계산 → 결과 표·못 지킨 조건·선택지 → 직접 고치기(두 칸 맞바꾸기·블록 한 시간 옮기기·담당 교사 바꾸기·칸/교사 고정) → 엑셀·낱장 인쇄·6단계로 블록 시간 적기). **같은 값을 시간표에서 다시 입력받지 않는다.**
+
+| 시간표 입력 | 출처(읽기만) | 맞추는 기준 | 없을 때 |
+|---|---|---|---|
+| 학년·반 수 | 5단계 `stats.classCounts`(= 4단계 내년 학급 수) | 내년 학년 | 계산 막음(P0) |
+| 반 수업(학교 지정 과목) | 5단계 `computeHoursStats` 항목(그 학기, `designated`) — 반 수는 편제표 값 `autoClasses`(확대학급은 넣지 않고 알림) | 과목명·담당 교과 `item.department` | 신입생 편제표가 없으면 올해 1학년 편제표의 1학년 과목(가정) |
+| 반 일부만 듣는 지정 과목(교차집중·분할 편성) | 반 수 = 5단계 항목(`autoClasses`, 1단계 `crossSplit` 반영) · 묶음 = `item.split`(같은 편제표 행) · 어느 반인지 = `state.timetable.settings.splitClasses[학년|과목↔과목]` | 반 수가 편제표와 같을 때만 씀, 교차집중은 다른 학기에 맞바꿈 | 앞 반부터 차례로(가정) |
+| 공통 과목 반별 담당(통합과학 조각) | 5단계 `hoursCommonClassAssignment(학년, 학기)` | 과목 → 반 → 교과별 시간 | 교과군 세부 교과 교사 모두 후보(가정) |
+| 이동수업 블록·분반·분반 교사·특별실 | 6단계 `sectionResult`(그룹 = 현학년:학기:택n, 합친 그룹이면 `현학년:학기:그룹A+그룹B` — `classSectionsSource`의 그룹 목록 그대로), 블록 시간은 지금 6단계 입력 칸 `blockTimes` | 분반 id, 과목 키 | 계산 막음(P0), 입력이 바뀌었으면 알림 |
+| 학급 단위 과목(반 → 과목) | 6단계 `classSectionsClassUnitPlan` | 내년 반 번호 | 내년 반 배정표가 없으면 6단계 자동 배정(가정) |
+| 교사(담당 교과·담당 과목·불가 시간·출근 요일 `days`·교사별 상한 `maxHours`·담임 `homeroom` '2-3') | 6단계 `settings.teachers` — **교사 후보의 한 출처**(전공 일치: 담당 교과가 과목의 담당 교과이거나 담당 과목에 그 과목이 있음, 두 교과를 맡는 교사는 '담당 과목'에 적음). 시간표에는 교사를 넣는 화면이 없다(주어진 명단 안에서만 편성). 교양 과목만 다른 교과 교사가 맡을 수 있고 5단계 '담당 교과'로 정한다 | 교사 id, 과목명은 `normalizeResultCourseName` | 5단계 교과별 교사 수로 자리 교사(가정). 5단계 교사 수 ≠ 명단 인원이면 알림만. 수업이 있는데 교사 0명인 교과는 1명(`hoursTimetableTeacherCounts` — 6단계 명단 만들기와 7단계가 같은 값, 자리 이름 `t-교과-1`) |
+| 요일·교시 격자, 전교 고정 시간 | 6단계 `gridDays`·`gridPeriods`·`fixedSlots`('창체' 이름은 전교 동시 창체로) | — | 월~금 7교시 |
+| 창체 시수 | 5단계 `creativeHours`(자율 + 진로) | 학년 공통 | 0 |
+| 요일별 교시 수·점심·창체 나눔·규칙·장소·다른 교과 교사 허용 교과 | `state.timetable.settings`(시간표에만 있는 조건) | — | 기본값 + '가정' 목록 |
+
+- 검사: 5단계 그 학기 시수 합 = 7단계(반 수업 + 블록 분반) 시수 합 — `tests/timetable-input.test.cjs`, 하네스 백업은 `e2e/timetable-input-check.cjs`. 선택과목은 학년마다 5단계 시수와 6단계 분반 시수를 대조해 다르면 사전 점검 경고(P0)로 알린다(예: 4단계 2반인 학급 단위 과목을 6단계가 6개 반에 배정).
+- 남은 한계: 한 그룹에서 일부 과목만 학급 단위이면 학급 단위 반이 빠지는 블록을 구분하지 못한다(경고로 알림).
+- 계산 결과: `state.timetable[차수] = { at, seconds, tried, stopped, signature, validation, result }` — `result.layers[학기]`의 `lessons[수업@반] = { slots, teacherId, bareSlots? }`·`blocks[블록] = { slots, teachers: { 분반: 교사 }, timesOverridden? }`·`creative`, `violations`(못 지킨 설정 조건), `noTeacher`(담당 교사 없음), `metrics`. `signature` = 계산 때의 두 학기 입력 서명(`timetableSignature`) — 지금 입력과 다르면 화면에 '바뀌기 전 결과'. 교사·반은 id만 저장하고 이름은 화면에서 6단계 명단으로 읽는다(학생 자료 없음). 블록 요일·교시는 시간표가 정하는 것이 기본이고(6단계 블록 시간은 `settings.keepBlockTimes`일 때만 읽음), 결과의 '6단계 블록 시간에 적어 넣기'를 누르면 7단계 → 6단계로 블록 시간(`entry.blockTimes`·`sectionResult.blocks[].times`·서명)을 되돌려 쓴다 — 6단계 출력물의 블록 시간 출처.
+- 6단계 '시간표 미리 점검'(`sectionResult.timetableCheck`)의 규칙은 `timetable.js` `timetablePrecheckDepartments` 한 곳(6단계 화면은 부르기만).
+- 시간표에만 있는 고정: `state.timetable.settings.pins[학기][수업 id] = ['월3', …]`(칸 고정)·`teacherPins[학기][수업 id] = 교사 id`(담당 교사 고정) → 입력 `pins.lessons`·`pins.teachers`. 수업 id = 결과 `lessons`의 키(`과목 id@반`). 입력 서명에는 넣지 않고 결과가 고정을 지키는지 `timetablePinsHeld`로 따로 본다.
+- 7단계 → 6단계로 가는 것은 두 가지뿐: ① '6단계 블록 시간에 적어 넣기'(사용자가 누를 때만, 블록 요일·교시) ② 6단계 학생 이동수업 시간표의 빈칸 채우기 — 6단계 `classSectionsTimetableSemesterModels`가 `typeof timetableStudentLessons === "function"` 가드로 `timetableStudentLessons(차수, 내년 학년, 학기)`를 읽기만 한다(7단계 결과가 지금 조건의 것이고 그 학기 블록 자리가 6단계 블록 시간과 같을 때만 값이 있고, 아니면 6단계는 예전 그대로).
+- 반군 엇갈림 견적(`timetableStaggerFor`·`timetableStaggerPrecheck`)은 6단계 `sectionResult`(분반·학생 배정)와 내년 반(`classSectionsHomeroomStudents`)을 **읽기만** 한다 — 6단계 분반·배정은 바꾸지 않는다.
 
 ## 남긴 것
 
