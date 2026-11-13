@@ -2210,6 +2210,13 @@ button.prereq-badge:hover, button.prereq-badge:focus-visible { background: #f9d6
 .school-start-guide-mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 1px solid #c7d7f5; font-weight: 700; }
 .cloud-server-notice { margin: 8px 0; padding: 6px 10px; border: 1px solid #f0d9a8; border-radius: 8px; background: #fffaf0; font-size: 13px; }
 .cloud-server-notice summary { cursor: pointer; font-weight: 600; color: #7a4b00; }
+.school-settings-dialog { max-width: 860px; }
+.school-settings-group h3 { margin: 14px 0 6px; font-size: 14px; }
+.school-settings-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.school-settings-table th, .school-settings-table td { padding: 5px 8px; border-bottom: 1px solid #e4e8f0; text-align: left; vertical-align: middle; }
+.school-settings-table thead th { background: #f4f6fa; font-weight: 600; }
+.school-settings-table tbody th { font-weight: 500; }
+.school-settings-table input { width: 72px; }
 .curriculum-plan-error-button { border-color: #e2a59a !important; background: #fdf0ed !important; color: #a44939 !important; font-weight: 600; }
 .curriculum-guide-dialog { max-width: 720px; }
 .curriculum-guide-dialog .curriculum-guide-ways { margin: 8px 0; padding-left: 20px; display: grid; gap: 10px; }

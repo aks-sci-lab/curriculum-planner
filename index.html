@@ -118,6 +118,7 @@
           <details class="workspace-data-menu" id="workspaceDataMenu">
             <summary class="button button-quiet">자료 관리</summary>
             <div class="workspace-data-menu-items">
+            <button class="button button-quiet" id="openSchoolSettings" type="button" title="학교마다 다른 기준값(개설 기준·정원·교사 증원 기준·점심 등)을 한눈에 보고 고치거나, 기준값만 파일로 내보내기/가져오기 합니다.">학교 설정 (기준값)</button>
             <button class="button button-quiet" id="downloadWorkspaceBackup" type="button">파일로 백업하기</button>
             <label class="file-button" for="restoreWorkspaceBackup">백업 파일 불러오기<input class="visually-hidden-file" id="restoreWorkspaceBackup" type="file" accept=".json,.gz,application/json,application/gzip"></label>
             <button class="button button-quiet hidden" id="connectWorkspaceFile" type="button" title="작업 자료를 내 PC의 파일 하나에 자동으로 저장합니다. Chrome·Edge에서 쓸 수 있습니다.">자동 저장 파일 연결</button>
@@ -1088,6 +1089,7 @@ function courseClient_() {
   <script src="class-sections-teachers.js?v=20261111-release4" defer></script>
   <script src="class-sections-print.js?v=20261111-release4" defer></script>
   <script src="timetable-view.js?v=20261111-release4" defer></script>
+  <script src="school-settings.js?v=20261111-release4" defer></script>
   <script src="curriculum-subject-actions.js?v=20261111-release4" defer></script>
   <script src="workspace-file.js?v=20261111-release4" defer></script>
   <script src="workspace-header.js?v=20261111-release4" defer></script>

@@ -733,6 +733,8 @@
         workspaceStoreState.rev = "";
         lastSavedWorkspace = readWorkspaceRecord();
         updateWorkspaceSaveStatus("이 브라우저에 저장 완료");
+        // 새로 시작하는 학교의 기본값(중립값: 점심은 모든 학년 4교시 뒤). 저장된 자료가 있는 사용자는 이 길로 오지 않는다(school-settings.js).
+        if (typeof schoolSettingsFreshWorkspace === "function") schoolSettingsFreshWorkspace();
         return;
       }
       applyStoredWorkspace(loaded, { hold: true });
