@@ -130,6 +130,16 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await openSection("teachers");
   check(/주어진 교사 명단 안에서만/.test(clean(await panel.locator('[data-tt-section="teachers"]').innerText())) && /6단계 명단 \d+명/.test(clean(await panel.locator("#timetableTeacherCount").innerText())), "교사 영역: 주어진 명단·전공 일치 안내 + 명단 인원");
   check((await panel.locator('[data-tt-field="rules.departmentMax.진로"]').inputValue()) === "10", "진로 교사 주당 상한 기본 10시간");
+  // 나눠 맡기: 기본 = 3명까지(2명 먼저), '2명까지'·'나누지 않음'으로 바꾸면 저장되고 다시 그려도 그대로
+  await openSection("rules");
+  const splitField = () => panel.locator('[data-tt-field="rules.splitLesson"]');
+  const splitLevels = await splitField().locator("option").evaluateAll((els) => els.map((el) => `${el.value}:${el.textContent.trim()}`));
+  check((await splitField().inputValue()) === "allow" && splitLevels.length === 3 && /^allow:같은 전공 교사 3명까지/.test(splitLevels[0]) && /^two:2명까지만/.test(splitLevels[1]) && /^off:나누지 않음/.test(splitLevels[2]), "나눠 맡기 규칙: 기본 3명까지 · 2명까지 · 나누지 않음", splitLevels);
+  await splitField().selectOption("two"); await sleep(400);
+  check((await splitField().inputValue()) === "two", "나눠 맡기 '2명까지'로 바꾸면 그대로 남음");
+  await splitField().selectOption("allow"); await sleep(400);
+  check((await splitField().inputValue()) === "allow", "나눠 맡기 기본(3명까지)으로 되돌림");
+  await openSection("teachers");
 
   console.log("▶ 담임(6단계 교사 명단의 '담임' 칸) · 다른 교과 교사 허용 교과");
   check(/담임 명단 없음/.test(clean(await panel.locator("#timetableHomeroomCount").innerText())) && (await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts()).some((text) => /^담임 명단 없음/.test(text)), "처음: 담임 명단 없음(가정)");

@@ -303,6 +303,46 @@ test("한 교사가 한 반의 과목을 통째로 맡을 시간이 없으면 �
   assert.ok(plain(ctx.timetableValidate({ 1: make(true) }, wrong)).errors.some((error) => /후보\(전공 일치\)가 아닙니다/.test(error.text)));
 });
 
+test("나눠 맡기는 2명으로 안 되면 3명까지: 되도록 적은 인원으로, 조각은 1시간 이상 — '2명까지'·'나누지 않음'이면 그 수업 전체가 담당 교사 없음", () => {
+  const ctx = context();
+  // 3학년 인공지능 기초 4시간 × 4반 = 16시간, 정보 교사 3명의 필수 상한 6·5·5시간(합 16). 세 반은 한 명씩, 넷째 반은 남은 2·1·1시간을 모아야 한다.
+  const make = (rules, semester) => {
+    const input = school({ pe3: 3, info3: 3, ...(semester ? { semester } : {}) });
+    input.lessons.find((lesson) => lesson.id === "3인공").classes = ["1", "2", "3", "4"];
+    [6, 5, 5].forEach((hours, index) => { input.teachers.find((teacher) => teacher.id === `t-정보3-${index + 1}`).maxHours = hours; });
+    if (rules) input.rules = rules;
+    return input;
+  };
+  const solve = (input) => { const inputs = { 1: input }; const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 40000, rounds: 1 })); return { result, check: plain(ctx.timetableValidate(inputs, result)) }; };
+  const short = (result) => result.noTeacher.filter((item) => item.subject === "인공지능 기초").reduce((sum, item) => sum + item.hours, 0);
+  const three = solve(make());
+  assert.deepEqual([three.check.ok, three.check.errors, short(three.result), three.result.metrics.splitLessons], [true, [], 0, 1]);
+  const [sharedId, shared] = Object.entries(three.result.layers["1"].lessons).find(([, item]) => item.others);
+  // 세 교사가 2 + 1 + 1시간(칸이 겹치지 않고 모두 이 수업의 칸)
+  const otherSlots = shared.others.flatMap((part) => part.slots);
+  assert.deepEqual([sharedId.startsWith("3인공@"), shared.slots.length, shared.others.length, new Set(otherSlots).size, shared.others.map((part) => part.slots.length).sort()], [true, 4, 2, 2, [1, 1]]);
+  assert.equal(new Set([shared.teacherId, ...shared.others.map((part) => part.teacherId)]).size, 3);
+  assert.match(three.result.notes.find((note) => /나눠 맡겼습니다/.test(note)), /^1학기 3-\d반 인공지능 기초: 한 교사가 모두 맡을 시간이 없어 정보3 \d 2시간 \+ 정보3 \d 1시간 \+ 정보3 \d 1시간으로 나눠 맡겼습니다\.$/);
+  // 교사마다 상한까지(6·5·5) — 검증기가 세는 교사 칸과 같다
+  const hoursOf = (teacherId) => Object.values(three.result.layers["1"].lessons).reduce((sum, item) => sum + (item.teacherId === teacherId ? item.slots.length - (item.others || []).reduce((n, part) => n + part.slots.length, 0) : 0) + (item.others || []).filter((part) => part.teacherId === teacherId).reduce((n, part) => n + part.slots.length, 0), 0);
+  assert.deepEqual(["t-정보3-1", "t-정보3-2", "t-정보3-3"].map(hoursOf), [6, 5, 5]);
+  // '2명까지'·'나누지 않음': 둘로는 3시간뿐이라 나누지 않고 넷째 반 4시간 모두 담당 교사 없음
+  for (const mode of ["two", "off"]) {
+    const limited = solve(make({ splitLesson: mode }));
+    assert.deepEqual([mode, limited.check.ok, short(limited.result), limited.result.metrics.splitLessons], [mode, true, 4, 0]);
+  }
+  // 두 학기 뼈대(같은 칸): 이어지는 수업은 두 학기 같은 나눔(같은 교사·같은 칸)
+  const inputs = { 1: make(null, "1"), 2: make(null, "2") };
+  const framed = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 40000, rounds: 1 }));
+  assert.equal(plain(ctx.timetableValidate(inputs, framed)).ok, true);
+  const split = (semester) => Object.entries(framed.layers[semester].lessons).filter(([, item]) => item.others).map(([id, item]) => [id, item.teacherId, item.frame === true, item.others.map((part) => [part.teacherId, part.slots.slice().sort()])]);
+  assert.equal(split("1").length, 1);
+  assert.equal(split("1")[0][3].length, 2);
+  assert.equal(split("1")[0][2], true);
+  assert.deepEqual(split("2"), split("1"));
+  assert.equal(framed.metrics.splitLessons, 2); // 학기마다 셈
+});
+
 test("창체 교시 범위·하루 최소 교시: 시간을 정하지 않은 창체는 n교시 이후에만(검증기도 확인), 일찍 끝나는 날은 '최대한' 위반으로", () => {
   const ctx = context();
   // 학년별 창체 2시간(시간 미정) + 전교 동시 없음, 4교시 이후에만

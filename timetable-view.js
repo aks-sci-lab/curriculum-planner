@@ -860,7 +860,7 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "semesterFrame", label: "2학기는 1학기와 같은 뼈대(블록 자리 · 교사–반 짝 · 요일·교시)", level: true, later: true,
     levels: [["hard", "같은 칸(블록·이어지는 수업 모두)"], ["order", "블록은 같은 시간대만(순서는 학기마다 달라도 됨)"], ["soft", "최대한(학기마다 따로)"], ["off", "끔"]] },
   { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true },
-  { key: "splitLesson", label: "한 교사가 한 반의 과목을 모두 맡을 시간이 없을 때", level: true, levels: [["allow", "같은 전공 교사 둘이 나눠서 모두 맡을 수 있으면 나눠 맡음"], ["off", "나누지 않음(그 수업은 담당 교사 없음)"]], later: true }
+  { key: "splitLesson", label: "한 교사가 한 반의 과목을 모두 맡을 시간이 없을 때", level: true, levels: [["allow", "같은 전공 교사 3명까지 나눠서 모두 맡을 수 있으면 나눠 맡음(2명 먼저)"], ["two", "2명까지만 나눠 맡음"], ["off", "나누지 않음(그 수업은 담당 교사 없음)"]], later: true }
 ];
 var TIMETABLE_ISSUE_LABELS = { block: "계산 불가", fail: "조건 위반", warn: "확인", info: "참고" };
 

@@ -212,24 +212,35 @@ function timetableProblem(inputs) {
     act.teacher = best;
     const give = (piece, ti) => { for (const layer of piece.layers) { load[layer][ti] += piece.hours; gradeLoad[layer].set(`${ti}|${piece.gi}`, (gradeLoad[layer].get(`${ti}|${piece.gi}`) || 0) + piece.hours); pairHours.set(`${layer}|${piece.classes[0]}|${ti}`, (pairHours.get(`${layer}|${piece.classes[0]}|${ti}`) || 0) + piece.hours); } };
     if (best >= 0) { give(act, best); continue; }
-    // 한 교사가 통째로 맡을 수 없다(남은 시간이 모자람): 후보 둘의 남은 시간을 합치면 그 수업을 모두 맡을 수 있을 때만 둘이 나눠 맡는다
-    // — 그 반 그 과목을 두 교사가 시간을 나눠 가르침. 둘로도 다 못 맡으면 나누지 않고 그 수업 전체를 담당 교사 없음으로 둔다
-    // (교사를 한계까지 채우고 일부만 비우면 위반이 늘어 얻는 것이 적다). 정해진 교사·고정한 칸이 있는 수업, 1시간짜리, rules.splitLesson = "off"면 나누지 않는다.
+    // 한 교사가 통째로 맡을 수 없다(남은 시간이 모자람): 같은 전공 후보 둘의 남은 시간을 합쳐 그 수업을 모두 맡을 수 있으면 둘이,
+    // 둘로 안 되면 셋이 나눠 맡는다(되도록 적은 인원으로, 조각은 1시간 이상, 시수가 고르게) — 그 반 그 과목을 교사들이 시간을 나눠 가르침.
+    // 셋으로도 다 못 맡으면 나누지 않고 그 수업 전체를 담당 교사 없음으로 둔다(교사를 한계까지 채우고 일부만 비우면 위반이 늘어 얻는 것이 적다).
+    // 정해진 교사·고정한 칸이 있는 수업, 1시간짜리는 나누지 않는다. rules.splitLesson: off = 나누지 않음, two = 2명까지, 그 밖(allow, 기본) = 3명까지.
     let left = act.hours;
-    if (rules.splitLesson !== "off" && act.fixed < 0 && !act.pins && act.hours > 1) {
+    const splitMax = rules.splitLesson === "off" ? 1 : rules.splitLesson === "two" ? 2 : 3;
+    if (splitMax > 1 && act.fixed < 0 && !act.pins && act.hours > 1) {
+      const total = act.hours;
       const room = (ti) => Math.floor(Math.min(...act.layers.map((layer) => Math.min(capacity[layer][ti] - load[layer][ti], gradeFree[layer][act.gi] - (gradeLoad[layer].get(`${ti}|${act.gi}`) || 0)))));
-      const ranked = options.map((ti) => [ti, room(ti)]).filter(([, hours]) => hours >= 1).sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 2);
-      if (ranked.length === 2 && ranked[0][1] + ranked[1][1] >= act.hours) {
-        const whole = { ...act };
-        // 두 교사의 시수가 비슷해지게 나눈다(한 교사를 한계까지 채우지 않게): 첫 교사 몫 = (수업 시간 + 둘째 교사 시수 − 첫 교사 시수) ÷ 2를 둘이 맡을 수 있는 범위 안으로
+      const ranked = options.map((ti) => [ti, room(ti)]).filter(([, hours]) => hours >= 1).sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+      for (let count = 2; count <= Math.min(splitMax, ranked.length, total) && left === total; count += 1) {
+        const chosen = ranked.slice(0, count);
+        if (chosen.reduce((sum, [, hours]) => sum + hours, 0) < total) continue;
+        // 시수가 비슷해지게 나눈다(한 교사를 한계까지 채우지 않게): 먼저 한 시간씩, 남은 시간은 (지금 시수 + 받은 시간)이 가장 적은 교사에게 한 시간씩(남은 시간 한도 안)
         const loadOf = (ti) => Math.max(...act.layers.map((layer) => load[layer][ti]));
-        const first = Math.max(1, act.hours - ranked[1][1], Math.min(ranked[0][1], act.hours - 1, Math.round((act.hours + loadOf(ranked[1][0]) - loadOf(ranked[0][0])) / 2)));
-        [[ranked[0][0], first], [ranked[1][0], act.hours - first]].forEach(([ti, hours], order) => {
-          const piece = order === 0 ? act : { ...whole, pins: null };
-          piece.teacher = ti; piece.hours = hours; piece.split = true;
+        const base = chosen.map(([ti]) => loadOf(ti));
+        const share = chosen.map(() => 1);
+        for (let rest = total - count; rest > 0; rest -= 1) {
+          let pick = -1;
+          chosen.forEach(([, cap], index) => { if (share[index] < cap && (pick < 0 || base[index] + share[index] < base[pick] + share[pick])) pick = index; });
+          share[pick] += 1;
+        }
+        const whole = { ...act };
+        chosen.forEach(([ti], index) => {
+          const piece = index === 0 ? act : { ...whole, pins: null };
+          piece.teacher = ti; piece.hours = share[index]; piece.split = true;
           give(piece, ti);
-          if (order > 0) acts.push(piece);
-          left -= hours;
+          if (index > 0) acts.push(piece);
+          left -= share[index];
         });
       }
     }
@@ -1220,7 +1231,7 @@ function timetableSolveFinish(run) {
   const layers = {};
   const noTeacher = P.noTeacher.map((item) => ({ semester: P.keys[item.layer], kind: item.kind, grade: item.grade, classId: item.classId, subject: item.subject, hours: item.hours, reason: item.reason }));
   let blockTimesChanged = 0;
-  let splitLessons = 0; // 두 교사가 나눠 맡은 반 수업 수(학기마다 셈)
+  let splitLessons = 0; // 교사 둘·셋이 나눠 맡은 반 수업 수(학기마다 셈)
   const notes = P.notes.slice();
   P.keys.forEach((key, layer) => {
     const lessons = {};
@@ -1265,7 +1276,7 @@ function timetableSolveFinish(run) {
         if (bare.length) for (const section of act.sections[at]) if (section.teacher >= 0) noTeacher.push({ semester: key, kind: "section", grade: P.grades[act.gi], classId: act.labels[at], subject: section.subject, hours: bare.length, reason: "clash" });
       } else creative.push({ scope: act.scope, grade: act.gi >= 0 ? P.grades[act.gi] : "", slots, ...(early ? { anyPeriod: true } : {}) });
     }
-    // 나눠 맡긴 수업 알림(그 반 그 과목을 두 교사가 시간을 나눠 가르침)
+    // 나눠 맡긴 수업 알림(그 반 그 과목을 교사 둘·셋이 시간을 나눠 가르침)
     for (const act of P.acts) {
       const at = act.layers.indexOf(layer);
       if (at < 0 || act.kind !== 0 || !act.split) continue;
