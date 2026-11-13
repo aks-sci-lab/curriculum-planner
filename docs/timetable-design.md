@@ -397,6 +397,7 @@ state.timetable = {
 | T5d **(완료)** | 담당 교사 바꾸기·교사 고정: 반 수업 칸을 고르면 후보(전공 일치 교사)마다 그 수업의 모든 시간에 설 수 있는지 미리 보고(안 되면 이유) 고른 교사로 바꿈(그 반·그 과목 전체, '담당 교사 없음'으로 비우기 포함, 두 학기 묶음은 함께, 필수 시수 상한·정해진 교사는 거절) → '이 교사로 고정'(`settings.teacherPins` → 입력 `pins.teachers` → 다시 계산해도 그 교사). 블록 분반 교사는 6단계가 정하므로 여기서 바꾸지 않음 | `tests/timetable-result.test.cjs`·`tests/timetable-solve.test.cjs`·`tests/timetable-input.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
 | T5e **(완료)** | 직접 고치기 위반 미리보기: 옮길 수 있는 칸마다 '반드시' 위반이 몇 건 늘거나 주는지(늘지 않음 = 초록, 늘어남 = 노랑 + '+n' + 내역), 고친 뒤 '반드시'·'최대한' 조건을 모두 다시 셈(검증기가 '최대한' 조건도 풀이기와 같은 수로 셈), 교사 후보에도 표시 | `tests/timetable-result.test.cjs`·`tests/timetable-solve.test.cjs`(검증기 = 풀이기 위반 목록), 클릭 `e2e/timetable-solve-ui.cjs` |
 | T5f **(완료)** | 결과 요약의 구조상 하한: 사전 점검이 계산한 '피할 수 없는 수'(P2·P3·P7 담당 교사 없음 시간, P11 공강, P6 학년별 모자란 반 수업 시간)를 실제 수와 나란히(`timetableLowerBounds` → `timetableBoundLines` → `#timetableBounds`) + '더 오래 계산'(`#timetableRunMore`: 쓰지 않은 씨앗으로 한 번 더, 더 나을 때만 바꿈, 기록 `#timetableMore`) | `tests/timetable-precheck.test.cjs`·`tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
+| T5g **(완료)** | 교사 불가 시간의 실제 시각: 6단계 교사 명단의 불가 시간에 학년 구분 '월4(3학년)'·'월4(1·2학년)'(화면: 불가 시간 표 아래 '학년을 구분할 시간' 칸·표 칸의 학년 표시, 엑셀 양식·안내 시트·올리기) → 7단계 모형은 그 학년 교시의 실제 시각 칸만 막음(`unavailable: { day, period, grades }`), 구분 없는 '월4'는 지금처럼 두 시각 모두 | `tests/class-sections-view.test.cjs`·`tests/class-sections-teachers.test.cjs`·`tests/timetable-precheck.test.cjs`, 클릭 `e2e/class-sections-teachers-ui.cjs` |
 | T6a **(완료)** | 시간표가 정한 블록 자리를 6단계 블록 시간에 적어 넣기(`timetableBlockTimeChanges`·`timetableWriteBlockTimes`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
 | T6b **(완료)** | 엑셀 내려받기: 학기마다 학급별·교사별 전체 시간표 + 못 지킨 조건 + 담당 교사 없음(`timetableResultSheets`) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs`(파일 이름·시트) |
 | T6c **(완료)** | 낱장 인쇄: 지금 보는 학기의 반별·교사별 시간표를 A4 한 장에 2개씩(이 반/교사만, 전체) | `tests/timetable-result.test.cjs`, 클릭 `e2e/timetable-solve-ui.cjs` |
@@ -443,7 +444,7 @@ state.timetable = {
 | 교사 필수 한계 | 그 교사가 설 수 있는 칸 수(불가 시간·출근 요일·점심·연강 3·하루 6) | 시수 상한을 뺐으므로 물리적 한계만 남김 |
 | 참고 상한 | 22시간(넘으면 '확인' 알림) | 시제품 값. 얼마나 넘는지는 계속 보여 줘야 선택을 할 수 있음 |
 | 교과별 필수 상한 | `{ 진로: 10 }`(교과 id 기준, 교사 명단에 교사별 상한이 있으면 그 값이 먼저) | 사용자 답을 일반형으로. 다른 교과도 같은 방식으로 넣을 수 있음 |
-| 불가 시간 '월4' 해석 | 점심이 다른 학년 때문에 실제 시각이 둘(A·B)이면 **둘 다 막음** | 6단계 명단이 교시로 받기 때문. 안전한 쪽. 실제 시각 칸 입력은 교사 시간표 걸음에서(모형은 `{ day, pos }`를 이미 받음) |
+| 불가 시간 '월4' 해석 | 점심이 다른 학년 때문에 실제 시각이 둘(A·B)이면 **둘 다 막음**. 학년을 적은 '월4(3학년)'·'월4(1·2학년)'은 **그 학년 4교시의 실제 시각만** 막음(T5g). 6단계는 '그 학년 교시와 실제 시각이 같은 학년'의 블록에만 걸고(점심 = 7단계 설정, 모르면 모든 학년), 전 학년 함께 계산할 때는 합쳐서 봄(안전한 쪽). 5교시처럼 모든 학년이 같은 시각인 교시는 학년을 적어도 구분 없음과 같음 | 6단계 명단이 교시로 받기 때문. 표에서 고른 칸은 지금처럼 두 시각 모두 |
 | 하루 한 번 규칙에서 교사가 아직 정해지지 않은 반 수업 | 수업마다 다른 교사로 보고 점검(낙관) | 사전 점검은 필요 조건만 봄. 계산에서는 실제 배정 교사로 지킴 |
 | 다른 교과 교사가 맡을 수 있는 교과 | `["교양"]`(`settings.openDepartments`), 시간표 조건 '교사' 영역에서 바꿈 | 사용자 답 |
 | 담임 입력 자리 | 6단계 교사 명단의 '담임' 칸·엑셀 열(내년 학년-반) | 교사 정보를 두 곳에 두지 않기 위해 |

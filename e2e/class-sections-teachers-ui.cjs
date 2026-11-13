@@ -67,6 +67,30 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   const names = await page.locator('#classSectionsTeacherDialog input[data-cs-t$="|name"]').evaluateAll((els) => els.map((e) => e.value));
   check(edited.changed.every(([, name]) => names.includes(name)), "창의 이름 칸이 새 이름", names.slice(0, 5));
   await shot("02-teachers-renamed.png");
+  // 불가 시간의 학년 구분: '월4(3학년)'(3학년 4교시 시각에만 불가) — 표 아래 칸에 적으면 그 칸에 학년 표시, 양식에도 같은 글자
+  const dialog = page.locator("#classSectionsTeacherDialog");
+  await dialog.locator('[data-cs-t-grid="0"]').click(); await sleep(300);
+  const partial = dialog.locator('[data-cs-t-partial="0"]');
+  await partial.fill("월4(3학년), 화4 (1, 2학년)"); await partial.press("Tab"); await sleep(400);
+  const parts = await dialog.locator("[data-cs-t-part]").evaluateAll((els) => els.map((el) => `${el.dataset.csTPart}:${el.textContent.trim()}`));
+  check(parts.join(",") === "월4:3학년,화4:1·2학년" && (await dialog.locator('[data-cs-t-partial="0"]').inputValue()) === "월4(3학년),화4(1·2학년)", "학년을 구분한 불가 시간이 표의 그 칸에 표시되고 같은 글자로 정리됨", parts);
+  check(!(await dialog.locator('[data-cs-t-slot="0|월4"]').isChecked()) && /불가 2시간/.test(await dialog.locator('[data-cs-t-grid="0"]').innerText()), "표의 체크(두 시각 모두 불가)와는 따로 셈");
+  await shot("03-teacher-partial.png");
+  await dialog.locator(".cs-grid-row").screenshot({ path: path.join(OUT, "03-teacher-partial-grid.png") });
+  const dl3 = page.waitForEvent("download");
+  await page.getByRole("button", { name: "교사 명단 양식 내려받기" }).click();
+  const partialFile = path.join(OUT, "downloads", "teachers-partial.xlsx");
+  await (await dl3).saveAs(partialFile);
+  const partialSheets = await page.evaluate(async (bytes) => (await parseWorkbook(new Uint8Array(bytes).buffer)).map((sheet) => sheet.rows), [...fs.readFileSync(partialFile)]);
+  check(String(partialSheets[0][1][3]) === "화4(1·2학년),월4(3학년)" && partialSheets[1].some((row) => /불가 시간의 학년 구분: .*'월4\(3학년\)'/.test(String(row[0]))), "양식의 불가 시간 칸·안내 시트에 학년 구분", partialSheets[0][1][3]);
+  // 표에서 그 칸을 고르면(두 시각 모두 불가) 학년 구분은 없어지고, 못 읽는 글자는 안내
+  await dialog.locator('[data-cs-t-slot="0|월4"]').check(); await sleep(400);
+  check((await dialog.locator('[data-cs-t-partial="0"]').inputValue()) === "화4(1·2학년)", "표에서 고른 칸은 학년 구분에서 빠짐");
+  await dialog.locator('[data-cs-t-partial="0"]').fill("화4(오후)"); await dialog.locator('[data-cs-t-partial="0"]').press("Tab"); await sleep(400);
+  const partialMessage = await page.locator("#classSectionsTeacherMessage").innerText().catch(() => "");
+  check(/불가 시간 '화4\(\?\)'를 읽지 못했습니다\. '월4\(3학년\)'처럼/.test(partialMessage), "못 읽는 학년 구분은 안내", partialMessage);
+  await dialog.locator('[data-cs-t-slot="0|월4"]').uncheck(); await sleep(400);
+  check(/^불가 시간$/.test((await dialog.locator('[data-cs-t-grid="0"]').innerText()).trim()), "모두 지우면 불가 시간 없음");
   await page.locator("#classSectionsTeacherClose").click(); await sleep(400);
   // 배정은 id 그대로 → 결과 화면 담당 교사·블록표가 새 이름
   const renamedIds = new Set(edited.changed.map(([, , id]) => id));

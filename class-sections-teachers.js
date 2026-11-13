@@ -29,29 +29,43 @@ function classSectionsTeacherNameWarningsFor(teachers, labelOf = (id) => id) {
   return [`실제 이름이 없는 교사 ${placeholders.length}명(${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}) — 교사 명단에서 이름을 넣으세요(6단계 '교사·시간 설정' → 교사 명단 양식).`];
 }
 
-// 불가 시간 글자: 하루 전체(1~periods교시)는 요일만('목'), 나머지는 '월7,화7'.
+// 불가 시간 글자: 하루 전체(1~periods교시)는 요일만('목'), 나머지는 '월7,화7'. 학년을 적은 칸은 뒤에 '월4(3학년)'.
 function classSectionsTeacherSlotsText(slots, days, periods) {
-  const set = new Set(slots || []);
-  const parts = [];
-  for (const day of days) {
-    const all = Array.from({ length: periods }, (_, p) => `${day}${p + 1}`);
-    if (all.every((slot) => set.has(slot))) { parts.push(day); all.forEach((slot) => set.delete(slot)); }
+  const groups = new Map(); // 학년 구분 글자('' = 구분 없음) → 칸 집합
+  for (const slot of slots || []) {
+    const match = String(slot).match(/^([^(]+)(\(.+\))?$/);
+    if (!match) continue;
+    if (!groups.has(match[2] || "")) groups.set(match[2] || "", new Set());
+    groups.get(match[2] || "").add(match[1]);
   }
   const order = (slot) => days.indexOf(slot[0]) * 100 + Number(slot.slice(1));
-  return [...parts, ...[...set].sort((a, b) => order(a) - order(b))].join(",");
+  const out = [];
+  for (const suffix of [...groups.keys()].sort()) {
+    const set = groups.get(suffix);
+    const parts = [];
+    for (const day of days) {
+      const all = Array.from({ length: periods }, (_, p) => `${day}${p + 1}`);
+      if (all.every((slot) => set.has(slot))) { parts.push(day); all.forEach((slot) => set.delete(slot)); }
+    }
+    out.push(...[...parts, ...[...set].sort((x, y) => order(x) - order(y))].map((slot) => `${slot}${suffix}`));
+  }
+  return out.join(",");
 }
 
-// '월7,화6~7, 목' → ['월7','화6','화7','목1'…'목N']. 모르는 글자는 problems.
+// '월7,화6~7, 목' → ['월7','화6','화7','목1'…'목N']. 학년을 적으면('월4(3학년)', '월4(1,2학년)') 그 학년 교시의 시각만 → '월4(3학년)'·'월4(1·2학년)'. 모르는 글자는 problems.
 function classSectionsTeacherParseSlots(text, days, periods) {
   const slots = new Set();
   const problems = [];
-  for (const raw of String(text ?? "").split(/[,\s/]+/).map((item) => item.trim()).filter(Boolean)) {
-    const match = raw.match(/^([월화수목금토일])(?:요일)?(?:\s*(\d{1,2})(?:교시)?(?:\s*[~-]\s*(\d{1,2})(?:교시)?)?)?$/);
+  // 괄호 안(학년)의 쉼표·띄어쓰기에 잘리지 않게 먼저 '(12)'처럼 줄인다. 학년이 아닌 괄호는 '(?)'로 남겨 못 읽은 것으로 알린다.
+  const packed = String(text ?? "").replace(/\s*[(（]([^)）]*)[)）]/g, (_, inner) => { const grades = [...new Set(inner.replace(/[^123]/g, "").split(""))].sort().join(""); return /학년/.test(inner) && grades ? `(${grades})` : "(?)"; });
+  for (const raw of packed.split(/[,\s/]+/).map((item) => item.trim()).filter(Boolean)) {
+    const match = raw.match(/^([월화수목금토일])(?:요일)?(?:\s*(\d{1,2})(?:교시)?(?:\s*[~-]\s*(\d{1,2})(?:교시)?)?)?(?:\(([123]{1,3})\))?$/);
     if (!match || !days.includes(match[1])) { problems.push(raw); continue; }
     const from = match[2] ? Number(match[2]) : 1;
     const to = match[3] ? Number(match[3]) : match[2] ? from : periods;
     if (!(from >= 1 && to <= periods && from <= to)) { problems.push(raw); continue; }
-    for (let p = from; p <= to; p += 1) slots.add(`${match[1]}${p}`);
+    const suffix = match[4] && match[4].length < 3 ? `(${match[4].split("").join("·")}학년)` : "";
+    for (let p = from; p <= to; p += 1) slots.add(`${match[1]}${p}${suffix}`);
   }
   return { slots: [...slots], problems };
 }
@@ -105,7 +119,7 @@ function classSectionsTeacherReadRows(rows, existing, spec = {}) {
     const department = at.department >= 0 ? deptOf(row[at.department]) : "";
     if (department === null) problems.push(`${line}행 ${name}: 담당 교과 '${text(row[at.department])}'를 모릅니다(예: 과학-물리)`);
     const parsed = at.unavailable >= 0 ? classSectionsTeacherParseSlots(row[at.unavailable], days, periods) : { slots: [], problems: [] };
-    if (parsed.problems.length) problems.push(`${line}행 ${name}: 불가 시간 '${parsed.problems.join(", ")}'를 읽지 못했습니다(예: 월7,화7 또는 목)`);
+    if (parsed.problems.length) problems.push(`${line}행 ${name}: 불가 시간 '${parsed.problems.join(", ")}'를 읽지 못했습니다(예: 월7,화7 또는 목, 학년 구분은 월4(3학년))`);
     const values = { name, courses: at.courses >= 0 ? text(row[at.courses]) : "", unavailable: parsed.slots,
       reason: at.reason >= 0 ? text(row[at.reason]) : "", note: at.note >= 0 ? text(row[at.note]) : "" };
     if (department !== null) values.department = department;
@@ -172,7 +186,7 @@ function classSectionsTeacherToolsHtml() {
       <button class="button" type="button" id="classSectionsTeacherExport">교사 명단 양식 내려받기</button>
       <label class="button">교사 명단 올리기<input id="classSectionsTeacherImport" type="file" accept=".xlsx" hidden aria-label="교사 명단 올리기"></label>
       ${missing ? `<button class="button" type="button" id="classSectionsTeacherRemoveMissing">명단에 없는 교사 ${missing}명 지우기</button>` : ""}
-      <span class="cs-note">열: 이름·담당 교과(예 과학-물리)·담당 과목(쉼표)·불가 시간(월7,화7 또는 목)·사유·비고. 번호 열은 고치지 마세요(배정·고정이 이어짐).</span></div>
+      <span class="cs-note">열: 이름·담당 교과(예 과학-물리)·담당 과목(쉼표)·불가 시간(월7,화7 또는 목, 학년마다 시각이 다른 교시는 월4(3학년))·사유·비고. 번호 열은 고치지 마세요(배정·고정이 이어짐).</span></div>
     ${warnings.length ? `<p class="cs-note is-warn" id="classSectionsTeacherNameWarning">${esc(warnings.join(" "))}</p>` : ""}`;
 }
 
@@ -182,6 +196,7 @@ function classSectionsTeacherExport() {
   const rows = classSectionsTeacherSheetRows(settings.teachers, classSectionsTeacherGrid());
   const guide = [["교사 명단 양식"], ["이름: 실제 이름(출력물·나이스 확인용). 담당 교과: 5단계 시수표 교과 표기(예: 과학-물리, 사회-지리, 국어). 담당 과목: 그 교과 중 맡을 과목만 쉼표로(비우면 교과 전체)."],
     ["불가 시간: '월7,화7'처럼 요일+교시, 하루 전체는 '목', 이어진 교시는 '화6~7'. 사유: 육아시간·순회 등. 비고: 자유."],
+    ["불가 시간의 학년 구분: 점심이 학년마다 달라 같은 4교시라도 시각이 다르면 '월4(3학년)'(3학년 4교시 시각에만 불가) 또는 '월4(1·2학년)'(1·2학년 4교시 시각에만 불가)처럼 학년을 적습니다. 학년을 안 적은 '월4'는 두 시각 모두 불가입니다. 학년별 점심은 7단계 시간표의 조건 설정에서 정합니다."],
     ["번호(고치지 마세요): 지금 명단의 교사 번호입니다. 이름을 바꿔도 이 번호로 같은 교사로 맞춰 배정·고정·교실이 이어집니다. 새 교사는 비워 두세요."],
     ["담임(내년 학년-반): 내년에 담임을 맡을 반을 '2-3'(2학년 3반)처럼 적습니다. 비우면 담임 아님. 7단계 시간표의 담임 규칙(담임반 수업 포함, 학년별 창체 시간에 담임 비움)에 씁니다."],
     ["올릴 때: 번호 또는 이름으로 맞춰 갱신·추가하고, 파일에 없는 교사는 지우지 않고 '명단에 없음'으로 표시합니다."]];

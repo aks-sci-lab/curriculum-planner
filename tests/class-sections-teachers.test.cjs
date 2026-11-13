@@ -41,6 +41,25 @@ test("불가 시간 글자: 하루 전체는 요일만, '화6~7'·'목' 읽기, 
   assert.deepEqual(parsed.problems, ["토3", "월9", "x"]);
 });
 
+test("불가 시간의 학년 구분: '월4(3학년)'·'월4(1, 2학년)'을 읽고 같은 글자로 내보낸다(구분 없는 '월4'는 그대로)", () => {
+  const ctx = context();
+  const days = ["월", "화", "수", "목", "금"];
+  const parsed = plain(ctx.classSectionsTeacherParseSlots("월4(3학년), 화4 (1, 2학년) 수3~4（3학년） 목7, 금4(1·2·3학년), 월5(오후) 화5()", days, 7));
+  assert.deepEqual(parsed.slots, ["월4(3학년)", "화4(1·2학년)", "수3(3학년)", "수4(3학년)", "목7", "금4"]);
+  assert.deepEqual(parsed.problems, ["월5(?)", "화5(?)"]);
+  // 내보내기: 구분 없는 칸 먼저, 학년 구분은 뒤에 같은 글자로 — 다시 읽으면 같은 칸
+  const text = ctx.classSectionsTeacherSlotsText(["화4(1·2학년)", "목7", "월4(3학년)", "수4(3학년)"], days, 7);
+  assert.equal(text, "목7,화4(1·2학년),월4(3학년),수4(3학년)");
+  assert.deepEqual(plain(ctx.classSectionsTeacherParseSlots(text, days, 7)).slots.sort(), ["화4(1·2학년)", "목7", "월4(3학년)", "수4(3학년)"].sort());
+  // 하루 전체에 학년을 적으면 요일만 + 학년
+  const all = Array.from({ length: 7 }, (_, p) => `목${p + 1}(3학년)`);
+  assert.equal(ctx.classSectionsTeacherSlotsText(all, days, 7), "목(3학년)");
+  assert.deepEqual(plain(ctx.classSectionsTeacherParseSlots("목(3학년)", days, 7)).slots, all);
+  // 양식 왕복
+  const rows = ctx.classSectionsTeacherSheetRows([{ id: "a", name: "가", department: "국어", unavailable: ["월4(3학년)", "금7"] }], { days, periods: 7 });
+  assert.equal(rows[1][3], "금7,월4(3학년)");
+});
+
 test("양식 내려받기 → 이름만 실제 이름으로 고쳐 올리면 번호(id)로 맞춰 갱신, 새 줄은 추가, 빠진 교사는 '명단에 없음' 표시만", () => {
   const ctx = context();
   const existing = [

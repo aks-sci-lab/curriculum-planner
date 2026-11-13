@@ -183,7 +183,7 @@ function timetableDayCapacity(available, positions, rules, lunchPositions) {
 //   grades: [{ grade: "1", classes: 10 | ["1-1", …] }],
 //   creative: { school: 전교 동시 시수, schoolTimes: ["금7"], grade: 학년별 시수(숫자 | { 학년: n }), gradeTimes: { 학년: [..] }, byGroup: 반군별 허용, expected: { 학년: 5단계 창체 시수 } },
 //   fixedSlots: [{ label, times, allTeachers }],
-//   teachers: [{ id, name, departments, courses, maxHours, unavailable: ["월4" | { day, period } | { day, pos }], days: 출근 요일, placeholder, homeroom: "2-3" }],
+//   teachers: [{ id, name, departments, courses, maxHours, unavailable: ["월4" | { day, period } | { day, period, grades: ["3"] }(그 학년 교시의 실제 시각만) | { day, pos }], days: 출근 요일, placeholder, homeroom: "2-3" }],
 //   lessons: [{ id, grade, classes: 생략 = 학년 전체 | ["1", "3-2"], subject, department, hours, teacherId, teacherIds, teacherByClass, venue, double,
 //               parts: [{ department, hours, teacherId, teacherIds }] }],          // 반 수업(parts = 통합과학처럼 교사 여럿이 나눠 맡는 수업)
 //   blocks: [{ id, grade, label, hours, classes, times, sections: [{ id, subject, department, credits, teacherId, teacherIds, venue }] }],
@@ -243,7 +243,13 @@ function timetableModel(input = {}) {
     const blocked = new Set(everyoneBusy);
     for (const entry of teacher.unavailable || []) {
       if (entry && typeof entry === "object" && entry.pos !== undefined && dayAt.has(String(entry.day))) blocked.add(dayAt.get(String(entry.day)) * positions + Number(entry.pos));
-      else for (const time of timetableTimes([entry])) for (const abs of absOfTime(time)) blocked.add(abs);
+      else for (const time of timetableTimes([entry])) {
+        // 학년을 적은 불가 시간('월4(3학년)' = { day, period, grades: ["3"] }): 그 학년 기준 교시의 실제 시각만. 모르는 학년뿐이면 가능한 시각 모두.
+        const named = entry && typeof entry === "object" && Array.isArray(entry.grades) ? entry.grades.map(String).filter((grade) => gradeOf.has(grade)) : [];
+        const d = dayAt.get(time.day);
+        if (named.length && d !== undefined && time.period >= 1 && time.period <= periodsOf[time.day]) for (const grade of named) blocked.add(d * positions + posOf(grade, time.period));
+        else for (const abs of absOfTime(time)) blocked.add(abs);
+      }
     }
     const attend = Array.isArray(teacher.days) && teacher.days.length ? new Set(teacher.days.map(String)) : null;
     if (attend) days.forEach((day, d) => { if (!attend.has(day)) for (let pos = 0; pos < positions; pos += 1) blocked.add(d * positions + pos); });

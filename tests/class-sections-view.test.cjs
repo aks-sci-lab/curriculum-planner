@@ -555,6 +555,33 @@ test("공통 과목 교사: 5단계 배분 메모(통과·융과 …)가 정한 
   assert.equal(counts["과학-공통"], 5);
 });
 
+test("교사 불가 시간의 학년 구분: '월4(3학년)'은 그 학년 4교시와 실제 시각이 같은 학년에만, 함께 계산할 때는 합쳐서", () => {
+  const ctx = context();
+  assert.deepEqual(plain(["월4", "월 4(3학년)", "화:4（1,2학년）", "수4(1·2·3학년)", "목4(오후)", "x"].map((text) => ctx.classSectionsUnavailableSlot(text))),
+    [{ day: "월", period: 4, grades: [] }, { day: "월", period: 4, grades: ["3"] }, { day: "화", period: 4, grades: ["1", "2"] }, { day: "수", period: 4, grades: [] }, null, null]);
+  // 저장 모양: 같은 칸 한 번, 구분 없는 칸이 있으면 학년 구분은 뺌, 세 학년이 모이면 구분 없음
+  assert.deepEqual(plain(ctx.classSectionsUnavailableNormalize(["월4(3학년)", "월4", "화4(3학년)", "화4(1·2학년)", "수4(2학년)", "수4(1학년)", "금7"])), ["월4", "화4", "수4(1·2학년)", "금7"]);
+  const settings = ctx.classSectionsSettings();
+  settings.teachers.push({ id: "t1", name: "김교사", department: "국어", unavailable: ["월4(3학년)", "화4(1·2학년)", "수5(3학년)", "금7"], reason: "순회" });
+  const slots = (grade) => plain(ctx.classSectionsTeacherList(settings, grade))[0].unavailable.map((slot) => `${slot.day}${slot.period}${slot.grades ? `@${slot.grades.join("")}` : ""}`);
+  // 학년을 안 주면 모두(학년 구분은 grades로 — 7단계 시간표가 읽음)
+  assert.deepEqual(slots(null), ["월4@3", "화4@12", "수5@3", "금7"]);
+  // 점심을 모르면(7단계 화면이 없으면) 모든 학년에 걸리는 것으로 본다
+  assert.deepEqual(slots("2"), ["월4", "화4", "수5", "금7"]);
+  // 점심: 3학년 3교시 뒤, 1·2학년 4교시 뒤 → 4교시만 시각이 다르고 5교시는 같다
+  ctx.timetableLunchSetting = () => ({ 1: 4, 2: 4, 3: 3 });
+  assert.deepEqual(slots("2"), ["화4", "수5", "금7"]);
+  assert.deepEqual(slots("3"), ["월4", "수5", "금7"]);
+  // 점심이 모두 같으면 학년을 적어도 같은 시각
+  ctx.timetableLunchSetting = () => ({ 1: 4, 2: 4, 3: 4 });
+  assert.deepEqual(slots("2"), ["월4", "화4", "수5", "금7"]);
+  // 전 학년 함께 계산: 학년마다 다른 불가 시간을 합친다
+  const joint = plain(ctx.classSectionsJointTeachers([
+    { teachers: [{ id: "t1", departments: ["국어"], courses: [], unavailable: [{ day: "화", period: 4 }, { day: "금", period: 7 }] }] },
+    { teachers: [{ id: "t1", departments: ["국어"], courses: [], unavailable: [{ day: "월", period: 4 }, { day: "금", period: 7 }] }] }]));
+  assert.deepEqual(joint.teachers[0].unavailable.map((slot) => `${slot.day}${slot.period}`), ["화4", "금7", "월4"]);
+});
+
 test("[버그] 학기·전 학년 함께 계산: 교사 명단을 그룹마다 합쳐 넘긴다(첫 그룹 명단만 쓰면 다른 그룹 공통 과목 분반 교사가 빔)", async () => {
   const ctx = context();
   const a = [{ id: "t1", departments: ["과학-물리"], courses: [] }, { id: "t2", departments: ["사회-일사"], courses: [] }];

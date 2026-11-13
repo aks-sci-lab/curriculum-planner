@@ -514,6 +514,10 @@ function timetableSettings() {
 var TIMETABLE_STAGGER_SMALL = 10; // 반군 엇갈림 견적에서 '소인수 분반'으로 세는 기준(이 인원 미만 — 막지 않고 수로만 보여 준다)
 var TIMETABLE_CREATIVE_FROM = 5; // 시간을 정하지 않은 창체(학년별·반군별·전교 동시)는 기본 5교시 이후에만 놓는다(낮 시간에 창체가 끼지 않게)
 var TIMETABLE_DEFAULT_LUNCH = { 1: 4, 2: 4, 3: 3 }; // 사용자 학교: 3학년은 3교시 뒤, 1·2학년은 4교시 뒤
+// 지금 쓰는 학년별 점심(몇 교시 뒤). 6단계가 학년을 적은 교사 불가 시간('월4(3학년)')이 어느 학년 블록에 걸리는지 볼 때도 읽는다.
+function timetableLunchSetting() {
+  return { ...TIMETABLE_DEFAULT_LUNCH, ...(timetableSettings().lunchAfter || {}) };
+}
 var TIMETABLE_CREATIVE_LABEL = /창체|창의적|동아리|자율|진로/;
 
 // 반 일부만 듣는 학교 지정 과목(교차집중·분할 편성)의 반: 같은 학년·학기 안에서 앞 반부터 차례로(가정).
@@ -580,7 +584,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   let teachers = classSectionsTeacherList(cs).map((teacher) => {
     const raw = rawOf.get(teacher.id) || {};
     return { id: teacher.id, name: teacher.name, departments: teacher.departments, courses: teacher.courses,
-      unavailable: teacher.unavailable.map((slot) => ({ day: slot.day, period: slot.period })), maxHours: Number(raw.maxHours) > 0 ? Number(raw.maxHours) : undefined,
+      unavailable: teacher.unavailable.map((slot) => ({ day: slot.day, period: slot.period, ...(slot.grades ? { grades: slot.grades } : {}) })), maxHours: Number(raw.maxHours) > 0 ? Number(raw.maxHours) : undefined,
       days: Array.isArray(raw.days) && raw.days.length ? raw.days : undefined, homeroom: homeroomValue(raw.homeroom),
       placeholder: typeof classSectionsTeacherPlaceholder === "function" && classSectionsTeacherPlaceholder(raw, departmentName) };
   });

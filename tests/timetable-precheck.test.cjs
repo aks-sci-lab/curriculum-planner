@@ -64,6 +64,26 @@ function school(options = {}) {
 }
 const issuesOf = (result, id, level) => result.issues.filter((issue) => issue.id === id && (!level || issue.level === level));
 
+test("모형: 학년을 적은 교사 불가 시간은 그 학년 교시의 실제 시각만 막는다(안 적으면 두 시각 모두)", () => {
+  const ctx = context();
+  const model = ctx.timetableModel({
+    days: ["월", "화"], periods: 7, lunchAfter: { 1: 4, 2: 4, 3: 3 },
+    grades: [{ grade: "1", classes: 1 }, { grade: "2", classes: 1 }, { grade: "3", classes: 1 }],
+    teachers: [
+      { id: "plain", departments: ["국어"], unavailable: [{ day: "월", period: 4 }] },
+      { id: "third", departments: ["국어"], unavailable: [{ day: "월", period: 4, grades: ["3"] }] },
+      { id: "lower", departments: ["국어"], unavailable: [{ day: "월", period: 4, grades: ["1", "2"] }, { day: "화", period: 5, grades: ["3"] }] },
+      { id: "unknown", departments: ["국어"], unavailable: [{ day: "월", period: 4, grades: ["9"] }] }
+    ], lessons: [], blocks: []
+  });
+  const blocked = (id) => [...model.teacherOf.get(id).blocked].sort((a, b) => a - b);
+  // 하루 8칸 1,2,3,A(1·2학년 4교시),B(3학년 4교시),5,6,7
+  assert.deepEqual(blocked("plain"), [3, 4]);
+  assert.deepEqual(blocked("third"), [4]);
+  assert.deepEqual(blocked("lower"), [3, 13]); // 화5는 모든 학년이 같은 시각(8 + 5)
+  assert.deepEqual(blocked("unknown"), [3, 4]); // 모르는 학년뿐이면 가능한 시각 모두
+});
+
 test("모형: 학년별 점심으로 실제 시각 축을 만들고, 반·조각 수업·교사 후보·불가 시간을 정리한다", () => {
   const ctx = context();
   const model = ctx.timetableModel({
