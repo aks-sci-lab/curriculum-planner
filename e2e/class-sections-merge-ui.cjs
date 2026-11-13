@@ -48,6 +48,33 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await page.getByRole("button", { name: /6\. 분반 편성/ }).click(); await sleep(800);
   await page.locator("#workspaceRound").selectOption("2").catch(() => {}); await sleep(600);
 
+  console.log("▶ 교사 0명인데 수업이 있는 교과: 명단에 없어도 자리 교사 1명을 두고 계산");
+  {
+    const note = async () => clean(await page.locator("#classSectionsTeacherNote").innerText().catch(() => ""));
+    const noteBefore = await note();
+    await page.locator("#classSectionsTeachersOpen").click();
+    const dialog = page.locator("#classSectionsTeacherDialog");
+    await dialog.waitFor({ state: "visible", timeout: 10000 });
+    // 명단에서 자리 교사 '진로 1'(5단계 교사 수 0명 교과)을 지운다 = 그 규칙이 생기기 전에 만든 명단
+    const names = await dialog.locator('input[data-cs-t$="|name"]').evaluateAll((els) => els.map((el) => el.value));
+    const at = names.findIndex((name) => /^진로 1$/.test(name));
+    if (at >= 0) {
+      await dialog.locator(`[data-cs-t-remove="${at}"]`).click(); await sleep(300);
+      await page.locator("#appConfirmDialog[open] #appConfirmOk").click({ timeout: 1500 }).catch(() => {});
+      await page.locator("#classSectionsTeacherClose").click(); await sleep(500);
+      const noteAfter = await note();
+      check(!/자리 교사 1명을 두고 계산/.test(noteBefore) && /자리 교사 1명을 두고 계산: 진로 1\(교사 명단에 없고 5단계 교사 수 0명 — '5단계 교사 수로 명단 만들기'를 누르면 명단에 생깁니다\)/.test(noteAfter), "명단에서 빠진 0명 교과(진로)는 자리 교사 1명을 두고 계산한다고 알림", { noteBefore, noteAfter });
+      await page.locator("#classSectionsTeachersOpen").click();
+      await dialog.waitFor({ state: "visible", timeout: 10000 });
+      await page.getByRole("button", { name: "5단계 교사 수로 명단 만들기" }).click(); await sleep(400);
+      await page.locator("#classSectionsTeacherClose").click(); await sleep(500);
+      check(!/자리 교사 1명을 두고 계산/.test(await note()), "'5단계 교사 수로 명단 만들기'를 누르면 명단에 생겨 알림이 사라짐", await note());
+    } else {
+      await page.locator("#classSectionsTeacherClose").click(); await sleep(300);
+      console.log("     (이 백업의 명단에는 자리 교사 '진로 1'이 없어 건너뜀)", names.slice(0, 5));
+    }
+  }
+
   console.log("▶ 합치기 줄(기본 꺼짐)");
   const before = await groups();
   const ids = await page.locator("[data-cs-merge]").evaluateAll((els) => els.map((e) => ({ id: e.dataset.csMerge, on: e.checked, text: e.parentElement.innerText.replace(/\s+/g, " ").trim() })));

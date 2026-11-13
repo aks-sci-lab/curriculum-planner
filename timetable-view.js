@@ -602,7 +602,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
     return { id: teacher.id, name: teacher.name, departments: teacher.departments, courses: teacher.courses,
       unavailable: teacher.unavailable.map((slot) => ({ day: slot.day, period: slot.period, ...(slot.grades ? { grades: slot.grades } : {}) })), maxHours: Number(raw.maxHours) > 0 ? Number(raw.maxHours) : undefined,
       days: Array.isArray(raw.days) && raw.days.length ? raw.days : undefined, homeroom: homeroomValue(raw.homeroom),
-      placeholder: typeof classSectionsTeacherPlaceholder === "function" && classSectionsTeacherPlaceholder(raw, departmentName) };
+      placeholder: Boolean(teacher.assumed) || (typeof classSectionsTeacherPlaceholder === "function" && classSectionsTeacherPlaceholder(raw, departmentName)), ...(teacher.assumed ? { assumed: true } : {}) };
   });
   const timetableCounts = typeof hoursTimetableTeacherCounts === "function" ? hoursTimetableTeacherCounts(year) : { counts: stats?.settings?.teachers || {}, assumed: (stats?.assumedTeachers || []).map((item) => item.id) };
   if (!teachers.length) {
@@ -622,7 +622,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   // 5단계 교과별 교사 수와 6단계 명단이 다르면 알림만(시간표는 명단으로 계산)
   if (teachers.length && !teachers.every((teacher) => teacher.placeholder) && stats?.settings?.teachers) {
     const listed = {};
-    for (const teacher of teachers) for (const department of teacher.departments) listed[department] = (listed[department] || 0) + 1;
+    for (const teacher of teachers) if (!teacher.assumed) for (const department of teacher.departments) listed[department] = (listed[department] || 0) + 1;
     const differ = [...new Set([...Object.keys(listed), ...Object.keys(stats.settings.teachers)])]
       .map((department) => [department, Math.floor(Number(stats.settings.teachers[department]) || 0), listed[department] || 0]).filter(([, planned, actual]) => planned !== actual);
     if (differ.length) notes.teacherCounts = [`5단계 교사 수와 6단계 교사 명단이 다른 교과: ${differ.map(([department, planned, actual]) => `${departmentName(department)} ${planned} → ${actual}명`).join(", ")} — 시간표는 6단계 명단으로 계산합니다.`];
@@ -1223,7 +1223,7 @@ function timetableConditionsHtml(prepared) {
     <span class="cs-note">'반드시'인 조건을 다 지킬 수 없으면 자동으로 풀지 않고, 아래 사전 점검의 선택지에서 무엇을 양보할지 고릅니다.</span></span></div>`;
 
   // 교사: 주어진 명단 안에서만 편성한다(교사를 늘리는 입력은 없다). 후보 = 6단계 명단의 담당 교과·담당 과목.
-  const listed = classSectionsTeacherList(cs).length;
+  const listed = classSectionsTeacherList(cs).filter((teacher) => !teacher.assumed).length;
   const counts = [...(prepared.input.notes.teacherCounts || []), ...(prepared.input.notes.homerooms || [])];
   const departmentIds = typeof HOURS_DEPARTMENTS !== "undefined" ? HOURS_DEPARTMENTS.filter((department) => !department.common).map((department) => department.id) : prepared.openDepartments;
   const departmentName = (id) => (typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id);

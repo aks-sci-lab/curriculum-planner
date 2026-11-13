@@ -382,12 +382,39 @@ function classSectionsClassUnitInput(group, entry, settings) {
 function classSectionsTeacherList(settings, grade = null) {
   const lunch = grade !== null && typeof timetableLunchSetting === "function" ? timetableLunchSetting() : null;
   // 이름(또는 별칭)을 아직 안 넣은 줄(방금 추가한 빈 줄)은 빼고 센다.
-  return settings.teachers.filter((teacher) => teacher && (teacher.name || teacher.alias)).map((teacher, index) => ({
+  const list = settings.teachers.filter((teacher) => teacher && (teacher.name || teacher.alias)).map((teacher, index) => ({
     id: String(teacher.id || `t${index + 1}`), name: String(teacher.alias || teacher.name || teacher.id), departments: teacher.department ? [teacher.department] : [],
     courses: String(teacher.courses || "").split(/[,·]/).map((item) => item.trim()).filter(Boolean),
     unavailable: (teacher.unavailable || []).map(classSectionsUnavailableSlot).filter((slot) => slot && (grade === null || classSectionsUnavailableApplies(slot, grade, lunch)))
       .map((slot) => ({ day: slot.day, period: slot.period, ...(grade === null && slot.grades.length ? { grades: slot.grades } : {}), reason: teacher.reason || "" }))
   }));
+  return list.length ? [...list, ...classSectionsAssumedTeachers(list)] : list;
+}
+
+// 명단에 없는 '교사 0명인데 수업이 있는 교과'(5단계 assumedTeachers — 교양·공통 제외)의 자리 교사: 사용자 결정 "그런 교과는 자리 교사 1명을 두고 계산".
+// 명단을 이미 만든 뒤 이 규칙이 생긴 자료는 명단에 그 교과 교사가 없으므로, 계산에 쓰는 명단(classSectionsTeacherList)에만 보충한다(저장된 명단은 그대로).
+// 7단계 시간표와 같은 규칙·같은 자리 이름(t-교과-1, '교과 이름 1'): 그 교과 과목 가운데 맡을 교사(담당 교과·담당 과목)가 없는 과목이 있을 때만.
+function classSectionsAssumedTeachers(list) {
+  if (typeof hoursTimetableTeacherCounts !== "function") return [];
+  let assumed = [];
+  let items = [];
+  try {
+    assumed = hoursTimetableTeacherCounts().assumed || [];
+    if (!assumed.length) return [];
+    const stats = typeof hoursStatsCached === "function" && typeof hoursTargetYear === "function" ? hoursStatsCached(hoursTargetYear()) : null;
+    items = stats?.items || [];
+  } catch { return []; }
+  const courseKey = (name) => (typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(name) : String(name ?? "").replace(/\s+/g, ""));
+  const out = [];
+  for (const department of assumed) {
+    const id = `t-${department}-1`;
+    if (list.some((teacher) => teacher.id === id)) continue;
+    const subjects = [...new Set(items.filter((item) => item.department === department && Number(item.hours) > 0).map((item) => item.subject))];
+    const covered = (subject) => list.some((teacher) => teacher.departments.includes(department) || teacher.courses.some((course) => courseKey(course) === courseKey(subject)));
+    if (subjects.length ? subjects.every(covered) : list.some((teacher) => teacher.departments.includes(department))) continue;
+    out.push({ id, name: `${typeof hoursDepartmentName === "function" ? hoursDepartmentName(department) : department} 1`, departments: [department], courses: [], unavailable: [], assumed: true });
+  }
+  return out;
 }
 
 // 공통 과목마다 맡는 세부 교과: { 과목명: [세부 교과 id] }. 먼저 5단계 반별 배분(assignment = hoursCommonClassAssignment(학년, 학기)
@@ -1155,7 +1182,7 @@ function renderClassSectionsView() {
       ${source.locked ? "" : '<span class="cs-badge" data-state="draft">확정 전 시안</span>'}
       ${stale ? '<span class="cs-badge" data-state="stale" id="classSectionsStale">입력 변경됨, 재계산 필요</span>' : ""}
       ${stale && entry.sectionResult?.homeroomRoomsKey && entry.sectionResult.homeroomRoomsKey !== classSectionsHomeroomBasisKey(group) ? '<span class="cs-note is-warn" id="classSectionsStaleReason">내년 반 배정표(진급 반 편성)가 바뀌어 담임반·학급 단위 배정을 다시 계산해야 합니다.</span>' : ""}
-      <span class="cs-note">${esc(teacherNote)}</span>
+      <span class="cs-note" id="classSectionsTeacherNote">${esc(teacherNote)}</span>
     </div>
     <section class="cs-card" aria-label="편성 기준">
       <h4>기준</h4>
@@ -1221,9 +1248,13 @@ function classSectionsTeacherNote(settings, group, input) {
   const label = (id) => (typeof hoursDepartmentName === "function" ? hoursDepartmentName(id) : id);
   const departments = [...new Set(input.courses.filter((course) => course.mode !== "class").map((course) => course.department).filter(Boolean))];
   if (settings.teachers.length) {
-    const covered = new Set(classSectionsTeacherList(settings).flatMap((teacher) => teacher.departments));
+    const list = classSectionsTeacherList(settings);
+    const covered = new Set(list.flatMap((teacher) => teacher.departments));
     const missing = departments.filter((dept) => !covered.has(dept));
-    return `교사 ${settings.teachers.length}명 입력됨${missing.length ? ` · 명단에 없는 교과는 교사 수 제한 없이 계산: ${missing.map(label).join(", ")}` : ""}`;
+    // 명단에 없지만 5단계에서 교사 0명인데 수업이 있는 교과: 자리 교사 1명을 두고 계산(7단계 시간표와 같은 자리 교사)
+    const assumed = list.filter((teacher) => teacher.assumed);
+    const assumedText = assumed.length ? ` · 자리 교사 1명을 두고 계산: ${assumed.map((teacher) => teacher.name).join(", ")}(교사 명단에 없고 5단계 교사 수 0명 — '5단계 교사 수로 명단 만들기'를 누르면 명단에 생깁니다)` : "";
+    return `교사 ${settings.teachers.length}명 입력됨${missing.length ? ` · 명단에 없는 교과는 교사 수 제한 없이 계산: ${missing.map(label).join(", ")}` : ""}${assumedText}`;
   }
   if (!settings.useHoursTeachers) return "교사 명단 없음 · 교사 수 제한 없이 계산합니다";
   if (!input.departmentTeachers) return "교사 명단 없음 · 5단계 교사 수가 비어 있어 교사 수 제한 없이 계산합니다";

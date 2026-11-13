@@ -582,6 +582,34 @@ test("교사 불가 시간의 학년 구분: '월4(3학년)'은 그 학년 4교�
   assert.deepEqual(joint.teachers[0].unavailable.map((slot) => `${slot.day}${slot.period}`), ["화4", "금7", "월4"]);
 });
 
+test("교사 0명인데 수업이 있는 교과(5단계)는 명단에 없어도 자리 교사 1명을 두고 계산 — 저장된 명단은 그대로, 7단계와 같은 자리 이름", () => {
+  const ctx = context();
+  const settings = ctx.classSectionsSettings();
+  ctx.hoursDepartmentName = (id) => ({ 기술가정: "기술·가정", "과학-물리": "과학(물리)" })[id] || id;
+  ctx.hoursTimetableTeacherCounts = () => ({ counts: { "과학-물리": 2, 기술가정: 1 }, assumed: ["기술가정"] });
+  ctx.hoursStatsCached = () => ({ items: [{ department: "기술가정", subject: "발명과 기업가 정신", hours: 8 }, { department: "기술가정", subject: "지식 재산 일반", hours: 0 }] });
+  // 명단이 비어 있으면 보충하지 않는다(그때는 5단계 교사 수로 계산)
+  assert.deepEqual(plain(ctx.classSectionsTeacherList(settings)), []);
+  settings.teachers.push({ id: "t1", name: "김교사", department: "과학-물리", unavailable: [] });
+  const list = plain(ctx.classSectionsTeacherList(settings));
+  assert.deepEqual(list.map((teacher) => [teacher.id, teacher.name, teacher.departments.join(","), Boolean(teacher.assumed)]), [["t1", "김교사", "과학-물리", false], ["t-기술가정-1", "기술·가정 1", "기술가정", true]]);
+  assert.equal(settings.teachers.length, 1, "저장된 명단은 그대로");
+  // 그룹 입력·함께 계산 명단에도 들어간다
+  const group = ctx.classSectionsSource("1").groups[0];
+  assert.ok(plain(ctx.classSectionsBuildInput("1", group, ctx.classSectionsEntry("1", group.key, true))).teachers.some((teacher) => teacher.id === "t-기술가정-1"));
+  assert.match(ctx.classSectionsTeacherNote(settings, group, { courses: [] }), /^교사 1명 입력됨 · 자리 교사 1명을 두고 계산: 기술·가정 1\(교사 명단에 없고 5단계 교사 수 0명 — '5단계 교사 수로 명단 만들기'를 누르면 명단에 생깁니다\)$/);
+  // 그 교과 교사가 명단에 있거나, 그 교과의 수업 있는 과목을 맡는 교사(담당 과목)가 있으면 보충하지 않는다
+  settings.teachers.push({ id: "t2", name: "박교사", department: "정보", courses: "발명과 기업가 정신", unavailable: [] });
+  assert.deepEqual(plain(ctx.classSectionsTeacherList(settings)).map((teacher) => teacher.id), ["t1", "t2"]);
+  settings.teachers.pop();
+  settings.teachers.push({ id: "t3", name: "최교사", department: "기술가정", unavailable: [] });
+  assert.deepEqual(plain(ctx.classSectionsTeacherList(settings)).map((teacher) => teacher.id), ["t1", "t3"]);
+  // 이미 자리 교사가 명단에 있으면(5단계 교사 수로 명단 만들기) 겹쳐 넣지 않는다
+  settings.teachers.pop();
+  settings.teachers.push({ id: "t-기술가정-1", name: "기술·가정 1", department: "기술가정", unavailable: [] });
+  assert.deepEqual(plain(ctx.classSectionsTeacherList(settings)).map((teacher) => [teacher.id, Boolean(teacher.assumed)]), [["t1", false], ["t-기술가정-1", false]]);
+});
+
 test("[버그] 학기·전 학년 함께 계산: 교사 명단을 그룹마다 합쳐 넘긴다(첫 그룹 명단만 쓰면 다른 그룹 공통 과목 분반 교사가 빔)", async () => {
   const ctx = context();
   const a = [{ id: "t1", departments: ["과학-물리"], courses: [] }, { id: "t2", departments: ["사회-일사"], courses: [] }];
