@@ -1515,20 +1515,31 @@ async function stepClassSections({ page, h, report, roster }) {
     result.specialTeacherSections = special.slice(0, 20);
     await h.screenshot(page, "step6-solved");
     // 같은 학년·학기 두 그룹의 블록을 일부러 같은 시간으로 두면(학생 시간 겹침) 앱이 알려 주는지 본다 → 원래대로 되돌림.
-    const same = info.filter((g) => g.grade === "2" && g.semester === "2");
-    if (same.length >= 2) {
-      const [a, b] = same;
+    // 블록 시간은 지금 화면에서 다시 읽는다: 위에서 '모두 학급 단위' 제안을 적용한 그룹은 모든 과목이 반 수업이라 블록 시간이 없고
+    // (times[]는 제안을 적용하기 전에 읽은 값), 그런 그룹과는 겹칠 것이 없으므로 '겹침 오류가 나오지 않아야' 맞다.
+    const same = [];
+    for (const g of info.filter((x) => x.grade === "2" && x.semester === "2")) {
+      await S6.selectGroup(page, g.key);
+      const unitOnly = (await page.locator("#classSectionsClassUnitOnly").count()) > 0;
+      const now = unitOnly ? [] : await page.locator("[data-cs-block-times]").evaluateAll((els) => els.map((e) => e.value));
+      same.push({ ...g, unitOnly, now });
+    }
+    const a = same.find((g) => !g.unitOnly && g.now[0]);
+    const b = a ? same.find((g) => g !== a && !g.unitOnly && g.now[0]) || same.find((g) => g !== a && g.unitOnly && times[g.key]?.[0]) : null;
+    if (a && b) {
       await S6.selectGroup(page, a.key);
-      const overlap = times[b.key][0].split(",").slice(0, a.credit);
-      while (overlap.length < a.credit) overlap.push(times[a.key][0].split(",")[overlap.length]);
-      await SC.setBlockTimes(page, [overlap.join(","), ...times[a.key].slice(1)]);
+      const overlap = (b.unitOnly ? times[b.key][0] : b.now[0]).split(",").filter(Boolean).slice(0, a.credit);
+      while (overlap.length < a.credit) overlap.push(a.now[0].split(",")[overlap.length]);
+      await SC.setBlockTimes(page, [overlap.join(","), ...a.now.slice(1)]);
       const r = await S6.solve(page);
       const body = await text(page, 'section[aria-label="편성 결과"]');
-      result.overlapProbe = { group: a.key, with: b.key, times: overlap.join(","), feasible: r.feasible, warned: r.feasible === false && /겹|같은 시간|충돌|같은 학생/.test(body + r.summary + r.status), summary: r.summary.slice(0, 200) };
-      h.check(result.overlapProbe.warned, "중요", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 오류(같은 학생 시간 겹침·불가)로 나오지 않음`, { actual: result.overlapProbe });
-      await SC.setBlockTimes(page, times[a.key]);
+      const clash = /같은 학생이 듣는 [^\n]*같은 시간/.test(body + r.summary + r.status);
+      result.overlapProbe = { group: a.key, with: b.key, withClassUnitOnly: b.unitOnly, times: overlap.join(","), feasible: r.feasible, clash, warned: r.feasible === false && clash, summary: r.summary.slice(0, 200) };
+      if (b.unitOnly) h.check(!clash, "중요", "6단계", `${b.key}는 학급 단위로만 운영돼 블록 시간이 없는데(반 수업) ${a.key} 블록과 '같은 학생 시간 겹침' 오류가 나옴`, { actual: result.overlapProbe });
+      else h.check(result.overlapProbe.warned, "중요", "6단계", `같은 학년·학기 두 그룹(${a.key}·${b.key})의 블록이 같은 시간인데 오류(같은 학생 시간 겹침·불가)로 나오지 않음`, { actual: result.overlapProbe });
+      await SC.setBlockTimes(page, a.now);
       if (await page.locator("#classSectionsSolveSemester").count()) await S6.solve(page, "#classSectionsSolveSemester"); else await S6.solve(page);
-    }
+    } else result.overlapProbe = { skipped: "2학년 2학기에 블록 시간이 있는 그룹과 견줄 다른 그룹이 없음", groups: same.map((g) => [g.key, g.unitOnly, g.now.length]) };
     report.data.step6Snapshot = await step6Snapshot(page, info.map((g) => g.key));
     // 재신청 시뮬레이션: 2차 확정 해제 → 학생 3명 선택 변경(교사 화면) → 재확정 → '바뀐 학생만 다시 계산'
     // 교실 배정(모든 그룹) · 교실 직접 고르기가 '바뀐 학생만 다시 계산' 뒤에도 남는지
