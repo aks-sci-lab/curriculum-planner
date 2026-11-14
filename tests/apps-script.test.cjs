@@ -11,7 +11,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "apps-script", "Code.g
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 function environment({ cacheLimit = 1000 } = {}) {
-  const stats = { sheetReads: 0, rowsRead: 0, appends: 0, cellWrites: 0, lockTries: 0, lockHeld: false, lockBusy: false, beforeLock: null, alerts: [], formats: [] };
+  const stats = { sheetReads: 0, rowsRead: 0, appends: 0, cellWrites: 0, lockTries: 0, lockHeld: false, lockBusy: false, beforeLock: null, alerts: [], formats: [], protections: [] };
   const sheets = new Map();
   // 실제 시트처럼 글자를 바꾼다: 숫자처럼 보이는 글자 → 숫자(앞의 0이 사라짐), '='로 시작 → 수식(값이 아님).
   const stored = (value) => {
@@ -31,6 +31,9 @@ function environment({ cacheLimit = 1000 } = {}) {
         setValues: (values) => { stats.cellWrites += 1; assert.equal(values.length, count); values.forEach((line, r) => { assert.equal(line.length, width); rows[row - 1 + r] ||= []; line.forEach((value, c) => { rows[row - 1 + r][column - 1 + c] = stored(value); }); }); },
         setNumberFormat: (format) => { stats.formats.push(`${name}:${column}:${format}`); },
       }),
+      protect: () => { const protection = { name, description: "", warningOnly: false,
+        setDescription(text) { this.description = text; return this; }, setWarningOnly(value) { this.warningOnly = value; return this; } };
+        stats.protections.push(protection); return protection; },
     };
     return sheet;
   };
@@ -557,4 +560,97 @@ test("답이 사라져 같은 요청이 다시 와도 안전하다: 코드 변�
   for (let i = 0; i < 2; i += 1) assert.ok(env.call({ action: "submit", ...now, selections: ["대수", "영어Ⅰ", "화학"] }).message);
   const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
   assert.deepEqual([results.submitted, results.mismatched], [1, 0]);
+});
+
+// ---- 교사가 명렬 시트를 정렬·줄 삭제한 경우 ----
+
+function bigRoster() {
+  const roster = [];
+  for (const grade of ["1", "2"]) for (let classroom = 1; classroom <= 3; classroom += 1) for (let number = 1; number <= 8; number += 1) {
+    roster.push({ grade, classroom: String(classroom), number: String(number), name: `가상학생${grade}-${classroom}-${number}` });
+  }
+  return roster;
+}
+const picksFor = (item, index) => item.grade === "2" ? [index % 2 ? "세계사" : "확률과 통계"] : ["대수", index % 2 ? "영어Ⅰ" : "물리학", "화학"];
+
+test("신청을 만들 때 명렬·기록 시트에 '경고만' 보호를 건다", () => {
+  const env = environment();
+  const { created } = ready(env);
+  assert.deepEqual(env.stats.protections.map((item) => [item.name, item.warningOnly]), [[`명렬_${created.id}`, true], [`기록_${created.id}`, true]]);
+  assert.match(env.stats.protections[0].description, /고치거나 정렬하지 마세요/);
+});
+
+test("명렬 줄을 뒤섞어도(정렬) 전원 열기·제출이 맞고 아무도 잠기지 않는다", () => {
+  const env = environment();
+  const created = env.call({ action: "setup", adminKey: env.adminKey, setup: setupJson({ roster: bigRoster() }) });
+  const sheet = env.sheets.get(`명렬_${created.id}`);
+  const whoOf = (item) => ({ event: created.id, grade: item.grade, classroom: item.classroom, number: item.number });
+  // 절반은 먼저 코드를 바꾸고 제출해 둔다.
+  created.codes.forEach((item, index) => {
+    env.call({ action: "changeCode", ...whoOf(item), code: item.code, newCode: "482913" });
+    if (index % 2 === 0) assert.ok(env.call({ action: "submit", ...whoOf(item), code: "482913", selections: picksFor(item, index) }).message);
+  });
+  // 교사가 이름 내림차순으로 정렬(머리글은 그대로) → 줄 번호가 모두 바뀐다.
+  const body = sheet.rows.splice(1).reverse();
+  sheet.rows.push(...body);
+  const propertyWrites = env.properties.get(`ev:${created.id}:0`);
+  created.codes.forEach((item, index) => {
+    const opened = env.call({ action: "open", ...whoOf(item), code: "482913" });
+    assert.equal(opened.student?.name, item.name, JSON.stringify(opened));
+    assert.deepEqual(plain(opened.selections), index % 2 === 0 ? picksFor(item, index) : []);
+    assert.ok(env.call({ action: "submit", ...whoOf(item), code: "482913", selections: picksFor(item, index + 1) }).message);
+  });
+  assert.notEqual(env.properties.get(`ev:${created.id}:0`), propertyWrites, "색인을 다시 만들어 저장했다");
+  const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+  assert.deepEqual([results.students, results.submitted, results.mismatched], [48, 48, 0]);
+  created.codes.forEach((item, index) => {
+    const entry = results.entries.find((one) => one.grade === item.grade && one.classroom === item.classroom && one.number === item.number);
+    assert.deepEqual(plain(entry.selections), picksFor(item, index + 1), item.name);
+    assert.equal(entry.locked, false);
+  });
+  assert.ok(sheet.rows.slice(1).every((row) => row[9] === 0 && row[10] === 0 && row[12] === 0), "실패 수·잠금이 하나도 없다");
+  // 색인은 한 번만 다시 만든다: 그 뒤 요청은 명렬 전체를 읽지 않는다.
+  const before = env.stats.rowsRead;
+  env.call({ action: "open", ...whoOf(created.codes[5]), code: "482913" });
+  assert.equal(env.stats.rowsRead, before + 1);
+});
+
+test("줄 하나를 지우면 그 학생만 '맞지 않습니다'(실패로 세지 않음), 다른 학생은 정상", () => {
+  const env = environment();
+  const created = env.call({ action: "setup", adminKey: env.adminKey, setup: setupJson({ roster: bigRoster() }) });
+  const sheet = env.sheets.get(`명렬_${created.id}`);
+  const whoOf = (item) => ({ event: created.id, grade: item.grade, classroom: item.classroom, number: item.number });
+  created.codes.forEach((item) => env.call({ action: "changeCode", ...whoOf(item), code: item.code, newCode: "482913" }));
+  const gone = created.codes[10];
+  sheet.rows.splice(11, 1);
+  for (let i = 0; i < 12; i += 1) assert.deepEqual(plain(env.call({ action: "open", ...whoOf(gone), code: "482913" })), { error: "반·번호 또는 코드가 맞지 않습니다." });
+  assert.equal(env.call({ action: "submit", ...whoOf(gone), code: "482913", selections: ["대수", "영어Ⅰ", "화학"] }).error, "반·번호 또는 코드가 맞지 않습니다.");
+  created.codes.forEach((item, index) => {
+    if (item === gone) return;
+    assert.equal(env.call({ action: "open", ...whoOf(item), code: "482913" }).student?.name, item.name);
+    assert.ok(env.call({ action: "submit", ...whoOf(item), code: "482913", selections: picksFor(item, index) }).message);
+  });
+  assert.ok(sheet.rows.slice(1).every((row) => row[9] === 0 && row[10] === 0 && row[12] === 0), "지워진 학생 대신 다른 학생이 잠기지 않는다");
+  const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+  assert.deepEqual([results.students, results.submitted, results.mismatched], [47, 47, 0]);
+  // 지워진 학생은 색인에서도 빠져 그 뒤로는 시트를 읽지 않는다.
+  const reads = env.stats.sheetReads;
+  env.call({ action: "open", ...whoOf(gone), code: "482913" });
+  assert.equal(env.stats.sheetReads, reads);
+});
+
+test("잠금 안에서 쓰기 직전에 줄이 다른 학생으로 바뀌어 있으면 쓰지 않고 다시 시도하게 한다", () => {
+  const env = environment();
+  const { student, created } = ready(env);
+  const sheet = env.sheets.get(`명렬_${created.id}`);
+  const who = student(1);
+  // 틀린 코드를 보낸 요청이 잠금을 기다리는 사이 교사가 1번과 2번 줄을 맞바꿨다.
+  env.stats.beforeLock = () => { [sheet.rows[1], sheet.rows[2]] = [sheet.rows[2], sheet.rows[1]]; };
+  const answer = env.call({ action: "open", ...who, code: "000001" });
+  assert.equal(answer.retry, true);
+  assert.ok(sheet.rows.slice(1).every((row) => row[9] === 0 && row[10] === 0), "누구의 실패 수도 오르지 않았다");
+  // 다시 보내면 색인을 고쳐 제 학생에게 센다.
+  assert.equal(env.call({ action: "open", ...who, code: "000001" }).error, "반·번호 또는 코드가 맞지 않습니다.");
+  assert.deepEqual(sheet.rows[2].slice(0, 3).concat(sheet.rows[2].slice(9, 11)), [1, 1, 1, 1, 1]);
+  assert.deepEqual(sheet.rows[1].slice(9, 11), [0, 0]);
 });

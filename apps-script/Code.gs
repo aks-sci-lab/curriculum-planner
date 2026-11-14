@@ -201,20 +201,72 @@ function readRoster_(event) {
   return students;
 }
 
-// 반·번호(학년을 모르면 그 신청의 학년마다)에 해당하는 줄 번호들. 시트를 읽지 않는다.
+// 반·번호(학년을 모르면 그 신청의 학년마다)에 해당하는 [{ grade, row }]. 시트를 읽지 않는다.
 function findRows_(event, grade, classroom, number) {
   var grades = grade ? [grade] : event.grades;
   var rows = [];
   for (var i = 0; i < grades.length; i++) {
     var row = event.index[grades[i]] && event.index[grades[i]][classroom] && event.index[grades[i]][classroom][number];
-    if (row) rows.push(row);
+    if (row) rows.push({ grade: grades[i], row: row });
   }
   return rows;
 }
 
-// 잠금 상태 칸(연속실패~잠금횟수)만 쓴다. 다른 칸(코드·선택)은 건드리지 않는다.
+function sameStudent_(s, grade, classroom, number) { return s.grade === grade && s.classroom === classroom && s.number === number; }
+
+function buildIndex_(students) {
+  var index = {};
+  students.forEach(function (s) {
+    index[s.grade] = index[s.grade] || {};
+    index[s.grade][s.classroom] = index[s.grade][s.classroom] || {};
+    index[s.grade][s.classroom][s.number] = s.row;
+  });
+  return index;
+}
+
+// 색인의 줄에 다른 학생이 있으면(교사가 명렬 시트를 정렬·줄 삭제·끼워 넣기 함) 잠금 안에서 명렬을 한 번 읽어 색인을 다시 만든다.
+// 돌려주는 값: { event(새 색인), student } · 그 학생이 시트에 없으면 student = null · 잠금을 못 잡으면 { retry: true }
+function reindex_(eventId, grade, classroom, number) {
+  var result = null;
+  var busy = withLock_(function () {
+    // 잠금을 기다리는 사이 다른 요청이 이미 다시 만들었으면 그것을 쓴다.
+    var event = loadEvent_(eventId);
+    var row = event.index[grade] && event.index[grade][classroom] && event.index[grade][classroom][number];
+    var student = row ? readStudentRow_(event, row) : null;
+    if (!student || !sameStudent_(student, grade, classroom, number)) {
+      var all = readRoster_(event);
+      event.index = buildIndex_(all);
+      event.version = (Number(event.version) || 1) + 1;
+      saveEvent_(event);
+      student = null;
+      for (var i = 0; i < all.length; i++) if (sameStudent_(all[i], grade, classroom, number)) { student = all[i]; break; }
+    }
+    result = { event: event, student: student };
+    return null;
+  });
+  return busy || result;
+}
+
+// 학생 한 줄을 읽되 그 줄이 정말 그 학생인지 확인한다(아니면 색인을 다시 만들어 새 줄에서 읽는다).
+function loadStudent_(event, grade, classroom, number, row) {
+  var student = readStudentRow_(event, row);
+  if (sameStudent_(student, grade, classroom, number)) return { event: event, student: student };
+  return reindex_(event.id, grade, classroom, number);
+}
+
+// 잠금 안에서 쓰기 직전에 그 줄을 새로 읽는다. 그 사이 줄이 바뀌어 다른 학생이면 null(쓰지 않고 다시 시도하게 한다).
+function freshStudent_(event, s) {
+  var fresh = readStudentRow_(event, s.row);
+  return sameStudent_(fresh, s.grade, s.classroom, s.number) ? fresh : null;
+}
+
+// 학생 줄의 일부 칸만 쓴다(모든 쓰기가 이 한 곳을 지난다): 코드(6~7), 잠금 상태(10~14), 현재 선택(15~16).
+function writeStudentCells_(event, s, column, values) {
+  rosterSheet_(event.id).getRange(s.row, column, 1, values.length).setValues([values]);
+}
+
 function writeLockCells_(event, s) {
-  rosterSheet_(event.id).getRange(s.row, 10, 1, 5).setValues([[s.failStreak || 0, s.failTotal || 0, s.lockedUntil || 0, s.teacherLock ? 1 : 0, s.lockCount || 0]]);
+  writeStudentCells_(event, s, 10, [s.failStreak || 0, s.failTotal || 0, s.lockedUntil || 0, s.teacherLock ? 1 : 0, s.lockCount || 0]);
 }
 
 function lockMessage_(student) {
@@ -239,7 +291,12 @@ function authenticate_(request) {
   var rows = findRows_(event, grade, classroom, number);
   if (!grade && rows.length > 1) return { error: '학년을 선택하세요.', needGrade: true };
   if (!rows.length) return { error: WRONG_CODE };
-  var student = readStudentRow_(event, rows[0]);
+  var loaded = loadStudent_(event, rows[0].grade, classroom, number, rows[0].row);
+  if (loaded.retry) return loaded;
+  // 색인을 다시 만들어도 그 학생이 시트에 없으면(줄이 지워짐) 없는 학생과 같은 답. 실패로 세지 않는다.
+  if (!loaded.student) return { error: WRONG_CODE };
+  event = loaded.event;
+  var student = loaded.student;
   var message = lockMessage_(student);
   if (message) return { error: message, locked: true };
   var key = studentKey_(student.grade, student.classroom, student.number);
@@ -248,7 +305,8 @@ function authenticate_(request) {
     if (student.failStreak) {
       // 연속 실패 수를 0으로: 잠금 안에서 그 줄을 새로 읽어 고친다(그 사이 다른 요청이 올린 값을 덮어쓰지 않게).
       var reset = withLock_(function () {
-        var fresh = readStudentRow_(event, student.row);
+        var fresh = freshStudent_(event, student);
+        if (!fresh) return { error: BUSY, retry: true };
         var locked = lockMessage_(fresh);
         if (locked) return { error: locked, locked: true };
         if (fresh.failStreak) { fresh.failStreak = 0; writeLockCells_(event, fresh); }
@@ -260,7 +318,8 @@ function authenticate_(request) {
   }
   // 틀린 코드: 잠금을 잡고 그 줄을 새로 읽어 실패 수를 올린다(연속 5회 → 10분, 누적 10회 넘으면 교사가 풀 때까지).
   return withLock_(function () {
-    var fresh = readStudentRow_(event, student.row);
+    var fresh = freshStudent_(event, student);
+    if (!fresh) return { error: BUSY, retry: true };
     var already = lockMessage_(fresh);
     if (already) return { error: already, locked: true };
     fresh.failStreak += 1;
@@ -333,14 +392,9 @@ function teacherSetup_(setup) {
   });
   return withLock_(function () {
     var id = Utilities.getUuid().replace(/-/g, '').substr(0, 16);
-    // 반·번호 → 명렬 시트 줄 번호(만든 뒤 바뀌지 않는다). 학생을 찾을 때 시트 전체를 읽지 않게 한다.
-    var index = {};
-    students.forEach(function (s) {
-      index[s.grade] = index[s.grade] || {};
-      index[s.grade][s.classroom] = index[s.grade][s.classroom] || {};
-      index[s.grade][s.classroom][s.number] = s.row;
-    });
-    var event = { id: id, schoolName: String(setup.schoolName), schoolYear: String(setup.schoolYear), round: String(setup.round),
+    // 반·번호 → 명렬 시트 줄 번호. 학생을 찾을 때 시트 전체를 읽지 않게 한다(줄이 바뀐 것을 알아채면 다시 만든다).
+    var index = buildIndex_(students);
+    var event = { id: id, version: 1, schoolName: String(setup.schoolName), schoolYear: String(setup.schoolYear), round: String(setup.round),
       open: true, createdAt: now_(), grades: Object.keys(grades).sort(), subjects: setup.subjects, groups: groups, index: index,
       pepper: Utilities.getUuid() + Utilities.getUuid() };
     var codes = [];
@@ -357,6 +411,8 @@ function teacherSetup_(setup) {
     var record = book_().insertSheet('기록_' + id);
     record.getRange(1, 5, record.getMaxRows(), 2).setNumberFormat('@');
     record.getRange(1, 1, 1, RECORD_HEADER.length).setValues([RECORD_HEADER]);
+    // 손으로 고치거나 정렬하려 하면 구글이 경고를 띄운다(막지는 않는다 — 교사 본인 시트).
+    [roster, record].forEach(function (sheet) { sheet.protect().setDescription('수강신청이 쓰는 시트입니다. 고치거나 정렬하지 마세요.').setWarningOnly(true); });
     saveEvent_(event);
     return { id: id, schoolName: event.schoolName, schoolYear: event.schoolYear, round: event.round, codes: codes };
   });
@@ -425,7 +481,8 @@ function changeAlreadyDone_(request) {
   var grade = String(request.grade == null ? '' : request.grade).trim();
   var rows = findRows_(event, /^[12]$/.test(grade) ? grade : '', digits_(request.classroom), digits_(request.number));
   if (rows.length !== 1) return false;
-  var s = readStudentRow_(event, rows[0]);
+  var s = readStudentRow_(event, rows[0].row);
+  if (!sameStudent_(s, rows[0].grade, digits_(request.classroom), digits_(request.number))) return false;
   return !s.mustChange && !lockMessage_(s) && sameText_(s.hash, codeHash_(event, studentKey_(s.grade, s.classroom, s.number), next));
 }
 
@@ -441,12 +498,13 @@ function studentChangeCode_(request) {
   if (/^(.)\1{5}$/.test(next) || WEAK_CODES.indexOf(next) >= 0) return { error: '너무 쉬운 번호입니다. 다른 6자리를 정하세요.' };
   return withLock_(function () {
     // 잠금 안에서 그 줄을 새로 읽는다: 같은 학생이 동시에 두 번 바꾸려 하면 둘째는 거절된다.
-    var fresh = readStudentRow_(event, s.row);
+    var fresh = freshStudent_(event, s);
+    if (!fresh) return { error: BUSY, retry: true };
     var key = studentKey_(fresh.grade, fresh.classroom, fresh.number);
     if (!fresh.mustChange || !sameText_(fresh.hash, codeHash_(event, key, String(request.code)))) {
       return { error: '이미 코드를 변경했습니다. 잊었다면 선생님께 재발급을 요청하세요.' };
     }
-    rosterSheet_(event.id).getRange(fresh.row, 6, 1, 2).setValues([['h:' + codeHash_(event, key, next), 0]]);
+    writeStudentCells_(event, fresh, 6, ['h:' + codeHash_(event, key, next), 0]);
     return { message: '코드를 변경했습니다. 지금부터 새 코드로 접속하세요. 처음 받은 코드는 쓸 수 없습니다.' };
   });
 }
@@ -493,7 +551,8 @@ function studentSubmit_(request) {
   var text = JSON.stringify(selections);
   recordSheet_(event.id).appendRow([at, Number(s.grade), Number(s.classroom), Number(s.number), text, 'submit']);
   // 학생 화면이 다음에 읽을 값: 그 학생 줄의 '현재선택·제출시각' 두 칸(다른 학생·다른 칸과 겹치지 않아 잠금이 필요 없다).
-  rosterSheet_(event.id).getRange(s.row, 15, 1, 2).setValues([[text, at]]);
+  // 줄은 이 요청 처음에 그 학생인지 확인한 것. 그 뒤 쓰기 사이에 정렬이 끼어들면 교사 결과 읽기의 mismatched로 드러난다.
+  writeStudentCells_(event, s, 15, [text, at]);
   return { message: '신청이 저장되었습니다. 신청 이력도 기록했습니다.', submittedAt: at };
 }
 
