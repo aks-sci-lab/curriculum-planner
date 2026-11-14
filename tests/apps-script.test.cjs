@@ -10,18 +10,26 @@ const { test } = require("node:test");
 const source = fs.readFileSync(path.join(__dirname, "..", "apps-script", "Code.gs"), "utf8");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function environment() {
-  const stats = { sheetReads: 0, appends: 0, lockTries: 0, lockHeld: false, lockBusy: false, alerts: [] };
+function environment({ cacheLimit = 1000 } = {}) {
+  const stats = { sheetReads: 0, rowsRead: 0, appends: 0, cellWrites: 0, lockTries: 0, lockHeld: false, lockBusy: false, beforeLock: null, alerts: [], formats: [] };
   const sheets = new Map();
+  // 실제 시트처럼 글자를 바꾼다: 숫자처럼 보이는 글자 → 숫자(앞의 0이 사라짐), '='로 시작 → 수식(값이 아님).
+  const stored = (value) => {
+    if (typeof value !== "string") return value;
+    if (value.startsWith("=")) return "#수식";
+    return value !== "" && /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(value.trim()) ? Number(value) : value;
+  };
   const makeSheet = (name) => {
     const rows = [];
     const sheet = {
       name, rows,
       getLastRow: () => rows.length,
-      appendRow: (row) => { stats.appends += 1; rows.push(row.slice()); },
+      getMaxRows: () => 1000,
+      appendRow: (row) => { stats.appends += 1; rows.push(row.map(stored)); },
       getRange: (row, column, count = 1, width = 1) => ({
-        getValues: () => { stats.sheetReads += 1; return Array.from({ length: count }, (_, r) => Array.from({ length: width }, (_, c) => rows[row - 1 + r]?.[column - 1 + c] ?? "")); },
-        setValues: (values) => { assert.equal(values.length, count); values.forEach((line, r) => { rows[row - 1 + r] ||= []; line.forEach((value, c) => { rows[row - 1 + r][column - 1 + c] = value; }); }); },
+        getValues: () => { stats.sheetReads += 1; stats.rowsRead += count; return Array.from({ length: count }, (_, r) => Array.from({ length: width }, (_, c) => rows[row - 1 + r]?.[column - 1 + c] ?? "")); },
+        setValues: (values) => { stats.cellWrites += 1; assert.equal(values.length, count); values.forEach((line, r) => { assert.equal(line.length, width); rows[row - 1 + r] ||= []; line.forEach((value, c) => { rows[row - 1 + r][column - 1 + c] = stored(value); }); }); },
+        setNumberFormat: (format) => { stats.formats.push(`${name}:${column}:${format}`); },
       }),
     };
     return sheet;
@@ -38,18 +46,26 @@ function environment() {
   const ctx = vm.createContext({
     SpreadsheetApp: { getActiveSpreadsheet: () => book, getUi: () => ui },
     PropertiesService: { getScriptProperties: () => ({
-      getProperty: (key) => properties.has(key) ? properties.get(key) : null,
+      getProperty: (key) => { stats.propertyReads = (stats.propertyReads || 0) + 1; return properties.has(key) ? properties.get(key) : null; },
       setProperty: (key, value) => { assert.ok(String(value).length <= 9000, "속성 값 9KB 한도"); properties.set(key, String(value)); },
+      getProperties: () => { stats.propertyReads = (stats.propertyReads || 0) + 1; return Object.fromEntries(properties); },
       setProperties: (values) => { for (const [key, value] of Object.entries(values)) { assert.ok(String(value).length <= 9000, "속성 값 9KB 한도"); properties.set(key, String(value)); } },
     }) },
-    CacheService: { getScriptCache: () => ({
-      get: (key) => cache.has(key) ? cache.get(key) : null,
-      put: (key, value) => { assert.ok(String(value).length <= 100000); cache.set(key, String(value)); },
-      putAll: (values) => { for (const [key, value] of Object.entries(values)) cache.set(key, String(value)); },
-      getAll: (keys) => Object.fromEntries(keys.filter((key) => cache.has(key)).map((key) => [key, cache.get(key)])),
-    }) },
+    // 실제 캐시처럼 항목 수 상한이 있고, 넘으면 임의의 항목을 지운다(만료 전에도 사라질 수 있다).
+    CacheService: { getScriptCache: () => {
+      const trim = () => { while (cache.size > cacheLimit) cache.delete([...cache.keys()][Math.floor(cache.size / 2)]); };
+      return {
+        get: (key) => cache.has(key) ? cache.get(key) : null,
+        put: (key, value) => { assert.ok(String(value).length <= 100000); cache.set(key, String(value)); trim(); },
+        putAll: (values) => { for (const [key, value] of Object.entries(values)) cache.set(key, String(value)); trim(); },
+        getAll: (keys) => Object.fromEntries(keys.filter((key) => cache.has(key)).map((key) => [key, cache.get(key)])),
+      };
+    } },
     LockService: { getScriptLock: () => ({
-      tryLock: () => { stats.lockTries += 1; if (stats.lockBusy || stats.lockHeld) return false; stats.lockHeld = true; return true; },
+      // beforeLock: 잠금을 기다리는 사이 다른 요청이 먼저 끝난 상황을 흉내 낸다(한 번만 실행).
+      tryLock: () => { stats.lockTries += 1; if (stats.lockBusy || stats.lockHeld) return false;
+        if (stats.beforeLock) { const hook = stats.beforeLock; stats.beforeLock = null; hook(); }
+        stats.lockHeld = true; return true; },
       releaseLock: () => { stats.lockHeld = false; },
     }) },
     ContentService: { MimeType: { JSON: "application/json" }, createTextOutput: (text) => ({ text, mime: "", setMimeType(mime) { this.mime = mime; return this; }, getContent() { return this.text; } }) },
@@ -164,7 +180,7 @@ test("학생 접속: 첫 접속은 코드 변경부터, 쉬운 코드 거절, �
   assert.deepEqual(opened.groups.map((group) => group.id), ["g1", "g2"], "내년 학년(2학년) 그룹만");
   assert.deepEqual(plain(opened.selections), []);
   assert.match(env.call({ action: "changeCode", ...who, code: "482913", newCode: "777123" }).error, /이미 코드를 변경/);
-  // 캐시가 비어도(6시간 뒤) 시트에서 다시 읽어 같은 답.
+  // 캐시가 비어도(6시간 뒤) 속성·시트에서 다시 읽어 같은 답.
   env.clearCache();
   assert.equal(env.call({ action: "open", ...who, code: "482913" }).open, true);
   // 앞에 0이 붙은 반·번호도 같은 학생.
@@ -216,10 +232,11 @@ test("학생별 마지막 줄이 유효: 다시 제출하면 줄이 늘고 결�
   assert.deepEqual(plain(byNumber["2"].selections), ["물리학", "영어Ⅰ", "화학"]);
   assert.equal(byNumber["3"].submittedAt, null);
   assert.equal(byNumber["1"].studentId, "1011");
+  assert.equal(results.mismatched, 0, "학생 화면이 읽는 칸과 기록의 마지막 줄이 같다");
   assert.ok(!JSON.stringify(results).includes("482913"), "결과에 코드가 없다");
 });
 
-test("제출은 잠금 없이 한 줄 덧붙이기 + 시트 읽기 없음(캐시가 채워진 동안)", () => {
+test("제출 1건 = 잠금 없이 학생 한 줄 읽기 + 기록 한 줄 덧붙이기 + 그 학생 칸 쓰기(시트 전체를 읽지 않는다)", () => {
   const env = environment();
   const { changed } = ready(env);
   const who = changed(1);
@@ -230,8 +247,16 @@ test("제출은 잠금 없이 한 줄 덧붙이기 + 시트 읽기 없음(캐시
   assert.match(env.call({ action: "submit", ...who, selections: ["대수", "영어Ⅰ", "화학"] }).message, /저장/);
   env.stats.lockBusy = false;
   assert.equal(env.stats.lockTries, before.lockTries, "제출은 잠금을 잡지 않는다");
-  assert.equal(env.stats.sheetReads, before.sheetReads, "제출은 시트를 읽지 않는다");
+  assert.equal(env.stats.sheetReads, before.sheetReads + 1, "시트 읽기는 그 학생 한 줄 한 번");
+  assert.equal(env.stats.rowsRead, before.rowsRead + 1);
   assert.equal(env.stats.appends, before.appends + 1);
+  assert.equal(env.stats.cellWrites, before.cellWrites + 1);
+  assert.equal(env.stats.propertyReads, before.propertyReads, "설정은 캐시에서(속성을 읽지 않는다)");
+  // 설정 캐시가 지워져도 속성은 한 번에 읽는다(getProperties 한 번).
+  env.clearCache();
+  const reads = env.stats.propertyReads;
+  assert.equal(env.call({ action: "open", ...who }).open, true);
+  assert.equal(env.stats.propertyReads, reads + 1, "속성 읽기는 getProperties 한 번");
 });
 
 test("잠금을 못 잡으면 다시 시도하라는 답(retry), 자료는 그대로", () => {
@@ -384,4 +409,109 @@ test("측정 요약과 가상 자료: 가상 선택은 시제품 서버 규칙�
   }
   assert.equal(client.appsScriptSummary(results).successRate, 100, JSON.stringify(results.find((item) => !item.ok)));
   assert.equal(env.call({ action: "results", adminKey: env.adminKey, event: created.id }).submitted, 10);
+});
+
+// ---- 검토에서 나온 결함 확인 ----
+
+test("캐시가 항목을 임의로 지워도(상한 1,000) 650명 규모에서 로그인·열기·제출·결과가 모두 맞다", () => {
+  for (const cacheLimit of [1000, 3, 0]) {
+    const env = environment({ cacheLimit });
+    const roster = [];
+    for (let classroom = 1; classroom <= 10; classroom += 1) for (let number = 1; number <= 34; number += 1) roster.push({ grade: "1", classroom: String(classroom), number: String(number), name: `가상학생1-${classroom}-${number}` });
+    for (let classroom = 1; classroom <= 10; classroom += 1) for (let number = 1; number <= 31; number += 1) roster.push({ grade: "2", classroom: String(classroom), number: String(number), name: `가상학생2-${classroom}-${number}` });
+    assert.equal(roster.length, 650);
+    const created = env.call({ action: "setup", adminKey: env.adminKey, setup: setupJson({ roster }) });
+    assert.equal(created.codes.length, 650);
+    const picks = (item, index) => item.grade === "2" ? [index % 2 ? "세계사" : "확률과 통계"]
+      : [["대수", "영어Ⅰ"], ["물리학", "영어Ⅰ"], ["대수", "물리학"]][index % 3].concat(index % 2 ? "화학" : "심화 영어 (2학기)");
+    const expected = new Map();
+    created.codes.forEach((item, index) => {
+      const who = { event: created.id, grade: item.grade, classroom: item.classroom, number: item.number };
+      assert.equal(env.call({ action: "open", ...who, code: item.code }).mustChangeCode, true, `${item.grade}-${item.classroom}-${item.number}`);
+      assert.ok(env.call({ action: "changeCode", ...who, code: item.code, newCode: "482913" }).message);
+      const opened = env.call({ action: "open", ...who, code: "482913" });
+      assert.equal(opened.student.name, item.name);
+      assert.deepEqual(plain(opened.selections), []);
+      assert.ok(env.call({ action: "submit", ...who, code: "482913", selections: picks(item, index) }).message, `${item.name}`);
+      expected.set(`${item.grade}-${item.classroom}-${item.number}`, picks(item, index));
+    });
+    // 모두 낸 뒤 다시 열어도 자기 선택이 보인다(캐시에서 지워졌다고 '제출 안 함'이 되지 않는다).
+    created.codes.forEach((item) => {
+      const opened = env.call({ action: "open", event: created.id, grade: item.grade, classroom: item.classroom, number: item.number, code: "482913" });
+      assert.deepEqual(plain(opened.selections), expected.get(`${item.grade}-${item.classroom}-${item.number}`), item.name);
+    });
+    const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+    assert.deepEqual([results.students, results.submitted, results.mismatched], [650, 650, 0]);
+    for (const entry of results.entries) assert.deepEqual(plain(entry.selections), expected.get(`${entry.grade}-${entry.classroom}-${entry.number}`));
+    // 없는 반·번호를 물어도 시트를 읽지 않는다.
+    const reads = env.stats.sheetReads;
+    assert.equal(env.call({ action: "open", event: created.id, grade: "1", classroom: "11", number: "1", code: "482913" }).error, "반·번호 또는 코드가 맞지 않습니다.");
+    assert.equal(env.stats.sheetReads, reads);
+  }
+});
+
+test("같은 반 두 학생이 번갈아 여러 번 내도 서로의 제출을 잃지 않고, 재선택 불가 학생은 시트의 지금 선택으로 판정한다", () => {
+  const env = environment({ cacheLimit: 1 });
+  const roster = [
+    { grade: "1", classroom: "1", number: "1", name: "가상학생1" },
+    { grade: "1", classroom: "1", number: "2", name: "가상학생2", reselectionAllowed: false, retained: ["대수", "영어Ⅰ", "화학"] },
+  ];
+  const { changed, created } = ready(env, { roster });
+  const one = changed(1), two = changed(2);
+  env.call({ action: "submit", ...one, selections: ["대수", "영어Ⅰ", "화학"] });
+  env.call({ action: "submit", ...two, selections: ["화학", "영어Ⅰ", "대수"] });
+  env.call({ action: "submit", ...one, selections: ["물리학", "영어Ⅰ", "화학"] });
+  assert.match(env.call({ action: "submit", ...two, selections: ["대수", "물리학", "화학"] }).error, /폐강 과목 신청 학생만/);
+  assert.deepEqual(plain(env.call({ action: "open", ...one }).selections), ["물리학", "영어Ⅰ", "화학"]);
+  assert.deepEqual(plain(env.call({ action: "open", ...two }).selections), ["화학", "영어Ⅰ", "대수"]);
+  const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+  assert.deepEqual([results.submitted, results.mismatched], [2, 0]);
+});
+
+test("잠금 안에서는 그 줄을 새로 읽는다: 그 사이 올라간 실패 수를 덮어쓰지 않고, 코드 변경이 겹치면 둘째를 거절한다", () => {
+  const env = environment();
+  const { changed, student, created } = ready(env);
+  const who = changed(1);
+  const sheet = env.sheets.get(`명렬_${created.id}`);
+  env.call({ action: "open", ...who, code: "000001" });
+  assert.deepEqual(sheet.rows[1].slice(9, 11), [1, 1]);
+  // 올바른 코드로 들어오는 사이(잠금을 기다리는 동안) 다른 요청이 누적 실패를 5로 올렸다.
+  env.stats.beforeLock = () => { sheet.rows[1][9] = 3; sheet.rows[1][10] = 5; };
+  assert.equal(env.call({ action: "open", ...who }).open, true);
+  assert.deepEqual(sheet.rows[1].slice(9, 11), [0, 5], "연속 실패만 0으로, 누적 실패는 새로 읽은 값 그대로");
+  // 틀린 코드가 잠금을 기다리는 사이 다른 요청이 이미 교사 잠금을 걸었으면 그 상태를 그대로 답한다.
+  env.stats.beforeLock = () => { sheet.rows[1][12] = 1; };
+  assert.match(env.call({ action: "open", ...who, code: "000001" }).error, /선생님께 잠금 해제/);
+  assert.deepEqual(sheet.rows[1].slice(9, 13), [0, 5, 0, 1]);
+  // 같은 학생의 코드 변경 두 건이 겹치면: 먼저 끝난 것만 유효.
+  const other = student(2);
+  env.stats.beforeLock = () => { sheet.rows[2][6] = 0; };
+  assert.match(env.call({ action: "changeCode", ...other, newCode: "482913" }).error, /이미 코드를 변경/);
+  // 코드·잠금 칸을 써도 그 학생의 현재 선택 칸은 그대로다.
+  const third = changed(3);
+  env.call({ action: "submit", ...third, selections: ["대수", "영어Ⅰ", "화학"] });
+  env.call({ action: "open", ...third, code: "000001" });
+  assert.deepEqual(plain(env.call({ action: "open", ...third }).selections), ["대수", "영어Ⅰ", "화학"]);
+});
+
+test("시트가 글자를 바꿔도 그대로: 0으로 시작하는 학번, 숫자·수식처럼 보이는 이름, 숫자만 있는 과목명", () => {
+  const env = environment();
+  const setup = setupJson({ roster: [
+    { grade: "1", classroom: "1", number: "1", name: "=SUM(A1)", studentId: "01234" },
+    { grade: "1", classroom: "1", number: "2", name: "1004", studentId: "1e5" },
+  ] });
+  setup.subjects["2"].push({ subject: "2024", credit: 4, semester: "2" });
+  setup.groups[1].courses.push("2024");
+  const created = env.call({ action: "setup", adminKey: env.adminKey, setup });
+  const who = { event: created.id, classroom: "1", number: "1" };
+  env.call({ action: "changeCode", ...who, code: created.codes[0].code, newCode: "482913" });
+  assert.equal(env.call({ action: "open", ...who, code: "482913" }).student.name, "=SUM(A1)");
+  assert.match(env.call({ action: "submit", ...who, code: "482913", selections: ["대수", "영어Ⅰ", "2024"] }).message, /저장/);
+  const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+  assert.deepEqual(results.entries.map((entry) => [entry.name, entry.studentId]), [["=SUM(A1)", "01234"], ["1004", "1e5"]]);
+  assert.deepEqual(plain(results.entries[0].selections), ["대수", "영어Ⅰ", "2024"]);
+  assert.equal(results.mismatched, 0);
+  // 글자 칸은 일반 글자 서식으로 만든다(성명·학번·코드해시·유지과목·현재선택, 기록의 선택과목·구분).
+  for (const column of [4, 5, 6, 9, 15]) assert.ok(env.stats.formats.includes(`명렬_${created.id}:${column}:@`), String(column));
+  assert.ok(env.stats.formats.includes(`기록_${created.id}:5:@`));
 });
