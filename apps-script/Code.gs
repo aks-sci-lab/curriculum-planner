@@ -416,7 +416,21 @@ function studentOpen_(request) {
     lockedSelections: s.retained, reselectionAllowed: s.allowed };
 }
 
+// 코드 변경 답이 가는 길에 사라져 같은 요청이 다시 온 경우: 이미 그 새 코드로 바뀌어 있으면 성공으로 답한다
+// (그대로 두면 다시 보낸 요청이 '틀린 코드'로 세어져 학생이 잠길 수 있다). 새 코드를 아는 사람만 이 답을 받는다.
+function changeAlreadyDone_(request) {
+  var next = String(request.newCode == null ? '' : request.newCode);
+  if (!/^[0-9]{6}$/.test(next) || next === String(request.code)) return false;
+  var event = loadEvent_(request.event);
+  var grade = String(request.grade == null ? '' : request.grade).trim();
+  var rows = findRows_(event, /^[12]$/.test(grade) ? grade : '', digits_(request.classroom), digits_(request.number));
+  if (rows.length !== 1) return false;
+  var s = readStudentRow_(event, rows[0]);
+  return !s.mustChange && !lockMessage_(s) && sameText_(s.hash, codeHash_(event, studentKey_(s.grade, s.classroom, s.number), next));
+}
+
 function studentChangeCode_(request) {
+  if (changeAlreadyDone_(request)) return { message: '코드를 변경했습니다. 지금부터 새 코드로 접속하세요. 처음 받은 코드는 쓸 수 없습니다.', already: true };
   var auth = authenticate_(request);
   if (auth.error) return auth;
   var s = auth.student, event = auth.event;

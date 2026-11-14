@@ -50,26 +50,53 @@ function appsScriptSummary(results) {
   };
 }
 
-// 부하 측정용 가상 신청 설정(가상 과목·가상 학생만).
-function appsScriptVirtualSetup({ classes = 4, perClass = 30, schoolYear = String(new Date().getFullYear()) } = {}) {
+// 부하 측정용 가상 신청 설정(가상 과목·가상 학생만). 기본은 실제 규모: 현 1학년 10반 × 34명 + 현 2학년 10반 × 31명 = 650명.
+function appsScriptVirtualSetup({ classes1 = 10, perClass1 = 34, classes2 = 10, perClass2 = 31, schoolYear = String(new Date().getFullYear()) } = {}) {
   const names = (prefix, count) => Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`);
-  const first = names("가상 선택 가", 6), second = names("가상 선택 나", 6);
+  const courses = { "2": [names("가상 이학년 가", 6), names("가상 이학년 나", 6)], "3": [names("가상 삼학년 가", 6), names("가상 삼학년 나", 6)] };
   const roster = [];
-  for (let classroom = 1; classroom <= classes; classroom += 1) {
-    for (let number = 1; number <= perClass; number += 1) roster.push({ grade: "1", classroom: String(classroom), number: String(number), name: `가상학생${classroom}-${number}` });
+  for (const [grade, classes, perClass] of [["1", classes1, perClass1], ["2", classes2, perClass2]]) {
+    for (let classroom = 1; classroom <= classes; classroom += 1) {
+      for (let number = 1; number <= perClass; number += 1) roster.push({ grade, classroom: String(classroom), number: String(number), name: `가상학생${grade}-${classroom}-${number}` });
+    }
   }
-  return {
-    type: "course-application-setup", schoolName: "[부하 측정] 가상고등학교", schoolYear, round: "1",
-    subjects: { "2": [...first.map((subject) => ({ subject, credit: 4, semester: "1" })), ...second.map((subject) => ({ subject, credit: 4, semester: "2" }))], "3": [] },
-    groups: [{ id: "load-1", grade: "2", semester: "1", name: "1학기 택3", count: 3, courses: first }, { id: "load-2", grade: "2", semester: "2", name: "2학기 택3", count: 3, courses: second }],
-    roster,
-  };
+  const subjects = {}, groups = [];
+  for (const grade of ["2", "3"]) {
+    subjects[grade] = courses[grade].flatMap((list, index) => list.map((subject) => ({ subject, credit: 4, semester: String(index + 1) })));
+    courses[grade].forEach((list, index) => groups.push({ id: `load-${grade}-${index + 1}`, grade, semester: String(index + 1), name: `${grade}학년 ${index + 1}학기 택3`, count: 3, courses: list }));
+  }
+  return { type: "course-application-setup", schoolName: "[부하 측정] 가상고등학교", schoolYear, round: "1", subjects, groups, roster };
 }
 
-// 가상 학생의 선택(그룹마다 정확히 n개, 학생 번호로 정해져 다시 돌려도 같다).
-function appsScriptVirtualSelections(setup, index) {
-  return setup.groups.flatMap((group, order) => Array.from({ length: group.count }, (_, pick) => group.courses[(index + order + pick * 2) % group.courses.length]))
+// 가상 학생의 선택(내년 학년 그룹마다 정확히 n개, 학생 순서로 정해져 다시 돌려도 같다). grade = 현 학년.
+function appsScriptVirtualSelections(setup, index, grade = "1") {
+  const target = String(Number(grade) + 1);
+  return setup.groups.filter((group) => String(group.grade) === target)
+    .flatMap((group, order) => Array.from({ length: group.count }, (_, pick) => group.courses[(index + order + pick * 2) % group.courses.length]))
     .filter((name, position, list) => list.indexOf(name) === position);
 }
 
-if (typeof module !== "undefined") module.exports = { appsScriptDelay, appsScriptCall, appsScriptSummary, appsScriptVirtualSetup, appsScriptVirtualSelections };
+// '틀린 답' 세기: 느리거나 실패한 것과 달리, 성공이라고 답했는데 자료가 다른 경우와 정상 학생이 코드 오류·잠금을 받은 경우.
+// students = [{ grade, classroom, number, sent(보낸 선택), submitted(제출 결과), reopened(제출 뒤 다시 연 결과), calls: [모든 호출 결과] }]
+// entries = 교사 결과 읽기의 entries. 돌려주는 값: { wrongCode, lostSubmit, wrongStored, wrongShown, extraStored, total, examples }
+function appsScriptWrongAnswers(students, entries) {
+  const stored = new Map((entries || []).map((entry) => [`${entry.grade}-${entry.classroom}-${entry.number}`, entry]));
+  const same = (a, b) => JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
+  const counts = { wrongCode: 0, lostSubmit: 0, wrongStored: 0, wrongShown: 0, extraStored: 0 };
+  const examples = [];
+  const note = (kind, student) => { counts[kind] += 1; if (examples.length < 10) examples.push(`${kind}: ${student.grade}-${student.classroom}-${student.number}`); };
+  for (const student of students) {
+    const key = `${student.grade}-${student.classroom}-${student.number}`;
+    // 정상 학생(올바른 코드)이 '코드가 맞지 않습니다'·잠금·학년 선택을 받으면 서버가 학생을 잘못 본 것.
+    if ((student.calls || []).some((call) => call && call.data && (call.data.locked || call.data.needGrade || /맞지 않습니다/.test(String(call.data.error || ""))))) note("wrongCode", student);
+    const entry = stored.get(key);
+    const ok = student.submitted && student.submitted.ok;
+    if (ok && !(entry && entry.submittedAt)) note("lostSubmit", student);
+    else if (ok && !same(entry.selections, student.sent)) note("wrongStored", student);
+    else if (!ok && entry && entry.submittedAt) note("extraStored", student);
+    if (ok && student.reopened && student.reopened.ok && !same(student.reopened.data.selections, student.sent)) note("wrongShown", student);
+  }
+  return { ...counts, total: Object.values(counts).reduce((sum, count) => sum + count, 0), examples };
+}
+
+if (typeof module !== "undefined") module.exports = { appsScriptDelay, appsScriptCall, appsScriptSummary, appsScriptVirtualSetup, appsScriptVirtualSelections, appsScriptWrongAnswers };

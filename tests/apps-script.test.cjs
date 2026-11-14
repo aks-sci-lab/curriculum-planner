@@ -395,20 +395,46 @@ test("측정 요약과 가상 자료: 가상 선택은 시제품 서버 규칙�
   const summary = client.appsScriptSummary([{ ok: true, ms: 100, attempts: 1 }, { ok: true, ms: 300, attempts: 2 }, { ok: true, ms: 200, attempts: 1 }, { ok: false, ms: 9000, attempts: 6, kind: "quota" }]);
   assert.deepEqual(summary, { total: 4, success: 3, successRate: 75, retries: 6, retried: 2, median: 200, p95: 300, max: 300, errors: { quota: 1 } });
   const env = environment();
-  const setup = client.appsScriptVirtualSetup({ classes: 2, perClass: 5, schoolYear: "2026" });
+  const setup = client.appsScriptVirtualSetup({ schoolYear: "2026" });
+  assert.equal(setup.roster.length, 650, "기본값은 실제 규모(340 + 310)");
   assert.ok(setup.roster.every((student) => /^가상학생/.test(student.name)));
   const created = env.call({ action: "setup", adminKey: env.adminKey, setup });
-  assert.equal(created.codes.length, 10);
-  // 호출 도우미를 흉내 서버에 연결해 학생 10명이 접속 → 코드 변경 → 제출.
+  assert.equal(created.codes.length, 650);
+  // 호출 도우미를 흉내 서버에 연결해 두 학년 학생이 접속 → 코드 변경 → 제출 → 다시 열기.
   const fetchFn = async (url, init) => ({ status: 200, text: async () => JSON.stringify(env.call(init.body)) });
-  const results = [];
+  const students = [];
   for (const [index, item] of created.codes.entries()) {
-    const who = { event: created.id, classroom: item.classroom, number: item.number };
-    assert.equal((await client.appsScriptCall(fetchFn, "u", { action: "changeCode", ...who, code: item.code, newCode: "482913" }, quick)).ok, true);
-    results.push(await client.appsScriptCall(fetchFn, "u", { action: "submit", ...who, code: "482913", selections: client.appsScriptVirtualSelections(setup, index) }, quick));
+    if (index % 13) continue;
+    const student = { grade: item.grade, classroom: item.classroom, number: item.number, sent: client.appsScriptVirtualSelections(setup, index, item.grade), calls: [] };
+    const who = { event: created.id, grade: item.grade, classroom: item.classroom, number: item.number };
+    const call = async (body) => { const result = await client.appsScriptCall(fetchFn, "u", body, quick); student.calls.push(result); return result; };
+    assert.equal((await call({ action: "changeCode", ...who, code: item.code, newCode: "482913" })).ok, true);
+    student.submitted = await call({ action: "submit", ...who, code: "482913", selections: student.sent });
+    student.reopened = await call({ action: "open", ...who, code: "482913" });
+    students.push(student);
   }
-  assert.equal(client.appsScriptSummary(results).successRate, 100, JSON.stringify(results.find((item) => !item.ok)));
-  assert.equal(env.call({ action: "results", adminKey: env.adminKey, event: created.id }).submitted, 10);
+  assert.equal(client.appsScriptSummary(students.map((student) => student.submitted)).successRate, 100, JSON.stringify(students.find((student) => !student.submitted.ok)?.submitted));
+  const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+  assert.equal(results.submitted, students.length);
+  assert.equal(client.appsScriptWrongAnswers(students, results.entries).total, 0);
+});
+
+test("틀린 답 세기: 성공했는데 저장이 없거나 다르면, 정상 학생이 코드 오류를 받으면 따로 센다", () => {
+  const base = { grade: "1", classroom: "1", sent: ["가", "나"], submitted: { ok: true }, calls: [] };
+  const students = [
+    { ...base, number: "1", reopened: { ok: true, data: { selections: ["나", "가"] } } },
+    { ...base, number: "2" },
+    { ...base, number: "3" },
+    { ...base, number: "4", reopened: { ok: true, data: { selections: [] } } },
+    { ...base, number: "5", calls: [{ ok: false, data: { error: "반·번호 또는 코드가 맞지 않습니다." } }] },
+    { ...base, number: "6", submitted: { ok: false } },
+    { ...base, number: "7", submitted: { ok: false }, calls: [{ ok: false, data: { error: "x", locked: true } }] },
+  ];
+  const entry = (number, selections, submittedAt = 1) => ({ grade: "1", classroom: "1", number, selections, submittedAt });
+  const wrong = client.appsScriptWrongAnswers(students, [entry("1", ["가", "나"]), entry("2", [], null), entry("3", ["가", "다"]), entry("4", ["가", "나"]),
+    entry("5", ["가", "나"]), entry("6", ["가", "나"]), entry("7", [], null)]);
+  assert.deepEqual({ ...wrong, examples: undefined }, { wrongCode: 2, lostSubmit: 1, wrongStored: 1, wrongShown: 1, extraStored: 1, total: 6, examples: undefined });
+  assert.equal(wrong.examples.length, 6);
 });
 
 // ---- 검토에서 나온 결함 확인 ----
@@ -514,4 +540,21 @@ test("시트가 글자를 바꿔도 그대로: 0으로 시작하는 학번, 숫�
   // 글자 칸은 일반 글자 서식으로 만든다(성명·학번·코드해시·유지과목·현재선택, 기록의 선택과목·구분).
   for (const column of [4, 5, 6, 9, 15]) assert.ok(env.stats.formats.includes(`명렬_${created.id}:${column}:@`), String(column));
   assert.ok(env.stats.formats.includes(`기록_${created.id}:5:@`));
+});
+
+test("답이 사라져 같은 요청이 다시 와도 안전하다: 코드 변경은 성공으로, 제출은 같은 선택 한 줄 더", () => {
+  const env = environment();
+  const { student, created } = ready(env);
+  const who = student(1);
+  assert.ok(env.call({ action: "changeCode", ...who, newCode: "482913" }).message);
+  // 같은 요청을 다시(예전 코드 + 같은 새 코드): 틀린 코드로 세지 않고 성공으로 답한다.
+  const again = env.call({ action: "changeCode", ...who, newCode: "482913" });
+  assert.equal(again.already, true);
+  assert.deepEqual(env.sheets.get(`명렬_${created.id}`).rows[1].slice(9, 11), [0, 0], "실패 수가 오르지 않는다");
+  // 새 코드를 모르면(다른 새 코드) 여전히 틀린 코드.
+  assert.equal(env.call({ action: "changeCode", ...who, newCode: "777123" }).error, "반·번호 또는 코드가 맞지 않습니다.");
+  const now = { ...who, code: "482913" };
+  for (let i = 0; i < 2; i += 1) assert.ok(env.call({ action: "submit", ...now, selections: ["대수", "영어Ⅰ", "화학"] }).message);
+  const results = env.call({ action: "results", adminKey: env.adminKey, event: created.id });
+  assert.deepEqual([results.submitted, results.mismatched], [1, 0]);
 });

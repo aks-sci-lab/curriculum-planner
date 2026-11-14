@@ -24,16 +24,25 @@
 <label for="url">웹 앱 주소 (https://script.google.com/macros/s/…/exec)</label><input id="url" type="text" autocomplete="off">
 <label for="key">관리 열쇠</label><input id="key" type="password" autocomplete="off">
 <div class="row">
-  <label>반 수<input id="classes" type="number" min="1" max="20" value="4"></label>
-  <label>반별 인원<input id="perClass" type="number" min="1" max="40" value="30"></label>
+  <label>현 1학년 반 수<input id="classes1" type="number" min="1" max="20" value="10"></label>
+  <label>현 1학년 반별 인원<input id="perClass1" type="number" min="1" max="40" value="34"></label>
+  <label>현 2학년 반 수<input id="classes2" type="number" min="0" max="20" value="10"></label>
+  <label>현 2학년 반별 인원<input id="perClass2" type="number" min="1" max="40" value="31"></label>
+</div>
+<div class="row">
+  <label>동시에 여는·내는 학생 수 (현 1학년에서, 0 = 학년 전체)<input id="measure" type="number" min="0" max="800" value="0"></label>
   <label>준비 단계 동시 수<input id="prepare" type="number" min="1" max="30" value="10"></label>
   <label>제출 동시 수 (0 = 모두 한꺼번에)<input id="burst" type="number" min="0" max="800" value="0"></label>
   <label>다시 시도 횟수<input id="retries" type="number" min="0" max="8" value="5"></label>
 </div>
+<p class="note">기본값은 실제 규모입니다: 두 학년 650명 명렬로 신청을 만들고, 그중 현 1학년 340명이 동시에 신청 화면을 열고 제출합니다.</p>
 <button id="start" type="button">측정 시작</button>
 <p class="note" id="status" role="status">웹 앱 주소와 관리 열쇠를 넣고 시작하세요. 이 페이지는 입력한 주소로만 요청을 보냅니다.</p>
 <h2>결과</h2>
 <table id="summary"><thead><tr><th>단계</th><th>요청</th><th>성공</th><th>성공률</th><th>다시 시도한 요청</th><th>다시 시도 횟수</th><th>중앙값(ms)</th><th>95%(ms)</th><th>최대(ms)</th><th>실패 종류</th></tr></thead><tbody></tbody></table>
+<h2>틀린 답 <span class="note">(느리거나 실패한 것과 별개 — 0이어야 합니다)</span></h2>
+<table id="wrong"><thead><tr><th>종류</th><th>수</th></tr></thead><tbody></tbody></table>
+<p class="note" id="wrongExamples"></p>
 <p class="note">실패 종류 — quota: 구글이 JSON이 아닌 답(동시 실행 한도·오류 화면)이나 429·5xx를 보냄 · busy: 스크립트 잠금을 못 잡음 · network: 연결 실패·시간 초과(CORS 차단 포함) · rule: 규칙·입력 오류(측정에서는 나오면 안 됨).</p>
 <h2>기록</h2>
 <div id="log"></div>
@@ -75,35 +84,47 @@
       const ping = await call({ action: "ping" }, { retries: 1 });
       row("연결 확인(ping)", [ping]);
       if (!ping.ok) { status(`웹 앱에 연결하지 못했습니다: ${ping.data?.error || ping.kind}. 주소·배포 설정(액세스: 모든 사용자)을 확인하세요.`); return; }
-      const setup = appsScriptVirtualSetup({ classes: Number($("classes").value) || 1, perClass: Number($("perClass").value) || 1 });
+      const number = (id, fallback) => { const value = Number($(id).value); return Number.isFinite(value) && $(id).value !== "" ? value : fallback; };
+      const setup = appsScriptVirtualSetup({ classes1: number("classes1", 10), perClass1: number("perClass1", 34), classes2: number("classes2", 10), perClass2: number("perClass2", 31) });
       status(`가상 학생 ${setup.roster.length}명으로 신청 만드는 중…`);
       const created = await call({ action: "setup", adminKey, setup });
-      row("신청 만들기(setup)", [created]);
+      row(`신청 만들기(setup) · 명렬 ${setup.roster.length}명`, [created]);
       if (!created.ok) { status(`신청을 만들지 못했습니다: ${created.data?.error || created.kind}`); return; }
       const event = created.data.id;
-      const students = created.data.codes.map((item, index) => ({ event, classroom: item.classroom, number: item.number, code: item.code, index }));
-      status("준비: 가상 학생마다 첫 접속 → 코드 변경…");
-      const prepare = Number($("prepare").value) || 10;
-      const firstOpen = await pool(students, prepare, (s) => call({ action: "open", ...s }));
-      row("첫 접속(open)", firstOpen);
-      const changed = await pool(students, prepare, async (s) => { const result = await call({ action: "changeCode", ...s, newCode: "482913" }); if (result.ok) s.code = "482913"; return result; });
-      row("코드 변경(changeCode, 잠금 사용)", changed);
-      const burst = Number($("burst").value) || 0;
-      status(`측정: ${students.length}명이 ${burst ? `${burst}명씩` : "한꺼번에"} 신청 화면 열기…`);
-      const opened = await pool(students, burst, (s) => call({ action: "open", ...s }));
-      row(`신청 화면 열기(open) · 동시 ${burst || students.length}`, opened);
-      status(`측정: ${students.length}명이 ${burst ? `${burst}명씩` : "한꺼번에"} 제출…`);
-      const submitted = await pool(students, burst, (s) => call({ action: "submit", ...s, selections: appsScriptVirtualSelections(setup, s.index) }));
-      const summary = row(`제출(submit) · 동시 ${burst || students.length}`, submitted);
+      // 측정 대상: 현 1학년에서 정한 수만큼(같은 반·번호가 현 2학년에도 있으므로 학년을 함께 보낸다).
+      const firstGrade = created.data.codes.filter((item) => item.grade === "1");
+      const count = number("measure", 0) > 0 ? Math.min(number("measure", 0), firstGrade.length) : firstGrade.length;
+      const students = firstGrade.slice(0, count).map((item, index) => ({ grade: "1", classroom: item.classroom, number: item.number, code: item.code, index,
+        sent: appsScriptVirtualSelections(setup, index, "1"), calls: [] }));
+      const who = (s) => ({ event, grade: s.grade, classroom: s.classroom, number: s.number, code: s.code });
+      const tracked = async (s, body) => { const result = await call(body); s.calls.push(result); return result; };
+      status(`준비: 가상 학생 ${students.length}명 첫 접속 → 코드 변경…`);
+      const prepare = number("prepare", 10) || 10;
+      row("첫 접속(open)", await pool(students, prepare, (s) => tracked(s, { action: "open", ...who(s) })));
+      row("코드 변경(changeCode, 잠금 사용)", await pool(students, prepare, async (s) => { const result = await tracked(s, { action: "changeCode", ...who(s), newCode: "482913" }); if (result.ok) s.code = "482913"; return result; }));
+      const burst = number("burst", 0);
+      const together = burst || students.length;
+      status(`측정: ${students.length}명이 동시 ${together}명으로 신청 화면 열기…`);
+      row(`신청 화면 열기(open) · 동시 ${together}`, await pool(students, burst, (s) => tracked(s, { action: "open", ...who(s) })));
+      status(`측정: ${students.length}명이 동시 ${together}명으로 제출…`);
+      const summary = row(`제출(submit) · 동시 ${together}`, await pool(students, burst, async (s) => { s.submitted = await tracked(s, { action: "submit", ...who(s), selections: s.sent }); return s.submitted; }));
+      status("제출 뒤 다시 열어 자기 선택이 보이는지 확인…");
+      row(`제출 뒤 다시 열기(open) · 동시 ${together}`, await pool(students, burst, async (s) => { s.reopened = await tracked(s, { action: "open", ...who(s) }); return s.reopened; }));
       status("결과 대조 중…");
       const results = await call({ action: "results", adminKey, event });
       row("결과 읽기(results)", [results]);
-      const stored = results.ok ? results.data.submitted : null;
       await call({ action: "close", adminKey, event });
-      log(`서버에 저장된 제출 학생 ${stored ?? "?"}명 / 성공으로 답한 제출 ${summary.success}건`);
-      status(stored === summary.success
-        ? `끝. 제출 ${summary.success}/${summary.total} 성공(성공률 ${summary.successRate}%), 서버 저장 수와 일치. 스프레드시트에서 명렬_${event}·기록_${event} 시트를 지우세요.`
-        : `끝. 주의: 성공으로 답한 제출 ${summary.success}건과 서버에 저장된 학생 ${stored ?? "?"}명이 다릅니다. 표와 기록을 확인하세요.`);
+      const wrong = appsScriptWrongAnswers(students, results.ok ? results.data.entries : []);
+      const labels = { wrongCode: "정상 학생이 코드 오류·잠금·학년 선택을 받음", lostSubmit: "성공이라고 답했는데 서버에 제출이 없음", wrongStored: "서버에 저장된 선택이 보낸 것과 다름",
+        wrongShown: "다시 열었을 때 보이는 선택이 보낸 것과 다름", extraStored: "실패라고 답했는데 서버에 제출이 있음" };
+      $("wrong").tBodies[0].textContent = "";
+      for (const [kind, label] of Object.entries(labels)) { const tr = document.createElement("tr"); for (const value of [label, wrong[kind]]) { const td = document.createElement("td"); td.textContent = String(value); tr.append(td); } $("wrong").tBodies[0].append(tr); }
+      const sheetMismatch = results.ok ? results.data.mismatched : null;
+      $("wrongExamples").textContent = `${wrong.examples.length ? `예: ${wrong.examples.join(", ")} · ` : ""}서버가 센 '학생 화면 칸 ≠ 기록 마지막 줄' ${sheetMismatch ?? "?"}명`;
+      log(`틀린 답 ${wrong.total}건, 서버 저장 ${results.ok ? results.data.submitted : "?"}명 / 성공으로 답한 제출 ${summary.success}건`);
+      status(!results.ok ? "끝. 주의: 결과를 읽지 못해 대조하지 못했습니다. 표와 기록을 확인하세요."
+        : wrong.total || sheetMismatch ? `끝. 주의: 틀린 답 ${wrong.total}건${sheetMismatch ? `, 시트 불일치 ${sheetMismatch}명` : ""} — 표를 확인하세요(성공률과 별개의 결함입니다).`
+          : `끝. 제출 ${summary.success}/${summary.total} 성공(성공률 ${summary.successRate}%), 틀린 답 0건. 스프레드시트에서 명렬_${event}·기록_${event} 시트를 지우세요.`);
     } catch (error) {
       status(`측정 중 오류: ${error?.message || error}`);
     } finally {
