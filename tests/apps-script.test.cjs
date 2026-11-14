@@ -327,3 +327,61 @@ test("큰 설정(과목 500개)도 속성 조각으로 저장하고, 학년도�
   assert.match(env.call({ action: "loginForm", event: created.id }).error, /기간이 끝났습니다/);
   assert.match(env.call({ action: "loginForm", event: "없는신청" }).error, /찾지 못했습니다/);
 });
+
+// ---- 호출 도우미(apps-script/client.js): 다시 시도·요약·가상 자료 ----
+const client = require("../apps-script/client.js");
+
+function fakeFetch(answers) {
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, init });
+    const answer = answers[Math.min(calls.length - 1, answers.length - 1)];
+    if (answer instanceof Error) throw answer;
+    return { status: answer.status || 200, text: async () => answer.text };
+  };
+  return { fn, calls };
+}
+const quick = { sleep: async () => {}, random: () => 0.5 };
+
+test("호출 도우미: 단순 요청(text/plain, redirect follow), 잠금·한도·네트워크 오류는 지연을 늘려 다시 시도", async () => {
+  const waits = [];
+  const options = { sleep: async (ms) => { waits.push(ms); }, random: () => 1 };
+  const flaky = fakeFetch([{ text: "<html>Service invoked too many times</html>" }, { text: JSON.stringify({ error: "busy", retry: true }) }, new Error("Failed to fetch"), { text: JSON.stringify({ message: "저장" }) }]);
+  const result = await client.appsScriptCall(flaky.fn, "https://script.google.com/macros/s/x/exec", { action: "submit" }, options);
+  assert.equal(result.ok, true);
+  assert.equal(result.attempts, 4);
+  assert.deepEqual(waits, [500, 1000, 2000], "지연이 두 배씩 늘어난다");
+  assert.equal(flaky.calls[0].init.method, "POST");
+  assert.equal(flaky.calls[0].init.headers["Content-Type"], "text/plain;charset=utf-8");
+  assert.equal(flaky.calls[0].init.redirect, "follow");
+  assert.equal(JSON.parse(flaky.calls[0].init.body).action, "submit");
+  // 규칙 오류는 다시 시도하지 않고 그대로 돌려준다.
+  const rule = fakeFetch([{ text: JSON.stringify({ error: "정확히 2과목을 선택하세요." }) }]);
+  const refused = await client.appsScriptCall(rule.fn, "u", {}, quick);
+  assert.deepEqual([refused.ok, refused.kind, refused.attempts, rule.calls.length], [false, "rule", 1, 1]);
+  // 끝까지 안 되면 마지막 종류를 알려 준다.
+  const down = fakeFetch([{ status: 429, text: JSON.stringify({ error: "x" }) }]);
+  const failed = await client.appsScriptCall(down.fn, "u", {}, { ...quick, retries: 2 });
+  assert.deepEqual([failed.ok, failed.kind, failed.attempts], [false, "quota", 3]);
+  assert.ok(client.appsScriptDelay(10, { random: () => 1 }) <= 8000, "지연 상한");
+});
+
+test("측정 요약과 가상 자료: 가상 선택은 시제품 서버 규칙을 통과한다", async () => {
+  const summary = client.appsScriptSummary([{ ok: true, ms: 100, attempts: 1 }, { ok: true, ms: 300, attempts: 2 }, { ok: true, ms: 200, attempts: 1 }, { ok: false, ms: 9000, attempts: 6, kind: "quota" }]);
+  assert.deepEqual(summary, { total: 4, success: 3, successRate: 75, retries: 6, retried: 2, median: 200, p95: 300, max: 300, errors: { quota: 1 } });
+  const env = environment();
+  const setup = client.appsScriptVirtualSetup({ classes: 2, perClass: 5, schoolYear: "2026" });
+  assert.ok(setup.roster.every((student) => /^가상학생/.test(student.name)));
+  const created = env.call({ action: "setup", adminKey: env.adminKey, setup });
+  assert.equal(created.codes.length, 10);
+  // 호출 도우미를 흉내 서버에 연결해 학생 10명이 접속 → 코드 변경 → 제출.
+  const fetchFn = async (url, init) => ({ status: 200, text: async () => JSON.stringify(env.call(init.body)) });
+  const results = [];
+  for (const [index, item] of created.codes.entries()) {
+    const who = { event: created.id, classroom: item.classroom, number: item.number };
+    assert.equal((await client.appsScriptCall(fetchFn, "u", { action: "changeCode", ...who, code: item.code, newCode: "482913" }, quick)).ok, true);
+    results.push(await client.appsScriptCall(fetchFn, "u", { action: "submit", ...who, code: "482913", selections: client.appsScriptVirtualSelections(setup, index) }, quick));
+  }
+  assert.equal(client.appsScriptSummary(results).successRate, 100, JSON.stringify(results.find((item) => !item.ok)));
+  assert.equal(env.call({ action: "results", adminKey: env.adminKey, event: created.id }).submitted, 10);
+});

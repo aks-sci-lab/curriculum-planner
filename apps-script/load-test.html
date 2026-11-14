@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apps Script 수강신청 저장소 부하 측정</title>
+<style>
+  body { font-family: system-ui, "Malgun Gothic", sans-serif; margin: 24px auto; max-width: 920px; padding: 0 16px; color: #1f2937; line-height: 1.5; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 24px; }
+  label { display: block; margin: 8px 0 2px; font-size: 13px; font-weight: 600; }
+  input { padding: 6px 8px; border: 1px solid #c5ccd8; border-radius: 6px; font: inherit; }
+  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; } .row label { flex: 1 1 140px; } .row input { width: 100%; box-sizing: border-box; }
+  button { margin-top: 14px; padding: 8px 16px; border: 0; border-radius: 6px; background: #2f5bd8; color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { background: #9aa6c2; cursor: default; }
+  .note { font-size: 13px; color: #5c6982; } .warn { padding: 8px 12px; border: 1px solid #f0d9a8; background: #fffaf0; border-radius: 8px; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 13px; } th, td { border: 1px solid #dfe4ee; padding: 5px 8px; text-align: right; } th:first-child, td:first-child { text-align: left; } thead th { background: #f4f6fa; }
+  #log { white-space: pre-wrap; font: 12px ui-monospace, monospace; background: #f6f7f9; padding: 8px; border-radius: 6px; max-height: 220px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>Apps Script 수강신청 저장소 부하 측정 (시제품)</h1>
+<p class="warn"><strong>가상 학생만 씁니다.</strong> 실제 학생 명렬·코드를 넣지 마세요. 측정을 시작하면 입력한 웹 앱(본인 구글 스프레드시트)에 '[부하 측정] 가상고등학교' 신청과 가상 학생 시트 두 장(명렬_…, 기록_…)이 만들어집니다. 끝나면 신청은 마감 상태로 두니 스프레드시트에서 그 시트 두 장을 지우면 됩니다.</p>
+<label for="url">웹 앱 주소 (https://script.google.com/macros/s/…/exec)</label><input id="url" type="text" autocomplete="off">
+<label for="key">관리 열쇠</label><input id="key" type="password" autocomplete="off">
+<div class="row">
+  <label>반 수<input id="classes" type="number" min="1" max="20" value="4"></label>
+  <label>반별 인원<input id="perClass" type="number" min="1" max="40" value="30"></label>
+  <label>준비 단계 동시 수<input id="prepare" type="number" min="1" max="30" value="10"></label>
+  <label>제출 동시 수 (0 = 모두 한꺼번에)<input id="burst" type="number" min="0" max="800" value="0"></label>
+  <label>다시 시도 횟수<input id="retries" type="number" min="0" max="8" value="5"></label>
+</div>
+<button id="start" type="button">측정 시작</button>
+<p class="note" id="status" role="status">웹 앱 주소와 관리 열쇠를 넣고 시작하세요. 이 페이지는 입력한 주소로만 요청을 보냅니다.</p>
+<h2>결과</h2>
+<table id="summary"><thead><tr><th>단계</th><th>요청</th><th>성공</th><th>성공률</th><th>다시 시도한 요청</th><th>다시 시도 횟수</th><th>중앙값(ms)</th><th>95%(ms)</th><th>최대(ms)</th><th>실패 종류</th></tr></thead><tbody></tbody></table>
+<p class="note">실패 종류 — quota: 구글이 JSON이 아닌 답(동시 실행 한도·오류 화면)이나 429·5xx를 보냄 · busy: 스크립트 잠금을 못 잡음 · network: 연결 실패·시간 초과(CORS 차단 포함) · rule: 규칙·입력 오류(측정에서는 나오면 안 됨).</p>
+<h2>기록</h2>
+<div id="log"></div>
+<script src="client.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const log = (text) => { $("log").textContent += `${new Date().toLocaleTimeString("ko-KR")} ${text}\n`; $("log").scrollTop = $("log").scrollHeight; };
+  const status = (text) => { $("status").textContent = text; };
+  // 동시 수를 제한해 차례로 돌린다(limit 0 = 모두 한꺼번에).
+  async function pool(items, limit, work) {
+    const results = new Array(items.length);
+    if (!limit || limit >= items.length) { await Promise.all(items.map(async (item, index) => { results[index] = await work(item, index); })); return results; }
+    let next = 0;
+    await Promise.all(Array.from({ length: limit }, async () => { while (next < items.length) { const index = next++; results[index] = await work(items[index], index); } }));
+    return results;
+  }
+  function row(label, results) {
+    const s = appsScriptSummary(results);
+    const tr = document.createElement("tr");
+    const cells = [label, s.total, s.success, `${s.successRate}%`, s.retried, s.retries, s.median ?? "-", s.p95 ?? "-", s.max ?? "-",
+      Object.entries(s.errors).map(([kind, count]) => `${kind} ${count}`).join(", ") || "-"];
+    for (const value of cells) { const td = document.createElement("td"); td.textContent = String(value); tr.append(td); }
+    $("summary").tBodies[0].append(tr);
+    log(`${label}: ${s.success}/${s.total} 성공, 중앙값 ${s.median ?? "-"}ms, 95% ${s.p95 ?? "-"}ms, 다시 시도 ${s.retries}회`);
+    return s;
+  }
+  $("start").addEventListener("click", async () => {
+    const url = $("url").value.trim(), adminKey = $("key").value.trim();
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) { status("웹 앱 주소는 https://script.google.com/macros/s/…/exec 모양이어야 합니다."); return; }
+    if (!adminKey) { status("관리 열쇠를 넣어 주세요."); return; }
+    const retries = Number($("retries").value) || 0;
+    const call = (body, options = {}) => appsScriptCall(fetch.bind(window), url, body, { retries, ...options });
+    $("start").disabled = true;
+    $("summary").tBodies[0].textContent = "";
+    $("log").textContent = "";
+    try {
+      status("연결 확인 중…");
+      const ping = await call({ action: "ping" }, { retries: 1 });
+      row("연결 확인(ping)", [ping]);
+      if (!ping.ok) { status(`웹 앱에 연결하지 못했습니다: ${ping.data?.error || ping.kind}. 주소·배포 설정(액세스: 모든 사용자)을 확인하세요.`); return; }
+      const setup = appsScriptVirtualSetup({ classes: Number($("classes").value) || 1, perClass: Number($("perClass").value) || 1 });
+      status(`가상 학생 ${setup.roster.length}명으로 신청 만드는 중…`);
+      const created = await call({ action: "setup", adminKey, setup });
+      row("신청 만들기(setup)", [created]);
+      if (!created.ok) { status(`신청을 만들지 못했습니다: ${created.data?.error || created.kind}`); return; }
+      const event = created.data.id;
+      const students = created.data.codes.map((item, index) => ({ event, classroom: item.classroom, number: item.number, code: item.code, index }));
+      status("준비: 가상 학생마다 첫 접속 → 코드 변경…");
+      const prepare = Number($("prepare").value) || 10;
+      const firstOpen = await pool(students, prepare, (s) => call({ action: "open", ...s }));
+      row("첫 접속(open)", firstOpen);
+      const changed = await pool(students, prepare, async (s) => { const result = await call({ action: "changeCode", ...s, newCode: "482913" }); if (result.ok) s.code = "482913"; return result; });
+      row("코드 변경(changeCode, 잠금 사용)", changed);
+      const burst = Number($("burst").value) || 0;
+      status(`측정: ${students.length}명이 ${burst ? `${burst}명씩` : "한꺼번에"} 신청 화면 열기…`);
+      const opened = await pool(students, burst, (s) => call({ action: "open", ...s }));
+      row(`신청 화면 열기(open) · 동시 ${burst || students.length}`, opened);
+      status(`측정: ${students.length}명이 ${burst ? `${burst}명씩` : "한꺼번에"} 제출…`);
+      const submitted = await pool(students, burst, (s) => call({ action: "submit", ...s, selections: appsScriptVirtualSelections(setup, s.index) }));
+      const summary = row(`제출(submit) · 동시 ${burst || students.length}`, submitted);
+      status("결과 대조 중…");
+      const results = await call({ action: "results", adminKey, event });
+      row("결과 읽기(results)", [results]);
+      const stored = results.ok ? results.data.submitted : null;
+      await call({ action: "close", adminKey, event });
+      log(`서버에 저장된 제출 학생 ${stored ?? "?"}명 / 성공으로 답한 제출 ${summary.success}건`);
+      status(stored === summary.success
+        ? `끝. 제출 ${summary.success}/${summary.total} 성공(성공률 ${summary.successRate}%), 서버 저장 수와 일치. 스프레드시트에서 명렬_${event}·기록_${event} 시트를 지우세요.`
+        : `끝. 주의: 성공으로 답한 제출 ${summary.success}건과 서버에 저장된 학생 ${stored ?? "?"}명이 다릅니다. 표와 기록을 확인하세요.`);
+    } catch (error) {
+      status(`측정 중 오류: ${error?.message || error}`);
+    } finally {
+      $("start").disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
