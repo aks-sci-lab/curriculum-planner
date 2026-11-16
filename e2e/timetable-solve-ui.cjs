@@ -336,8 +336,12 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
     `'반드시' 위반 ${beforeChoice.hard}건이 남은 결과에 선택지(${choiceRows.map((row) => row.key).join(", ")})`, choiceRows);
   check(!choiceRows.some((row) => /증원|순회|강사|교사를 늘/.test(row.text)), "선택지에 교사를 늘리는 문구 없음");
   // 두 학기 같은 칸 결과에 교사 점심·연강이 남아 있으면 '블록 순서를 학기마다 다르게 허용'이 맨 위에 추천으로 나온다
-  const teacherLeft = await page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; const m = saved.result.metrics; return { mode: m.frameMode, lunch: m.lunch, run: m.run }; });
-  if (teacherLeft.mode === "hard" && teacherLeft.lunch + teacherLeft.run > 0 && choiceRows.some((row) => row.key === "frameOrder")) {
+  const teacherLeft = await page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; const m = saved.result.metrics; return { mode: m.frameMode, lunch: m.lunch, run: m.run, gap: m.gap }; });
+  // 두 학기를 묶어 계산한 결과에 반 공강이 남으면 '학기마다 따로 놓기'가 맨 위 추천(점심·연강 추천보다 먼저)
+  if ((teacherLeft.mode === "hard" || teacherLeft.mode === "order") && teacherLeft.gap > 0 && choiceRows.some((row) => row.key === "frameSoft")) {
+    check(choiceRows[0].key === "frameSoft" && choiceRows[0].recommended && /^추천 학기마다 따로 놓기/.test(choiceRows[0].text) && /반 공강 \d+칸이 남았습니다/.test(choiceRows[0].text)
+      && choiceRows.filter((row) => row.recommended).length === 1, `두 학기 묶음 결과에 공강 ${teacherLeft.gap}칸 → 맨 위 추천: ${choiceRows[0].text.slice(0, 120)}`);
+  } else if (teacherLeft.mode === "hard" && teacherLeft.lunch + teacherLeft.run > 0 && choiceRows.some((row) => row.key === "frameOrder")) {
     check(choiceRows[0].key === "frameOrder" && choiceRows[0].recommended && /^추천 블록 순서를 학기마다 다르게 허용/.test(choiceRows[0].text) && /두 학기 같은 칸에서는 .*(점심|연강) \d+건이 남았습니다/.test(choiceRows[0].text)
       && choiceRows.filter((row) => row.recommended).length === 1, `같은 칸 결과에 점심 ${teacherLeft.lunch}·연강 ${teacherLeft.run}건 → 맨 위 추천: ${choiceRows[0].text.slice(0, 120)}`);
   } else console.log(`  (추천 선택지 확인 건너뜀: 뼈대 ${teacherLeft.mode}, 점심 ${teacherLeft.lunch}, 연강 ${teacherLeft.run})`);

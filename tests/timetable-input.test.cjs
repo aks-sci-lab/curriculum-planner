@@ -132,6 +132,33 @@ test("5·6단계 자료를 시간표 입력으로 모은다: 학교 지정 과�
   assert.deepEqual(check.grades.map((row) => [row.grade, row.lessonHours, row.blockHours, row.creative]), [["1", 6, 0, 2], ["2", 6, 6, 2], ["3", 4, 0, 2]]);
 });
 
+test("일부 과목만 학급 단위인 그룹: 블록은 그 블록에 배정된 학생의 내년 반만 덮는다(내년 반을 모르면 학년 전체 + 경고)", () => {
+  // 3학년 3반, 3-1 택1: 일본어 = 학급 단위(1·2반), 중국어회화 = 이동(3반 학생만 a블록 2분반)
+  const students = [];
+  const assign = {};
+  for (const [room, count, id] of [[3, 5, "중국어회화#1"], [3, 4, "중국어회화#2"]]) for (let n = 0; n < count; n += 1) { const key = `2-${room}-${students.length + 1}`; students.push({ key, homeroom: String(room) }); assign[key] = [id]; }
+  const group = { key: "2:1:3-1 택1", grade: "2", targetGrade: "3", semester: "1", category: "3-1 택1", label: "현2 → 3학년 1학기 · 3-1 택1", classes: 3, students,
+    courses: [{ key: "일본어", name: "일본어", credits: 2, department: "제2외국어", classCount: 2 }, { key: "중국어회화", name: "중국어 회화", credits: 2, department: "제2외국어", classCount: 2 }] };
+  const sectionResult = { signature: "sig", assign, blocks: [{ id: "a", letter: "a", times: [], sectionIds: ["중국어회화#1", "중국어회화#2"] }],
+    sections: [{ id: "중국어회화#1", courseKey: "중국어회화", blockId: "a", teacherId: "jp" }, { id: "중국어회화#2", courseKey: "중국어회화", blockId: "a", teacherId: "jp" }] };
+  const make = (mapped) => {
+    const ctx = world({ groups: [group], entries: { "2:1:3-1 택1": { classCounts: {}, classUnit: {}, blockTimes: {}, sectionResult } }, mapped });
+    ctx.classSectionsHomeroomStudents = (target) => (mapped ? target.students : target.students.map(({ homeroom, ...rest }) => rest));
+    ctx.classSectionsEffectiveClassMap = () => ({ map: mapped ? {} : null });
+    return plain(ctx.timetableInput("1", "1").input);
+  };
+  const known = make(true);
+  assert.deepEqual(known.lessons.filter((lesson) => lesson.grade === "3" && lesson.subject === "일본어").map((lesson) => lesson.classes), [["1"], ["2"]]);
+  assert.deepEqual(known.blocks.map((block) => [block.label, block.classes]), [["3-1 택1 a블록", ["3"]]]);
+  assert.ok(!known.missing.some((item) => /학급 단위/.test(item.cause) && /블록/.test(item.cause)), "내년 반을 알면 경고 없음");
+  // 반마다 주간 칸: 1·2반 = 일본어 2시간, 3반 = a블록 2시간(예전에는 1·2반도 블록 2시간이 더 잡혔다)
+  const model = (() => { const ctx = world(); return ctx.timetableModel(known); })();
+  assert.deepEqual(plain(model.blocks.map((block) => block.classIds)), [["3-3"]]);
+  const unknown = make(false);
+  assert.equal(unknown.blocks[0].classes, undefined, "내년 반을 모르면 학년 전체");
+  assert.ok(unknown.missing.some((item) => item.level === "warn" && /일부 과목만 학급 단위인데 내년 반을 몰라/.test(item.cause)));
+});
+
 test("자료가 없을 때: 막는 것(분반 결과·학급 수·5단계 오류)과 가정으로 채우는 것(교사 자리·신입생 편제표·창체 나눔)", () => {
   const noResult = world({ entries: { "1:1:2-1 택2": { classCounts: {}, classUnit: {}, blockTimes: {} } }, stats: { classCounts: { 1: 2, 2: 3, 3: 0 } } });
   const missing = plain(noResult.timetableInput("1", "1")).input.missing;
@@ -322,11 +349,20 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   // 두 학기 같은 칸 결과에 교사 점심·연강이 남으면 '블록 순서를 학기마다 다르게 허용'이 맨 앞·추천(실제 자료에서 이 선택으로 풀린 위반)
   const leftover = { metrics: { frameMode: "hard" }, noTeacher: [], violations: [
     { level: "hard", rule: "oncePerDay", amount: 2, subjects: [] }, { level: "hard", rule: "lunch", amount: 1 }, { level: "hard", rule: "lunch", amount: 1 }, { level: "hard", rule: "run", amount: 1 }, { level: "soft", rule: "lunch", amount: 5 }] };
-  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, {}, {})), { keys: ["frameOrder", "releaseTeacher", "oncePerDay", "teacherRules"], recommended: "frameOrder", lunch: 2, run: 1 });
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, {}, {})), { keys: ["frameOrder", "releaseTeacher", "oncePerDay", "teacherRules"], recommended: "frameOrder", lunch: 2, run: 1, gap: 0 });
   // 한 학기만 계산한 결과·이미 '같은 시간대'인 조건·점심·연강이 없는 결과에는 추천하지 않는다
   assert.equal(ctx.timetableResultChoiceKeys({ ...leftover, metrics: { frameMode: "off" } }, {}, {}).recommended, "");
-  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, { rules: { semesterFrame: "order" } }, {})), { keys: ["releaseTeacher", "oncePerDay", "teacherRules"], recommended: "", lunch: 2, run: 1 });
-  assert.deepEqual(plain(ctx.timetableResultChoiceKeys({ metrics: { frameMode: "hard" }, violations: [{ level: "hard", rule: "oncePerDay", amount: 1 }] }, {}, {})), { keys: ["releaseTeacher", "oncePerDay"], recommended: "", lunch: 0, run: 0 });
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, { rules: { semesterFrame: "order" } }, {})), { keys: ["releaseTeacher", "oncePerDay", "teacherRules"], recommended: "", lunch: 2, run: 1, gap: 0 });
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys({ metrics: { frameMode: "hard" }, violations: [{ level: "hard", rule: "oncePerDay", amount: 1 }] }, {}, {})), { keys: ["releaseTeacher", "oncePerDay"], recommended: "", lunch: 0, run: 0, gap: 0 });
+  // 두 학기를 묶어 계산했는데 반 공강이 남으면 '학기마다 따로 놓기'가 맨 앞·추천(한 학기에만 있는 블록 자리가 다른 학기에서 비어 생기는 공강 — 하네스 자료 26칸 → 0칸)
+  assert.equal(resultChoices.gap[0], "frameSoft");
+  assert.deepEqual(plain(vm.runInContext("TIMETABLE_CHOICES.frameSoft.patch({ rules: { run: 4 } })", ctx)), { rules: { run: 4, semesterFrame: "soft" } });
+  assert.deepEqual(["{}", "{ rules: { semesterFrame: 'order' } }", "{ rules: { semesterFrame: 'soft' } }", "{ rules: { semesterFrame: 'off' } }"].map((tt) => vm.runInContext(`TIMETABLE_CHOICES.frameSoft.skip(${tt})`, ctx)), [false, false, true, true]);
+  const gapped = { metrics: { frameMode: "hard" }, noTeacher: [], violations: [{ level: "hard", rule: "gap", amount: 2 }, { level: "hard", rule: "gap", amount: 1 }, { level: "hard", rule: "lunch", amount: 1 }] };
+  const gapPrepared = { input: { creative: { schoolTimes: ["금6", "금7"], gradeTimes: {} }, blocks: [] } };
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(gapped, {}, gapPrepared)), { keys: ["frameSoft", "releaseTeacher", "creativeFree", "creativeGroup", "gaps", "frameOrder"], recommended: "frameSoft", lunch: 1, run: 0, gap: 3 });
+  assert.equal(ctx.timetableResultChoiceKeys({ ...gapped, metrics: { frameMode: "order" } }, { rules: { semesterFrame: "order" } }, gapPrepared).recommended, "frameSoft");
+  assert.equal(ctx.timetableResultChoiceKeys({ ...gapped, metrics: { frameMode: "off" } }, { rules: { semesterFrame: "soft" } }, gapPrepared).recommended, "", "학기마다 따로 계산한 결과에는 추천하지 않는다");
   // 과목을 붙이는 선택지 'double:과목' = 그 과목 2시간 연속 수업 허용(이미 고른 과목이면 빠짐)
   const double = vm.runInContext("timetableChoiceOf('double:발명과 기업가 정신')", ctx);
   assert.equal(double.label, "'발명과 기업가 정신' 2시간 연속 수업 허용");

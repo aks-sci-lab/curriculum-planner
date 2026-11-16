@@ -227,7 +227,9 @@ async function restore(page, H, file) {
     const again = await compareRound(page, H, `${rounds[0]}차 다시`, { neis: false });
     check(!diff(again.s5.screen, before[rounds[0]].s5.screen).length && !diff(again.s6.sections, before[rounds[0]].s6.sections).length, `차수를 바꿨다 돌아와도 ${rounds[0]}차 5·6단계 값 그대로`, diff(again.s5.screen, before[rounds[0]].s5.screen).join(" / "));
     const last = before[rounds.at(-1)], first = before[rounds[0]];
-    check(diff(last.s4.screen, first.s4.screen).length > 0, `${rounds[0]}차와 ${rounds.at(-1)}차의 4단계 값이 실제로 다름(차수마다 다른 자료를 읽음)`, "두 차수 값이 같음");
+    // 학급수가 우연히 모두 같아도(1차 학급수가 2차로 복사됨) 폐강 과목이 빠지면 과목 목록이 다르므로 그것도 '다름'으로 봄
+    const sameKeys = (a, b) => a.size === b.size && [...a.keys()].every((key) => b.has(key));
+    check(diff(last.s4.screen, first.s4.screen).length > 0 || !sameKeys(last.s4.screen, first.s4.screen), `${rounds[0]}차와 ${rounds.at(-1)}차의 4단계 값이 실제로 다름(차수마다 다른 자료를 읽음)`, "두 차수 값·과목 목록이 같음");
   }
   const lastRound = rounds.at(-1);
   await H.selectRound(lastRound);
