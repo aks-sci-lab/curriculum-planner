@@ -255,7 +255,7 @@ test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같�
     "fail 2학년 b블록: 금6은 전교 고정 시간(창체·회의)과 겹칩니다.",
     "fail 2학년 a블록과 b블록이 같은 시간(화1)입니다.",
     "warn 2학년 a블록: 블록 시간 3칸 ≠ 시수 4시간(시간표에서 다시 놓습니다).",
-    "warn 2학년 b블록: 같은 날 두 번 들어 있습니다(같은 교사 하루 한 번 규칙)."]);
+    "warn 2학년 b블록: 같은 날 두 번 들어 있습니다(같은 블록 하루 한 번 규칙)."]);
   // 블록 8개가 모두 같은 확정 교사를 쓰면 서로 다른 시간이어야 한다: 12 + 20 = 32칸 ≤ 33칸(35 − 창체 2)은 통과, 블록 시수가 늘면 실패
   const shared = school();
   shared.teachers.push({ id: "공동", name: "공동", departments: [], maxHours: 40 });
@@ -263,6 +263,8 @@ test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같�
   assert.equal(issuesOf(ctx.timetablePrecheck(shared), "P5").length, 0);
   shared.blocks[0].hours = 6;
   assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail")).map((issue) => issue.cause).join("\n"), /블록 8개\(.*\)가 같은 교사를 써서 서로 다른 시간이어야 하는데, 모두 34칸이 필요합니다\(주 33칸\)\./);
+  // 블록 하루 한 번을 '반드시'로 두었을 때만: 주 6시간 블록은 5일에 못 넣는다(기본 '최대한'에서는 알리지 않음)
+  shared.rules = { ...(shared.rules || {}), blockTwice: "hard" };
   assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail"))[0].cause, /^2학년 a블록: 주 6시간인데 요일은 5일 — 같은 교사가 같은 분반에 하루 두 번 들어갈 수밖에 없습니다\./);
 });
 

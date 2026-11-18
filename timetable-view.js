@@ -897,7 +897,7 @@ function timetablePrecheckFor(round, semester = "1") {
 var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
-var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
+var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", blockTwice: "블록 하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
 var TIMETABLE_NO_TEACHER_REASONS = { manual: "직접 비움", none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
 var TIMETABLE_RESULT_CHOICES = { gap: ["frameSoft", "releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules", "frameOrder"], maxPerDay: ["teacherRules"], lunch: ["frameOrder"] };;
@@ -909,6 +909,7 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "maxPerDay", label: "교사 하루 최대 수업", min: 1, max: 9, unit: "시간" },
   { key: "gap", label: "반 공강 금지(하루 안 빈칸은 뒤쪽만)", level: true },
   { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만(과목이 달라도)", level: true },
+  { key: "blockTwice", label: "같은 선택 블록은 하루 한 번만", level: true },
   { key: "lunch", label: "교사 점심(학년별 점심 칸 가운데 하나는 비움)", level: true },
   { key: "lunchSide", label: "교사 점심 앞이나 뒤 한 시간 공강", level: true, later: true },
   { key: "homeroom", label: "담임이 그 학년 반 수업을 맡으면 담임반 포함", level: true, later: true },

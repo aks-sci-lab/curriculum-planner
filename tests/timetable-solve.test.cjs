@@ -471,7 +471,7 @@ test("실제 학교 모양(3학년 11반 · 블록 20 · 반 수업 2과목(2 + 
   for (const [day, periods] of Object.entries(byDay)) assert.deepEqual(periods.slice().sort((a, b) => a - b), periods.map((_, index) => index + 1), `${day}요일 블록 ${periods.join(",")}`);
   assert.equal(byDay["금"].length, 5);
   // '반드시' 조건끼리 부딪칠 때는 공강을 먼저 막는다(무게 공강 3000 > 하루 두 번 2000 > 교사 규칙 1000)
-  assert.deepEqual(plain(vm.runInContext("TIMETABLE_HARD_WEIGHTS", ctx)), { gap: 3000, oncePerDay: 2000 });
+  assert.deepEqual(plain(vm.runInContext("TIMETABLE_HARD_WEIGHTS", ctx)), { gap: 3000, oncePerDay: 2000, blockTwice: 2000 });
   // 남는 '하루 두 번'은 같은 수업이 하루에 두 번인 경우 — 위반에 과목이 실려 '그 과목 2시간 연속 수업 허용' 선택지가 된다
   const twice = result.violations.filter((item) => item.rule === "oncePerDay");
   assert.ok(twice.length > 0 && twice.some((item) => (item.subjects || []).includes("인공지능 기초")), JSON.stringify(twice.slice(0, 2)));
@@ -647,4 +647,20 @@ test("통합과학 전공별 몫: 그 전공 교사가 참고 상한 안에서 �
   assert.deepEqual(teacherOfPart(tight, 1).sort(), ["물리1", "물리1", "화학1", "화학1"]);
   assert.equal(tight.metrics.noTeacherHours, 0);
   assert.equal(tight.notes.some((note) => /1학년 통합과학\(과학-물리\): .*화학1 교사가 주 2시간 지원합니다/.test(note)), true);
+});
+
+test("같은 선택 블록 하루 두 번은 반 수업의 '하루 한 번'과 따로 센다: 기본은 '최대한'(반드시 위반 아님), 끄면 세지 않음", () => {
+  const ctx = context();
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.blockTwice", ctx), "soft");
+  const make = (level) => { const input = school(); input.rules = { ...(input.rules || {}), ...(level ? { blockTwice: level } : {}) }; input.blocks[0].times = ["월1", "월2", "화1", "수1"].slice(0, input.blocks[0].hours); input.keepBlockTimes = true; return input; };
+  const run = (level) => { const inputs = { 1: make(level) }; const result = ctx.timetableSolve(inputs, { seed: 1, iterations: 2000, rounds: 1 }); return { result, check: ctx.timetableValidate(inputs, result) }; };
+  const soft = run("");
+  const rows = soft.result.violations.filter((item) => item.rule === "blockTwice");
+  assert.ok(rows.length > 0 && rows.every((item) => item.level === "soft" && /블록이 하루에 두 번 있습니다/.test(item.cause)), "기본: '최대한' 위반으로만");
+  assert.equal(soft.result.violations.filter((item) => item.rule === "oncePerDay" && /블록/.test(item.cause)).length, 0, "'하루 두 번'(반드시)에는 블록이 들어가지 않는다");
+  assert.equal(soft.check.counts.blockTwice, rows.reduce((sum, item) => sum + item.amount, 0), "검증기도 같은 수");
+  assert.ok(run("hard").result.violations.some((item) => item.rule === "blockTwice" && item.level === "hard"));
+  const off = run("off");
+  assert.equal(off.result.violations.filter((item) => item.rule === "blockTwice").length, 0);
+  assert.equal(off.check.counts.blockTwice, 0);
 });
