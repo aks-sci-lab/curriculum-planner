@@ -42,6 +42,11 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
 
   console.log("▶ 메뉴·사전 점검 결과");
   await openStep();
+  // 기본 조건(사용자 결정): 교사 하루 최대 4 · 연강 2 · 점심을 사이에 두고 3. 아래 확인은 예전 조건(6 · 3 · 제한 없음)의 자료에 맞춰 있어 규칙 칸을 먼저 그렇게 바꾼다.
+  await openSection("rules");
+  const ruleValue = async (key) => panel.locator(`[data-tt-field="rules.${key}"]`).inputValue();
+  check((await ruleValue("maxPerDay")) === "4" && (await ruleValue("run")) === "2" && (await ruleValue("runLunch")) === "3", "기본 조건: 교사 하루 최대 4 · 연강 2 · 점심을 사이에 두고 3");
+  for (const [key, value] of [["maxPerDay", "6"], ["run", "3"], ["runLunch", "0"]]) { const field = panel.locator(`[data-tt-field="rules.${key}"]`); await field.fill(value); await field.press("Tab"); await sleep(500); }
   check(/7단계 · 시간표/.test(clean(await panel.locator("#timetableTitle").innerText())), "제목 '7단계 · 시간표' + 차수·학기 배지", clean(await panel.locator("#timetableTitle").innerText()));
   const verdict = clean(await panel.locator("#timetableVerdict").innerText());
   const first = await issues();
@@ -138,7 +143,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await openSection("rules");
   check((await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "4" && (await panel.locator('[data-tt-field="rules.maxPerDay"]').inputValue()) === "7", "규칙 칸도 연강 4 · 하루 7로 바뀜");
   await panel.locator("#timetableChoiceUndo").click(); await sleep(500);
-  check((await panel.locator("#timetableChosen").count()) === 0 && (await issues()).some((item) => liberalText.test(item.text)) && (await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "3", "마지막 선택 되돌리기 → 조건·점검이 원래대로");
+  check((await panel.locator("#timetableChosen").count()) === 0 && (await issues()).some((item) => liberalText.test(item.text)) && (await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "2", "마지막 선택 되돌리기 → 조건·점검이 원래대로(기본값으로 되돌린 뒤라 연강 2)");
   await openSection("teachers");
   check(/주어진 교사 명단 안에서만/.test(clean(await panel.locator('[data-tt-section="teachers"]').innerText())) && /6단계 명단 \d+명/.test(clean(await panel.locator("#timetableTeacherCount").innerText())), "교사 영역: 주어진 명단·전공 일치 안내 + 명단 인원");
   check((await panel.locator('[data-tt-field="rules.departmentMax.진로"]').inputValue()) === "10", "진로 교사 주당 상한 기본 10시간");
@@ -240,7 +245,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await resetNav; await sleep(1500);
   await openStep();
   await openSection("rules");
-  check((await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "3", "전체 초기화 뒤 시간표 조건이 기본값(연강 3)");
+  check((await panel.locator('[data-tt-field="rules.run"]').inputValue()) === "2", "전체 초기화 뒤 시간표 조건이 기본값(연강 2)");
   await page.locator("#workspaceDataMenu summary").click();
   const restoreNav = page.waitForEvent("load", { timeout: 30000 }).catch(() => null);
   await page.locator("#restoreWorkspaceBackup").setInputFiles(backupFile);

@@ -15,7 +15,7 @@ function context() {
   vm.runInContext(read("timetable.js"), ctx);
   vm.runInContext(read("timetable-solve.js"), ctx);
   // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐 — 기본값 자체는 따로 확인)
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft" })', ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0 })', ctx);
   return ctx;
 }
 
@@ -663,4 +663,52 @@ test("같은 선택 블록 하루 두 번은 반 수업의 '하루 한 번'과 �
   const off = run("");
   assert.equal(off.result.violations.filter((item) => item.rule === "blockTwice").length, 0);
   assert.equal(off.check.counts.blockTwice, 0);
+});
+
+test("연강(사용자 결정): 쉬는 칸 없이 2시간까지, 3시간은 점심을 사이에 둘 때만 — 하루 수업 수·검증기 문장", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(read("timetable.js"), ctx);
+  const rules = plain(vm.runInContext("TIMETABLE_DEFAULT_RULES", ctx));
+  assert.deepEqual([rules.run, rules.runLunch, rules.maxPerDay, rules.lunch], [2, 3, 4, "hard"]);
+  // 2·3교시, 점심(칸 3), 5·6교시만 설 수 있는 교사: 점심을 사이에 두고 4시간은 안 되므로 3시간
+  assert.equal(ctx.timetableDayCapacity(0b0110110, 7, { ...rules, maxPerDay: 9 }, [3]), 3);
+  assert.equal(ctx.timetableDayCapacity(0b0110110, 7, { ...rules, maxPerDay: 9, runLunch: 0 }, [3]), 4);
+  // 1·2·3교시만 설 수 있으면 2시간(점심 없이 3연강은 안 됨)
+  assert.equal(ctx.timetableDayCapacity(0b0000111, 7, { ...rules, maxPerDay: 9 }, [3]), 2);
+});
+
+test("블록 분반 나눠 맡기: 담당 교사가 없는 분반 시간을 그 과목 후보 가운데 비어 있는 교사가 칸마다 맡는다(검증 통과, 담당 교사 없음이 줄어듦)", () => {
+  const ctx = context();
+  const input = school();
+  const inputs = { 1: input };
+  const result = JSON.parse(JSON.stringify(ctx.timetableSolve(inputs, { seed: 1, iterations: 3000, rounds: 1 })));
+  const model = ctx.timetableModel(input);
+  const block = model.blocks.find((item) => item.sections.some((section) => section.candidates.length >= 1 && result.layers[1].blocks[item.id].teachers[section.id]));
+  const section = block.sections.find((item) => result.layers[1].blocks[block.id].teachers[item.id]);
+  const item = result.layers[1].blocks[block.id];
+  const was = item.teachers[section.id];
+  item.teachers[section.id] = null; // 이 분반의 교사를 비운다(담당 교사 없음)
+  result.noTeacher.push({ semester: "1", kind: "section", grade: block.grade, classId: block.label, subject: section.subject, hours: block.hours, reason: "clash" });
+  const before = ctx.timetableValidate(inputs, result);
+  const shared = ctx.timetableShareBlocks(inputs, result);
+  const cells = shared.layers[1].blocks[block.id].shares?.[section.id] || {};
+  assert.equal(Object.keys(cells).length, block.hours, "모든 칸을 후보 교사가 맡는다(원래 교사는 그 시간에 비어 있다)");
+  assert.ok(Object.values(cells).every((id) => section.candidates.includes(id)), "맡은 교사는 그 과목 후보(전공 일치)");
+  assert.ok(new Set(Object.values(cells)).size <= 3, "한 분반에 교사 3명까지");
+  assert.ok(Object.values(cells).includes(was) || section.candidates.length > 1);
+  assert.equal(shared.noTeacher.filter((entry) => entry.kind === "section" && entry.classId === block.label && entry.subject === section.subject).length, 0);
+  assert.equal(shared.metrics.sharedSectionHours, block.hours);
+  assert.ok(shared.notes.some((note) => /분반 나눠 맡기/.test(note)));
+  const after = ctx.timetableValidate(inputs, shared);
+  assert.ok(after.errors.length <= before.errors.length);
+  for (const key of item.slots) assert.ok(section.candidates.includes(ctx.timetableBlockTeacherAt(shared.layers[1].blocks[block.id], section.id, key)));
+  // 검증기: 후보가 아닌 교사가 나눠 맡으면 오류
+  const bad = JSON.parse(JSON.stringify(shared));
+  bad.layers[1].blocks[block.id].shares[section.id][item.slots[0]] = model.teachers.find((teacher) => !section.candidates.includes(teacher.id)).id;
+  assert.ok(ctx.timetableValidate(inputs, bad).errors.some((error) => error.type === "qualification"));
+  // 나눠 맡기를 끄면(splitLesson off) 하지 않는다
+  const offInput = { ...input, rules: { ...(input.rules || {}), splitLesson: "off" } };
+  const offResult = JSON.parse(JSON.stringify(result));
+  delete offResult.layers[1].blocks[block.id].shares;
+  assert.equal(ctx.timetableShareBlocks({ 1: offInput }, offResult).layers[1].blocks[block.id].shares, undefined);
 });

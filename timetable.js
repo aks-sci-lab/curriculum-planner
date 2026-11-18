@@ -6,8 +6,9 @@
 const TIMETABLE_DEFAULT_RULES = {
   maxHours: 22,        // 교사 주당 시수 '참고' 상한(학기별): 넘어도 편성하고 알림만(5단계 교사 수가 두 학기 평균 기준이라 필수가 아님)
   departmentMax: { 진로: 10 }, // 교과별 필수 상한(진로 교사 10시간). 교사 명단에 교사별 상한이 있으면 그 값이 먼저
-  run: 3,              // 연강 상한(실제 시각 축에서 연속 수업 수)
-  maxPerDay: 6,        // 교사 하루 최대 수업 수
+  run: 2,              // 연강 상한: 쉬는 칸 없이 이어지는 수업 수(사용자 결정 2026-11-18: 3시간 연강은 점심을 사이에 둘 때만)
+  runLunch: 3,         // 점심(비어 있는 점심 칸)을 사이에 두고 이어지는 수업 수 상한. 0 = 점심이 끼면 따로 셈(제한 없음)
+  maxPerDay: 4,        // 교사 하루 최대 수업 수(사용자 결정 2026-11-18: 4시간 이하, 반드시)
   gap: "hard",         // 반 공강 금지(하루 안 빈칸은 뒤쪽만)
   oncePerDay: "hard",  // 같은 교사가 같은 반(분반)에 하루 두 번 들어가지 않음(과목이 달라도, 교사가 다른 조각은 같은 날 가능)
   blockTwice: "off",   // 같은 선택 블록이 하루에 두 번(사용자 결정 2026-11-18: 정한 조건이 아니므로 세지 않음 — 켜면 hard/soft)
@@ -161,14 +162,16 @@ function timetableCoverage(groups, capacityOf) {
 function timetableDayCapacity(available, positions, rules, lunchPositions) {
   if (!available) return 0;
   const run = timetableNumber(rules.run, 0);
+  const runLunch = timetableNumber(rules.runLunch, 0);
   const lunchHard = rules.lunch === "hard" && lunchPositions.length > 0;
   let best = 0;
   for (let mask = available; ; mask = (mask - 1) & available) {
     let count = 0;
     let streak = 0;
+    let span = 0; // 비어 있는 점심 칸은 끊지 않고 센 수업 수
     let ok = true;
     for (let pos = 0; pos < positions && ok; pos += 1) {
-      if (mask & (1 << pos)) { count += 1; streak += 1; if (run && streak > run) ok = false; } else streak = 0;
+      if (mask & (1 << pos)) { count += 1; streak += 1; span += 1; if ((run && streak > run) || (runLunch && span > runLunch)) ok = false; } else { streak = 0; if (!lunchPositions.includes(pos)) span = 0; }
     }
     if (ok && lunchHard && lunchPositions.every((pos) => mask & (1 << pos))) ok = false;
     if (ok && count > best) best = count;

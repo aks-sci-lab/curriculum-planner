@@ -12,6 +12,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 function context() {
   const ctx = vm.createContext({});
   vm.runInContext(source, ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { maxPerDay: 6, run: 3, runLunch: 0 })', ctx); // 이 파일의 가상 학교는 예전 기본값(교사 하루 최대 6시간) 기준 — 지금 기본값 4는 아래 따로 확인
   return ctx;
 }
 
@@ -523,4 +524,13 @@ test("6단계 시간표 미리 점검은 timetable.js 규칙 하나를 쓴다", 
   const input = { grades: [{ grade: "3", classes: 7 }], creative: { school: 2 }, teachers: [{ id: "a", departments: ["정보"] }, { id: "b", departments: ["정보"] }, { id: "z", departments: ["기타"] }],
     lessons: [{ grade: "3", subject: "인공지능 기초", department: "정보", hours: 4 }], blocks: ["a", "b", "c", "d", "e"].map((id) => ({ id, grade: "3", hours: 4, sections: [{ subject: "기타", department: "기타", credits: 4 }] })) };
   assert.deepEqual([plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.capacity, plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.shortage], [26, 2]);
+});
+
+test("기본 조건(사용자 결정): 교사 하루 최대 4시간(반드시) — 주 5일이면 한 교사가 설 수 있는 시간은 20시간까지", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(source, ctx);
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.maxPerDay", ctx), 4);
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.lunch", ctx), "hard");
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.lunchSide", ctx), "soft");
+  assert.equal(ctx.timetableDayCapacity(0b1111111, 7, vm.runInContext("TIMETABLE_DEFAULT_RULES", ctx), [3, 4]), 4);
 });
