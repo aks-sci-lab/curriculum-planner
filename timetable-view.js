@@ -920,6 +920,14 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true },
   { key: "splitLesson", label: "한 교사가 한 반의 과목을 모두 맡을 시간이 없을 때", level: true, levels: [["allow", "같은 전공 교사 3명까지 나눠서 모두 맡을 수 있으면 나눠 맡음(2명 먼저)"], ["two", "2명까지만 나눠 맡음"], ["off", "나누지 않음(그 수업은 담당 교사 없음)"]], later: true }
 ];
+// 꼭 필요하지는 않은 조건(사용자 결정: 지우지 않고 선택형으로) — 규칙 영역 맨 위에서 쓸지 말지 고른다. 끄면 rules[key] = "off", 켜면 기본값으로.
+var TIMETABLE_OPTIONAL_RULES = [
+  { key: "semesterFrame", label: "2학기는 1학기와 같은 칸", gives: "끄면 학기마다 따로 편성합니다(공강·담당 교사 없음이 줄 수 있음, 2학기 시간표가 1학기와 달라짐)." },
+  { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만", gives: "끄면 같은 교사가 한 반에 하루 두 번 들어갈 수 있습니다." },
+  { key: "shortDay", label: "반 하루 최소 교시", gives: "끄면 수업이 적은 날 일찍 끝나는 반이 생길 수 있습니다(공강 금지는 그대로)." },
+  { key: "lunchSide", label: "교사 점심 앞뒤 한 시간씩 공강", gives: "끄면 점심 바로 앞뒤에 수업이 붙을 수 있습니다(교사 점심 자체는 그대로)." },
+  { key: "sameSubjectDay", label: "교사 같은 날 같은 과목 줄이기", gives: "끄면 한 교사가 같은 날 같은 과목을 여러 반에서 이어 가르칠 수 있습니다." }
+];
 var TIMETABLE_ISSUE_LABELS = { block: "계산 불가", fail: "조건 위반", warn: "확인", info: "참고" };
 
 // 규칙 값 읽기·쓰기('departmentMax.진로'처럼 점으로 이어진 이름은 한 단계 안쪽 값)
@@ -1300,7 +1308,11 @@ function timetableConditionsHtml(prepared) {
     ${blockGrades.map((grade) => { const total = (prepared.input.grades || []).find((item) => String(item.grade) === grade)?.classes || 0; const half = Math.ceil(total / 2);
       return `<label>${grade}학년 <input class="cs-text" type="text" value="${timetableEsc(tt.staggerGroups?.[grade] || "")}" placeholder="${total > 1 ? `1-${half}/${half + 1}-${total}` : ""}" data-tt-field="stagger:${grade}" data-focus-key="tt-stagger-${grade}" aria-label="${grade}학년 반 묶음"></label>`; }).join("")}
     <span class="cs-note">비우면 앞·뒤 절반. '1-6/7-11'처럼 묶음을 /로 나눠 적습니다. 사전 점검의 '반 묶음을 나눠 블록 일부를 엇갈리게' 선택지에 보이는 예상 분반 수에만 쓰입니다(6단계 편성은 바꾸지 않음).</span></span></div>` : "";
-  const rulesBody = `${ruleRows}${doubleRow}${staggerRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
+  const optionalRow = `<div class="tt-row" id="timetableOptionalRules"><span class="tt-label">선택 조건<br><span class="cs-note">꼭 필요하지 않으면 끕니다</span></span><span class="tt-fields tt-optional">${TIMETABLE_OPTIONAL_RULES.map((item) => {
+    const on = timetableRuleValue(rules, item.key) !== "off";
+    return `<label data-tt-optional="${item.key}" data-on="${on ? "1" : "0"}"><input type="checkbox" data-tt-field="optional:${item.key}" data-focus-key="tt-optional-${item.key}"${on ? " checked" : ""}> <strong>${timetableEsc(item.label)}</strong> <span class="cs-note">${timetableEsc(item.gives)}</span></label>`;
+  }).join("")}<span class="cs-note">켠 조건을 얼마나 엄격하게 지킬지(반드시·최대한)는 아래 줄에서 정합니다.</span></span></div>`;
+  const rulesBody = `${optionalRow}${ruleRows}${doubleRow}${staggerRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
     <span class="cs-note">'반드시'인 조건을 다 지킬 수 없으면 자동으로 풀지 않고, 아래 사전 점검의 선택지에서 무엇을 양보할지 고릅니다.</span></span></div>`;
 
   // 교사: 주어진 명단 안에서만 편성한다(교사를 늘리는 입력은 없다). 후보 = 6단계 명단의 담당 교과·담당 과목.
@@ -2105,6 +2117,14 @@ function timetableApplyField(field, target) {
   if (name === "blocks.keep") {
     if (target.checked) settings.keepBlockTimes = true; else delete settings.keepBlockTimes;
     return target.checked ? "6단계 블록 시간 그대로 지키기" : "블록 시간을 시간표가 정하기";
+  }
+  if (name === "optional") {
+    const spec = TIMETABLE_OPTIONAL_RULES.find((item) => item.key === key);
+    if (!spec) return "";
+    const rules = { ...(settings.rules || {}) };
+    if (target.checked) delete rules[key]; else rules[key] = "off";
+    settings.rules = rules;
+    return `${spec.label} → ${target.checked ? "씀(기본값)" : "끔"}`;
   }
   if (name.startsWith("rules.")) {
     const rule = name.slice(6);

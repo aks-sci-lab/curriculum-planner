@@ -72,6 +72,17 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await openSection("time");
   await panel.locator("#timetableConditions").screenshot({ path: path.join(OUT, "02-conditions.png") });
 
+  console.log("▶ 선택 조건(꼭 필요하지 않은 조건을 켜고 끄기)");
+  await openSection("rules");
+  const optional = (key) => panel.locator(`#timetableOptionalRules [data-tt-field="optional:${key}"]`);
+  check((await panel.locator("#timetableOptionalRules [data-tt-optional]").count()) === 5 && await optional("semesterFrame").isChecked(), "선택 조건 5개, 처음에는 모두 켜짐");
+  await optional("semesterFrame").uncheck(); await sleep(400);
+  check((await panel.locator('[data-tt-field="rules.semesterFrame"]').inputValue()) === "off" && /2학기는 1학기와 같은 칸 → 끔/.test(clean(await panel.locator("#timetableChange").innerText())), "'2학기는 1학기와 같은 칸'을 끄면 아래 규칙 줄도 '끔' · 바꾼 조건에 표시");
+  await optional("lunchSide").uncheck(); await sleep(300);
+  await optional("lunchSide").check(); await sleep(300);
+  check((await panel.locator('[data-tt-field="rules.lunchSide"]').inputValue()) === "soft", "다시 켜면 기본값(최대한)으로");
+  await panel.locator("#timetableOptionalRules").screenshot({ path: path.join(OUT, "02b-optional-rules.png") });
+
   console.log("▶ 시간표 계산");
   const bar = panel.locator("#timetableRunBar");
   await panel.locator("#timetableRun").click();

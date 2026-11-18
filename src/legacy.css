@@ -2351,6 +2351,7 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-sub { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; color:#526078; }
     .tt-presets { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
     .tt-creative-grades { flex-direction:column; align-items:flex-start; }
+    .tt-optional { flex-direction:column; align-items:flex-start; gap:4px; }
     .tt-creative-grade { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; }
     .cs-roam { white-space:nowrap; }
     .cs-roam label { margin-left:4px; }
