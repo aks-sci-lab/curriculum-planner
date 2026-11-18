@@ -649,18 +649,18 @@ test("통합과학 전공별 몫: 그 전공 교사가 참고 상한 안에서 �
   assert.equal(tight.notes.some((note) => /1학년 통합과학\(과학-물리\): .*화학1 교사가 주 2시간 지원합니다/.test(note)), true);
 });
 
-test("같은 선택 블록 하루 두 번은 반 수업의 '하루 한 번'과 따로 센다: 기본은 '최대한'(반드시 위반 아님), 끄면 세지 않음", () => {
+test("같은 선택 블록 하루 두 번은 반 수업의 '하루 한 번'과 따로 센다: 기본은 세지 않음(끔), 켜면 '최대한'·'반드시'", () => {
   const ctx = context();
-  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.blockTwice", ctx), "soft");
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.blockTwice", ctx), "off");
   const make = (level) => { const input = school(); input.rules = { ...(input.rules || {}), ...(level ? { blockTwice: level } : {}) }; input.blocks[0].times = ["월1", "월2", "화1", "수1"].slice(0, input.blocks[0].hours); input.keepBlockTimes = true; return input; };
   const run = (level) => { const inputs = { 1: make(level) }; const result = ctx.timetableSolve(inputs, { seed: 1, iterations: 2000, rounds: 1 }); return { result, check: ctx.timetableValidate(inputs, result) }; };
-  const soft = run("");
+  const soft = run("soft");
   const rows = soft.result.violations.filter((item) => item.rule === "blockTwice");
-  assert.ok(rows.length > 0 && rows.every((item) => item.level === "soft" && /블록이 하루에 두 번 있습니다/.test(item.cause)), "기본: '최대한' 위반으로만");
+  assert.ok(rows.length > 0 && rows.every((item) => item.level === "soft" && /블록이 하루에 두 번 있습니다/.test(item.cause)), "최대한: '최대한' 위반으로만");
   assert.equal(soft.result.violations.filter((item) => item.rule === "oncePerDay" && /블록/.test(item.cause)).length, 0, "'하루 두 번'(반드시)에는 블록이 들어가지 않는다");
   assert.equal(soft.check.counts.blockTwice, rows.reduce((sum, item) => sum + item.amount, 0), "검증기도 같은 수");
   assert.ok(run("hard").result.violations.some((item) => item.rule === "blockTwice" && item.level === "hard"));
-  const off = run("off");
+  const off = run("");
   assert.equal(off.result.violations.filter((item) => item.rule === "blockTwice").length, 0);
   assert.equal(off.check.counts.blockTwice, 0);
 });

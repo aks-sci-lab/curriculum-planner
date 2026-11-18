@@ -247,6 +247,7 @@ test("P4: 블록 안 동시 분반 ≤ 맡을 수 있는 교사, 같은 시각�
 test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같은 시간·시수와 칸 수·같은 교사를 쓰는 블록 묶음", () => {
   const ctx = context();
   const input = school();
+  input.rules = { ...(input.rules || {}), blockTwice: "soft" }; // 같은 날 두 번 알림은 블록 하루 한 번 조건을 켰을 때만
   input.blocks[0].times = ["월8", "화1", "수1"];
   input.blocks[1].times = ["화1", "금6", "수2", "수3"];
   const causes = plain(issuesOf(ctx.timetablePrecheck(input), "P5")).map((issue) => `${issue.level} ${issue.cause}`);
