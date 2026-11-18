@@ -12,7 +12,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 function context() {
   const ctx = vm.createContext({});
   vm.runInContext(source, ctx);
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { maxPerDay: 6, run: 3, runLunch: 0 })', ctx); // 이 파일의 가상 학교는 예전 기본값(교사 하루 최대 6시간) 기준 — 지금 기본값 4는 아래 따로 확인
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx); // 이 파일의 가상 학교는 예전 기본값(교사 하루 최대 6시간) 기준 — 지금 기본값 4는 아래 따로 확인
   return ctx;
 }
 

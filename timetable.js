@@ -4,7 +4,7 @@
 
 // "hard" = 반드시(해가 없을 때만 완화 사다리에서 풂), "soft" = 최대한, "off" = 끔.
 const TIMETABLE_DEFAULT_RULES = {
-  maxHours: 22,        // 교사 주당 시수 '참고' 상한(학기별): 넘어도 편성하고 알림만(5단계 교사 수가 두 학기 평균 기준이라 필수가 아님)
+  maxHours: 19,        // 교사 주당 시수 '참고' 상한(학기별): 넘어도 편성하고 알림만(5단계 교사 수가 두 학기 평균 기준이라 필수가 아님)
   departmentMax: { 진로: 10 }, // 교과별 필수 상한(진로 교사 10시간). 교사 명단에 교사별 상한이 있으면 그 값이 먼저
   run: 2,              // 연강 상한: 쉬는 칸 없이 이어지는 수업 수(사용자 결정 2026-11-18: 3시간 연강은 점심을 사이에 둘 때만)
   runLunch: 3,         // 점심(비어 있는 점심 칸)을 사이에 두고 이어지는 수업 수 상한. 0 = 점심이 끼면 따로 셈(제한 없음)
@@ -494,7 +494,7 @@ function timetablePrecheck(source) {
       [timetableWhere("teachers", "담당 교과·과목·불가 시간"), timetableWhere("hours", "담당 교과"), timetableWhere("rules", "교사 규칙")],
       { data: { departments, teachers: cluster.teachers, demand: cluster.demand, capacity: cluster.capacity, shortage: cluster.shortage }, relax: ["teacherRules", "otherDepartment", "noTeacher"] });
   }
-  // 참고 상한(기본 22시간): 넘어도 편성은 하지만 어느 교과가 얼마나 넘는지 알린다.
+  // 참고 상한(기본 19시간): 넘어도 편성은 하지만 어느 교과가 얼마나 넘는지 알린다.
   const softOf = (id) => Math.min(capacityOf.get(id), model.teacherOf.get(id)?.softHours ?? Infinity);
   for (const cluster of timetableCoverage(groupsList, softOf).clusters) {
     if (cluster.teachers.some((id) => hardKeys.has(id))) continue;

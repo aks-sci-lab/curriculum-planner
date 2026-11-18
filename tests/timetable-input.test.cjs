@@ -82,7 +82,7 @@ function world(overrides = {}) {
       { grade: "2", semester: "1", subject: "대수", area: "수학", credit: 4, kind: "지정", rowIndex: 3 }] })
   });
   vm.runInContext(read("timetable.js"), ctx);
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { maxPerDay: 6, run: 3, runLunch: 0 })', ctx); // 이 파일의 자료는 예전 기본값(교사 하루 최대 6시간) 기준
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx); // 이 파일의 자료는 예전 기본값(교사 하루 최대 6시간) 기준
   vm.runInContext(read("timetable-view.js"), ctx);
   return ctx;
 }

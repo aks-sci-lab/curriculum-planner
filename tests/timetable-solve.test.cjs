@@ -15,7 +15,7 @@ function context() {
   vm.runInContext(read("timetable.js"), ctx);
   vm.runInContext(read("timetable-solve.js"), ctx);
   // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐 — 기본값 자체는 따로 확인)
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0 })', ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx);
   return ctx;
 }
 

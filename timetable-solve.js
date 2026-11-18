@@ -76,7 +76,7 @@ function timetableProblem(inputs) {
   //   사전 점검이 센 값(lessonCells)을 그대로 쓴다: 반군별 창체면 학년별 창체 시간만큼, 반 묶음마다 블록이 다르면(엇갈림) 다른 묶음의 블록 시간만큼 늘어난다.
   const gradeFree = prechecks.map((check) => grades.map((grade) => { const row = check.grades.find((item) => item.grade === grade); return row && Number.isFinite(row.lessonCells) && row.lessonCells > 0 ? row.lessonCells : Infinity; }));
   const gradeLoad = models.map(() => new Map()); // 교사|학년 → 그 학년 반 수업 시수
-  const softHours = Number(rules.maxHours) > 0 ? Number(rules.maxHours) : 22;
+  const softHours = Number(rules.maxHours) > 0 ? Number(rules.maxHours) : 19;
   const shareHours = teacherIds.map((id) => { const teacher = models.map((model) => model.teacherOf.get(id)).find(Boolean); return Math.max(1, teacher && teacher.ownMax ? teacher.maxHours : softHours - (teacher ? teacher.outHours || 0 : 0)); });
   const teacherName = teacherIds.map((id) => models.map((model) => model.teacherOf.get(id)).find(Boolean)?.name || id);
   const homeroomOf = new Map(); // 반 → 담임 교사
