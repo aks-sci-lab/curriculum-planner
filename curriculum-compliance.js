@@ -1094,7 +1094,7 @@ function planComplianceCardButton(type, year, available) {
       badge = counts["확인필요"] ? `<span class="plan-compliance-badge is-check">확인 ${counts["확인필요"]}</span>` : '<span class="plan-compliance-badge is-ok">O</span>';
     }
   } catch { badge = ""; }
-  return `<button class="button plan-compliance-open" type="button" data-plan-compliance="${planComplianceEscape(key)}" aria-label="${planComplianceEscape(year)}학년도 ${type === "annual" ? "전학년" : "입학생"} 편제 점검표 열기">편제 점검${badge}</button>`;
+  return `<button class="button plan-compliance-open" type="button" data-plan-compliance="${planComplianceEscape(key)}" aria-label="${planComplianceEscape(year)}학년도 ${type === "annual" ? "전학년" : "입학생"} 편제 점검표 열기" title="편제 점검"><span class="plan-compliance-word">점검</span>${badge}</button>`;
 }
 
 let planComplianceDialogKey = "";

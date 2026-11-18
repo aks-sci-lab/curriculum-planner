@@ -31,19 +31,38 @@ const check = (ok, message, detail) => { if (!ok) failures.push({ message, detai
     await (await chooser).setFiles(file);
     await page.locator("#curriculumCohortUploads").getByText(`plan-${year}.xlsx`).first().waitFor({ timeout: 30000 });
   }
-  const card = page.locator(".curriculum-annual-card", { hasText: "2027학년도 전학년 편제표" });
+  const card = page.locator(".curriculum-annual-card", { hasText: "2027 전학년" });
   check(await card.count() === 1, "2027학년도(내년도) 전학년 편제표 카드가 있음");
   check(/만들 준비 완료/.test(await card.innerText()), "내년도 카드: 세 입학생 편제표가 있어 만들 준비 완료", await card.innerText());
-  const current = page.locator(".curriculum-annual-card", { hasText: "2026학년도 전학년 편제표" });
+  const current = page.locator(".curriculum-annual-card", { hasText: "2026 전학년" });
   check(/3학년\(2024\) 편제표 필요/.test(await current.innerText()), "올해 카드: 2024 입학생 편제표가 없어 만들 수 없음", await current.innerText());
   await page.getByRole("button", { name: "2027학년도 전학년 편제표 만들기" }).click();
   await page.getByRole("button", { name: "2027학년도 전학년 편제표 보기" }).filter({ hasText: "보는 중" }).waitFor({ timeout: 30000 });
   const panel = await page.locator("#workflowStep1Panel").innerText();
   check(/2027학년도 전학년 교육과정 편제표/.test(panel), "표 제목: 2027학년도 전학년 교육과정 편제표");
   for (const header of ["1학년(2027)", "2학년(2026)", "3학년(2025)"]) check(panel.includes(header), `학년 머리글 ${header}`);
-  check(/생성됨 · 원본과 일치/.test(await card.innerText()), "내년도 카드: 생성됨 · 원본과 일치");
+  check(/생성됨/.test(await card.innerText()), "내년도 카드: 생성됨");
   check(/2027학년도 전학년 편제표를 3개년 편제표에서 다시 만들었습니다/.test(await page.locator("body").innerText()), "상태 문구");
   await page.screenshot({ path: path.join(OUT, "annual-2027.png"), fullPage: false });
+  await page.locator("#curriculumCohortUploads").screenshot({ path: path.join(OUT, "cards-1500.png") });
+  // 카드 6장이 한 줄(같은 높이)에, 카드마다 단추가 한 줄에
+  const boxes = await page.locator(".curriculum-cohort-card").evaluateAll((cards) => cards.map((card) => ({
+    top: Math.round(card.getBoundingClientRect().top),
+    buttons: [...card.querySelectorAll(".curriculum-card-actions .button")].map((button) => Math.round(button.getBoundingClientRect().top)),
+    clipped: [...card.querySelectorAll(".button")].some((button) => button.scrollWidth > button.clientWidth + 1
+      || button.getBoundingClientRect().right > card.getBoundingClientRect().right + 0.5),
+  })));
+  check(boxes.length === 6 && new Set(boxes.map((box) => box.top)).size === 1, "카드 6장이 한 줄", boxes);
+  check(boxes.every((box) => new Set(box.buttons).size === 1 && !box.clipped), "카드 단추가 한 줄·글자 잘림 없음", boxes);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.waitForTimeout(200);
+  await page.locator("#curriculumCohortUploads").screenshot({ path: path.join(OUT, "cards-1280.png") });
+  const narrow = await page.locator(".curriculum-cohort-card").evaluateAll((cards) => cards.map((card) => ({
+    top: Math.round(card.getBoundingClientRect().top),
+    clipped: [...card.querySelectorAll(".button")].some((button) => button.scrollWidth > button.clientWidth + 1
+      || button.getBoundingClientRect().right > card.getBoundingClientRect().right + 0.5) })));
+  check(new Set(narrow.map((box) => box.top)).size === 1 && narrow.every((box) => !box.clipped), "1280 폭에서도 한 줄·단추 잘림 없음", narrow);
+  await page.setViewportSize({ width: 1500, height: 1000 });
   for (const name of ["엑셀 내보내기", "교육청 양식으로 내보내기"]) {
     const names = [];
     await page.evaluate(() => { window.__downloads = []; const click = HTMLAnchorElement.prototype.click;

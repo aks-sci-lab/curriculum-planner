@@ -280,16 +280,21 @@ test("curriculum management shows three cohort plans and a separate annual whole
   assert.deepEqual([...markup.matchAll(/data-annual-build="(\d+)"/g)].map((match) => match[1]), ["2026", "2027"],
     "올해와 내년도 전학년 편제표 카드");
   // 내년도 전학년 편제표 = 내년도 신입생(2027)·현 1학년(2026)·현 2학년(2025) 입학생 편제표
-  assert.match(markup, /2027학년도 전학년 편제표<\/h4>\s*<p title="내년도 1·2·3학년\(2027 입학생·2026 입학생·2025 입학생\)[^"]*">내년도 · 3개년 편제표에서 자동 생성<\/p>/);
+  assert.match(markup, /<h4 title="2027학년도 전학년 편제표 · 3개년 편제표에서 자동 생성 · 내년도 1·2·3학년\(2027 입학생·2026 입학생·2025 입학생\)[^"]*">2027 전학년 <span class="curriculum-card-tag">내년도<\/span><\/h4>/);
   assert.match(markup, /1학년 2027 미업로드 · 2학년 2026 미업로드 · 3학년 2025 미업로드/,
     "plan 행이 없는 카드는 아직 학년 열이 없음");
   assert.match(markup, /data-annual-build="2027" disabled/);
   assert.match(markup, />1·2·3학년\(2027·2026·2025\) 편제표 필요</);
   assert.match(markup, /내년도 전학년 편제표의 1학년 열/);
   assert.doesNotMatch(markup, /data-annual-upload/, "the annual plan is built, never uploaded");
-  assert.match(markup, /2024학년도 입학생 · 현 3학년/);
+  assert.match(markup, />2024 입학생 <span class="curriculum-card-tag">현 3학년<\/span><\/h4>/);
   assert.match(markup, /3개년 편제표에서 자동 생성/);
-  assert.match(markup, /2027학년도 입학생 · 내년도 신입생/);
+  assert.match(markup, />2027 입학생 <span class="curriculum-card-tag">내년 신입생<\/span><\/h4>/);
+  assert.match(markup, />2026 전학년 <span class="curriculum-card-tag">올해<\/span><\/h4>/);
+  // 카드는 제목 · 파일/상태 · 단추 한 줄(짧은 글자, 접근성 이름은 그대로)
+  assert.match(markup, /aria-label="2026학년도 신입생 3개년 편제표 원본 교체">교체<\/button>/);
+  assert.match(markup, /aria-label="2025학년도 신입생 3개년 편제표 보기">보기<\/button>/);
+  assert.equal((markup.match(/class="curriculum-card-actions"/g) || []).length, 6);
   assert.match(markup, /내년도 1학년 시수 통계용/);
   assert.match(markup, /현 1학년은 이 편제표의 2학년 과목으로 신청/);
   assert.match(markup, /현 2학년은 이 편제표의 3학년 과목으로 신청/);
@@ -303,13 +308,14 @@ test("curriculum management shows three cohort plans and a separate annual whole
   assert.match(css, /\.curriculum-cohort-card p \{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;/);
   assert.match(css, /\.curriculum-cohort-card > p:not\(\.curriculum-cohort-file\) \{ -webkit-line-clamp: 3; \}/, "편제 점검 단추 옆 부제는 세 줄까지");
   assert.match(css, /\.curriculum-cohort-card > \.curriculum-cohort-file \{ overflow-wrap: anywhere; word-break: break-all;/, "파일 이름은 글자 단위로 줄바꿈");
-  assert.match(markup, /<p title="수강신청: 3학년 과목 기준 · 현 2학년은 이 편제표의 3학년 과목으로 신청 · 내년도 전학년 편제표의 3학년 열">수강신청: 3학년 과목 기준<\/p>/, "부제 title에 보이는 글자도");
+  assert.match(markup, /<h4 title="2025학년도 입학생 · 현 2학년 · 수강신청: 3학년 과목 기준 · 현 2학년은 이 편제표의 3학년 과목으로 신청 · 내년도 전학년 편제표의 3학년 열">/, "자세한 설명은 제목 title에");
+  assert.match(css, /\.curriculum-cohort-uploads \{ grid-template-columns: repeat\(6, minmax\(0, 1fr\)\); gap: 6px; \}/, "넓은 화면에서 카드 6장 한 줄");
   elements["#schoolYear"].value = "2027";
   ctx.renderCurriculumCohortUploads();
   assert.deepEqual([...elements["#curriculumCohortUploads"].innerHTML.matchAll(/data-cohort-upload="(\d+)"/g)]
     .map((match) => match[1]), ["2028", "2027", "2026", "2025"]);
-  assert.match(elements["#curriculumCohortUploads"].innerHTML, /2027학년도 전학년 편제표/);
-  assert.match(elements["#curriculumCohortUploads"].innerHTML, /2028학년도 전학년 편제표/);
+  assert.match(elements["#curriculumCohortUploads"].innerHTML, /2027학년도 전학년 편제표 보기/);
+  assert.match(elements["#curriculumCohortUploads"].innerHTML, /2028학년도 전학년 편제표 보기/);
 });
 
 test("next-year annual plan is built from next year's three cohorts and can be opened", () => {
