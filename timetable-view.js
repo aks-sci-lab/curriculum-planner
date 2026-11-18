@@ -170,7 +170,7 @@ function timetableResultTables(input, layer) {
   const teachers = new Map();
   const teacherCell = (id, abs, entry) => {
     if (!id) return;
-    if (!teachers.has(id)) teachers.set(id, { id, name: nameOf(id), hours: 0, cells: {} });
+    if (!teachers.has(id)) teachers.set(id, { id, name: nameOf(id), hours: 0, outHours: model.teacherOf.get(id)?.outHours || 0, cells: {} }); // outHours = 다른 학교로 나가는 순회 시수(표에는 없고 시수에만 더해 보임)
     const row = teachers.get(id);
     const key = `${Math.floor(abs / model.positions)}|${abs % model.positions}`;
     (row.cells[key] || (row.cells[key] = [])).push(entry);
@@ -263,7 +263,7 @@ function timetableResultSheets(inputs, result, labels = {}) {
     });
     sheets.push({ name: `${semester}학기 교사`, freeze: "C4", widths: [12, 5, ...tables.days.flatMap(() => Array.from({ length: width }, () => 11))], merges: teacherMerges, heights: [28],
       rows: [[{ v: `${title}${semester}학기 교사별 시간표`, s: 1 }], teacherHead, teacherSub,
-        ...tables.teachers.map((row) => [{ v: row.name, s: 2 }, { v: row.hours, s: 4 }, ...tables.days.flatMap((day, d) => tables.teacherRows.map((item) => cellOf(row.cells[`${d}|${item.pos}`], (entry) => entry.where)))])] });
+        ...tables.teachers.map((row) => [{ v: row.name, s: 2 }, { v: row.outHours ? `${row.hours} + 순회 ${row.outHours}` : row.hours, s: 4 }, ...tables.days.flatMap((day, d) => tables.teacherRows.map((item) => cellOf(row.cells[`${d}|${item.pos}`], (entry) => entry.where)))])] });
   }
   const violations = result?.violations || [];
   sheets.push({ name: "못 지킨 조건", widths: [7, 9, 16, 90], rows: [[{ v: "학기", s: 2 }, { v: "구분", s: 2 }, { v: "조건", s: 2 }, { v: "내용", s: 2 }],
@@ -498,7 +498,7 @@ function timetablePrintHtml(tables, kind, options = {}) {
       : row.rows.map((slot) => (slot.lunch ? `<tr class="tt-print-lunch"><th>점심</th><td colspan="${tables.days.length}"></td></tr>`
         : `<tr><th>${slot.period}</th>${tables.days.map((day) => `<td>${cell(row.cells[`${day}${slot.period}`], (entry) => (entry.noTeacher ? "담당 교사 없음" : entry.teacher))}</td>`).join("")}</tr>`)).join("");
     const name = kind === "teacher" ? `${row.name} 선생님 시간표` : `${row.id}반 시간표`;
-    return `<section class="tt-print-card" data-kind="${kind}" data-id="${esc(row.id)}"><h3>${esc(options.title || "")} ${esc(name)}${kind === "teacher" ? ` <small>주 ${row.hours}시간</small>` : ""}</h3><table class="tt-print-table">${head}<tbody>${body}</tbody></table></section>`;
+    return `<section class="tt-print-card" data-kind="${kind}" data-id="${esc(row.id)}"><h3>${esc(options.title || "")} ${esc(name)}${kind === "teacher" ? ` <small>주 ${row.hours}시간${row.outHours ? ` + 순회(타교) ${row.outHours}시간` : ""}</small>` : ""}</h3><table class="tt-print-table">${head}<tbody>${body}</tbody></table></section>`;
   });
   const pages = [];
   for (let at = 0; at < cards.length; at += perPage) pages.push(`<div class="print-page tt-print-page" data-per="${perPage}">${cards.slice(at, at + perPage).join("")}</div>`);
@@ -513,6 +513,17 @@ function timetableSettings() {
 
 var TIMETABLE_STAGGER_SMALL = 10; // 반군 엇갈림 견적에서 '소인수 분반'으로 세는 기준(이 인원 미만 — 막지 않고 수로만 보여 준다)
 var TIMETABLE_CREATIVE_FROM = 5; // 시간을 정하지 않은 창체(학년별·반군별·전교 동시)는 기본 5교시 이후에만 놓는다(낮 시간에 창체가 끼지 않게)
+// 창체 '교시 지정 없이 일반 수업처럼(반마다 따로)' 여부: creative.byGroup = true(모든 학년) | { 학년: true }
+function timetableCreativeByClass(creative, grade) {
+  const value = creative ? creative.byGroup : false;
+  return value && typeof value === "object" ? Boolean(value[grade]) : Boolean(value);
+}
+// 저장 모양: 세 학년이 모두 같으면 true/false, 아니면 { 학년: true }
+function timetableCreativeByClassValue(flags) {
+  const on = ["1", "2", "3"].filter((grade) => flags[grade]);
+  return on.length === 3 ? true : on.length ? Object.fromEntries(on.map((grade) => [grade, true])) : false;
+}
+
 var TIMETABLE_DEFAULT_LUNCH = { 1: 4, 2: 4, 3: 3 }; // 사용자 학교: 3학년은 3교시 뒤, 1·2학년은 4교시 뒤
 // 한 주에 블록을 놓을 수 있는 칸 수(사전 점검 P5의 '주 n칸'과 같은 규칙): 요일별 교시 합 − 전 교사가 묶이는 칸(전교 고정 시간·전교 동시 창체 시간).
 // 6단계 '전 학년 함께 다시 계산'이 학년 간 겹치는 블록 쌍이 필요한지 볼 때 읽는다.
@@ -593,7 +604,8 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   const fixedSlots = cs.fixedSlots.filter((slot) => !creativeSlots.includes(slot)).map((slot) => ({ label: slot.label, times: slot.times, allTeachers: slot.allTeachers !== false }));
   let creative;
   if (tt.creative && typeof tt.creative === "object") {
-    creative = { school: Number(tt.creative.school) || 0, schoolTimes: tt.creative.schoolTimes || [], grade: tt.creative.grade ?? 0, gradeTimes: tt.creative.gradeTimes || {}, byGroup: Boolean(tt.creative.byGroup) };
+    creative = { school: Number(tt.creative.school) || 0, schoolTimes: tt.creative.schoolTimes || [], grade: tt.creative.grade ?? 0, gradeTimes: tt.creative.gradeTimes || {},
+      byGroup: timetableCreativeByClassValue(Object.fromEntries(["1", "2", "3"].map((grade) => [grade, timetableCreativeByClass(tt.creative, grade)]))) };
   } else if (creativeSlots.length) {
     const times = creativeSlots.flatMap((slot) => timetableTimes(slot.times)).map((time) => `${time.day}${time.period}`);
     creative = { school: times.length, schoolTimes: times, grade: Math.max(0, creativeTotal - times.length), gradeTimes: {}, byGroup: false };
@@ -616,9 +628,11 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   };
   let teachers = classSectionsTeacherList(cs).map((teacher) => {
     const raw = rawOf.get(teacher.id) || {};
-    return { id: teacher.id, name: teacher.name, departments: teacher.departments, courses: teacher.courses,
-      unavailable: teacher.unavailable.map((slot) => ({ day: slot.day, period: slot.period, ...(slot.grades ? { grades: slot.grades } : {}) })), maxHours: Number(raw.maxHours) > 0 ? Number(raw.maxHours) : undefined,
-      days: Array.isArray(raw.days) && raw.days.length ? raw.days : undefined, homeroom: homeroomValue(raw.homeroom),
+    // 순회: 오는 순회교사는 주당 시수(필수 상한)·오는 요일 안에서만, 나가는 교사는 나가는 시수를 그 교사 시수로 센다(6단계 명단의 '순회')
+    return { id: teacher.id, name: teacher.roaming ? `${teacher.name}(순회)` : teacher.name, departments: teacher.departments, courses: teacher.courses,
+      ...(teacher.roaming ? { roaming: true } : {}), ...(teacher.outHours ? { outHours: teacher.outHours } : {}),
+      unavailable: teacher.unavailable.map((slot) => ({ day: slot.day, period: slot.period, ...(slot.grades ? { grades: slot.grades } : {}) })), maxHours: Number(teacher.maxHours) > 0 ? Number(teacher.maxHours) : Number(raw.maxHours) > 0 ? Number(raw.maxHours) : undefined,
+      days: teacher.days || (Array.isArray(raw.days) && raw.days.length ? raw.days : undefined), homeroom: homeroomValue(raw.homeroom),
       placeholder: Boolean(teacher.assumed) || (typeof classSectionsTeacherPlaceholder === "function" && classSectionsTeacherPlaceholder(raw, departmentName)), ...(teacher.assumed ? { assumed: true } : {}) };
   });
   const timetableCounts = typeof hoursTimetableTeacherCounts === "function" ? hoursTimetableTeacherCounts(year) : { counts: stats?.settings?.teachers || {}, assumed: (stats?.assumedTeachers || []).map((item) => item.id) };
@@ -639,7 +653,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   // 5단계 교과별 교사 수와 6단계 명단이 다르면 알림만(시간표는 명단으로 계산)
   if (teachers.length && !teachers.every((teacher) => teacher.placeholder) && stats?.settings?.teachers) {
     const listed = {};
-    for (const teacher of teachers) if (!teacher.assumed) for (const department of teacher.departments) listed[department] = (listed[department] || 0) + 1;
+    for (const teacher of teachers) if (!teacher.assumed && !teacher.roaming) for (const department of teacher.departments) listed[department] = (listed[department] || 0) + 1;
     const differ = [...new Set([...Object.keys(listed), ...Object.keys(stats.settings.teachers)])]
       .map((department) => [department, Math.floor(Number(stats.settings.teachers[department]) || 0), listed[department] || 0]).filter(([, planned, actual]) => planned !== actual);
     if (differ.length) notes.teacherCounts = [`5단계 교사 수와 6단계 교사 명단이 다른 교과: ${differ.map(([department, planned, actual]) => `${departmentName(department)} ${planned} → ${actual}명`).join(", ")} — 시간표는 6단계 명단으로 계산합니다.`];
@@ -720,7 +734,13 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
       for (const classNo of classes || Array.from({ length: total }, (_, index) => String(index + 1))) {
         const share = byClass[classNo];
         if (!share) { lessons.push({ id: `${grade}|${subject}|${classNo}`, grade, classes: [classNo], subject, department, hours, teacherIds: candidateIds(department, subject), ...rest }); continue; }
-        const parts = Object.entries(share).filter(([, value]) => Number(value) > 0).map(([id, value]) => ({ department: id, hours: Number(value), teacherIds: candidateIds(id, subject) }));
+        // 공통 과목(통합과학·통합사회)의 전공별 몫: 그 전공 교사가 먼저, 맡을 수 없으면(교사 없음·2·3학년 수업으로 시수가 참) 같은 교과군에서 시수에 여유가 있는 다른 교과 교사가 지원(사용자 결정)
+        const parts = Object.entries(share).filter(([, value]) => Number(value) > 0).map(([id, value]) => {
+          const own = candidateIds(id, subject);
+          const group = String(id).includes("-") ? String(id).split("-")[0] : "";
+          const support = group ? teachers.filter((teacher) => !own.includes(teacher.id) && teacher.departments.some((item) => item.startsWith(`${group}-`) && !item.endsWith("-공통"))).map((teacher) => teacher.id) : [];
+          return { department: id, hours: Number(value), teacherIds: [...own, ...support], ...(support.length ? { supportIds: support } : {}) };
+        });
         lessons.push({ id: `${grade}|${subject}|${classNo}`, grade, classes: [classNo], subject, department, hours, parts, ...rest });
       }
       return;
@@ -857,7 +877,7 @@ function timetableInputCompute(round, semester, year, settingsOverride = null) {
   const pinned = pinnedSlots || pinnedTeachers ? { ...(pinnedSlots ? { lessons: pinnedSlots } : {}), ...(pinnedTeachers ? { teachers: pinnedTeachers } : {}) } : null;
   const input = {
     ...(pinned ? { pins: pinned } : {}), // 교사가 고정한 반 수업 칸(없으면 넣지 않는다 — 입력 서명이 그대로)
-    semester, days: cs.gridDays, periods: Number(cs.gridPeriods) || 7, periodsByDay: tt.periodsByDay || {}, lunchAfter: tt.lunchAfter || TIMETABLE_DEFAULT_LUNCH,
+    semester, days: cs.gridDays, periods: Number(cs.gridPeriods) || 7, periodsByDay: tt.periodsByDay || {}, ...(tt.periodsByGrade && Object.keys(tt.periodsByGrade).length ? { periodsByGrade: tt.periodsByGrade } : {}), lunchAfter: tt.lunchAfter || TIMETABLE_DEFAULT_LUNCH,
     // 담임 규칙: 직접 고르지 않았으면 담임 명단이 있을 때 '최대한', 없으면 끔
     grades, creative, fixedSlots, teachers, lessons, blocks, venues, rules: { ...(tt.rules || {}), homeroom: tt.rules?.homeroom ?? (homeroomCount ? "soft" : "off") }, missing, notes
   };
@@ -877,7 +897,7 @@ function timetablePrecheckFor(round, semester = "1") {
 var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
-var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
+var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
 var TIMETABLE_NO_TEACHER_REASONS = { manual: "직접 비움", none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
 var TIMETABLE_RESULT_CHOICES = { gap: ["frameSoft", "releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules", "frameOrder"], maxPerDay: ["teacherRules"], lunch: ["frameOrder"] };;
@@ -890,8 +910,7 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "gap", label: "반 공강 금지(하루 안 빈칸은 뒤쪽만)", level: true },
   { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만(과목이 달라도)", level: true },
   { key: "lunch", label: "교사 점심(학년별 점심 칸 가운데 하나는 비움)", level: true },
-  { key: "lunchSide", label: "교사 점심 앞뒤 한 시간씩 공강", level: true, later: true },
-  { key: "sameSubjectDay", label: "교사 같은 날 같은 과목 줄이기", level: true, later: true },
+  { key: "lunchSide", label: "교사 점심 앞이나 뒤 한 시간 공강", level: true, later: true },
   { key: "homeroom", label: "담임이 그 학년 반 수업을 맡으면 담임반 포함", level: true, later: true },
   { key: "minPerDay", label: "반 하루 최소 교시(수업이 있는 날)", min: 1, max: 9, unit: "교시" },
   { key: "shortDay", label: "반 하루 최소 교시 지키기(반마다 끝나는 시간이 들쭉날쭉하지 않게)", level: true, later: true },
@@ -899,6 +918,13 @@ var TIMETABLE_RULE_FIELDS = [
     levels: [["hard", "같은 칸(블록·이어지는 수업 모두)"], ["order", "블록은 같은 시간대만(순서는 학기마다 달라도 됨)"], ["soft", "최대한(학기마다 따로)"], ["off", "끔"]] },
   { key: "cover", label: "교사를 세우면 공강·하루 두 번이 생길 때", level: true, levels: [["hard", "교사 먼저(위반이 남을 수 있음)"], ["soft", "공강 먼저(그 수업은 담당 교사 없음)"]], later: true },
   { key: "splitLesson", label: "한 교사가 한 반의 과목을 모두 맡을 시간이 없을 때", level: true, levels: [["allow", "같은 전공 교사 3명까지 나눠서 모두 맡을 수 있으면 나눠 맡음(2명 먼저)"], ["two", "2명까지만 나눠 맡음"], ["off", "나누지 않음(그 수업은 담당 교사 없음)"]], later: true }
+];
+// 꼭 필요하지는 않은 조건(사용자 결정: 지우지 않고 선택형으로) — 규칙 영역 맨 위에서 쓸지 말지 고른다. 끄면 rules[key] = "off", 켜면 기본값으로.
+var TIMETABLE_OPTIONAL_RULES = [
+  { key: "semesterFrame", label: "2학기는 1학기와 같은 칸", gives: "기본은 꺼짐(학기마다 따로 편성). 켜면 2학기를 1학기와 같은 칸에 맞춥니다(공강·담당 교사 없음이 늘 수 있음).", on: "hard" },
+  { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만", gives: "끄면 같은 교사가 한 반에 하루 두 번 들어갈 수 있습니다." },
+  { key: "shortDay", label: "반 하루 최소 교시", gives: "기본은 꺼짐. 켜면 수업이 있는 날은 최소 교시(기본 4)를 채우려고 합니다.", on: "soft" },
+  { key: "lunchSide", label: "교사 점심 앞이나 뒤 한 시간 공강", gives: "끄면 점심 바로 앞과 뒤에 모두 수업이 붙을 수 있습니다(교사 점심 자체는 그대로)." }
 ];
 var TIMETABLE_ISSUE_LABELS = { block: "계산 불가", fail: "조건 위반", warn: "확인", info: "참고" };
 
@@ -921,8 +947,8 @@ var TIMETABLE_CHOICES = {
   creativeFree: { label: "창체 시간을 고정하지 않기(학년별로 놓고 계산이 정함)", gives: "창체가 지금 고정 시간(예: 금 6·7)이 아닐 수 있습니다. 동아리(전교 같은 시간)는 그대로 둡니다.",
     skip: (tt, prepared) => { const creative = prepared.input.creative; return !timetableTimes(creative.schoolTimes).length && !Object.values(creative.gradeTimes || {}).some((list) => timetableTimes(list).length); },
     patch: (tt, prepared) => { const total = Number(prepared.creativeTotal) || 0; const club = Math.min(1, total); return { ...tt, creative: { school: club, schoolTimes: [], grade: total - club, gradeTimes: {}, byGroup: Boolean(prepared.input.creative.byGroup) } }; } },
-  creativeGroup: { label: "같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)", gives: "학년 전체가 한 시간에 모이는 창체가 없어집니다(동아리 제외). 그 시간에 다른 반은 반 수업을 할 수 있습니다.",
-    skip: (tt, prepared) => Boolean(prepared.input.creative.byGroup),
+  creativeGroup: { label: "창체를 교시 지정 없이 일반 수업처럼(반마다 따로)", gives: "학년 전체가 한 시간에 모이는 창체가 없어집니다(동아리 제외). 그 시간에 다른 반은 반 수업을 할 수 있습니다.",
+    skip: (tt, prepared) => prepared.input.creative.byGroup === true,
     patch: (tt, prepared) => { const total = Number(prepared.creativeTotal) || 0; const club = Math.min(1, total); return { ...tt, creative: { school: club, schoolTimes: [], grade: total - club, gradeTimes: {}, byGroup: true } }; } },
   oncePerDay: { label: "같은 교사가 같은 반에 하루 두 번 들어가는 것을 허용(최대한 피함)", gives: "어떤 반은 같은 교사 수업이 하루에 두 번 있을 수 있습니다.",
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).oncePerDay !== "hard",
@@ -1223,26 +1249,33 @@ function timetableConditionsHtml(prepared) {
   const creative = input.creative;
   const timesText = (list) => (Array.isArray(list) ? list.map((time) => (typeof time === "string" ? time : `${time.day}${time.period}`)).join(",") : String(list || ""));
   const gradeHours = (grade) => (typeof creative.grade === "object" && creative.grade ? Number(creative.grade[grade]) || 0 : Number(creative.grade) || 0);
-  const mode = !tt.creative ? "fixed" : creative.byGroup ? "group" : !creative.school ? "grade" : "custom";
+  const mode = !tt.creative ? "fixed" : creative.byGroup === true ? "group" : !creative.school && !creative.byGroup ? "grade" : "custom";
   const preset = (key, label) => `<button class="button" type="button" data-tt-creative-preset="${key}" aria-pressed="${mode === key}">${label}</button>`;
 
   // 시간 구조
   const periodInputs = days.map((day) => `<label>${day} <input class="cs-num" type="number" min="1" max="12" value="${timetableEsc(tt.periodsByDay?.[day] ?? cs.gridPeriods)}" data-tt-field="period:${day}" data-focus-key="tt-period-${day}" aria-label="${day}요일 교시 수"></label>`).join("");
   const lunchInputs = ["1", "2", "3"].map((grade) => `<label>${grade}학년 <input class="cs-num" type="number" min="1" max="11" value="${timetableEsc(lunch[grade] ?? 4)}" data-tt-field="lunch:${grade}" data-focus-key="tt-lunch-${grade}" aria-label="${grade}학년 점심 앞 교시"> 교시 뒤</label>`).join("");
-  const gradeTimeInputs = ["1", "2", "3"].map((grade) => `<label>${grade}학년 <input class="cs-text" type="text" value="${timetableEsc(timesText(creative.gradeTimes?.[grade]))}" placeholder="비우면 계산이 정함" data-tt-field="creative.gradeTimes:${grade}" data-focus-key="tt-creative-times-${grade}" aria-label="${grade}학년 창체 시간"></label>`).join("");
+  // 학년별 창체 운영 방식: same = 교시를 정해 학년 전체가 같은 시간에(시간을 비우면 계산이 정함), class = 교시 지정 없이 일반 수업처럼 반마다 따로
+  const gradeModeRows = ["1", "2", "3"].map((grade) => {
+    const byClass = timetableCreativeByClass(creative, grade);
+    return `<span class="tt-creative-grade" data-tt-creative-grade="${grade}" data-mode="${byClass ? "class" : "same"}"><strong>${grade}학년</strong> ${gradeHours(grade)}시간
+      <select data-tt-field="creative.mode:${grade}" data-focus-key="tt-creative-mode-${grade}" aria-label="${grade}학년 창체 운영 방식"><option value="same"${byClass ? "" : " selected"}>교시 지정(학년 전체 같은 시간)</option><option value="class"${byClass ? " selected" : ""}>교시 지정 없이 일반 수업처럼(반마다 따로)</option></select>
+      ${byClass ? "" : `<label>요일·교시 <input class="cs-text" type="text" value="${timetableEsc(timesText(creative.gradeTimes?.[grade]))}" placeholder="예: 수6 (비우면 계산이 정함)" data-tt-field="creative.gradeTimes:${grade}" data-focus-key="tt-creative-times-${grade}" aria-label="${grade}학년 창체 시간"></label>`}</span>`;
+  }).join("");
+  // 학년별 요일 교시 수: 비우면 공통 값
+  const gradePeriodRows = ["1", "2", "3"].map((grade) => `<span class="tt-sub" data-tt-grade-periods="${grade}">${grade}학년 ${days.map((day) => `<label>${day} <input class="cs-num" type="number" min="1" max="12" value="${timetableEsc(tt.periodsByGrade?.[grade]?.[day] ?? "")}" placeholder="${timetableEsc(tt.periodsByDay?.[day] ?? cs.gridPeriods)}" data-tt-field="gperiod:${grade}:${day}" data-focus-key="tt-period-${grade}-${day}" aria-label="${grade}학년 ${day}요일 교시 수"></label>`).join("")}</span>`).join("");
   const fixedText = input.fixedSlots.length ? input.fixedSlots.map((slot) => `${slot.label || "고정"} ${timesText(slot.times)}`).join(" · ") : "없음";
   const roomsText = Object.entries(cs.rooms || {}).filter(([, value]) => Number(value) > 0).map(([name, value]) => `${name} ${value}`).join(" · ") || "없음";
   const time = `
-    <div class="tt-row"><span class="tt-label">요일별 교시 수</span><span class="tt-fields">${periodInputs}</span><span class="cs-note">요일은 6단계 격자(${timetableEsc(cs.gridDays)})를 씁니다.</span></div>
+    <div class="tt-row"><span class="tt-label">요일별 교시 수</span><span class="tt-fields"><span class="tt-sub">공통 ${periodInputs}</span>${gradePeriodRows}</span><span class="cs-note">요일은 6단계 격자(${timetableEsc(cs.gridDays)})를 씁니다. 학년마다 다르면 그 학년 칸에만 적습니다(비우면 공통 값).</span></div>
     <div class="tt-row"><span class="tt-label">학년별 점심</span><span class="tt-fields">${lunchInputs}</span><span class="cs-note">점심이 다른 학년의 같은 교시는 실제 시각이 다릅니다.</span></div>
     <div class="tt-row" id="timetableCreative"><span class="tt-label">창체 ${prepared.creativeTotal}시간<br><span class="cs-note">시수는 5단계</span></span><span class="tt-fields">
-      <span class="tt-presets" role="group" aria-label="창체 놓는 방식">${preset("fixed", "전교 동시(6단계 고정 시간)")}${preset("grade", "학년별로 놓기")}${preset("group", "학년별 + 반군별 허용")}</span>
+      <span class="tt-presets" role="group" aria-label="창체 놓는 방식">${preset("fixed", "전교 동시(6단계 고정 시간)")}${preset("grade", "학년별로 놓기")}${preset("group", "모든 학년 일반 수업처럼")}</span>
       <label>전교 동시(동아리 등) <input class="cs-num" type="number" min="0" max="9" value="${timetableEsc(creative.school)}" data-tt-field="creative.school" data-focus-key="tt-creative-school" aria-label="전교 동시 창체 시수"> 시간</label>
       <label>전교 동시 시간 <input class="cs-text" type="text" value="${timetableEsc(timesText(creative.schoolTimes))}" placeholder="예: 금7 (비우면 계산이 정함)" data-tt-field="creative.schoolTimes" data-focus-key="tt-creative-school-times" aria-label="전교 동시 창체 시간"></label>
-      <span>학년별 <strong id="timetableCreativeGrade">${["1", "2", "3"].map((grade) => gradeHours(grade)).join("·")}</strong>시간(1·2·3학년)</span>
-      <span class="tt-sub">학년별 창체 시간 ${gradeTimeInputs}</span>
-      <label><input type="checkbox" data-tt-field="creative.byGroup" ${creative.byGroup ? "checked" : ""}> 같은 학년 안에서 반 묶음마다 다른 시간 허용(반군별)</label>
-      <label>시간을 정하지 않은 창체는 <input class="cs-num" type="number" min="1" max="12" value="${timetableEsc(creative.fromPeriod ?? TIMETABLE_CREATIVE_FROM)}" data-tt-field="creativeFrom" data-focus-key="tt-creative-from" aria-label="시간을 정하지 않은 창체를 놓을 수 있는 첫 교시"> 교시 이후에만(1 = 제한 없음)</label>
+      <span>나머지 학년별 <strong id="timetableCreativeGrade">${["1", "2", "3"].map((grade) => gradeHours(grade)).join("·")}</strong>시간(1·2·3학년) — 학년마다 운영 방식을 고릅니다</span>
+      <span class="tt-sub tt-creative-grades" id="timetableCreativeGrades">${gradeModeRows}</span>
+      <label>같은 시간에 하는데 시간을 정하지 않은 창체는 <input class="cs-num" type="number" min="1" max="12" value="${timetableEsc(creative.fromPeriod ?? TIMETABLE_CREATIVE_FROM)}" data-tt-field="creativeFrom" data-focus-key="tt-creative-from" aria-label="시간을 정하지 않은 창체를 놓을 수 있는 첫 교시"> 교시 이후에만(1 = 제한 없음)</label>
     </span></div>
     <div class="tt-row"><span class="tt-label">장소</span><span class="tt-fields">
       <label>체육 동시 수업 <input class="cs-num" type="number" min="0" max="20" value="${timetableEsc(tt.venues?.체육 ?? "")}" data-tt-field="venue:체육" data-focus-key="tt-venue-pe" aria-label="체육 동시 수업 가능 반 수"> 반(비우면 점검 안 함)</label>
@@ -1273,7 +1306,11 @@ function timetableConditionsHtml(prepared) {
     ${blockGrades.map((grade) => { const total = (prepared.input.grades || []).find((item) => String(item.grade) === grade)?.classes || 0; const half = Math.ceil(total / 2);
       return `<label>${grade}학년 <input class="cs-text" type="text" value="${timetableEsc(tt.staggerGroups?.[grade] || "")}" placeholder="${total > 1 ? `1-${half}/${half + 1}-${total}` : ""}" data-tt-field="stagger:${grade}" data-focus-key="tt-stagger-${grade}" aria-label="${grade}학년 반 묶음"></label>`; }).join("")}
     <span class="cs-note">비우면 앞·뒤 절반. '1-6/7-11'처럼 묶음을 /로 나눠 적습니다. 사전 점검의 '반 묶음을 나눠 블록 일부를 엇갈리게' 선택지에 보이는 예상 분반 수에만 쓰입니다(6단계 편성은 바꾸지 않음).</span></span></div>` : "";
-  const rulesBody = `${ruleRows}${doubleRow}${staggerRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
+  const optionalRow = `<div class="tt-row" id="timetableOptionalRules"><span class="tt-label">선택 조건<br><span class="cs-note">꼭 필요하지 않으면 끕니다</span></span><span class="tt-fields tt-optional">${TIMETABLE_OPTIONAL_RULES.map((item) => {
+    const on = timetableRuleValue(rules, item.key) !== "off";
+    return `<label data-tt-optional="${item.key}" data-on="${on ? "1" : "0"}"><input type="checkbox" data-tt-field="optional:${item.key}" data-focus-key="tt-optional-${item.key}"${on ? " checked" : ""}> <strong>${timetableEsc(item.label)}</strong> <span class="cs-note">${timetableEsc(item.gives)}</span></label>`;
+  }).join("")}<span class="cs-note">켠 조건을 얼마나 엄격하게 지킬지(반드시·최대한)는 아래 줄에서 정합니다.</span></span></div>`;
+  const rulesBody = `${optionalRow}${ruleRows}${doubleRow}${staggerRow}<div class="tt-row"><span class="tt-label"></span><span class="tt-fields"><button class="button" type="button" id="timetableRulesReset">규칙을 기본값으로</button>
     <span class="cs-note">'반드시'인 조건을 다 지킬 수 없으면 자동으로 풀지 않고, 아래 사전 점검의 선택지에서 무엇을 양보할지 고릅니다.</span></span></div>`;
 
   // 교사: 주어진 명단 안에서만 편성한다(교사를 늘리는 입력은 없다). 후보 = 6단계 명단의 담당 교과·담당 과목.
@@ -1311,7 +1348,7 @@ function timetableConditionsHtml(prepared) {
   const chosen = Array.isArray(tt.choices) ? tt.choices : [];
   const chosenHtml = chosen.length ? `<div class="tt-chosen" id="timetableChosen" data-count="${chosen.length}"><strong>고른 선택 ${chosen.length}개</strong>
     <ol>${chosen.map((entry) => `<li>${timetableEsc(entry.label)}</li>`).join("")}</ol><button class="button" type="button" id="timetableChoiceUndo">마지막 선택 되돌리기</button></div>` : "";
-  const timeSummary = `${days.map((day) => tt.periodsByDay?.[day] ?? cs.gridPeriods).join("·")}교시 · 창체 전교 ${creative.school} + 학년별 ${gradeHours("1")}${creative.byGroup ? " · 반군별 허용" : ""}`;
+  const timeSummary = `${days.map((day) => tt.periodsByDay?.[day] ?? cs.gridPeriods).join("·")}교시 · 창체 전교 ${creative.school} + 학년별 ${gradeHours("1")}${creative.byGroup ? ` · 일반 수업처럼 ${["1", "2", "3"].filter((grade) => timetableCreativeByClass(creative, grade)).join("·")}학년` : ""}${tt.periodsByGrade && Object.keys(tt.periodsByGrade).length ? " · 학년별 교시 수 다름" : ""}`;
   const rulesSummary = `참고 상한 ${rules.maxHours} · 진로 ${rules.departmentMax.진로} · 연강 ${rules.run} · 하루 ${rules.maxPerDay} · 공강 ${TIMETABLE_LEVELS.find(([value]) => value === rules.gap)?.[1] || ""}`;
   return `<section class="cs-card" id="timetableConditions"><h4>조건 설정 <span class="cs-note">바꾸면 사전 점검이 바로 다시 돕니다. 5·6단계에서 온 값은 그 단계에서 고칩니다.</span></h4>
     <p class="tt-status${TIMETABLE_VIEW.statusError ? " is-error" : ""}" id="timetableStatus" role="status" aria-live="polite">${timetableEsc(TIMETABLE_VIEW.status)}</p>
@@ -1788,7 +1825,7 @@ function timetableGridHtml(tables, stale = false) {
   if (!list.length) return `<p class="cs-note" id="timetableGrid">표로 보여 줄 ${view === "teacher" ? "교사" : "반"}이 없습니다.</p>`;
   let picked = list.find((row) => row.id === TIMETABLE_VIEW.pick[view]) || list[0];
   TIMETABLE_VIEW.pick[view] = picked.id;
-  const options = list.map((row) => `<option value="${timetableEsc(row.id)}"${row.id === picked.id ? " selected" : ""}>${timetableEsc(view === "teacher" ? `${row.name} (${row.hours}시간)` : `${row.id}반`)}</option>`).join("");
+  const options = list.map((row) => `<option value="${timetableEsc(row.id)}"${row.id === picked.id ? " selected" : ""}>${timetableEsc(view === "teacher" ? `${row.name} (${row.hours}시간${row.outHours ? ` + 순회 ${row.outHours}` : ""})` : `${row.id}반`)}</option>`).join("");
   const head = `<thead><tr><th></th>${tables.days.map((day) => `<th>${timetableEsc(day)}</th>`).join("")}</tr></thead>`;
   // 이 반에서 고정한 칸
   const pinsNow = timetableSettings().pins?.[TIMETABLE_VIEW.semester] || {};
@@ -2028,6 +2065,17 @@ function timetableApplyField(field, target) {
     settings.periodsByDay = { ...(settings.periodsByDay || {}), [key]: value };
     return `${key}요일 ${value}교시`;
   }
+  if (name === "gperiod") {
+    // 학년별 요일 교시 수: 비우면 공통 값을 따른다
+    const [grade, day] = key.split(":");
+    const all = { ...(settings.periodsByGrade || {}) };
+    const own = { ...(all[grade] || {}) };
+    if (String(target.value).trim() === "") delete own[day];
+    else { const value = whole(1, 12); if (value === null) return fail("교시 수는 1~12 사이 숫자로 넣어 주세요."); own[day] = value; }
+    if (Object.keys(own).length) all[grade] = own; else delete all[grade];
+    if (Object.keys(all).length) settings.periodsByGrade = all; else delete settings.periodsByGrade;
+    return `${grade}학년 ${day}요일 ${own[day] ? `${own[day]}교시` : "공통 값"}`;
+  }
   if (name === "lunch") {
     const value = whole(1, 11);
     if (value === null) return fail("점심은 몇 교시 뒤인지 숫자로 넣어 주세요.");
@@ -2068,6 +2116,17 @@ function timetableApplyField(field, target) {
     if (target.checked) settings.keepBlockTimes = true; else delete settings.keepBlockTimes;
     return target.checked ? "6단계 블록 시간 그대로 지키기" : "블록 시간을 시간표가 정하기";
   }
+  if (name === "optional") {
+    const spec = TIMETABLE_OPTIONAL_RULES.find((item) => item.key === key);
+    if (!spec) return "";
+    const rules = { ...(settings.rules || {}) };
+    // 켜기: 기본값이 켜짐이면 기본값으로(덮어쓴 값 지움), 기본값이 꺼짐이면 spec.on. 끄기: 기본값이 꺼짐이면 덮어쓴 값 지움.
+    const defaultOff = timetableRuleDefault(key) === "off";
+    if (target.checked) { if (defaultOff) rules[key] = spec.on || "soft"; else delete rules[key]; }
+    else if (defaultOff) delete rules[key]; else rules[key] = "off";
+    settings.rules = rules;
+    return `${spec.label} → ${target.checked ? "씀" : "끔"}`;
+  }
   if (name.startsWith("rules.")) {
     const rule = name.slice(6);
     const spec = TIMETABLE_RULE_FIELDS.find((item) => item.key === rule);
@@ -2097,7 +2156,8 @@ function timetableApplyField(field, target) {
     const current = TIMETABLE_VIEW.prepared?.input.creative || { school: 0, schoolTimes: [], grade: 0, gradeTimes: {}, byGroup: false };
     const total = Number(TIMETABLE_VIEW.prepared?.creativeTotal) || 0;
     const keys = (list) => timetableTimes(list).map((time) => `${time.day}${time.period}`);
-    const next = { school: Number(current.school) || 0, schoolTimes: keys(current.schoolTimes), grade: current.grade, byGroup: Boolean(current.byGroup),
+    const flags = Object.fromEntries(["1", "2", "3"].map((grade) => [grade, timetableCreativeByClass(current, grade)]));
+    const next = { school: Number(current.school) || 0, schoolTimes: keys(current.schoolTimes), grade: current.grade, byGroup: timetableCreativeByClassValue(flags),
       gradeTimes: Object.fromEntries(Object.entries(current.gradeTimes || {}).map(([grade, list]) => [grade, keys(list)])) };
     const part = name.slice(9);
     if (part === "school") {
@@ -2108,9 +2168,9 @@ function timetableApplyField(field, target) {
       if (next.schoolTimes.length > value) next.schoolTimes = next.schoolTimes.slice(0, value);
     } else if (part === "schoolTimes") next.schoolTimes = keys(target.value);
     else if (part === "gradeTimes") next.gradeTimes = { ...next.gradeTimes, [key]: keys(target.value) };
-    else if (part === "byGroup") next.byGroup = Boolean(target.checked);
+    else if (part === "mode") { flags[key] = target.value === "class"; next.byGroup = timetableCreativeByClassValue(flags); }
     settings.creative = next;
-    return part === "byGroup" ? `창체 반군별 ${next.byGroup ? "허용" : "허용 안 함"}` : `창체 전교 동시 ${next.school}시간${next.schoolTimes.length ? `(${next.schoolTimes.join(",")})` : ""} + 학년별 ${typeof next.grade === "object" ? "" : next.grade}시간`;
+    return part === "mode" ? `${key}학년 창체: ${flags[key] ? "교시 지정 없이 일반 수업처럼(반마다 따로)" : "교시 지정(학년 전체 같은 시간)"}` : `창체 전교 동시 ${next.school}시간${next.schoolTimes.length ? `(${next.schoolTimes.join(",")})` : ""} + 학년별 ${typeof next.grade === "object" ? "" : next.grade}시간`;
   }
   if (name === "split") {
     const cut = key.lastIndexOf(":");
@@ -2132,7 +2192,7 @@ function timetableCreativePreset(kind) {
   const total = Number(TIMETABLE_VIEW.prepared?.creativeTotal) || 0;
   if (kind === "fixed") { delete settings.creative; return "창체: 전교 동시(6단계 고정 시간)"; }
   settings.creative = { school: 0, schoolTimes: [], grade: total, gradeTimes: {}, byGroup: kind === "group" };
-  return kind === "group" ? "창체: 학년별 + 반군별 허용" : "창체: 학년별로 놓기";
+  return kind === "group" ? "창체: 모든 학년 일반 수업처럼(반마다 따로)" : "창체: 학년별로 놓기";
 }
 
 // 선택지 적용: 시간표 조건을 바꾸고 고른 내역(되돌릴 값 포함)을 남긴다.

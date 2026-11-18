@@ -344,12 +344,14 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   // 뼈대 중간 단계: 점심·연강 위반에 '블록 순서를 학기마다 다르게 허용' — 뼈대가 '같은 칸'일 때만 나온다
   assert.deepEqual([resultChoices.lunch, resultChoices.run], [["frameOrder"], ["teacherRules", "frameOrder"]]);
   assert.deepEqual(plain(vm.runInContext("TIMETABLE_CHOICES.frameOrder.patch({ rules: { run: 4 } })", ctx)), { rules: { run: 4, semesterFrame: "order" } });
-  assert.deepEqual([vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({})", ctx), vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'order' } })", ctx), vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'soft' } })", ctx)], [false, true, true]);
+  assert.deepEqual([vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'hard' } })", ctx), vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'order' } })", ctx), vm.runInContext("TIMETABLE_CHOICES.frameOrder.skip({ rules: { semesterFrame: 'soft' } })", ctx)], [false, true, true]);
+  // 기본값(2026-11-18 사용자 결정): 두 학기 같은 칸·하루 최소 교시는 꺼짐, 하루 한 번은 반드시, 점심 앞이나 뒤 한 시간 공강은 최대한, '같은 날 같은 과목'은 없앰
+  assert.deepEqual(plain(vm.runInContext("[TIMETABLE_DEFAULT_RULES.semesterFrame, TIMETABLE_DEFAULT_RULES.shortDay, TIMETABLE_DEFAULT_RULES.oncePerDay, TIMETABLE_DEFAULT_RULES.lunchSide, 'sameSubjectDay' in TIMETABLE_DEFAULT_RULES, TIMETABLE_CHOICES.frameOrder.skip({})]", ctx)), ["off", "off", "hard", "soft", false, true]);
   assert.ok(Object.values(resultChoices).flat().every((key) => vm.runInContext(`typeof TIMETABLE_CHOICES.${key}.patch`, ctx) === "function"));
   // 두 학기 같은 칸 결과에 교사 점심·연강이 남으면 '블록 순서를 학기마다 다르게 허용'이 맨 앞·추천(실제 자료에서 이 선택으로 풀린 위반)
   const leftover = { metrics: { frameMode: "hard" }, noTeacher: [], violations: [
     { level: "hard", rule: "oncePerDay", amount: 2, subjects: [] }, { level: "hard", rule: "lunch", amount: 1 }, { level: "hard", rule: "lunch", amount: 1 }, { level: "hard", rule: "run", amount: 1 }, { level: "soft", rule: "lunch", amount: 5 }] };
-  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, {}, {})), { keys: ["frameOrder", "releaseTeacher", "oncePerDay", "teacherRules"], recommended: "frameOrder", lunch: 2, run: 1, gap: 0 });
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, { rules: { semesterFrame: "hard" } }, {})), { keys: ["frameOrder", "releaseTeacher", "oncePerDay", "teacherRules"], recommended: "frameOrder", lunch: 2, run: 1, gap: 0 });
   // 한 학기만 계산한 결과·이미 '같은 시간대'인 조건·점심·연강이 없는 결과에는 추천하지 않는다
   assert.equal(ctx.timetableResultChoiceKeys({ ...leftover, metrics: { frameMode: "off" } }, {}, {}).recommended, "");
   assert.deepEqual(plain(ctx.timetableResultChoiceKeys(leftover, { rules: { semesterFrame: "order" } }, {})), { keys: ["releaseTeacher", "oncePerDay", "teacherRules"], recommended: "", lunch: 2, run: 1, gap: 0 });
@@ -357,10 +359,10 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   // 두 학기를 묶어 계산했는데 반 공강이 남으면 '학기마다 따로 놓기'가 맨 앞·추천(한 학기에만 있는 블록 자리가 다른 학기에서 비어 생기는 공강 — 하네스 자료 26칸 → 0칸)
   assert.equal(resultChoices.gap[0], "frameSoft");
   assert.deepEqual(plain(vm.runInContext("TIMETABLE_CHOICES.frameSoft.patch({ rules: { run: 4 } })", ctx)), { rules: { run: 4, semesterFrame: "soft" } });
-  assert.deepEqual(["{}", "{ rules: { semesterFrame: 'order' } }", "{ rules: { semesterFrame: 'soft' } }", "{ rules: { semesterFrame: 'off' } }"].map((tt) => vm.runInContext(`TIMETABLE_CHOICES.frameSoft.skip(${tt})`, ctx)), [false, false, true, true]);
+  assert.deepEqual(["{ rules: { semesterFrame: 'hard' } }", "{ rules: { semesterFrame: 'order' } }", "{ rules: { semesterFrame: 'soft' } }", "{ rules: { semesterFrame: 'off' } }", "{}"].map((tt) => vm.runInContext(`TIMETABLE_CHOICES.frameSoft.skip(${tt})`, ctx)), [false, false, true, true, true]);
   const gapped = { metrics: { frameMode: "hard" }, noTeacher: [], violations: [{ level: "hard", rule: "gap", amount: 2 }, { level: "hard", rule: "gap", amount: 1 }, { level: "hard", rule: "lunch", amount: 1 }] };
   const gapPrepared = { input: { creative: { schoolTimes: ["금6", "금7"], gradeTimes: {} }, blocks: [] } };
-  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(gapped, {}, gapPrepared)), { keys: ["frameSoft", "releaseTeacher", "creativeFree", "creativeGroup", "gaps", "frameOrder"], recommended: "frameSoft", lunch: 1, run: 0, gap: 3 });
+  assert.deepEqual(plain(ctx.timetableResultChoiceKeys(gapped, { rules: { semesterFrame: "hard" } }, gapPrepared)), { keys: ["frameSoft", "releaseTeacher", "creativeFree", "creativeGroup", "gaps", "frameOrder"], recommended: "frameSoft", lunch: 1, run: 0, gap: 3 });
   assert.equal(ctx.timetableResultChoiceKeys({ ...gapped, metrics: { frameMode: "order" } }, { rules: { semesterFrame: "order" } }, gapPrepared).recommended, "frameSoft");
   assert.equal(ctx.timetableResultChoiceKeys({ ...gapped, metrics: { frameMode: "off" } }, { rules: { semesterFrame: "soft" } }, gapPrepared).recommended, "", "학기마다 따로 계산한 결과에는 추천하지 않는다");
   // 과목을 붙이는 선택지 'double:과목' = 그 과목 2시간 연속 수업 허용(이미 고른 과목이면 빠짐)
@@ -374,7 +376,7 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   // 적용: 조건이 바뀌고 고른 내역(되돌릴 값)이 남는다 → 되돌리기
   vm.runInContext("TIMETABLE_VIEW.prepared = " + JSON.stringify(prepared), ctx);
   ctx.state.timetable = { settings: { rules: { run: 4 } } };
-  assert.equal(ctx.timetableApplyChoice("creativeGroup"), "선택 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
+  assert.equal(ctx.timetableApplyChoice("creativeGroup"), "선택 — 창체를 교시 지정 없이 일반 수업처럼(반마다 따로)");
   assert.equal(ctx.timetableApplyChoice("gaps"), "선택 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
   const settings = plain(ctx.state.timetable.settings);
   assert.deepEqual([settings.creative, settings.rules, settings.choices.map((entry) => [entry.key, entry.before.creative, entry.before.rules])],
@@ -386,7 +388,7 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   assert.equal(ctx.state.timetable.settings.doubleSubjects, undefined);
   assert.equal(ctx.timetableUndoChoice(), "되돌림 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
   assert.deepEqual([plain(ctx.state.timetable.settings.rules), ctx.state.timetable.settings.choices.length], [{ run: 4 }, 1]);
-  assert.equal(ctx.timetableUndoChoice(), "되돌림 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
+  assert.equal(ctx.timetableUndoChoice(), "되돌림 — 창체를 교시 지정 없이 일반 수업처럼(반마다 따로)");
   assert.deepEqual(plain(ctx.state.timetable.settings), { rules: { run: 4 } });
   assert.equal(ctx.timetableUndoChoice(), "");
 });

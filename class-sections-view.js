@@ -386,9 +386,28 @@ function classSectionsTeacherList(settings, grade = null) {
     id: String(teacher.id || `t${index + 1}`), name: String(teacher.alias || teacher.name || teacher.id), departments: teacher.department ? [teacher.department] : [],
     courses: String(teacher.courses || "").split(/[,·]/).map((item) => item.trim()).filter(Boolean),
     unavailable: (teacher.unavailable || []).map(classSectionsUnavailableSlot).filter((slot) => slot && (grade === null || classSectionsUnavailableApplies(slot, grade, lunch)))
-      .map((slot) => ({ day: slot.day, period: slot.period, ...(grade === null && slot.grades.length ? { grades: slot.grades } : {}), reason: teacher.reason || "" }))
+      .map((slot) => ({ day: slot.day, period: slot.period, ...(grade === null && slot.grades.length ? { grades: slot.grades } : {}), reason: teacher.reason || "" })),
+    ...classSectionsTeacherRoamValues(teacher, settings)
   }));
+  // 오는 순회교사: 오지 않는 요일은 모든 교시 불가(6단계 블록 시간·교사 배정과 7단계 시간표가 함께 읽는다)
+  for (const teacher of list) if (teacher.days) {
+    const taken = new Set(teacher.unavailable.filter((slot) => !slot.grades).map((slot) => `${slot.day}${slot.period}`));
+    for (const day of teacher.awayDays) for (let period = 1; period <= teacher.gridPeriods; period += 1) if (!taken.has(`${day}${period}`)) teacher.unavailable.push({ day, period, reason: "순회" });
+    delete teacher.awayDays; delete teacher.gridPeriods;
+  }
   return list.length ? [...list, ...classSectionsAssumedTeachers(list)] : list;
+}
+
+// 명단의 순회 값(teacher.roam·roamHours·roamDays) → 계산용: 오는 순회교사 = { roaming, maxHours(주당 시수 = 필수 상한), days(오는 요일) }, 나가는 교사 = { outHours }.
+function classSectionsTeacherRoamValues(teacher, settings) {
+  const hours = Math.floor(Number(teacher.roamHours) || 0);
+  if (!(hours > 0)) return {};
+  if (teacher.roam === "out") return { outHours: hours };
+  if (teacher.roam !== "in") return {};
+  const gridDays = String(settings?.gridDays || CLASS_SECTIONS_DAY_NAMES.join(",")).split(/[,\s]+/).filter(Boolean);
+  const days = gridDays.filter((day) => String(teacher.roamDays || "").includes(day));
+  if (!days.length || days.length === gridDays.length) return { roaming: true, maxHours: hours };
+  return { roaming: true, maxHours: hours, days, awayDays: gridDays.filter((day) => !days.includes(day)), gridPeriods: Math.max(Number(settings?.gridPeriods) || 0, CLASS_SECTIONS_PERIODS) };
 }
 
 // 명단에 없는 '교사 0명인데 수업이 있는 교과'(5단계 assumedTeachers — 교양·공통 제외)의 자리 교사: 사용자 결정 "그런 교과는 자리 교사 1명을 두고 계산".
@@ -1482,7 +1501,7 @@ function renderClassSectionsTeachers() {
     const deptOptions = [`<option value="">교과 선택</option>`, ...departments.map((item) => `<option value="${esc(item.id)}"${teacher.department === item.id ? " selected" : ""}>${esc(typeof hoursDepartmentName === "function" ? hoursDepartmentName(item.id) : item.id)}</option>`)].join("");
     const open = CLASS_SECTIONS_VIEW.teacherSlot === index;
     const partial = open ? (teacher.unavailable || []).map(classSectionsUnavailableSlot).filter((slot) => slot && slot.grades.length) : [];
-    const grid = open ? `<tr class="cs-grid-row"><td colspan="8"><table class="cs-grid" aria-label="${esc(teacher.name)} 불가 시간"><thead><tr><th></th>${CLASS_SECTIONS_DAY_NAMES.map((day) => `<th>${day}</th>`).join("")}</tr></thead><tbody>
+    const grid = open ? `<tr class="cs-grid-row"><td colspan="9"><table class="cs-grid" aria-label="${esc(teacher.name)} 불가 시간"><thead><tr><th></th>${CLASS_SECTIONS_DAY_NAMES.map((day) => `<th>${day}</th>`).join("")}</tr></thead><tbody>
       ${Array.from({ length: CLASS_SECTIONS_PERIODS }, (_, p) => `<tr><th>${p + 1}교시</th>${CLASS_SECTIONS_DAY_NAMES.map((day) => {
         const slot = `${day}${p + 1}`;
         const part = partial.find((item) => item.day === day && item.period === p + 1);
@@ -1498,6 +1517,9 @@ function renderClassSectionsTeachers() {
       <td><button class="button" type="button" data-cs-t-grid="${index}" aria-expanded="${open}">${(teacher.unavailable || []).length ? `불가 ${(teacher.unavailable || []).length}시간` : "불가 시간"}</button></td>
       <td><input class="cs-text" type="text" value="${esc(teacher.reason || "")}" placeholder="육아시간·순회" data-cs-t="${index}|reason" data-focus-key="cs-t-reason-${index}" aria-label="교사 ${index + 1} 불가 사유"></td>
       <td><input class="cs-text cs-homeroom" type="text" value="${esc(teacher.homeroom || "")}" placeholder="2-3" data-cs-t="${index}|homeroom" data-focus-key="cs-t-homeroom-${index}" aria-label="교사 ${index + 1} 담임 반(내년 학년-반)"></td>
+      <td class="cs-roam"><select data-cs-t="${index}|roam" data-focus-key="cs-t-roam-${index}" aria-label="교사 ${index + 1} 순회"><option value="">아님</option><option value="in"${teacher.roam === "in" ? " selected" : ""}>오는 교사</option><option value="out"${teacher.roam === "out" ? " selected" : ""}>나가는 교사</option></select>${teacher.roam === "in" || teacher.roam === "out" ? `
+        <label>주 <input class="cs-num" type="number" min="1" max="40" value="${esc(teacher.roamHours || "")}" data-cs-t="${index}|roamHours" data-focus-key="cs-t-roam-hours-${index}" aria-label="교사 ${index + 1} 순회 주당 시수">시간</label>${teacher.roam === "in" ? `
+        <input class="cs-text cs-homeroom" type="text" value="${esc(teacher.roamDays || "")}" placeholder="오는 요일" title="오는 요일(예: 월,수). 비우면 모든 요일" data-cs-t="${index}|roamDays" data-focus-key="cs-t-roam-days-${index}" aria-label="교사 ${index + 1} 오는 요일">` : ""}` : ""}</td>
       <td><button class="button" type="button" data-cs-t-remove="${index}" aria-label="교사 ${index + 1} 삭제">삭제</button></td></tr>${grid}`;
   }).join("");
   const fixed = settings.fixedSlots.map((slot, index) => `<tr>
@@ -1515,7 +1537,7 @@ function renderClassSectionsTeachers() {
       <div class="cs-actions"><button class="button" type="button" id="classSectionsTeacherAdd">교사 추가</button>
       <button class="button" type="button" id="classSectionsTeacherFromHours">5단계 교사 수로 명단 만들기</button></div>
       ${typeof classSectionsTeacherToolsHtml === "function" ? classSectionsTeacherToolsHtml() : ""}
-      <div class="cs-scroll" data-scroll-key="cs-teachers"><table class="cs-table"><thead><tr><th>이름</th><th>별칭</th><th>교과</th><th>과목(선택)</th><th>불가 시간</th><th>사유</th><th title="내년에 담임을 맡을 반(예: 2-3). 7단계 시간표의 담임 규칙에 씁니다.">담임</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8">교사 명단이 없습니다. 없으면 5단계 교과별 교사 수만으로 블록당 분반을 제한합니다.</td></tr>'}</tbody></table></div>
+      <div class="cs-scroll" data-scroll-key="cs-teachers"><table class="cs-table"><thead><tr><th>이름</th><th>별칭</th><th>교과</th><th>과목(선택)</th><th>불가 시간</th><th>사유</th><th title="내년에 담임을 맡을 반(예: 2-3). 7단계 시간표의 담임 규칙에 씁니다.">담임</th><th title="우리 학교로 오는 순회교사: 주당 시수까지만, 오는 요일에만 수업을 맡깁니다. 다른 학교로 나가는 교사: 나가는 시수를 그 교사 시수에 더해 셉니다(나가는 요일은 불가 시간에).">순회</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="9">교사 명단이 없습니다. 없으면 5단계 교과별 교사 수만으로 블록당 분반을 제한합니다.</td></tr>'}</tbody></table></div>
     </section>
     <section><h3>고정 시간 <span class="cs-note">창체·진로, 스포츠 + 창체 묶음 등</span></h3>
       <div class="cs-actions"><button class="button" type="button" id="classSectionsFixedAdd">고정 시간 추가</button>
@@ -1728,6 +1750,16 @@ function classSectionsHandleTeacherEvent(event) {
         else if (other) CLASS_SECTIONS_VIEW.teacherMessage = `담임 ${value}은 이미 ${other.name || other.id} 교사입니다. 한 반의 담임은 한 명만 적을 수 있습니다.`;
         else if (value) teacher.homeroom = value;
         else delete teacher.homeroom;
+      } else if (field === "roam" || field === "roamHours" || field === "roamDays") {
+        // 순회: 오는 교사(주당 시수·오는 요일) / 나가는 교사(나가는 주당 시수). 종류를 지우면 시수·요일도 지운다.
+        CLASS_SECTIONS_VIEW.teacherMessage = "";
+        if (field === "roam") { if (target.value) teacher.roam = target.value; else { delete teacher.roam; delete teacher.roamHours; delete teacher.roamDays; } if (teacher.roam !== "in") delete teacher.roamDays; }
+        else if (field === "roamHours") { const hours = Math.floor(Number(target.value) || 0); if (hours > 0) teacher.roamHours = Math.min(40, hours); else delete teacher.roamHours; }
+        else {
+          const read = typeof classSectionsTeacherRoamDays === "function" ? classSectionsTeacherRoamDays(target.value, String(settings.gridDays || "월,화,수,목,금").split(/[,\s]+/).filter(Boolean)) : { days: [], problems: [] };
+          if (read.problems.length) CLASS_SECTIONS_VIEW.teacherMessage = `오는 요일 '${target.value.trim()}'를 읽지 못했습니다. '월,수'처럼 적어 주세요.`;
+          else if (read.days.length) teacher.roamDays = read.days.join(","); else delete teacher.roamDays;
+        }
       } else teacher[field] = target.value.trim();
     } else if (data.csTSlot) {
       const [index, slot] = data.csTSlot.split("|");
