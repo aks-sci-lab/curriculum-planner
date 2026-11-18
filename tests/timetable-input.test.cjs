@@ -374,7 +374,7 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   // 적용: 조건이 바뀌고 고른 내역(되돌릴 값)이 남는다 → 되돌리기
   vm.runInContext("TIMETABLE_VIEW.prepared = " + JSON.stringify(prepared), ctx);
   ctx.state.timetable = { settings: { rules: { run: 4 } } };
-  assert.equal(ctx.timetableApplyChoice("creativeGroup"), "선택 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
+  assert.equal(ctx.timetableApplyChoice("creativeGroup"), "선택 — 창체를 교시 지정 없이 일반 수업처럼(반마다 따로)");
   assert.equal(ctx.timetableApplyChoice("gaps"), "선택 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
   const settings = plain(ctx.state.timetable.settings);
   assert.deepEqual([settings.creative, settings.rules, settings.choices.map((entry) => [entry.key, entry.before.creative, entry.before.rules])],
@@ -386,7 +386,7 @@ test("선택형 해결: 항목마다 고를 수 있는 선택지와 예상 효�
   assert.equal(ctx.state.timetable.settings.doubleSubjects, undefined);
   assert.equal(ctx.timetableUndoChoice(), "되돌림 — 반 공강 허용(최대한 줄이고 끝 교시 쪽으로)");
   assert.deepEqual([plain(ctx.state.timetable.settings.rules), ctx.state.timetable.settings.choices.length], [{ run: 4 }, 1]);
-  assert.equal(ctx.timetableUndoChoice(), "되돌림 — 같은 학년 안에서 반 묶음마다 창체 시간을 다르게(반군별)");
+  assert.equal(ctx.timetableUndoChoice(), "되돌림 — 창체를 교시 지정 없이 일반 수업처럼(반마다 따로)");
   assert.deepEqual(plain(ctx.state.timetable.settings), { rules: { run: 4 } });
   assert.equal(ctx.timetableUndoChoice(), "");
 });

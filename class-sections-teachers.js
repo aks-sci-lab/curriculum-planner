@@ -4,7 +4,33 @@
 
 // ---- 순수 계산 ----
 
-var CLASS_SECTIONS_TEACHER_HEADER = ["이름", "담당 교과", "담당 과목", "불가 시간", "사유", "비고", "번호(고치지 마세요)", "담임(내년 학년-반)"];
+var CLASS_SECTIONS_TEACHER_HEADER = ["이름", "담당 교과", "담당 과목", "불가 시간", "사유", "비고", "번호(고치지 마세요)", "담임(내년 학년-반)", "순회(오는/나가는)", "순회 시수", "오는 요일"];
+
+// 순회교사: teacher.roam = "in"(우리 학교로 오는 순회교사) | "out"(다른 학교로 나가는 우리 교사), roamHours = 주당 시수, roamDays = 오는 요일('월,수', 오는 교사만).
+// 글자 읽기: '오는'·'나가는'(또는 in/out) → "in"/"out", 비면 "", 모르면 null.
+function classSectionsTeacherRoam(value) {
+  const raw = String(value ?? "").replace(/\s+/g, "");
+  if (!raw) return "";
+  if (/^(오는|옴|전입|in)/i.test(raw)) return "in";
+  if (/^(나가는|나감|전출|out)/i.test(raw)) return "out";
+  return null;
+}
+
+// 오는 요일 글자('월,수'·'월수'·'월요일 수요일') → 격자 요일 순서의 목록. 읽지 못한 글자는 problems.
+function classSectionsTeacherRoamDays(value, days = ["월", "화", "수", "목", "금"]) {
+  const letters = String(value ?? "").replace(/요일/g, "").replace(/[,\s·/]+/g, "").split("");
+  const problems = letters.filter((letter) => !days.includes(letter));
+  return { days: days.filter((day) => letters.includes(day)), problems };
+}
+
+// 명단의 순회 값 정리: 시수가 없으면 순회가 아니다. 오는 요일은 오는 교사만.
+function classSectionsTeacherRoamClean(teacher) {
+  const hours = Math.floor(Number(teacher.roamHours) || 0);
+  if (!(teacher.roam === "in" || teacher.roam === "out") || !(hours > 0)) { if (!(teacher.roam === "in" || teacher.roam === "out")) delete teacher.roam; delete teacher.roamHours; if (teacher.roam !== "in") delete teacher.roamDays; }
+  else teacher.roamHours = Math.min(40, hours);
+  if (teacher.roam !== "in" || !String(teacher.roamDays || "").trim()) delete teacher.roamDays;
+  return teacher;
+}
 
 // 담임 반 표기: '2-3', '2학년 3반', '2학년3반' → '2-3'(내년 학년-반). 비면 "", 읽지 못하면 null.
 function classSectionsTeacherHomeroom(value) {
@@ -74,7 +100,8 @@ function classSectionsTeacherSheetRows(teachers, spec = {}) {
   const days = spec.days || ["월", "화", "수", "목", "금"];
   const periods = spec.periods || 7;
   return [CLASS_SECTIONS_TEACHER_HEADER.slice(), ...(teachers || []).map((teacher) => [teacher.name || "", teacher.department || "", teacher.courses || "",
-    classSectionsTeacherSlotsText(teacher.unavailable, days, periods), teacher.reason || "", teacher.note || "", teacher.id || "", teacher.homeroom || ""])];
+    classSectionsTeacherSlotsText(teacher.unavailable, days, periods), teacher.reason || "", teacher.note || "", teacher.id || "", teacher.homeroom || "",
+    teacher.roam === "in" ? "오는" : teacher.roam === "out" ? "나가는" : "", Number(teacher.roamHours) > 0 ? Number(teacher.roamHours) : "", teacher.roam === "in" ? teacher.roamDays || "" : ""])];
 }
 
 // 올린 교사 명단 → 새 명단. 번호(id)가 맞으면 그 교사, 아니면 이름(띄어쓰기 무시)·별칭으로 맞춘다. 없으면 추가.
@@ -90,7 +117,7 @@ function classSectionsTeacherReadRows(rows, existing, spec = {}) {
   if (headerAt < 0) return { error: "'이름' 머리글을 찾지 못했습니다(내려받은 교사 명단 양식인지 확인하세요)." };
   const header = rows[headerAt].map(compact);
   const col = (name) => header.findIndex((cell) => cell.startsWith(compact(name)));
-  const at = { name: 0, department: col("담당교과"), courses: col("담당과목"), unavailable: col("불가시간"), reason: col("사유"), note: col("비고"), id: col("번호"), homeroom: col("담임") };
+  const at = { name: 0, department: col("담당교과"), courses: col("담당과목"), unavailable: col("불가시간"), reason: col("사유"), note: col("비고"), id: col("번호"), homeroom: col("담임"), roam: col("순회(오는"), roamHours: col("순회시수"), roamDays: col("오는요일") };
   const departments = spec.departments || [];
   const deptOf = (value) => {
     const raw = text(value);
@@ -130,15 +157,28 @@ function classSectionsTeacherReadRows(rows, existing, spec = {}) {
       else if (homeroom && homerooms.has(homeroom)) problems.push(`${line}행 ${name}: 담임 ${homeroom}이 ${homerooms.get(homeroom)} 교사와 겹칩니다(뒤의 것은 비움)`);
       else { values.homeroom = homeroom; if (homeroom) homerooms.set(homeroom, name); }
     }
+    // 순회 열이 있는 양식만 순회 값을 바꾼다(예전 양식을 올려도 넣어 둔 값은 그대로).
+    if (at.roam >= 0) {
+      const roam = classSectionsTeacherRoam(row[at.roam]);
+      const hours = at.roamHours >= 0 ? Math.floor(Number(text(row[at.roamHours])) || 0) : 0;
+      const roamDays = at.roamDays >= 0 ? classSectionsTeacherRoamDays(row[at.roamDays], days) : { days: [], problems: [] };
+      if (roam === null) problems.push(`${line}행 ${name}: 순회 '${text(row[at.roam])}'를 읽지 못했습니다('오는' 또는 '나가는')`);
+      else if (roam && !(hours > 0)) problems.push(`${line}행 ${name}: 순회 시수(주당 시간 수)가 없어 순회로 적지 않았습니다`);
+      else {
+        if (roamDays.problems.length) problems.push(`${line}행 ${name}: 오는 요일 '${roamDays.problems.join("")}'를 읽지 못했습니다(예: 월,수)`);
+        values.roam = roam; values.roamHours = roam ? Math.min(40, hours) : 0; values.roamDays = roam === "in" ? roamDays.days.join(",") : "";
+      }
+    }
     const id = at.id >= 0 ? text(row[at.id]) : "";
     const match = (id && byId.get(id) && !touched.has(byId.get(id))) ? byId.get(id) : (byName.get(compact(name)) && !touched.has(byName.get(compact(name))) ? byName.get(compact(name)) : null);
     if (match) {
       touched.add(match);
-      const before = JSON.stringify([match.name, match.department || "", match.courses || "", (match.unavailable || []).slice().sort(), match.reason || "", match.note || "", match.homeroom || ""]);
+      const before = JSON.stringify([match.name, match.department || "", match.courses || "", (match.unavailable || []).slice().sort(), match.reason || "", match.note || "", match.homeroom || "", match.roam || "", match.roamHours || 0, match.roamDays || ""]);
       Object.assign(match, values);
       if (!match.homeroom) delete match.homeroom;
+      classSectionsTeacherRoamClean(match);
       delete match.notInList;
-      const after = JSON.stringify([match.name, match.department || "", match.courses || "", (match.unavailable || []).slice().sort(), match.reason || "", match.note || "", match.homeroom || ""]);
+      const after = JSON.stringify([match.name, match.department || "", match.courses || "", (match.unavailable || []).slice().sort(), match.reason || "", match.note || "", match.homeroom || "", match.roam || "", match.roamHours || 0, match.roamDays || ""]);
       if (before === after) kept += 1; else updated += 1;
     } else {
       const used = new Set(list.map((teacher) => String(teacher.id)));
@@ -148,6 +188,7 @@ function classSectionsTeacherReadRows(rows, existing, spec = {}) {
       while (used.has(newId)) { serial += 1; newId = make(serial); }
       const teacher = { id: newId, department: "", ...values };
       if (!teacher.homeroom) delete teacher.homeroom;
+      classSectionsTeacherRoamClean(teacher);
       list.push(teacher);
       touched.add(teacher);
       added += 1;
@@ -199,9 +240,10 @@ function classSectionsTeacherExport() {
     ["불가 시간의 학년 구분: 점심이 학년마다 달라 같은 4교시라도 시각이 다르면 '월4(3학년)'(3학년 4교시 시각에만 불가) 또는 '월4(1·2학년)'(1·2학년 4교시 시각에만 불가)처럼 학년을 적습니다. 학년을 안 적은 '월4'는 두 시각 모두 불가입니다. 학년별 점심은 7단계 시간표의 조건 설정에서 정합니다."],
     ["번호(고치지 마세요): 지금 명단의 교사 번호입니다. 이름을 바꿔도 이 번호로 같은 교사로 맞춰 배정·고정·교실이 이어집니다. 새 교사는 비워 두세요."],
     ["담임(내년 학년-반): 내년에 담임을 맡을 반을 '2-3'(2학년 3반)처럼 적습니다. 비우면 담임 아님. 7단계 시간표의 담임 규칙(담임반 수업 포함, 학년별 창체 시간에 담임 비움)에 씁니다."],
+    ["순회(오는/나가는)·순회 시수·오는 요일: 우리 학교로 오는 순회교사는 '오는' + 주당 시수(그 시수까지만 수업을 맡김) + 오는 요일('월,수', 비우면 모든 요일). 다른 학교로 나가는 우리 교사는 '나가는' + 나가는 주당 시수(그 교사 시수에 더해 셈) — 나가는 요일·시간은 불가 시간에 적습니다."],
     ["올릴 때: 번호 또는 이름으로 맞춰 갱신·추가하고, 파일에 없는 교사는 지우지 않고 '명단에 없음'으로 표시합니다."]];
   const year = String((Number(typeof $ === "function" ? $("#schoolYear")?.value : 0) || new Date().getFullYear()) + 1);
-  return downloadBlob(createWorkbookBlob([{ name: "교사 명단", rows, widths: [12, 14, 22, 22, 12, 16, 16, 16], freeze: "A2" },
+  return downloadBlob(createWorkbookBlob([{ name: "교사 명단", rows, widths: [12, 14, 22, 22, 12, 16, 16, 16, 14, 10, 12], freeze: "A2" },
     { name: "안내", rows: guide, widths: [110], orientation: "portrait" }]), `${year}_교사명단.xlsx`);
 }
 

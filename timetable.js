@@ -179,13 +179,14 @@ function timetableDayCapacity(available, positions, rules, lunchPositions) {
 
 // ---- 입력 정리 ----
 // input = {
-//   semester, days: ["월",…] | "월,화,…", periods: 7, periodsByDay: { 수: 6 }, lunchAfter: { "3": 3 }(기본 4),
+//   semester, days: ["월",…] | "월,화,…", periods: 7, periodsByDay: { 수: 6 }, periodsByGrade: { "3": { 금: 6 } }(학년별 요일 교시 수 — 없으면 periodsByDay), lunchAfter: { "3": 3 }(기본 4),
 //   grades: [{ grade: "1", classes: 10 | ["1-1", …] }],
-//   creative: { school: 전교 동시 시수, schoolTimes: ["금7"], grade: 학년별 시수(숫자 | { 학년: n }), gradeTimes: { 학년: [..] }, byGroup: 반군별 허용, expected: { 학년: 5단계 창체 시수 } },
+//   creative: { school: 전교 동시 시수, schoolTimes: ["금7"], grade: 학년별 시수(숫자 | { 학년: n }), gradeTimes: { 학년: [..] }, byGroup: 반마다 따로(일반 수업처럼) — true | { 학년: true }, expected: { 학년: 5단계 창체 시수 } },
 //   fixedSlots: [{ label, times, allTeachers }],
-//   teachers: [{ id, name, departments, courses, maxHours, unavailable: ["월4" | { day, period } | { day, period, grades: ["3"] }(그 학년 교시의 실제 시각만) | { day, pos }], days: 출근 요일, placeholder, homeroom: "2-3" }],
+//   teachers: [{ id, name, departments, courses, maxHours, unavailable: ["월4" | { day, period } | { day, period, grades: ["3"] }(그 학년 교시의 실제 시각만) | { day, pos }], days: 출근 요일, placeholder, homeroom: "2-3",
+//               roaming: 우리 학교로 오는 순회교사(maxHours = 주당 시수, days = 오는 요일), outHours: 다른 학교로 나가는 주당 시수(상한에서 뺀다) }],
 //   lessons: [{ id, grade, classes: 생략 = 학년 전체 | ["1", "3-2"], subject, department, hours, teacherId, teacherIds, teacherByClass, venue, double,
-//               parts: [{ department, hours, teacherId, teacherIds }] }],          // 반 수업(parts = 통합과학처럼 교사 여럿이 나눠 맡는 수업)
+//               parts: [{ department, hours, teacherId, teacherIds, supportIds: teacherIds 가운데 지원 교사(그 전공 교사가 못 맡을 때만 맡는 같은 교과군의 다른 교과 교사) }] }],          // 반 수업(parts = 통합과학처럼 교사 여럿이 나눠 맡는 수업)
 //   blocks: [{ id, grade, label, hours, classes, times, sections: [{ id, subject, department, credits, teacherId, teacherIds, venue }] }],
 //   pins: { lessons: { 수업 id: ['월3', …] }, teachers: { 수업 id: 교사 id } }(교사가 고정한 칸·담당 교사 — 수업 id = '과목 id@반'),
 //   venues: { 체육: 3 }, rules, missing: [{ level, cause, where }], notes: { expandedClasses, undecided: [..], staleSections: [..] }
@@ -195,8 +196,14 @@ function timetableModel(input = {}) {
   rules.departmentMax = { ...TIMETABLE_DEFAULT_RULES.departmentMax, ...(input.rules?.departmentMax || {}) };
   const days = (Array.isArray(input.days) ? input.days : String(input.days || "월,화,수,목,금").split(/[,\s]+/)).map(String).filter(Boolean);
   const basePeriods = Math.min(12, timetableNumber(input.periods, 7));
-  const periodsOf = Object.fromEntries(days.map((day) => [day, Math.min(12, timetableNumber(input.periodsByDay?.[day], basePeriods))]));
+  const commonPeriods = Object.fromEntries(days.map((day) => [day, Math.min(12, timetableNumber(input.periodsByDay?.[day], basePeriods))]));
+  // 학년별 요일 교시 수(periodsByGrade[학년][요일]) — 적지 않은 학년·요일은 공통 값. periodsOf = 학년 가운데 가장 긴 값(실제 시각 축·전체 격자).
+  const gradePeriods = (grade) => Object.fromEntries(days.map((day) => [day, Math.min(12, timetableNumber(input.periodsByGrade?.[grade]?.[day], commonPeriods[day]))]));
+  const gradeNames = (input.grades || []).map((item) => String(item.grade));
+  const periodsOf = Object.fromEntries(days.map((day) => [day, gradeNames.length ? Math.max(...gradeNames.map((grade) => gradePeriods(grade)[day])) : commonPeriods[day]]));
   const maxPeriods = Math.max(0, ...Object.values(periodsOf));
+  const grid = []; // 전체 격자(모든 학년의 칸을 합친 것) — 풀이기의 칸 번호
+  days.forEach((day, d) => { for (let period = 1; period <= periodsOf[day]; period += 1) grid.push({ key: `${day}${period}`, day, d, period }); });
   const positions = maxPeriods + 1; // 실제 시각 축: 교시 + 점심 한 칸
   const dayAt = new Map(days.map((day, index) => [day, index]));
   const lunchOf = (grade) => Math.min(maxPeriods, timetableNumber(input.lunchAfter?.[grade], 4));
@@ -207,10 +214,12 @@ function timetableModel(input = {}) {
     const classes = Array.isArray(item.classes) ? item.classes.map((id) => (String(id).includes("-") ? String(id) : `${grade}-${id}`))
       : Array.from({ length: Math.max(0, Math.floor(Number(item.classes) || 0)) }, (_, index) => `${grade}-${index + 1}`);
     const slots = [];
+    const own = gradePeriods(grade);
     days.forEach((day, d) => {
-      for (let period = 1; period <= periodsOf[day]; period += 1) slots.push({ key: `${day}${period}`, day, d, period, abs: d * positions + posOf(grade, period) });
+      for (let period = 1; period <= own[day]; period += 1) slots.push({ key: `${day}${period}`, day, d, period, abs: d * positions + posOf(grade, period) });
     });
-    return { grade, classes, slots, slotCount: slots.length, lunchAfter: lunchOf(grade), slotByKey: new Map(slots.map((slot) => [slot.key, slot])) };
+    return { grade, classes, slots, slotCount: slots.length, lunchAfter: lunchOf(grade), slotByKey: new Map(slots.map((slot) => [slot.key, slot])), periodsOf: own,
+      gridAbs: grid.map((slot) => slot.d * positions + posOf(grade, slot.period)) }; // gridAbs = 전체 격자 칸마다 이 학년의 실제 시각(이 학년에 없는 칸 포함)
   });
   const gradeOf = new Map(grades.map((item) => [item.grade, item]));
   const lunchPositions = [...new Set(grades.map((item) => item.lunchAfter))].sort((a, b) => a - b);
@@ -225,14 +234,17 @@ function timetableModel(input = {}) {
   const creativeInput = input.creative || {};
   const schoolTimes = timetableTimes(creativeInput.schoolTimes);
   const creative = {
-    school: timetableNumber(creativeInput.school, 0), schoolTimes, byGroup: Boolean(creativeInput.byGroup), byGrade: {},
+    school: timetableNumber(creativeInput.school, 0), schoolTimes, byGroup: false, byGrade: {},
     fromPeriod: Math.max(1, timetableNumber(creativeInput.fromPeriod, 1)) // 시간이 정해지지 않은 창체를 놓을 수 있는 첫 교시(1 = 제한 없음)
   };
   for (const item of grades) {
     const own = typeof creativeInput.grade === "object" && creativeInput.grade ? timetableNumber(creativeInput.grade[item.grade], 0) : timetableNumber(creativeInput.grade, 0);
     const expected = creativeInput.expected && creativeInput.expected[item.grade] !== undefined ? Number(creativeInput.expected[item.grade]) || 0 : null;
-    creative.byGrade[item.grade] = { school: creative.school, grade: own, total: creative.school + own, expected, times: timetableTimes(creativeInput.gradeTimes?.[item.grade]) };
+    // byClass = 이 학년의 학년별 창체를 교시 지정 없이 일반 수업처럼(반마다 따로, 담임) 놓는다
+    const byClass = typeof creativeInput.byGroup === "object" && creativeInput.byGroup ? Boolean(creativeInput.byGroup[item.grade]) : Boolean(creativeInput.byGroup);
+    creative.byGrade[item.grade] = { school: creative.school, grade: own, total: creative.school + own, expected, times: timetableTimes(creativeInput.gradeTimes?.[item.grade]), byClass };
   }
+  creative.byGroup = grades.length > 0 && grades.every((item) => creative.byGrade[item.grade].byClass); // 모든 학년이 반마다 따로
 
   const fixed = (input.fixedSlots || []).map((slot) => ({ label: String(slot.label || ""), times: timetableTimes(slot.times), allTeachers: slot.allTeachers !== false }));
   const busyList = [...fixed.filter((slot) => slot.allTeachers).flatMap((slot) => slot.times), ...schoolTimes];
@@ -253,9 +265,11 @@ function timetableModel(input = {}) {
     }
     const attend = Array.isArray(teacher.days) && teacher.days.length ? new Set(teacher.days.map(String)) : null;
     if (attend) days.forEach((day, d) => { if (!attend.has(day)) for (let pos = 0; pos < positions; pos += 1) blocked.add(d * positions + pos); });
+    // 다른 학교로 나가는 순회 시수(outHours): 이 학교 시간표에는 놓지 않지만 그 교사의 시수로 센다 → 교과 필수 상한·참고 상한에서 뺀다(교사별 maxHours는 이 학교 시수라 그대로).
+    const outHours = Math.max(0, timetableNumber(teacher.outHours, 0));
     return { id: String(teacher.id), name: String(teacher.name || teacher.id), departments: (teacher.departments || []).map(String), courses: (teacher.courses || []).map(String),
-      maxHours: timetableNumber(teacher.maxHours, 0) || Math.min(Infinity, ...(teacher.departments || []).map((department) => timetableNumber(rules.departmentMax?.[department], Infinity))), // 필수 상한(없으면 Infinity)
-      softHours: timetableNumber(rules.maxHours, Infinity), ownMax: timetableNumber(teacher.maxHours, 0) > 0, blocked, placeholder: Boolean(teacher.placeholder), homeroom: teacher.homeroom ? String(teacher.homeroom) : "" };
+      maxHours: timetableNumber(teacher.maxHours, 0) || Math.max(0, Math.min(Infinity, ...(teacher.departments || []).map((department) => timetableNumber(rules.departmentMax?.[department], Infinity))) - outHours), // 필수 상한(없으면 Infinity)
+      softHours: Math.max(0, timetableNumber(rules.maxHours, Infinity) - outHours), outHours, roaming: Boolean(teacher.roaming), ownMax: timetableNumber(teacher.maxHours, 0) > 0, blocked, placeholder: Boolean(teacher.placeholder), homeroom: teacher.homeroom ? String(teacher.homeroom) : "" };
   });
   const teacherOf = new Map(teachers.map((teacher) => [teacher.id, teacher]));
   const candidatesFor = (item, fixedId) => {
@@ -275,7 +289,7 @@ function timetableModel(input = {}) {
       parts.forEach((part, partIndex) => {
         const hours = timetableNumber(part ? part.hours : lesson.hours, 0);
         if (!hours) return;
-        const merged = part ? { subject: lesson.subject, department: part.department ?? lesson.department, teacherId: part.teacherId, teacherIds: part.teacherIds } : lesson;
+        const merged = part ? { subject: lesson.subject, department: part.department ?? lesson.department, teacherId: part.teacherId, teacherIds: part.teacherIds, supportIds: part.supportIds } : lesson;
         const fixedId = part ? part.teacherId : lesson.teacherByClass?.[classId] || lesson.teacherByClass?.[classId.split("-")[1]] || lesson.teacherId;
         let candidates = candidatesFor(merged, fixedId);
         const lessonId = `${lesson.id || `L${index + 1}`}@${classId}${part ? `#${partIndex + 1}` : ""}`;
@@ -287,6 +301,7 @@ function timetableModel(input = {}) {
         const pins = [...new Set((input.pins?.lessons?.[lessonId] || []).map(String))].filter((key) => grade.slotByKey.has(key)).slice(0, hours);
         lessons.push({ id: lessonId, pins, grade: grade.grade, classId, subject: String(lesson.subject || ""),
           department: String(merged.department || ""), hours, candidates, fixedTeacher: (fixedId || teacherPinned) && candidates.length === 1 ? candidates[0] : "", teacherPinned, unknownTeacher: Boolean(fixedId) && !candidates.length,
+          support: (Array.isArray(merged.supportIds) ? merged.supportIds.map(String) : []).filter((id) => candidates.includes(id)), // 지원 교사(전공 교사가 시수에 여유가 없을 때만)
           venue: String(lesson.venue || ""), double: Boolean(lesson.double), part: part ? partIndex + 1 : 0, mismatch: Boolean(lesson.teacherMismatch) && Boolean(fixedId) });
       });
     }
@@ -308,7 +323,7 @@ function timetableModel(input = {}) {
     blocks.push({ id: String(block.id || `B${index + 1}`), grade: grade.grade, label: String(block.label || block.id || `블록 ${index + 1}`), hours, classIds, times, sections });
   });
 
-  return { semester: String(input.semester || ""), days, periodsOf, positions, grades, gradeOf, lunchPositions, absOfTime, creative, fixed, everyoneBusy, busyTimes, teachers, teacherOf, lessons, blocks,
+  return { semester: String(input.semester || ""), days, periodsOf, grid, positions, grades, gradeOf, lunchPositions, absOfTime, creative, fixed, everyoneBusy, busyTimes, teachers, teacherOf, lessons, blocks,
     venues: { ...(input.venues || {}) }, rules, missing: Array.isArray(input.missing) ? input.missing : [], notes: input.notes || {} };
 }
 
@@ -589,7 +604,7 @@ function timetablePrecheck(source) {
     for (const grade of model.grades) {
       if (!grade.classes.length) continue;
       const creative = model.creative.byGrade[grade.grade] || { school: 0, grade: 0, total: 0, times: [] };
-      const creativeFixed = [...model.creative.schoolTimes.slice(0, creative.school), ...(model.creative.byGroup ? [] : creative.times.slice(0, creative.grade))]
+      const creativeFixed = [...model.creative.schoolTimes.slice(0, creative.school), ...(creative.byClass ? [] : creative.times.slice(0, creative.grade))]
         .map((time) => `${time.day}${time.period}`).filter((key) => grade.slotByKey.has(key));
       const hit = [];
       for (const classId of grade.classes) {
@@ -655,7 +670,7 @@ function timetablePrecheck(source) {
         }
       }
       // 반군별 창체가 허용돼 있으면 학년별 창체는 반마다 다른 시간에 둘 수 있다 → 동시 활동(블록·전교 창체)에서 빼고 반 수업 칸에 넣는다.
-      const loose = model.creative.byGroup ? creative.grade : 0;
+      const loose = creative.byClass ? creative.grade : 0;
       const syncCreative = creative.total - loose;
       const dayValue = (tail) => (loose ? Math.min(simultaneous * tail, classIds.length * perDay) : simultaneous * Math.min(tail, perDay));
       // 같은 시간에 가르칠 교사가 반 수보다 적으면 반 수업은 '하루 끝 쪽'에만 올 수 있다(가운데 빈칸 = 공강).
@@ -677,7 +692,7 @@ function timetablePrecheck(source) {
         const dayFlexCap = (onceHard ? flexBlocks : Infinity) + creativeFlex;
         let states = new Map([[0, 0]]); // 쓴 유동 시수 → 받을 수 있는 수업 최대
         days.forEach((day, d) => {
-          const periods = model.periodsOf[day];
+          const periods = grade.periodsOf[day];
           const fixedCount = fixedByDay[d].size;
           const lastFixed = Math.max(0, ...fixedByDay[d]);
           const nextStates = new Map();
@@ -728,7 +743,7 @@ function timetablePrecheck(source) {
       if (simultaneous && simultaneous < grade.classes.length && !own.some((block) => block.times.length)) {
         let perDay = Infinity;
         if (onceHard) { perDay = 0; for (const classId of grade.classes) perDay = Math.max(perDay, sum(pairsOfClass(classId), (item) => Math.max(item.double ? 2 : 1, Math.ceil(item.hours / days.length)))); }
-        const loose = model.creative.byGroup ? creative.grade : 0;
+        const loose = creative.byClass ? creative.grade : 0;
         const syncCreative = creative.total - loose;
         const classCount = grade.classes.length;
         const dayValue = (tail) => (loose ? Math.min(simultaneous * tail, classCount * perDay) : simultaneous * Math.min(tail, perDay));
@@ -754,7 +769,7 @@ function timetablePrecheck(source) {
           const dayFlexCap = (onceHard ? gradeBlocks.length : Infinity) + creativeFlex;
           let states = new Map([[0, 0]]);
           days.forEach((day, d) => {
-            const periods = model.periodsOf[day];
+            const periods = grade.periodsOf[day];
             const fixedCount = fixedByDay[d].size;
             const lastFixed = Math.max(0, ...fixedByDay[d]);
             const nextStates = new Map();
@@ -792,7 +807,7 @@ function timetablePrecheck(source) {
     }
     // 반군이 여럿이면 교사는 다른 반군이 블록일 때도 반 수업을 할 수 있다 → 모든 반이 함께 듣는 블록만 뺀다.
     if (groups.size > 1) widest = grade.slotCount - creative.total - sum(model.blocks.filter((block) => block.grade === grade.grade && block.classIds.length === grade.classes.length), (block) => block.hours);
-    if (model.creative.byGroup) widest += creative.grade;
+    if (creative.byClass) widest += creative.grade;
     // 이 학년에서 한 교사가 반 수업으로 설 수 있는 칸 수(한 칸에 한 반) — 풀이기가 교사를 정할 때 쓰는 한계(반군별 창체·반 묶음별 블록이면 늘어난다)
     { const row = gradeRows.find((item) => item.grade === grade.grade); if (row) row.lessonCells = widest; }
     // P7: 교사 한 사람이 이 학년 반 수업으로 가르칠 수 있는 시간 ≤ 반 수업 칸 수(한 칸에 한 반)
@@ -858,6 +873,8 @@ function timetablePrecheck(source) {
     if (creative.expected !== null && creative.expected !== creative.total) {
       add("P9", "warn", `${grade.grade}학년 창체: 5단계 시수 ${creative.expected}시간 ≠ 시간표 설정 ${creative.total}시간(전교 동시 ${creative.school} + 학년별 ${creative.grade}).`, [timetableWhere("time", "창체"), timetableWhere("hours", "창체")]);
     }
+    const offGrid = creative.byClass ? [] : creative.times.filter((time) => !grade.slotByKey.has(`${time.day}${time.period}`));
+    if (offGrid.length) add("P9", "fail", `${grade.grade}학년 창체 ${offGrid.map((time) => `${time.day}${time.period}`).join(",")}: ${grade.grade}학년에 없는 교시입니다(요일별 교시 수 확인).`, [timetableWhere("time", "창체"), timetableWhere("time", "요일별 교시 수")]);
     if (creative.times.length > creative.grade) add("P9", "warn", `${grade.grade}학년 창체: 학년별 ${creative.grade}시간인데 시간은 ${creative.times.length}칸 적혀 있습니다.`, timetableWhere("time", "창체"));
   }
   if (model.creative.schoolTimes.length > model.creative.school) add("P9", "warn", `전교 동시 창체 ${model.creative.school}시간인데 시간은 ${model.creative.schoolTimes.length}칸 적혀 있습니다.`, timetableWhere("time", "창체"));

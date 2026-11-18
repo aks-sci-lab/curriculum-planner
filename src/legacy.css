@@ -2350,6 +2350,10 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
     .tt-fields .cs-text { min-width:150px; }
     .tt-sub { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; color:#526078; }
     .tt-presets { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
+    .tt-creative-grades { flex-direction:column; align-items:flex-start; }
+    .tt-creative-grade { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; }
+    .cs-roam { white-space:nowrap; }
+    .cs-roam label { margin-left:4px; }
     .tt-presets .button[aria-pressed="true"], #timetableSemesterTabs .button[aria-pressed="true"] { background:var(--blue); border-color:var(--blue); color:#fff; }
     .tt-bounds { margin:2px 0 8px; padding:6px 10px 6px 26px; border-radius:8px; background:#f7f9fd; color:#33415c; font-size:12px; line-height:1.6; }
     .tt-bounds li { list-style:disc; }

@@ -572,3 +572,77 @@ test("Worker 소스: 조각으로 돌며 진행 상황을 보내고, 중단하�
   start(failed).send({ id: "c", inputs: {} });
   assert.deepEqual([failed[0].ok, failed[0].error], [false, "시간표 입력이 없습니다."]);
 });
+
+test("학년별 요일 교시 수: 교시가 적은 학년의 반에는 그 학년에 없는 칸에 아무것도 놓지 않는다(다른 학년은 그대로)", () => {
+  const ctx = context();
+  const inputs = { 1: small((input) => { input.periodsByGrade = { 3: { 금: 4, 수: 5 } }; }) };
+  const model = ctx.timetableModel(inputs["1"]);
+  assert.deepEqual(model.grades.map((grade) => grade.slotCount), [30, 30, 27]);
+  assert.equal(model.grid.length, 30);
+  const result = plain(ctx.timetableSolve(inputs, { seed: 2, iterations: 60000 }));
+  const check = plain(ctx.timetableValidate(inputs, result));
+  assert.deepEqual([check.ok, check.errors], [true, []]);
+  assert.equal(result.metrics.unplacedHours, 0);
+  const closed = new Set(["금5", "금6", "수6"]);
+  const layer = result.layers["1"];
+  const used = [...Object.entries(layer.lessons).filter(([id]) => id.split("@")[1].startsWith("3-")).flatMap(([, item]) => item.slots),
+    ...Object.entries(layer.blocks).filter(([id]) => id.startsWith("3")).flatMap(([, item]) => item.slots)];
+  assert.equal(used.length, 3 * 3 + 12);
+  assert.deepEqual(used.filter((key) => closed.has(key)), []);
+  // 전교 동시 창체 시간이 어느 학년에 없는 교시면 사전 점검이 막는다
+  const off = small((input) => { input.periodsByGrade = { 3: { 금: 4 } }; input.creative = { school: 1, schoolTimes: ["금6"] }; });
+  assert.equal(plain(ctx.timetablePrecheck(off)).issues.some((issue) => issue.id === "P9" && issue.level === "fail" && /그 칸이 없는 학년/.test(issue.cause)), true);
+});
+
+test("창체 운영 방식을 학년마다: 3학년만 교시 지정 없이 일반 수업처럼(반마다 따로), 1학년은 정한 교시에 학년 전체가 같은 시간", () => {
+  const ctx = context();
+  const inputs = { 1: small((input) => { input.creative = { school: 0, grade: { 1: 1, 3: 2 }, gradeTimes: { 1: ["금6"] }, byGroup: { 3: true } }; }) };
+  const model = ctx.timetableModel(inputs["1"]);
+  assert.deepEqual(["1", "2", "3"].map((grade) => model.creative.byGrade[grade].byClass), [false, false, true]);
+  assert.equal(model.creative.byGroup, false);
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 60000 }));
+  assert.deepEqual([plain(ctx.timetableValidate(inputs, result)).errors, result.metrics.unplacedHours], [[], 0]);
+  const creative = result.layers["1"].creative;
+  assert.deepEqual(creative.filter((item) => item.scope === "grade").map((item) => [item.grade, item.slots]), [["1", ["금6"]]]);
+  assert.deepEqual(creative.filter((item) => item.scope === "class").map((item) => [item.classId, item.slots.length]), [["3-1", 2], ["3-2", 2], ["3-3", 2]]);
+});
+
+test("순회교사: 오는 순회교사는 주당 시수·오는 요일 안에서만 수업을 맡고, 나가는 교사는 나가는 시수만큼 상한이 줄어든다", () => {
+  const ctx = context();
+  const inputs = { 1: small((input) => {
+    Object.assign(input.teachers.find((teacher) => teacher.id === "체육2"), { roaming: true, maxHours: 4, days: ["월", "화"] });
+    input.teachers.find((teacher) => teacher.id === "국어1").outHours = 6;
+  }) };
+  const model = ctx.timetableModel(inputs["1"]);
+  assert.deepEqual([model.teacherOf.get("체육2").roaming, model.teacherOf.get("체육2").maxHours, model.teacherOf.get("국어1").softHours, model.teacherOf.get("국어2").softHours], [true, 4, 16, 22]);
+  const result = plain(ctx.timetableSolve(inputs, { seed: 1, iterations: 60000 }));
+  assert.deepEqual(plain(ctx.timetableValidate(inputs, result)).errors, []);
+  const slots = Object.values(result.layers["1"].lessons).filter((item) => item.teacherId === "체육2").flatMap((item) => item.slots);
+  assert.equal(slots.length > 0 && slots.length <= 4, true);
+  assert.deepEqual(slots.filter((key) => !/^[월화]/.test(key)), []);
+});
+
+test("통합과학 전공별 몫: 그 전공 교사가 참고 상한 안에서 맡을 수 있으면 전공 교사가, 2학년 수업으로 시수가 차면 같은 교과군의 여유 있는 교과 교사가 지원한다", () => {
+  const ctx = context();
+  const make = (physicsLoad) => ({ 1: {
+    semester: "1", days: "월,화,수,목,금", periods: 6, grades: [{ grade: "1", classes: 4 }, { grade: "2", classes: 4 }], rules: {},
+    teachers: [{ id: "물리1", name: "물리1", departments: ["과학-물리"] }, { id: "화학1", name: "화학1", departments: ["과학-화학"] }, { id: "국어1", name: "국어1", departments: ["국어"] }, { id: "국어2", name: "국어2", departments: ["국어"] }],
+    lessons: [
+      { id: "1통합과학", grade: "1", subject: "통합과학", department: "과학-공통", hours: 2, parts: [
+        { department: "과학-물리", hours: 1, teacherIds: ["물리1", "화학1"], supportIds: ["화학1"] }, { department: "과학-화학", hours: 1, teacherIds: ["화학1", "물리1"], supportIds: ["물리1"] }] },
+      { id: "1국어", grade: "1", subject: "국어", department: "국어", hours: 4, teacherIds: ["국어1", "국어2"] },
+      { id: "2물리", grade: "2", subject: "물리학", department: "과학-물리", hours: physicsLoad, teacherIds: ["물리1"] }
+    ] } });
+  const teacherOfPart = (result, part) => Object.entries(result.layers["1"].lessons).filter(([id]) => id.startsWith("1통합과학") && id.endsWith(`#${part}`)).map(([, item]) => item.teacherId);
+  // 2학년 물리학 2시간 × 4반 = 8시간: 물리 교사가 통합과학 물리 몫도 모두 맡는다
+  const easy = plain(ctx.timetableSolve(make(2), { seed: 1, iterations: 30000 }));
+  assert.deepEqual(plain(ctx.timetableValidate(make(2), easy)).errors, []);
+  assert.deepEqual([teacherOfPart(easy, 1), teacherOfPart(easy, 2)], [["물리1", "물리1", "물리1", "물리1"], ["화학1", "화학1", "화학1", "화학1"]]);
+  assert.equal(easy.notes.some((note) => /지원합니다/.test(note)), false);
+  // 2학년 물리학 5시간 × 4반 = 20시간: 통합과학 물리 몫 4시간 가운데 2시간만 물리(22시간), 나머지는 화학 교사가 지원
+  const tight = plain(ctx.timetableSolve(make(5), { seed: 1, iterations: 30000 }));
+  assert.deepEqual(plain(ctx.timetableValidate(make(5), tight)).errors, []);
+  assert.deepEqual(teacherOfPart(tight, 1).sort(), ["물리1", "물리1", "화학1", "화학1"]);
+  assert.equal(tight.metrics.noTeacherHours, 0);
+  assert.equal(tight.notes.some((note) => /1학년 통합과학\(과학-물리\): .*화학1 교사가 주 2시간 지원합니다/.test(note)), true);
+});

@@ -102,8 +102,20 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const creativeAfter = clean(await panel.locator("#timetableCreative").innerText());
   check(/학년별 2·2·2시간/.test(creativeAfter) && (await panel.locator('[data-tt-field="creative.school"]').inputValue()) === "0", "창체 '학년별로 놓기' → 전교 동시 0 · 학년별 2·2·2", { creativeBefore, creativeAfter });
   check(!(await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts()).some((text) => /^창체/.test(text)), "창체 가정이 사라짐");
-  await panel.locator('[data-tt-field="creative.byGroup"]').check(); await sleep(300);
-  check((await panel.getByRole("button", { name: "학년별 + 반군별 허용" }).getAttribute("aria-pressed")) === "true", "반군별 허용 체크 → 방식 단추 '학년별 + 반군별 허용' 눌림");
+  // 학년마다 운영 방식 고르기: 3학년만 '교시 지정 없이 일반 수업처럼' → 3학년 시간 칸이 사라지고 1·2학년은 그대로, 세 학년 모두 고르면 방식 단추가 눌림
+  await panel.locator('[data-tt-field="creative.mode:3"]').selectOption("class"); await sleep(300);
+  check((await panel.locator('[data-tt-creative-grade="3"]').getAttribute("data-mode")) === "class" && (await panel.locator('[data-tt-field="creative.gradeTimes:3"]').count()) === 0
+    && (await panel.locator('[data-tt-field="creative.gradeTimes:1"]').count()) === 1, "3학년만 창체를 일반 수업처럼 → 3학년 요일·교시 칸 없음, 1학년 칸은 그대로");
+  for (const grade of ["1", "2"]) { await panel.locator(`[data-tt-field="creative.mode:${grade}"]`).selectOption("class"); await sleep(300); }
+  check((await panel.getByRole("button", { name: "모든 학년 일반 수업처럼" }).getAttribute("aria-pressed")) === "true", "세 학년 모두 일반 수업처럼 → 방식 단추 '모든 학년 일반 수업처럼' 눌림");
+  // 학년별 요일 교시 수: 3학년 금요일만 6교시 → 3학년 주 칸 수가 1 줄고, 비우면 공통 값으로 돌아감
+  const slotsOf = async (grade) => Number(clean(await panel.locator(`#timetableGrades tr[data-tt-grade="${grade}"] td`).nth(1).innerText()));
+  const slotsBefore = [await slotsOf("1"), await slotsOf("3")];
+  await panel.locator('[data-tt-field="gperiod:3:금"]').fill("6"); await panel.locator('[data-tt-field="gperiod:3:금"]').blur(); await sleep(400);
+  const slotsAfter = [await slotsOf("1"), await slotsOf("3")];
+  check(slotsAfter[0] === slotsBefore[0] && slotsAfter[1] === slotsBefore[1] - 1, "3학년 금요일 6교시 → 3학년 주 칸 수만 1 줄어듦", { slotsBefore, slotsAfter });
+  await panel.locator('[data-tt-field="gperiod:3:금"]').fill(""); await panel.locator('[data-tt-field="gperiod:3:금"]').blur(); await sleep(400);
+  check((await slotsOf("3")) === slotsBefore[1], "3학년 금요일 칸을 비우면 공통 교시 수로 돌아감");
   await panel.getByRole("button", { name: /전교 동시\(6단계 고정 시간\)/ }).click(); await sleep(300);
   check((await panel.locator('[data-tt-field="creative.schoolTimes"]').inputValue()) === "금6,금7", "창체 '전교 동시' → 6단계 고정 시간 금6,금7");
 

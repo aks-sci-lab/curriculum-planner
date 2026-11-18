@@ -67,8 +67,8 @@ test("양식 내려받기 → 이름만 실제 이름으로 고쳐 올리면 번
     { id: "t-사회-지리-2", department: "사회-지리", name: "사회(지리) 2", unavailable: [] },
     { id: "t-과학-물리-1", department: "과학-물리", name: "과학(물리) 1", unavailable: [] }];
   const rows = plain(ctx.classSectionsTeacherSheetRows(existing, { days: ["월", "화", "수", "목", "금"], periods: 7 }));
-  assert.deepEqual(rows[0], ["이름", "담당 교과", "담당 과목", "불가 시간", "사유", "비고", "번호(고치지 마세요)", "담임(내년 학년-반)"]);
-  assert.deepEqual(rows[1], ["사회(지리) 1", "사회-지리", "", "월7", "육아시간", "", "t-사회-지리-1", ""]);
+  assert.deepEqual(rows[0], ["이름", "담당 교과", "담당 과목", "불가 시간", "사유", "비고", "번호(고치지 마세요)", "담임(내년 학년-반)", "순회(오는/나가는)", "순회 시수", "오는 요일"]);
+  assert.deepEqual(rows[1], ["사회(지리) 1", "사회-지리", "", "월7", "육아시간", "", "t-사회-지리-1", "", "", "", ""]);
   // 사용자: 1행 이름을 실제 이름으로, 불가 시간 추가 · 2행 그대로 · 3행 삭제 · 새 교사 한 줄(교과는 화면 이름으로 써도 됨)
   const edited = [rows[0], ["김가상", "사회-지리", "", "월7,목", "육아시간", "", "t-사회-지리-1"], rows[2], ["이가상", "국어", "", "", "", "순회", ""], ["박가상", "모르는교과", "", "", "", "", ""]];
   const read = plain(ctx.classSectionsTeacherReadRows(edited, existing, { departments: Object.keys(labels), labelOf, days: ["월", "화", "수", "목", "금"], periods: 7, newId: (n) => `new${n}` }));
@@ -119,7 +119,7 @@ test("담임 열: '2-3'·'2학년 3반'을 '2-3'으로 맞춰 읽고, 읽지 못
   assert.deepEqual(["2-3", "2학년 3반", " 3학년11반 ", "", "4-1", "2반", "2-0"].map((value) => ctx.classSectionsTeacherHomeroom(value)), ["2-3", "2-3", "3-11", "", null, null, null]);
   const existing = [{ id: "a", name: "가", department: "국어", unavailable: [], homeroom: "1-1" }, { id: "b", name: "나", department: "국어", unavailable: [] }, { id: "c", name: "다", department: "국어", unavailable: [] }];
   const rows = plain(ctx.classSectionsTeacherSheetRows(existing));
-  assert.deepEqual(rows[1].slice(-2), ["a", "1-1"]);
+  assert.deepEqual(rows[1].slice(6, 8), ["a", "1-1"]);
   const edited = [rows[0], ["가", "국어", "", "", "", "", "a", "2학년 3반"], ["나", "국어", "", "", "", "", "b", "2-3"], ["다", "국어", "", "", "", "", "c", "삼반"]];
   const read = plain(ctx.classSectionsTeacherReadRows(edited, existing, { departments: ["국어"] }));
   assert.deepEqual(read.teachers.map((teacher) => teacher.homeroom || ""), ["2-3", "", ""]);
@@ -130,4 +130,21 @@ test("담임 열: '2-3'·'2학년 3반'을 '2-3'으로 맞춰 읽고, 읽지 못
   assert.equal(plain(ctx.classSectionsTeacherReadRows(old, existing, { departments: ["국어"] })).teachers[0].homeroom, "1-1");
   // 담임을 비우면 지운다
   assert.equal(plain(ctx.classSectionsTeacherReadRows([rows[0], ["가", "국어", "", "", "", "", "a", ""]], existing, { departments: ["국어"] })).teachers[0].homeroom, undefined);
+});
+
+test("순회 열: 오는 순회교사(주당 시수·오는 요일)·나가는 교사(나가는 시수)를 내려받고 올리면 그대로 읽고, 순회 열이 없는 예전 양식은 넣어 둔 값을 그대로 둔다", () => {
+  const ctx = context();
+  assert.deepEqual(["오는", " 나가는 교사", "in", "", "모름"].map((value) => ctx.classSectionsTeacherRoam(value)), ["in", "out", "in", "", null]);
+  assert.deepEqual(plain(ctx.classSectionsTeacherRoamDays("수요일, 월")), { days: ["월", "수"], problems: [] });
+  const existing = [{ id: "a", name: "가", department: "국어", unavailable: [], roam: "in", roamHours: 6, roamDays: "월,수" }, { id: "b", name: "나", department: "국어", unavailable: ["목1"], roam: "out", roamHours: 4 }, { id: "c", name: "다", department: "국어", unavailable: [] }];
+  const rows = plain(ctx.classSectionsTeacherSheetRows(existing));
+  assert.deepEqual(rows.slice(1).map((row) => row.slice(8)), [["오는", 6, "월,수"], ["나가는", 4, ""], ["", "", ""]]);
+  const edited = [rows[0], ["가", "국어", "", "", "", "", "a", "", "오는", 8, "화 목"], ["나", "국어", "", "목1", "", "", "b", "", "", "", ""], ["다", "국어", "", "", "", "", "c", "", "나가는", "", ""], ["라", "국어", "", "", "", "", "", "", "순회", 3, ""]];
+  const read = plain(ctx.classSectionsTeacherReadRows(edited, existing, { departments: ["국어"] }));
+  assert.deepEqual(read.teachers.map((teacher) => [teacher.roam || "", teacher.roamHours || 0, teacher.roamDays || ""]), [["in", 8, "화,목"], ["", 0, ""], ["", 0, ""], ["", 0, ""]]);
+  assert.deepEqual(read.problems, ["4행 다: 순회 시수(주당 시간 수)가 없어 순회로 적지 않았습니다", "5행 라: 순회 '순회'를 읽지 못했습니다('오는' 또는 '나가는')"]);
+  // 순회 열이 없는 예전 양식
+  const old = [rows[0].slice(0, 8), ["가", "국어", "", "", "", "", "a", ""]];
+  const kept = plain(ctx.classSectionsTeacherReadRows(old, existing, { departments: ["국어"] })).teachers[0];
+  assert.deepEqual([kept.roam, kept.roamHours, kept.roamDays], ["in", 6, "월,수"]);
 });
