@@ -1011,7 +1011,7 @@ function planCompliancePlan(key) {
   const layout = raw.planData ? raw : typeof curriculumLayoutData === "function" ? curriculumLayoutData(raw) : null;
   const schoolYear = typeof document !== "undefined" ? Number(document.getElementById("schoolYear")?.value) || 0 : 0;
   const grade = schoolYear ? schoolYear - Number(year) + 1 : -1;
-  const who = type === "annual" ? "전학년" : grade === 0 ? "입학생(내년도 신입생)" : grade >= 1 && grade <= 3 ? `입학생(현 ${grade}학년)` : "입학생";
+  const who = type === "annual" ? (grade === 0 ? "전학년(내년도)" : "전학년") : grade === 0 ? "입학생(내년도 신입생)" : grade >= 1 && grade <= 3 ? `입학생(현 ${grade}학년)` : "입학생";
   return { key, type, year, layout, fileName: active ? state.curriculumPlanFileName : stored?.fileName || "", label: `${year}학년도 ${who} 편제표` };
 }
 

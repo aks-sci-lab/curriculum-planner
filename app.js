@@ -194,7 +194,7 @@
     const CURRICULUM_DETAIL_OPTIONS = ["공통", "일반선택", "진로선택", "융합선택"];
     const CURRICULUM_DIVISION_OPTIONS = ["학교 지정 교육과정", "학생 선택 교육과정"];
     const CURRICULUM_SEMESTER_FIELDS = ["sem11", "sem12", "sem21", "sem22", "sem31", "sem32"];
-    // 편제표 카드: 내년도 신입생("0")과 올해 1·2·3학년 입학생. 3학년 카드는 올해 전학년 편제표를 만드는 데만 쓴다.
+    // 편제표 카드: 내년도 신입생("0")과 올해 1·2·3학년 입학생. 3학년 카드는 올해 전학년 편제표를, 신입생 카드는 내년도 전학년 편제표의 1학년 열을 만드는 데도 쓴다.
     const CURRICULUM_COHORT_GRADES = ["0", "1", "2", "3"];
 
     function escapeHtml(value) {
@@ -1395,10 +1395,10 @@
       if (step === 1) {
         message.textContent = hasPlan
           ? state.curriculumPlanType === "annual"
-            ? "전학년 편제표는 올해 1·2·3학년 입학생의 3개년 편제표에서 자동으로 만든 자료입니다. 수정은 각 입학생 편제표에서 하고 '다시 만들기'로 반영하세요."
+            ? `${state.curriculumCohortYear}학년도 전학년 편제표는 그 해 1·2·3학년 입학생의 3개년 편제표에서 자동으로 만든 자료입니다. 수정은 각 입학생 편제표에서 하고 '다시 만들기'로 반영하세요.`
             : "편제표를 확인한 뒤 2단계에서 신청 학년·그룹·선택 수를 확인하세요. 올해 전학년 편제표는 수강신청 기준에 사용하지 않습니다."
           : state.curriculumPlanType === "annual"
-            ? `${state.curriculumCohortYear}학년도 전학년 편제표는 올해 1·2·3학년 입학생 3개년 편제표를 모두 올린 뒤 '만들기'로 생성합니다.`
+            ? `${state.curriculumCohortYear}학년도 전학년 편제표는 그 해 1·2·3학년 입학생(${[0, 1, 2].map((offset) => Number(state.curriculumCohortYear) - offset).join("·")}) 3개년 편제표를 모두 올린 뒤 '만들기'로 생성합니다.`
             : `${state.curriculumCohortYear}학년도 신입생의 3개년 편제표를 먼저 업로드하세요.`;
         action.textContent = state.curriculumPlanType === "annual"
           ? "수강신청 기준 편제표 확인"
@@ -1917,8 +1917,9 @@
         state.curriculumPlanType = saved.curriculumPlanType === "annual" ? "annual" : "cohort";
         const availableCohortYears = CURRICULUM_COHORT_GRADES.map((grade) =>
           String(Number($("#schoolYear").value) - Number(grade) + 1));
+        const availableAnnualYears = [0, 1].map((offset) => String(Number($("#schoolYear").value) + offset));
         const activeCohortYear = state.curriculumPlanType === "annual"
-          ? String($("#schoolYear").value || "2026")
+          ? availableAnnualYears.includes(storedCohortYear) ? storedCohortYear : String($("#schoolYear").value || "2026")
           : availableCohortYears.includes(storedCohortYear)
           ? storedCohortYear
           : String($("#schoolYear").value || "2026");
@@ -5395,11 +5396,11 @@
         const active = state.curriculumPlanType !== "annual" && year === String(state.curriculumCohortYear);
         const fileName = active ? state.curriculumPlanFileName : state.curriculumCohorts?.[year]?.fileName;
         const description = grade === "0"
-          ? "내년도 1학년 시수 통계용 · 신입생 편제표가 정해지면 업로드"
+          ? "내년도 1학년 시수 통계용 · 내년도 전학년 편제표의 1학년 열 · 신입생 편제표가 정해지면 업로드"
           : grade === "1"
-            ? `현 1학년은 이 편제표의 2학년 과목으로 신청`
+            ? `현 1학년은 이 편제표의 2학년 과목으로 신청 · 내년도 전학년 편제표의 2학년 열`
             : grade === "2"
-              ? `현 2학년은 이 편제표의 3학년 과목으로 신청`
+              ? `현 2학년은 이 편제표의 3학년 과목으로 신청 · 내년도 전학년 편제표의 3학년 열`
               : "올해 전학년 편제표의 3학년 열을 만드는 데 사용 · 수강신청에는 쓰지 않음";
         const cohortSubtitle = grade === "0" ? "내년도 1학년 시수 기준" : grade === "3" ? "전학년 편제표의 3학년 열 기준" : `수강신청: ${Number(grade) + 1}학년 과목 기준`;
         return `<article class="curriculum-cohort-card${active ? " is-active" : ""}">
@@ -5410,24 +5411,32 @@
           <button class="button" type="button" data-cohort-view="${year}" aria-pressed="${active}" aria-label="${year}학년도 신입생 3개년 편제표 보기">${active ? "편집 중" : "편제표 보기"}</button></div>
         </article>`;
       }).join("");
-      const annualYear = String(schoolYear);
-      const annualActive = state.curriculumPlanType === "annual" && annualYear === String(state.curriculumCohortYear);
+      // 전학년 편제표는 올해(현 1·2·3학년 입학생)와 내년도(내년도 신입생·현 1·2학년 입학생) 두 장을 만든다.
       const cohorts = annualSourceCohorts();
-      const sources = annualSourceStatus(cohorts, annualYear);
-      const missing = sources.filter((source) => !source.rows);
-      const stored = annualActive ? { signature: state.curriculumAnnualPlans?.[annualYear]?.signature, fileName: state.curriculumPlanFileName }
-        : state.curriculumAnnualPlans?.[annualYear];
-      const built = !!stored?.fileName;
-      const stale = built && stored.signature !== undefined && stored.signature !== annualCurriculumSignature(cohorts, annualYear);
-      const sourceLine = sources.map((source) => `${source.grade}학년 ${source.year} ${source.rows ? "✓" : "미업로드"}`).join(" · ");
-      const annualCard = `<article class="curriculum-cohort-card curriculum-annual-card${annualActive ? " is-active" : ""}">
+      const annualCards = [schoolYear, schoolYear + 1].map((yearNumber) => {
+        const annualYear = String(yearNumber);
+        const next = yearNumber === schoolYear + 1;
+        const annualActive = state.curriculumPlanType === "annual" && annualYear === String(state.curriculumCohortYear);
+        const sources = annualSourceStatus(cohorts, annualYear);
+        const missing = sources.filter((source) => !source.rows);
+        const stored = annualActive ? { signature: state.curriculumAnnualPlans?.[annualYear]?.signature, fileName: state.curriculumPlanFileName }
+          : state.curriculumAnnualPlans?.[annualYear];
+        const built = !!stored?.fileName;
+        const stale = built && stored.signature !== undefined && stored.signature !== annualCurriculumSignature(cohorts, annualYear);
+        const sourceLine = sources.map((source) => `${source.grade}학년 ${source.year} ${source.rows ? "✓" : "미업로드"}`).join(" · ");
+        const subtitle = next ? "내년도 · 3개년 편제표에서 자동 생성" : "3개년 편제표에서 자동 생성";
+        const subtitleTitle = next
+          ? `내년도 1·2·3학년(${sources.map((source) => `${source.year} 입학생`).join("·")})의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.`
+          : "올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.";
+        return `<article class="curriculum-cohort-card curriculum-annual-card${next ? " is-next-year" : ""}${annualActive ? " is-active" : ""}">
         <h4>${annualYear}학년도 전학년 편제표</h4>
-        <p title="올해 1·2·3학년 입학생의 신입생 3개년 편제표에서 각 학년 열을 가져와 자동으로 만듭니다. 직접 수정하거나 따로 업로드하지 않습니다.">3개년 편제표에서 자동 생성</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("annual", annualYear, built) : ""}
+        <p title="${escapeHtml(subtitleTitle)}">${subtitle}</p>${typeof planComplianceCardButton === "function" ? planComplianceCardButton("annual", annualYear, built) : ""}
         <p class="curriculum-cohort-file" title="${escapeHtml(sourceLine)}">${escapeHtml(missing.length ? `${missing.map((source) => source.grade).join("·")}학년(${missing.map((source) => source.year).join("·")}) 편제표 필요` : stale ? "원본이 바뀌었습니다. 다시 만드세요" : built ? "생성됨 · 원본과 일치" : "만들 준비 완료")}</p>
         <div><button class="button${built && !stale ? "" : " button-primary"}" type="button" data-annual-build="${annualYear}"${missing.length ? " disabled" : ""} aria-label="${annualYear}학년도 전학년 편제표 ${built ? "다시 만들기" : "만들기"}">${built ? "다시 만들기" : "만들기"}</button>
         <button class="button" type="button" data-annual-view="${annualYear}"${built ? "" : " disabled"} aria-pressed="${annualActive}" aria-label="${annualYear}학년도 전학년 편제표 보기">${annualActive ? "보는 중" : "편제표 보기"}</button></div>
       </article>`;
-      $("#curriculumCohortUploads").innerHTML = cohortCards + annualCard;
+      }).join("");
+      $("#curriculumCohortUploads").innerHTML = cohortCards + annualCards;
     }
 
     function syncActiveCurriculumCohort() {
@@ -5561,13 +5570,18 @@
       return state.curriculumPlanType === "annual" && !!state.curriculumImportedLayout?.derived;
     }
 
-    // 올해 1·2·3학년 입학생의 3개년 편제표에서 학년별 열을 가져와 전학년 편제표를 만든다.
+    // 전학년 편제표를 만들 수 있는 학년도: 올해(현 1·2·3학년 입학생)와 내년도(내년도 신입생·현 1·2학년 입학생).
+    function annualPlanYears() {
+      const schoolYear = Number(typeof $ === "function" ? $("#schoolYear")?.value : "");
+      return Number.isInteger(schoolYear) && schoolYear >= 2000 ? [String(schoolYear), String(schoolYear + 1)] : [];
+    }
+
+    // 그 학년도 1·2·3학년 입학생의 3개년 편제표에서 학년별 열을 가져와 전학년 편제표를 만든다.
     function buildAnnualPlan(year) {
       const normalized = String(year || "").trim();
-      const schoolYear = String($("#schoolYear").value || "");
-      if (!/^\d{4}$/.test(normalized) || normalized !== schoolYear) {
+      if (!/^\d{4}$/.test(normalized) || !annualPlanYears().includes(normalized)) {
         status.style.color = "#a44939";
-        status.textContent = "올해 전학년 편제표만 만들 수 있습니다.";
+        status.textContent = "올해·내년도 전학년 편제표만 만들 수 있습니다.";
         return false;
       }
       syncActiveCurriculumCohort();
@@ -5598,10 +5612,9 @@
 
     function switchCurriculumAnnualPlan(year, rebuild = false) {
       const normalized = String(year || "").trim();
-      const schoolYear = String($("#schoolYear").value || "");
-      if (!/^\d{4}$/.test(normalized) || normalized !== schoolYear) {
+      if (!/^\d{4}$/.test(normalized) || !annualPlanYears().includes(normalized)) {
         status.style.color = "#a44939";
-        status.textContent = "올해 전학년 편제표만 볼 수 있습니다.";
+        status.textContent = "올해·내년도 전학년 편제표만 볼 수 있습니다.";
         return;
       }
       if (rebuild && !buildAnnualPlan(normalized)) {
