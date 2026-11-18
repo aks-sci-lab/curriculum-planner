@@ -2633,3 +2633,24 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
   .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid td { height:10mm; line-height:1.1; padding:1px 2px; }
   .print-page.cs-tt-page[data-per="2"] .cs-tt-year .cs-tt-grid tbody th { width:14px; }
 }
+
+
+/* 1단계 편제표 카드: 6장(입학생 4 + 전학년 2)을 한 줄에. 제목 한 줄 · 파일/상태 + 점검 한 줄 · 단추 한 줄(업로드·보기). */
+.curriculum-cohort-card { display: flex; flex-direction: column; align-items: stretch; text-align: left; }
+.curriculum-cohort-card h4 { display: flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.curriculum-card-tag { flex: none; padding: 0 6px; border-radius: 8px; background: #edf2fb; color: #3c5684; font-size: 11px; font-weight: 600; line-height: 17px; }
+.curriculum-annual-card .curriculum-card-tag { background: #e8edf3; color: #4a5d76; }
+.curriculum-annual-card.is-next-year .curriculum-card-tag { background: #e3f1ea; color: #23684a; }
+.curriculum-cohort-card > .curriculum-card-line { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 3px 0; }
+.curriculum-card-line > .curriculum-cohort-file { flex: 1 1 auto; min-width: 0; margin: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; -webkit-line-clamp: unset; }
+.curriculum-card-line > .plan-compliance-open { flex: none; min-height: 22px !important; padding: 0 5px !important; gap: 3px; font-size: 11px !important; white-space: nowrap; }
+.curriculum-cohort-card > .curriculum-card-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; margin-top: auto; padding-top: 2px; min-width: 0; }
+.curriculum-card-actions .button { flex: 1 1 0; min-width: 0; min-height: 28px; padding: 2px 6px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.curriculum-card-actions [data-annual-build] { flex-grow: 1.5; }
+@media screen and (min-width: 1200px) {
+  .curriculum-cohort-uploads { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+}
+/* 카드가 좁은 폭에서는 '점검' 글자를 빼고 결과 표시(확인 n·O)만 보인다(이름은 aria-label·title). */
+@media screen and (min-width: 1200px) and (max-width: 1499px) {
+  .curriculum-card-line > .plan-compliance-open:has(.plan-compliance-badge) .plan-compliance-word { display: none; }
+}

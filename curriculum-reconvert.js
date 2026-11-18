@@ -539,14 +539,15 @@ async function reconvertCurriculumOriginals({ startup = false, years = null } = 
       results.push(await reconvertCurriculumLayout(target));
     }
     const changed = results.some((result) => result.status === "done");
-    // 전학년 편제표는 원본 대신 세 입학생 편제표에서 다시 만든다.
-    const schoolYear = typeof document !== "undefined" ? String(document.getElementById("schoolYear")?.value || "") : "";
-    const annual = state.curriculumAnnualPlans?.[schoolYear]?.importedLayout;
-    if (annual?.derived && (changed || curriculumReconvertNeeded({ ...annual, derived: false })) && typeof buildAnnualPlan === "function") {
+    // 전학년 편제표(올해·내년도)는 원본 대신 세 입학생 편제표에서 다시 만든다.
+    const schoolYear = typeof document !== "undefined" ? Number(document.getElementById("schoolYear")?.value || 0) : 0;
+    for (const annualYear of schoolYear ? [String(schoolYear), String(schoolYear + 1)] : []) {
+      const annual = state.curriculumAnnualPlans?.[annualYear]?.importedLayout;
+      if (!(annual?.derived && (changed || curriculumReconvertNeeded({ ...annual, derived: false })) && typeof buildAnnualPlan === "function")) continue;
       const statusText = typeof status !== "undefined" ? status.textContent : "";
-      if (buildAnnualPlan(schoolYear)) {
-        results.push({ status: "done", text: `${schoolYear}학년도 전학년 편제표를 세 입학생 편제표에서 다시 만들었습니다` });
-        if (state.curriculumPlanType === "annual" && String(state.curriculumCohortYear) === schoolYear && typeof loadCurriculumPlanData === "function") loadCurriculumPlanData("annual", schoolYear);
+      if (buildAnnualPlan(annualYear)) {
+        results.push({ status: "done", text: `${annualYear}학년도 전학년 편제표를 세 입학생 편제표에서 다시 만들었습니다` });
+        if (state.curriculumPlanType === "annual" && String(state.curriculumCohortYear) === annualYear && typeof loadCurriculumPlanData === "function") loadCurriculumPlanData("annual", annualYear);
       } else if (typeof status !== "undefined") status.textContent = statusText;
     }
     if (!results.some((result) => result.status !== "skipped")) return results;
