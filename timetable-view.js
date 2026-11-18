@@ -897,7 +897,7 @@ function timetablePrecheckFor(round, semester = "1") {
 var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
-var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞뒤", sameSubjectDay: "같은 날 같은 과목", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
+var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
 var TIMETABLE_NO_TEACHER_REASONS = { manual: "직접 비움", none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
 var TIMETABLE_RESULT_CHOICES = { gap: ["frameSoft", "releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules", "frameOrder"], maxPerDay: ["teacherRules"], lunch: ["frameOrder"] };;
@@ -910,8 +910,7 @@ var TIMETABLE_RULE_FIELDS = [
   { key: "gap", label: "반 공강 금지(하루 안 빈칸은 뒤쪽만)", level: true },
   { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만(과목이 달라도)", level: true },
   { key: "lunch", label: "교사 점심(학년별 점심 칸 가운데 하나는 비움)", level: true },
-  { key: "lunchSide", label: "교사 점심 앞뒤 한 시간씩 공강", level: true, later: true },
-  { key: "sameSubjectDay", label: "교사 같은 날 같은 과목 줄이기", level: true, later: true },
+  { key: "lunchSide", label: "교사 점심 앞이나 뒤 한 시간 공강", level: true, later: true },
   { key: "homeroom", label: "담임이 그 학년 반 수업을 맡으면 담임반 포함", level: true, later: true },
   { key: "minPerDay", label: "반 하루 최소 교시(수업이 있는 날)", min: 1, max: 9, unit: "교시" },
   { key: "shortDay", label: "반 하루 최소 교시 지키기(반마다 끝나는 시간이 들쭉날쭉하지 않게)", level: true, later: true },
@@ -922,11 +921,10 @@ var TIMETABLE_RULE_FIELDS = [
 ];
 // 꼭 필요하지는 않은 조건(사용자 결정: 지우지 않고 선택형으로) — 규칙 영역 맨 위에서 쓸지 말지 고른다. 끄면 rules[key] = "off", 켜면 기본값으로.
 var TIMETABLE_OPTIONAL_RULES = [
-  { key: "semesterFrame", label: "2학기는 1학기와 같은 칸", gives: "끄면 학기마다 따로 편성합니다(공강·담당 교사 없음이 줄 수 있음, 2학기 시간표가 1학기와 달라짐)." },
+  { key: "semesterFrame", label: "2학기는 1학기와 같은 칸", gives: "기본은 꺼짐(학기마다 따로 편성). 켜면 2학기를 1학기와 같은 칸에 맞춥니다(공강·담당 교사 없음이 늘 수 있음).", on: "hard" },
   { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만", gives: "끄면 같은 교사가 한 반에 하루 두 번 들어갈 수 있습니다." },
-  { key: "shortDay", label: "반 하루 최소 교시", gives: "끄면 수업이 적은 날 일찍 끝나는 반이 생길 수 있습니다(공강 금지는 그대로)." },
-  { key: "lunchSide", label: "교사 점심 앞뒤 한 시간씩 공강", gives: "끄면 점심 바로 앞뒤에 수업이 붙을 수 있습니다(교사 점심 자체는 그대로)." },
-  { key: "sameSubjectDay", label: "교사 같은 날 같은 과목 줄이기", gives: "끄면 한 교사가 같은 날 같은 과목을 여러 반에서 이어 가르칠 수 있습니다." }
+  { key: "shortDay", label: "반 하루 최소 교시", gives: "기본은 꺼짐. 켜면 수업이 있는 날은 최소 교시(기본 4)를 채우려고 합니다.", on: "soft" },
+  { key: "lunchSide", label: "교사 점심 앞이나 뒤 한 시간 공강", gives: "끄면 점심 바로 앞과 뒤에 모두 수업이 붙을 수 있습니다(교사 점심 자체는 그대로)." }
 ];
 var TIMETABLE_ISSUE_LABELS = { block: "계산 불가", fail: "조건 위반", warn: "확인", info: "참고" };
 
@@ -2122,9 +2120,12 @@ function timetableApplyField(field, target) {
     const spec = TIMETABLE_OPTIONAL_RULES.find((item) => item.key === key);
     if (!spec) return "";
     const rules = { ...(settings.rules || {}) };
-    if (target.checked) delete rules[key]; else rules[key] = "off";
+    // 켜기: 기본값이 켜짐이면 기본값으로(덮어쓴 값 지움), 기본값이 꺼짐이면 spec.on. 끄기: 기본값이 꺼짐이면 덮어쓴 값 지움.
+    const defaultOff = timetableRuleDefault(key) === "off";
+    if (target.checked) { if (defaultOff) rules[key] = spec.on || "soft"; else delete rules[key]; }
+    else if (defaultOff) delete rules[key]; else rules[key] = "off";
     settings.rules = rules;
-    return `${spec.label} → ${target.checked ? "씀(기본값)" : "끔"}`;
+    return `${spec.label} → ${target.checked ? "씀" : "끔"}`;
   }
   if (name.startsWith("rules.")) {
     const rule = name.slice(6);

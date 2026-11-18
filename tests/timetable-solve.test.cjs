@@ -14,6 +14,8 @@ function context() {
   const ctx = vm.createContext({});
   vm.runInContext(read("timetable.js"), ctx);
   vm.runInContext(read("timetable-solve.js"), ctx);
+  // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐 — 기본값 자체는 따로 확인)
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft" })', ctx);
   return ctx;
 }
 
@@ -53,7 +55,7 @@ test("작은 학교: 필수 조건을 모두 지킨 시간표, 검증기와 같�
   assert.deepEqual([check.counts.gap, check.counts.oncePerDay, check.counts.run, check.counts.maxPerDay, check.counts.lunch], [0, 0, 0, 0, 0]);
   // 검증기는 '최대한' 조건(하루 최소 교시·점심 앞뒤·같은 날 같은 과목)도 풀이기와 같은 수로 센다 — 직접 고친 뒤 다시 셀 때 쓴다
   const amountOf = (list, rule) => list.filter((item) => item.rule === rule).reduce((sum, item) => sum + item.amount, 0);
-  for (const rule of ["shortDay", "lunchSide", "sameSubjectDay"]) assert.equal(check.counts[rule], amountOf(result.violations, rule), rule);
+  for (const rule of ["shortDay", "lunchSide"]) assert.equal(check.counts[rule], amountOf(result.violations, rule), rule);
   assert.deepEqual(check.violations.map((item) => [item.semester, item.rule, item.level, item.kind, item.id, item.day, item.amount, item.cause]).sort(), result.violations.map((item) => [item.semester, item.rule, item.level, item.kind, item.id, item.day, item.amount, item.cause]).sort());
   // 반마다 주간 수업 수 그대로: (24 + 14 + 3) × 3반 + 블록(2 × 3 + 3 × 4) × 3반 + 창체 9
   assert.equal(check.hours["1"], (24 + 14 + 3) * 3 + (6 + 12) * 3 + 9);
