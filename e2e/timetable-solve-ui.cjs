@@ -310,7 +310,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   if (!(await section.evaluate((el) => el.open))) { await section.locator(":scope > summary").click(); await sleep(200); }
   const run = panel.locator('[data-tt-field="rules.run"]');
   const before = await run.inputValue();
-  await run.fill("2"); await run.press("Tab"); await sleep(600); // 연강 상한을 2로 조여 '반드시' 위반이 남게 한다(뒤의 선택지 확인용)
+  await run.fill("1"); await run.press("Tab"); await sleep(600); // 연강 상한을 1로 조여 '반드시' 위반이 남게 한다(뒤의 선택지 확인용)
   check((await bar.getAttribute("data-state")) === "stale" && (await panel.locator("#timetableResultStale").count()) === 1 && /바뀌기 전/.test(clean(await panel.locator("#timetableRunNote").innerText())),
     "규칙(연강 상한)을 바꾸면 결과에 '조건·자료가 바뀌기 전 결과'", clean(await bar.innerText()));
   await page.screenshot({ path: path.join(OUT, "05-stale.png") });
@@ -328,7 +328,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check((await gridOf()).cells.filter((cell) => cell.text).length >= 30, "중단한 결과도 반 시간표가 빠짐없이 참");
 
   console.log("▶ 계산 뒤 선택지: 고르면 그 조건으로 다시 계산");
-  const total = async () => page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; return { hard: saved.result.metrics.hard, noTeacher: saved.result.metrics.noTeacherHours, run: (state.timetable.settings.rules || {}).run, cover: (state.timetable.settings.rules || {}).cover || "hard" }; });
+  const total = async () => page.evaluate(() => { const saved = state.timetable[String(state.currentRound)]; return { hard: saved.result.metrics.hard, noTeacher: saved.result.metrics.noTeacherHours, run: (state.timetable.settings?.rules || {}).run, cover: (state.timetable.settings?.rules || {}).cover || "hard" }; });
   const beforeChoice = await total();
   const choiceRows = await panel.locator("#timetableResultChoices [data-tt-choice-row]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.ttChoiceRow, recommended: el.dataset.recommended === "1", text: el.textContent.replace(/\s+/g, " ").trim() })));
   report.checks.choices = { beforeChoice, choiceRows };
@@ -352,14 +352,14 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const compareText = clean(await panel.locator("#timetableResultCompare").innerText());
   report.checks.choices.afterChoice = afterChoice; report.checks.choices.compareText = compareText;
   check(afterChoice.run === 4 && afterChoice.hard < beforeChoice.hard,
-    `'교사 규칙 양보'로 다시 계산: 연강 상한 2 → 4, '반드시' ${beforeChoice.hard} → ${afterChoice.hard}건`, afterChoice);
+    `'교사 규칙 양보'로 다시 계산: 연강 상한 1 → 4, '반드시' ${beforeChoice.hard} → ${afterChoice.hard}건`, afterChoice);
   check(new RegExp(`'반드시' 조건 ${beforeChoice.hard} → ${afterChoice.hard}건 · 담당 교사 없음 ${beforeChoice.noTeacher} → ${afterChoice.noTeacher}시간 — 고른 선택: 교사 규칙 양보`).test(compareText), `앞 결과와 견줌: ${compareText.slice(0, 110)}`);
   check((await panel.locator("#timetableValidation").count()) === 0 && (await bar.getAttribute("data-state")) === "done", "선택 뒤 결과도 검증 오류 없음·지금 조건의 결과");
   const chosen = clean(await panel.locator("#timetableChosen").innerText());
   check(/고른 선택 1개/.test(chosen) && /교사 규칙 양보/.test(chosen), `고른 내역: ${chosen.slice(0, 80)}`);
   await page.screenshot({ path: path.join(OUT, "06-after-choice.png"), fullPage: true });
   await panel.locator("#timetableChoiceUndo").click(); await sleep(600);
-  check((await total()).run === 2 && (await bar.getAttribute("data-state")) === "stale", "마지막 선택 되돌리기 → 규칙이 돌아가고(연강 상한 2) 결과는 '바뀌기 전 결과'");
+  check((await total()).run === 1 && (await bar.getAttribute("data-state")) === "stale", "마지막 선택 되돌리기 → 규칙이 돌아가고(연강 상한 1) 결과는 '바뀌기 전 결과'");
   await panel.locator("#timetableRun").click();
   await waitResult(240000);
   console.log("▶ 칸 고정 → 고정을 지키며 다시 계산");

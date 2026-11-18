@@ -13,7 +13,7 @@ function context() {
   const ctx = vm.createContext({});
   for (const file of ["timetable.js", "timetable-solve.js", "timetable-view.js"]) vm.runInContext(read(file), ctx);
   // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐)
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft" })', ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx);
   return ctx;
 }
 
@@ -115,7 +115,7 @@ test("시간표가 정한 블록 자리를 6단계에 적어 넣기: 다른 블�
   });
   for (const file of ["timetable.js", "timetable-solve.js", "timetable-view.js"]) vm.runInContext(read(file), ctx);
   // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐)
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft" })', ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx);
   // 순서만 다른 a블록은 같은 것으로 보고, 비어 있던 b블록과 2학기 a블록만 다르다
   assert.deepEqual(plain(ctx.timetableBlockTimeChanges("1")), [
     { semester: "1", groupKey: "1:1:2-1 택2", letter: "b", before: "", after: "월2,목4,금1" },
@@ -434,7 +434,7 @@ test("6단계 학생 시간표용 반 수업 칸: 결과가 지금 조건의 것
     const ctx = vm.createContext({ state: { currentRound: "1", timetable: { settings: pins ? { pins } : {}, 1: saved } }, classSectionsEntry: (round, key) => entries[key] || null });
     for (const file of ["timetable.js", "timetable-solve.js", "timetable-view.js"]) vm.runInContext(read(file), ctx);
   // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐)
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft" })', ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx);
     vm.runInContext("timetableInput = (round, semester) => ({ input: __input, year: '2027' }); timetableCurrentSignature = () => 'sig';", ctx);
     ctx.__input = input;
     return ctx;

@@ -10,8 +10,8 @@ var TIMETABLE_SOLVE_VERSION = 1;
 // 비용: 반드시 = 1000 이상, 최대한 = 규칙별 작은 값, 끔 = 0. 못 넣은 수업 1시간 = 20000.
 // '반드시' 조건끼리 부딪칠 때의 순서: 반 공강(3000) > 같은 교사 하루 두 번(2000) > 교사 연강·하루 최대·점심(1000).
 // (블록을 빈틈없이 붙이면 블록 교사의 연강이 늘고, 연강을 줄이려 블록을 흩으면 그 칸은 반 전체의 공강이 된다 — 학생 공강을 먼저 막는다.)
-var TIMETABLE_HARD_WEIGHTS = { gap: 3000, oncePerDay: 2000 };
-var TIMETABLE_SOFT_WEIGHTS = { gap: 30, oncePerDay: 20, run: 12, maxPerDay: 12, lunch: 25, lunchSide: 2, shortDay: 8 };
+var TIMETABLE_HARD_WEIGHTS = { gap: 3000, oncePerDay: 2000, blockTwice: 2000 };
+var TIMETABLE_SOFT_WEIGHTS = { gap: 30, oncePerDay: 20, blockTwice: 20, run: 12, maxPerDay: 12, lunch: 25, lunchSide: 2, shortDay: 8 };
 var TIMETABLE_UNPLACED_WEIGHT = 20000;
 var TIMETABLE_DEFAULT_ROUNDS = 12; // 흔들기 최대 횟수(한 번 = 기본 횟수의 절반)
 var TIMETABLE_DEFAULT_ITERATIONS = 600000; // 학기 층마다(두 학기 함께면 2배). 실제 크기 학교에서 한 학기 약 3초·두 학기 약 10초
@@ -76,7 +76,7 @@ function timetableProblem(inputs) {
   //   사전 점검이 센 값(lessonCells)을 그대로 쓴다: 반군별 창체면 학년별 창체 시간만큼, 반 묶음마다 블록이 다르면(엇갈림) 다른 묶음의 블록 시간만큼 늘어난다.
   const gradeFree = prechecks.map((check) => grades.map((grade) => { const row = check.grades.find((item) => item.grade === grade); return row && Number.isFinite(row.lessonCells) && row.lessonCells > 0 ? row.lessonCells : Infinity; }));
   const gradeLoad = models.map(() => new Map()); // 교사|학년 → 그 학년 반 수업 시수
-  const softHours = Number(rules.maxHours) > 0 ? Number(rules.maxHours) : 22;
+  const softHours = Number(rules.maxHours) > 0 ? Number(rules.maxHours) : 19;
   const shareHours = teacherIds.map((id) => { const teacher = models.map((model) => model.teacherOf.get(id)).find(Boolean); return Math.max(1, teacher && teacher.ownMax ? teacher.maxHours : softHours - (teacher ? teacher.outHours || 0 : 0)); });
   const teacherName = teacherIds.map((id) => models.map((model) => model.teacherOf.get(id)).find(Boolean)?.name || id);
   const homeroomOf = new Map(); // 반 → 담임 교사
@@ -294,11 +294,11 @@ function timetableProblem(inputs) {
   return { version: TIMETABLE_SOLVE_VERSION, keys, models, rules, days, D, positions, ABS, S, L, T, C: classIds.length, slotKey, slotDay, slotPeriod, slotsByDay, slotIndex, grades, absOf, closed: anyClosed ? closed : null, classIds, classGrade,
     teacherIds, teacherName, blocked, capacity, venueNames, venueCap, frame, orderFrame,
     zoneRep: (() => { const flags = new Uint8Array(classIds.length); if (orderFrame) for (const act of acts) if (act.kind === 1 && act.classes.length) flags[act.classes[0]] = 1; return flags; })(), // 블록 시간대를 견줄 대표 반
-    subjects, acts, notes, noTeacher, lunchPositions: base.lunchPositions.slice(),
-    weights: { gap: timetableRuleWeight(rules, "gap"), once: timetableRuleWeight(rules, "oncePerDay"), run: timetableRuleWeight(rules, "run") || (rules.run ? 1000 : 0), maxPerDay: timetableRuleWeight(rules, "maxPerDay") || (rules.maxPerDay ? 1000 : 0),
+    subjects, acts, notes, noTeacher, lunchPositions: base.lunchPositions.slice(), isLunch: Array.from({ length: base.positions }, (_, pos) => (base.lunchPositions.includes(pos) ? 1 : 0)),
+    weights: { gap: timetableRuleWeight(rules, "gap"), once: timetableRuleWeight(rules, "oncePerDay"), blockTwice: timetableRuleWeight(rules, "blockTwice"), run: timetableRuleWeight(rules, "run") || (rules.run ? 1000 : 0), maxPerDay: timetableRuleWeight(rules, "maxPerDay") || (rules.maxPerDay ? 1000 : 0),
       lunch: timetableRuleWeight(rules, "lunch"), lunchSide: timetableRuleWeight(rules, "lunchSide"), shortDay: Number(rules.minPerDay) > 1 ? timetableRuleWeight(rules, "shortDay") : 0 },
     minPerDay: Number(rules.minPerDay) > 1 ? Number(rules.minPerDay) : 0,
-    runLimit: Number(rules.run) > 0 ? Number(rules.run) : 99, dayLimit: Number(rules.maxPerDay) > 0 ? Number(rules.maxPerDay) : 99 };
+    runLimit: Number(rules.run) > 0 ? Number(rules.run) : 99, runLunch: Number(rules.runLunch) > 0 ? Number(rules.runLunch) : 99, dayLimit: Number(rules.maxPerDay) > 0 ? Number(rules.maxPerDay) : 99 };
 }
 
 // ---- 상태: 놓기·빼기·비용 ----
@@ -380,6 +380,7 @@ function timetableClassDayCost(state, layer, ci, d) {
   if (last < 0) return 0;
   let gaps = 0;
   let twice = 0;
+  let twiceBlock = 0; // 같은 선택 블록이 하루 두 번 — 반 수업의 '하루 한 번'과 따로 센다(rules.blockTwice)
   for (let i = 0; i <= last; i += 1) {
     const a = grid[ci * P.S + slots[i]];
     if (a === -1) { gaps += 1; continue; }
@@ -389,7 +390,7 @@ function timetableClassDayCost(state, layer, ci, d) {
       const b = grid[ci * P.S + slots[j]];
       if (b === -1 || P.acts[b].pair !== act.pair) continue;
       if (act.double && b === a && j === i - 1) continue; // 연속 2시간이 필요한 과목
-      twice += 1;
+      if (act.kind === 1) twiceBlock += 1; else twice += 1;
       break;
     }
   }
@@ -404,7 +405,7 @@ function timetableClassDayCost(state, layer, ci, d) {
       for (let other = 1; other < P.L; other += 1) { const b = state.grid[other][ci * P.S + slots[i]]; if ((b !== -1 && P.acts[b].kind === 1) !== here) zone += 1; }
     }
   }
-  return gaps * P.weights.gap + twice * P.weights.once + short * P.weights.shortDay + zone * 3000;
+  return gaps * P.weights.gap + twice * P.weights.once + twiceBlock * P.weights.blockTwice + short * P.weights.shortDay + zone * 3000;
 }
 
 // 교사 하루 비용: 연강 초과, 하루 최대 초과, 점심 칸을 모두 수업, 점심 앞뒤 공강, 같은 날 같은 과목.
@@ -414,9 +415,10 @@ function timetableTeacherDayCost(state, layer, ti, d) {
   const base = ti * P.ABS + d * P.positions;
   let count = 0;
   let streak = 0;
+  let span = 0; // 비어 있는 점심 칸은 끊지 않고 센 수업 수(점심을 사이에 둔 연강)
   let over = 0;
   for (let pos = 0; pos < P.positions; pos += 1) {
-    if (busy[base + pos] !== -1) { count += 1; streak += 1; if (streak > P.runLimit) over += 1; } else streak = 0;
+    if (busy[base + pos] !== -1) { count += 1; streak += 1; span += 1; if (streak > P.runLimit || span > P.runLunch) over += 1; } else { streak = 0; if (!P.isLunch[pos]) span = 0; }
   }
   if (!count) return 0;
   let cost = over * P.weights.run + Math.max(0, count - P.dayLimit) * P.weights.maxPerDay;
@@ -1148,7 +1150,7 @@ function timetableSolveStart(inputs, options = {}) {
   const total = Math.max(0, Math.floor(Number(options.iterations ?? TIMETABLE_DEFAULT_ITERATIONS * P.L)));
   // rounds = 첫 담금질 뒤 '흔들기'(가장 좋은 상태에서 다시 데워 돌기)를 몇 번까지 할지. 횟수 기준이라 같은 씨앗 = 같은 결과.
   const rounds = Math.max(0, Math.floor(Number(options.rounds ?? (P.frame ? TIMETABLE_DEFAULT_ROUNDS * 2 : TIMETABLE_DEFAULT_ROUNDS)))); // 두 학기 뼈대는 묶음 때문에 더 오래 걸려 판을 두 배로
-  return { P, state, rng, seed, iteration: 0, total, base: total, phaseStart: 0, phaseEnd: total, hot: 40, extensions: 0, rounds, stale: 0, roundCost: Infinity, best: timetableSnapshot(state), startCost: state.cost, accepted: 0 };
+  return { inputs, P, state, rng, seed, iteration: 0, total, base: total, phaseStart: 0, phaseEnd: total, hot: 40, extensions: 0, rounds, stale: 0, roundCost: Infinity, best: timetableSnapshot(state), startCost: state.cost, accepted: 0 };
 }
 
 // 탐색을 count번 더 한다(Worker가 조각으로 불러 중단 요청을 받을 수 있게). 돌려주는 값: 진행 상황.
@@ -1310,9 +1312,90 @@ function timetableSolveFinish(run) {
   const metrics = { cost: Math.round(state.cost), hard, gap: count("gap"), oncePerDay: count("oncePerDay"), run: count("run"), maxPerDay: count("maxPerDay"), lunch: count("lunch"),
     noTeacherHours: noTeacher.reduce((sum, item) => sum + item.hours, 0), unplacedHours: unplaced.length, frame: P.frame, frameMode: P.orderFrame ? "order" : P.frame ? "hard" : "off", frameZone: count("frame"), frameActs: P.acts.filter((act) => act.layers.length > 1).length, frameBroken,
     blockTimesChanged, splitLessons };
-  return { version: TIMETABLE_SOLVE_VERSION, seed: run.seed, iterations: run.iteration, total: run.total, semesters: P.keys.slice(), layers, violations, noTeacher,
+  return timetableShareBlocks(run.inputs, { version: TIMETABLE_SOLVE_VERSION, seed: run.seed, iterations: run.iteration, total: run.total, semesters: P.keys.slice(), layers, violations, noTeacher,
     unplaced: unplaced.map((item) => ({ subject: P.acts[item.act].kind === 0 ? P.acts[item.act].subjectName[0] : P.acts[item.act].kind === 1 ? P.acts[item.act].labels[0] : "창체", grade: P.acts[item.act].gi >= 0 ? P.grades[P.acts[item.act].gi] : "" })),
-    notes, metrics };
+    notes, metrics });
+}
+
+// 블록 분반의 그 칸 담당 교사: 나눠 맡은 칸(shares)이 먼저, 교사 없이 놓은 칸(bareSlots)은 없음, 아니면 분반 교사.
+function timetableBlockTeacherAt(item, sectionId, key) {
+  const shared = item && item.shares && item.shares[sectionId] && item.shares[sectionId][key];
+  if (shared) return shared;
+  if (item && (item.bareSlots || []).includes(key)) return null;
+  return (item && item.teachers && item.teachers[sectionId]) || null;
+}
+
+// 블록 분반 나눠 맡기(사용자 결정 2026-11-18: "블록 분반을 여러 교사가 나눠서 들어가도 돼"): 담당 교사가 없는 분반 시간
+// (분반 교사를 못 정했거나, 블록의 어느 교사가 못 서서 교사 없이 놓은 칸)을 그 과목 후보(전공 일치) 가운데 그 시각에 비어 있는
+// 교사에게 칸마다 맡긴다 — 한 분반에 교사는 rules.splitLesson 한도(기본 3명)까지. 맡긴 뒤 검증기로 다시 보아 절대 조건 오류나
+// '반드시' 위반이 늘면 되돌린다. 결과: blocks[id].shares = { 분반 id: { 칸: 교사 id } }, 알림, 담당 교사 없음 목록·수를 다시 센다.
+function timetableShareBlocks(inputs, result) {
+  if (!inputs || !result || !result.layers) return result;
+  const hardOf = (check) => check.violations.filter((item) => item.level === "hard").reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  let check = null;
+  let shared = 0;
+  const notes = [];
+  for (const semester of Object.keys(result.layers).sort()) {
+    if (!inputs[semester]) continue;
+    const model = inputs[semester].gradeOf instanceof Map ? inputs[semester] : timetableModel(inputs[semester]);
+    const limit = model.rules.splitLesson === "off" ? 1 : model.rules.splitLesson === "two" ? 2 : 3;
+    if (limit < 2) continue;
+    const layer = result.layers[semester];
+    const touched = new Set();
+    for (const block of model.blocks) {
+      const item = layer.blocks && layer.blocks[block.id];
+      if (!item) continue;
+      const absOf = model.gradeOf.get(block.grade).slotByKey;
+      for (const section of block.sections) {
+        const open = item.slots.filter((key) => key && !timetableBlockTeacherAt(item, section.id, key));
+        if (!open.length || !section.candidates.length) continue;
+        const taken = {};
+        for (const key of open) {
+          if (!check) check = timetableValidate(inputs, result);
+          const busy = check.teaching[semester];
+          const slot = absOf.get(key);
+          if (!slot || !busy) continue;
+          const inSection = new Set([item.teachers && item.teachers[section.id], ...Object.values((item.shares && item.shares[section.id]) || {})].filter(Boolean));
+          const inBlock = new Set(block.sections.filter((other) => other.id !== section.id).map((other) => timetableBlockTeacherAt(item, other.id, key)).filter(Boolean));
+          const options = section.candidates.filter((id) => {
+            const teacher = model.teacherOf.get(id);
+            const cells = busy.get(id);
+            if (!teacher || teacher.blocked.has(slot.abs) || inBlock.has(id) || (cells && cells.has(slot.abs))) return false;
+            if ((cells ? cells.size : 0) + 1 > teacher.maxHours) return false;
+            return inSection.has(id) || inSection.size < limit;
+          }).sort((a, b) => (inSection.has(b) ? 1 : 0) - (inSection.has(a) ? 1 : 0) || ((busy.get(a) || new Set()).size - (busy.get(b) || new Set()).size) || (a < b ? -1 : 1)).slice(0, 3);
+          for (const id of options) {
+            const shares = item.shares || (item.shares = {});
+            const mine = shares[section.id] || (shares[section.id] = {});
+            mine[key] = id;
+            const next = timetableValidate(inputs, result);
+            if (next.errors.length <= check.errors.length && hardOf(next) <= hardOf(check)) { check = next; shared += 1; touched.add(block.id); taken[id] = (taken[id] || 0) + 1; break; }
+            delete mine[key];
+            if (!Object.keys(mine).length) delete shares[section.id];
+            if (!Object.keys(shares).length) delete item.shares;
+          }
+        }
+        const names = Object.entries(taken).map(([id, hours]) => `${model.teacherOf.get(id).name} ${hours}시간`);
+        if (names.length) notes.push(`${semester}학기 ${block.grade}학년 ${block.label} ${section.subject}: 담당 교사가 없던 시간을 ${names.join(" + ")}이 맡았습니다(분반 나눠 맡기).`);
+      }
+    }
+    // 손댄 블록의 담당 교사 없음 목록을 다시 만든다
+    for (const block of model.blocks) {
+      if (!touched.has(block.id)) continue;
+      const item = layer.blocks[block.id];
+      result.noTeacher = (result.noTeacher || []).filter((entry) => !(entry.kind === "section" && String(entry.semester) === String(semester) && String(entry.grade) === String(block.grade) && entry.classId === block.label));
+      for (const section of block.sections) {
+        const hours = item.slots.filter((key) => key && !timetableBlockTeacherAt(item, section.id, key)).length;
+        if (hours) result.noTeacher.push({ semester, kind: "section", grade: block.grade, classId: block.label, subject: section.subject, hours, reason: section.candidates.length ? "clash" : "none" });
+      }
+    }
+  }
+  if (!shared) return result;
+  result.notes = [...(result.notes || []), ...notes];
+  result.violations = check.violations;
+  result.metrics = { ...result.metrics, hard: hardOf(check), gap: check.counts.gap, oncePerDay: check.counts.oncePerDay, run: check.counts.run, maxPerDay: check.counts.maxPerDay, lunch: check.counts.lunch,
+    noTeacherHours: result.noTeacher.reduce((sum, item) => sum + (Number(item.hours) || 0), 0), sharedSectionHours: shared };
+  return result;
 }
 
 // 남은 설정 조건 위반(반·교사·요일마다 한 줄).
@@ -1330,6 +1413,7 @@ function timetableViolations(state) {
       for (let i = slots.length - 1; i >= 0; i -= 1) if (grid[ci * P.S + slots[i]] !== -1) { last = i; break; }
       const empty = [];
       const twice = [];
+      const twiceBlocks = [];
       const twiceSubjects = [];
       for (let i = 0; i <= last; i += 1) {
         const a = grid[ci * P.S + slots[i]];
@@ -1339,7 +1423,8 @@ function timetableViolations(state) {
         for (let j = 0; j < i; j += 1) {
           const b = grid[ci * P.S + slots[j]];
           if (b === -1 || P.acts[b].pair !== act.pair || (act.double && b === a && j === i - 1)) continue;
-          twice.push(act.kind === 1 ? act.labels[act.layers.indexOf(layer)] : `${act.teacher >= 0 ? `${P.teacherName[act.teacher]} 교사 ` : ""}${act.subjectName[act.layers.indexOf(layer)]}`);
+          if (act.kind === 1) { twiceBlocks.push(act.labels[act.layers.indexOf(layer)]); break; }
+          twice.push(`${act.teacher >= 0 ? `${P.teacherName[act.teacher]} 교사 ` : ""}${act.subjectName[act.layers.indexOf(layer)]}`);
           if (act.kind === 0 && b === a) twiceSubjects.push(act.subjectName[act.layers.indexOf(layer)]); // 같은 수업이 하루 두 번 → '2시간 연속 수업 허용' 선택지의 과목
           break;
         }
@@ -1358,6 +1443,8 @@ function timetableViolations(state) {
         cause: `${P.classIds[ci]}반 ${P.days[d]}요일은 ${P.slotPeriod[slots[last]]}교시에 끝납니다(하루 최소 ${P.minPerDay}교시).` });
       if (empty.length && levelOf("gap") !== "off") out.push({ semester, rule: "gap", level: levelOf("gap"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: empty.length,
         cause: `${P.classIds[ci]}반 ${P.days[d]}요일 ${empty.join("·")}교시가 비었습니다(공강 ${empty.length}칸).` });
+      if (twiceBlocks.length && levelOf("blockTwice") !== "off") out.push({ semester, rule: "blockTwice", level: levelOf("blockTwice"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: twiceBlocks.length,
+        cause: `${P.classIds[ci]}반 ${P.days[d]}요일: ${[...new Set(twiceBlocks)].join(", ")}이 하루에 두 번 있습니다.` });
       if (twice.length && levelOf("oncePerDay") !== "off") out.push({ semester, rule: "oncePerDay", level: levelOf("oncePerDay"), kind: "class", id: P.classIds[ci], day: P.days[d], amount: twice.length,
         ...(twiceSubjects.length ? { subjects: [...new Set(twiceSubjects)] } : {}), cause: `${P.classIds[ci]}반 ${P.days[d]}요일: ${[...new Set(twice)].join(", ")} 수업이 하루에 두 번 있습니다.` });
     }
@@ -1367,15 +1454,15 @@ function timetableViolations(state) {
       for (let d = 0; d < P.D; d += 1) {
       const base = ti * P.ABS + d * P.positions;
       const busy = state.tAt[layer];
-      let count = 0; let streak = 0; let over = 0; let longest = 0;
-      for (let pos = 0; pos < P.positions; pos += 1) { if (busy[base + pos] !== -1) { count += 1; streak += 1; longest = Math.max(longest, streak); if (streak > P.runLimit) over += 1; } else streak = 0; }
+      let count = 0; let streak = 0; let over = 0; let longest = 0; let span = 0; let longestSpan = 0;
+      for (let pos = 0; pos < P.positions; pos += 1) { if (busy[base + pos] !== -1) { count += 1; streak += 1; span += 1; longest = Math.max(longest, streak); longestSpan = Math.max(longestSpan, span); if (streak > P.runLimit || span > P.runLunch) over += 1; } else { streak = 0; if (!P.isLunch[pos]) span = 0; } }
       if (!count) continue;
       if (P.weights.lunchSide && P.lunchPositions.length) {
         let side = 99;
         for (const pos of P.lunchPositions) { if (busy[base + pos] !== -1) continue; side = Math.min(side, (pos > 0 && busy[base + pos - 1] !== -1 ? 1 : 0) + (pos + 1 < P.positions && busy[base + pos + 1] !== -1 ? 1 : 0)); }
         if (side === 2) sideDays.push(P.days[d]);
       }
-      if (over) out.push({ semester, rule: "run", level: "hard", kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: over, cause: `${name} 교사 ${P.days[d]}요일 ${longest}시간 연강(상한 ${P.runLimit}).` });
+      if (over) out.push({ semester, rule: "run", level: "hard", kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: over, cause: longest > P.runLimit ? `${name} 교사 ${P.days[d]}요일 ${longest}시간 연강(상한 ${P.runLimit}).` : `${name} 교사 ${P.days[d]}요일 점심을 사이에 두고 ${longestSpan}시간 이어짐(상한 ${P.runLunch}).` });
       if (count > P.dayLimit) out.push({ semester, rule: "maxPerDay", level: "hard", kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: count - P.dayLimit, cause: `${name} 교사 ${P.days[d]}요일 ${count}시간(하루 최대 ${P.dayLimit}).` });
       if (P.lunchPositions.length && P.lunchPositions.every((pos) => busy[base + pos] !== -1) && levelOf("lunch") !== "off") {
         out.push({ semester, rule: "lunch", level: levelOf("lunch"), kind: "teacher", id: P.teacherIds[ti], day: P.days[d], amount: 1, cause: `${name} 교사 ${P.days[d]}요일 점심 시간이 없습니다(학년별 점심 칸에 모두 수업).` });
@@ -1403,12 +1490,13 @@ function timetableSolve(inputs, options = {}) {
 // 돌려주는 값: { ok(절대 조건 위반 없음), errors: [{ type, semester, text }], counts: { gap, oncePerDay, run, maxPerDay, lunch }, hours: { 학기: 놓인 시수 } }
 function timetableValidate(inputs, result) {
   const errors = [];
-  const counts = { gap: 0, oncePerDay: 0, run: 0, maxPerDay: 0, lunch: 0, shortDay: 0, lunchSide: 0 };
+  const counts = { gap: 0, oncePerDay: 0, blockTwice: 0, run: 0, maxPerDay: 0, lunch: 0, shortDay: 0, lunchSide: 0 };
   const hours = {};
   const frames = [];
   const zones = {}; // 학기 → 대표 반(블록의 첫 반) → 블록이 놓인 칸 집합(뼈대 order의 '같은 시간대' 확인)
   let zoneRule = "";
   let zoneDays = [];
+  const teaching = {}; // 학기 → Map(교사 id → 서는 실제 시각 Set) — 분반 나눠 맡기가 빈 교사를 찾을 때 쓴다
   const violations = []; // 설정 조건 위반(공강·하루 두 번·연강·하루 최대·점심)을 결과의 violations와 같은 모양으로 — 직접 고친 뒤 다시 셀 때 쓴다
   for (const semester of Object.keys(inputs || {}).filter((key) => inputs[key]).sort()) {
     const model = inputs[semester].gradeOf instanceof Map ? inputs[semester] : timetableModel(inputs[semester]);
@@ -1418,6 +1506,7 @@ function timetableValidate(inputs, result) {
     const rules = model.rules;
     if (!zoneRule) { zoneRule = rules.semesterFrame; zoneDays = model.days; }
     zones[semester] = new Map();
+    teaching[semester] = new Map();
     const classCells = new Map(); // 반|칸 → 이름
     const teacherCells = new Map(); // 교사|실제 시각 → 이름
     const teacherLessons = new Map(); // 교사|실제 시각 → { id, subject }(반 수업·담임 창체만)
@@ -1439,6 +1528,8 @@ function timetableValidate(inputs, result) {
       const cell = `${teacherId}|${slot.abs}`;
       if (teacherCells.has(cell)) fail("teacherClash", `${teacher.name} 교사 ${key}: ${teacherCells.get(cell)}와 ${name}이 겹칩니다.`);
       teacherCells.set(cell, name);
+      if (!teaching[semester].has(teacherId)) teaching[semester].set(teacherId, new Set());
+      teaching[semester].get(teacherId).add(slot.abs);
       if (info) teacherLessons.set(cell, info); // 반 수업이면 { id, subject } — '같은 날 같은 과목' 세기용
     };
     const useVenue = (venue, slot, name) => {
@@ -1448,10 +1539,10 @@ function timetableValidate(inputs, result) {
       const cap = Number(model.venues[venue]);
       if (Number.isFinite(cap) && venueCells.get(cell) > cap) fail("venue", `${venue} ${slot.key}: ${venueCells.get(cell)}개 수업이 겹칩니다(${cap}곳) — ${name}.`);
     };
-    const notePair = (classId, slot, key, double, id) => {
+    const notePair = (classId, slot, key, double, id, label) => {
       const cell = `${classId}|${slot.d}`;
       if (!pairs.has(cell)) pairs.set(cell, []);
-      pairs.get(cell).push({ key, period: slot.period, double, id });
+      pairs.get(cell).push({ key, period: slot.period, double, id, label });
     };
     for (const lesson of model.lessons) {
       const item = layer.lessons[lesson.id];
@@ -1496,18 +1587,22 @@ function timetableValidate(inputs, result) {
         if (used.has(teacherId)) fail("teacherClash", `${name}: ${teacherId} 교사가 두 분반에 있습니다.`);
         used.add(teacherId);
       }
+      // 나눠 맡은 칸(shares): 그 과목 후보여야 하고 이 블록의 칸이어야 한다
+      for (const section of block.sections) for (const [key, teacherId] of Object.entries((item.shares && item.shares[section.id]) || {})) {
+        if (!section.candidates.includes(teacherId)) fail("qualification", `${name} ${section.subject}: ${teacherId} 교사는 후보(전공 일치)가 아닙니다.`);
+        if (!item.slots.includes(key)) fail("hours", `${name} ${section.subject}: 나눠 맡은 칸 ${key}이 이 블록의 칸이 아닙니다.`);
+      }
       for (const key of item.slots.filter(Boolean)) {
         let slot = null;
         if (block.classIds.length) { if (!zones[semester].has(block.classIds[0])) zones[semester].set(block.classIds[0], new Set()); zones[semester].get(block.classIds[0]).add(key); }
         for (const classId of block.classIds) { slot = occupy(classId, block.grade, key, name) || slot; placed += 1; }
         if (!slot) continue;
-        for (const classId of block.classIds) notePair(classId, slot, `b:${block.id}`, false, block.id);
-        if (bare.has(key)) continue;
+        for (const classId of block.classIds) notePair(classId, slot, `b:${block.id}`, false, block.id, block.label);
         const inBlock = new Map(); // 블록 안에서 실 수를 넘는 분반(입력 자료 문제)은 장소를 세지 않는다
         for (const section of block.sections) {
-          const teacherId = item.teachers?.[section.id];
+          const teacherId = timetableBlockTeacherAt(item, section.id, key);
           if (teacherId) teach(teacherId, slot, `${name} ${section.subject}`, key);
-          if (!section.venue) continue;
+          if (bare.has(key) || !section.venue) continue;
           inBlock.set(section.venue, (inBlock.get(section.venue) || 0) + 1);
           const cap = Number(model.venues[section.venue]);
           if (!Number.isFinite(cap) || inBlock.get(section.venue) <= cap) useVenue(section.venue, slot, name);
@@ -1551,15 +1646,18 @@ function timetableValidate(inputs, result) {
           counts.shortDay += minPerDay - last - 1;
           violations.push({ semester, rule: "shortDay", level: rules.shortDay, kind: "class", id: classId, day: model.days[d], amount: minPerDay - last - 1, cause: `${classId}반 ${model.days[d]}요일은 ${periods[last].period}교시에 끝납니다(하루 최소 ${Number(rules.minPerDay)}교시).` });
         }
-        if (rules.oncePerDay === "off") continue;
         const list = (pairs.get(`${classId}|${d}`) || []).sort((a, b) => a.period - b.period);
         const seen = [];
         const twice = [];
+        const twiceBlocks = [];
         for (const entry of list) {
           const prior = seen.filter((other) => other.key === entry.key);
+          if (entry.key.startsWith("b:")) { if (prior.length) twiceBlocks.push(entry.label || entry.id); seen.push(entry); continue; }
+          if (rules.oncePerDay === "off") continue;
           if (prior.length && !(entry.double && prior.length === 1 && prior[0].id === entry.id && prior[0].period === entry.period - 1)) { counts.oncePerDay += 1; twice.push(classCells.get(`${classId}|${model.days[d]}${entry.period}`) || entry.id); }
           seen.push(entry);
         }
+        if (twiceBlocks.length && (rules.blockTwice === "hard" || rules.blockTwice === "soft")) { counts.blockTwice += twiceBlocks.length; violations.push({ semester, rule: "blockTwice", level: rules.blockTwice, kind: "class", id: classId, day: model.days[d], amount: twiceBlocks.length, cause: `${classId}반 ${model.days[d]}요일: ${[...new Set(twiceBlocks)].join(", ")}이 하루에 두 번 있습니다.` }); }
         if (twice.length) violations.push({ semester, rule: "oncePerDay", level: rules.oncePerDay, kind: "class", id: classId, day: model.days[d], amount: twice.length, cause: `${classId}반 ${model.days[d]}요일: ${[...new Set(twice)].join(", ")} 수업이 하루에 두 번 있습니다(같은 교사).` });
       }
     }
@@ -1586,10 +1684,12 @@ function timetableValidate(inputs, result) {
       let streak = 0;
       let over = 0;
       let longest = 0;
-      for (const value of busy) { if (value) { streak += 1; longest = Math.max(longest, streak); if (Number(rules.run) > 0 && streak > Number(rules.run)) over += 1; } else streak = 0; }
+      let span = 0;
+      let longestSpan = 0;
+      busy.forEach((value, pos) => { if (value) { streak += 1; span += 1; longest = Math.max(longest, streak); longestSpan = Math.max(longestSpan, span); if ((Number(rules.run) > 0 && streak > Number(rules.run)) || (Number(rules.runLunch) > 0 && span > Number(rules.runLunch))) over += 1; } else { streak = 0; if (!lunch.includes(pos)) span = 0; } });
       counts.run += over;
       const day = model.days[d];
-      if (over) violations.push({ semester, rule: "run", level: "hard", kind: "teacher", id: teacher.id, day, amount: over, cause: `${teacher.name} 교사 ${day}요일 ${longest}시간 연강(상한 ${Number(rules.run)}).` });
+      if (over) violations.push({ semester, rule: "run", level: "hard", kind: "teacher", id: teacher.id, day, amount: over, cause: Number(rules.run) > 0 && longest > Number(rules.run) ? `${teacher.name} 교사 ${day}요일 ${longest}시간 연강(상한 ${Number(rules.run)}).` : `${teacher.name} 교사 ${day}요일 점심을 사이에 두고 ${longestSpan}시간 이어짐(상한 ${Number(rules.runLunch)}).` });
       if (Number(rules.maxPerDay) > 0 && total > Number(rules.maxPerDay)) {
         counts.maxPerDay += total - Number(rules.maxPerDay);
         violations.push({ semester, rule: "maxPerDay", level: "hard", kind: "teacher", id: teacher.id, day, amount: total - Number(rules.maxPerDay), cause: `${teacher.name} 교사 ${day}요일 ${total}시간(하루 최대 ${Number(rules.maxPerDay)}).` });
@@ -1627,14 +1727,14 @@ function timetableValidate(inputs, result) {
     for (const item of frames) { const key = keyOf(item); if (!bag.has(key)) bag.set(key, {}); bag.get(key)[item.semester] = (bag.get(key)[item.semester] || 0) + 1; }
     for (const [key, entry] of bag) if (semesters.some((semester) => (entry[semester] || 0) !== (entry[semesters[0]] || 0))) errors.push({ type: "frame", semester: "", text: `두 학기 묶음이 같은 칸에 있지 않습니다: ${key}` });
   }
-  return { ok: errors.length === 0, errors, counts, hours, violations };
+  return { ok: errors.length === 0, errors, counts, hours, violations, teaching };
 }
 
 // ---- Worker: 조각으로 돌려 진행 상황을 보내고 중단 요청을 받는다 ----
 function TIMETABLE_FUNCTIONS_FOR_WORKER() {
   return [timetableWhere, timetableParseTime, timetableTimes, timetableNumber, timetableMatch, timetableCoverage, timetableDayCapacity, timetableModel, timetablePrecheck,
     timetableRng, timetableRuleWeight, timetableProblem, timetableState, timetableClosed, timetableCanPlace, timetableMark, timetableClassDayCost, timetableTeacherDayCost, timetableRecount, timetableDelta, timetableCommit,
-    timetableConstruct, timetableTryMove, timetableSetTeacher, timetableRelease, timetableTrySwapTeachers, timetableSnapshot, timetableRestoreSnapshot, timetableSolveStart, timetableSolveStep, timetableSolveFinish, timetableViolations, timetableSolve];
+    timetableConstruct, timetableTryMove, timetableSetTeacher, timetableRelease, timetableTrySwapTeachers, timetableSnapshot, timetableRestoreSnapshot, timetableSolveStart, timetableSolveStep, timetableSolveFinish, timetableViolations, timetableSolve, timetableBlockTeacherAt, timetableShareBlocks, timetableValidate];
 }
 
 function timetableWorkerSource() {

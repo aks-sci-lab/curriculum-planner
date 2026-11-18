@@ -15,7 +15,7 @@ function context() {
   vm.runInContext(read("timetable.js"), ctx);
   vm.runInContext(read("timetable-solve.js"), ctx);
   // 이 파일의 테스트는 두 학기 뼈대·하루 최소 교시를 켠 상태를 본다(기본값은 2026-11-18부터 둘 다 꺼짐 — 기본값 자체는 따로 확인)
-  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft" })', ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { semesterFrame: "hard", shortDay: "soft", maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx);
   return ctx;
 }
 
@@ -471,7 +471,7 @@ test("실제 학교 모양(3학년 11반 · 블록 20 · 반 수업 2과목(2 + 
   for (const [day, periods] of Object.entries(byDay)) assert.deepEqual(periods.slice().sort((a, b) => a - b), periods.map((_, index) => index + 1), `${day}요일 블록 ${periods.join(",")}`);
   assert.equal(byDay["금"].length, 5);
   // '반드시' 조건끼리 부딪칠 때는 공강을 먼저 막는다(무게 공강 3000 > 하루 두 번 2000 > 교사 규칙 1000)
-  assert.deepEqual(plain(vm.runInContext("TIMETABLE_HARD_WEIGHTS", ctx)), { gap: 3000, oncePerDay: 2000 });
+  assert.deepEqual(plain(vm.runInContext("TIMETABLE_HARD_WEIGHTS", ctx)), { gap: 3000, oncePerDay: 2000, blockTwice: 2000 });
   // 남는 '하루 두 번'은 같은 수업이 하루에 두 번인 경우 — 위반에 과목이 실려 '그 과목 2시간 연속 수업 허용' 선택지가 된다
   const twice = result.violations.filter((item) => item.rule === "oncePerDay");
   assert.ok(twice.length > 0 && twice.some((item) => (item.subjects || []).includes("인공지능 기초")), JSON.stringify(twice.slice(0, 2)));
@@ -647,4 +647,68 @@ test("통합과학 전공별 몫: 그 전공 교사가 참고 상한 안에서 �
   assert.deepEqual(teacherOfPart(tight, 1).sort(), ["물리1", "물리1", "화학1", "화학1"]);
   assert.equal(tight.metrics.noTeacherHours, 0);
   assert.equal(tight.notes.some((note) => /1학년 통합과학\(과학-물리\): .*화학1 교사가 주 2시간 지원합니다/.test(note)), true);
+});
+
+test("같은 선택 블록 하루 두 번은 반 수업의 '하루 한 번'과 따로 센다: 기본은 세지 않음(끔), 켜면 '최대한'·'반드시'", () => {
+  const ctx = context();
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.blockTwice", ctx), "off");
+  const make = (level) => { const input = school(); input.rules = { ...(input.rules || {}), ...(level ? { blockTwice: level } : {}) }; input.blocks[0].times = ["월1", "월2", "화1", "수1"].slice(0, input.blocks[0].hours); input.keepBlockTimes = true; return input; };
+  const run = (level) => { const inputs = { 1: make(level) }; const result = ctx.timetableSolve(inputs, { seed: 1, iterations: 2000, rounds: 1 }); return { result, check: ctx.timetableValidate(inputs, result) }; };
+  const soft = run("soft");
+  const rows = soft.result.violations.filter((item) => item.rule === "blockTwice");
+  assert.ok(rows.length > 0 && rows.every((item) => item.level === "soft" && /블록이 하루에 두 번 있습니다/.test(item.cause)), "최대한: '최대한' 위반으로만");
+  assert.equal(soft.result.violations.filter((item) => item.rule === "oncePerDay" && /블록/.test(item.cause)).length, 0, "'하루 두 번'(반드시)에는 블록이 들어가지 않는다");
+  assert.equal(soft.check.counts.blockTwice, rows.reduce((sum, item) => sum + item.amount, 0), "검증기도 같은 수");
+  assert.ok(run("hard").result.violations.some((item) => item.rule === "blockTwice" && item.level === "hard"));
+  const off = run("");
+  assert.equal(off.result.violations.filter((item) => item.rule === "blockTwice").length, 0);
+  assert.equal(off.check.counts.blockTwice, 0);
+});
+
+test("연강(사용자 결정): 쉬는 칸 없이 2시간까지, 3시간은 점심을 사이에 둘 때만 — 하루 수업 수·검증기 문장", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(read("timetable.js"), ctx);
+  const rules = plain(vm.runInContext("TIMETABLE_DEFAULT_RULES", ctx));
+  assert.deepEqual([rules.run, rules.runLunch, rules.maxPerDay, rules.lunch], [2, 3, 4, "hard"]);
+  // 2·3교시, 점심(칸 3), 5·6교시만 설 수 있는 교사: 점심을 사이에 두고 4시간은 안 되므로 3시간
+  assert.equal(ctx.timetableDayCapacity(0b0110110, 7, { ...rules, maxPerDay: 9 }, [3]), 3);
+  assert.equal(ctx.timetableDayCapacity(0b0110110, 7, { ...rules, maxPerDay: 9, runLunch: 0 }, [3]), 4);
+  // 1·2·3교시만 설 수 있으면 2시간(점심 없이 3연강은 안 됨)
+  assert.equal(ctx.timetableDayCapacity(0b0000111, 7, { ...rules, maxPerDay: 9 }, [3]), 2);
+});
+
+test("블록 분반 나눠 맡기: 담당 교사가 없는 분반 시간을 그 과목 후보 가운데 비어 있는 교사가 칸마다 맡는다(검증 통과, 담당 교사 없음이 줄어듦)", () => {
+  const ctx = context();
+  const input = school();
+  const inputs = { 1: input };
+  const result = JSON.parse(JSON.stringify(ctx.timetableSolve(inputs, { seed: 1, iterations: 3000, rounds: 1 })));
+  const model = ctx.timetableModel(input);
+  const block = model.blocks.find((item) => item.sections.some((section) => section.candidates.length >= 1 && result.layers[1].blocks[item.id].teachers[section.id]));
+  const section = block.sections.find((item) => result.layers[1].blocks[block.id].teachers[item.id]);
+  const item = result.layers[1].blocks[block.id];
+  const was = item.teachers[section.id];
+  item.teachers[section.id] = null; // 이 분반의 교사를 비운다(담당 교사 없음)
+  result.noTeacher.push({ semester: "1", kind: "section", grade: block.grade, classId: block.label, subject: section.subject, hours: block.hours, reason: "clash" });
+  const before = ctx.timetableValidate(inputs, result);
+  const shared = ctx.timetableShareBlocks(inputs, result);
+  const cells = shared.layers[1].blocks[block.id].shares?.[section.id] || {};
+  assert.equal(Object.keys(cells).length, block.hours, "모든 칸을 후보 교사가 맡는다(원래 교사는 그 시간에 비어 있다)");
+  assert.ok(Object.values(cells).every((id) => section.candidates.includes(id)), "맡은 교사는 그 과목 후보(전공 일치)");
+  assert.ok(new Set(Object.values(cells)).size <= 3, "한 분반에 교사 3명까지");
+  assert.ok(Object.values(cells).includes(was) || section.candidates.length > 1);
+  assert.equal(shared.noTeacher.filter((entry) => entry.kind === "section" && entry.classId === block.label && entry.subject === section.subject).length, 0);
+  assert.equal(shared.metrics.sharedSectionHours, block.hours);
+  assert.ok(shared.notes.some((note) => /분반 나눠 맡기/.test(note)));
+  const after = ctx.timetableValidate(inputs, shared);
+  assert.ok(after.errors.length <= before.errors.length);
+  for (const key of item.slots) assert.ok(section.candidates.includes(ctx.timetableBlockTeacherAt(shared.layers[1].blocks[block.id], section.id, key)));
+  // 검증기: 후보가 아닌 교사가 나눠 맡으면 오류
+  const bad = JSON.parse(JSON.stringify(shared));
+  bad.layers[1].blocks[block.id].shares[section.id][item.slots[0]] = model.teachers.find((teacher) => !section.candidates.includes(teacher.id)).id;
+  assert.ok(ctx.timetableValidate(inputs, bad).errors.some((error) => error.type === "qualification"));
+  // 나눠 맡기를 끄면(splitLesson off) 하지 않는다
+  const offInput = { ...input, rules: { ...(input.rules || {}), splitLesson: "off" } };
+  const offResult = JSON.parse(JSON.stringify(result));
+  delete offResult.layers[1].blocks[block.id].shares;
+  assert.equal(ctx.timetableShareBlocks({ 1: offInput }, offResult).layers[1].blocks[block.id].shares, undefined);
 });

@@ -12,6 +12,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 function context() {
   const ctx = vm.createContext({});
   vm.runInContext(source, ctx);
+  vm.runInContext('Object.assign(TIMETABLE_DEFAULT_RULES, { maxPerDay: 6, run: 3, runLunch: 0, maxHours: 22 })', ctx); // 이 파일의 가상 학교는 예전 기본값(교사 하루 최대 6시간) 기준 — 지금 기본값 4는 아래 따로 확인
   return ctx;
 }
 
@@ -247,6 +248,7 @@ test("P4: 블록 안 동시 분반 ≤ 맡을 수 있는 교사, 같은 시각�
 test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같은 시간·시수와 칸 수·같은 교사를 쓰는 블록 묶음", () => {
   const ctx = context();
   const input = school();
+  input.rules = { ...(input.rules || {}), blockTwice: "soft" }; // 같은 날 두 번 알림은 블록 하루 한 번 조건을 켰을 때만
   input.blocks[0].times = ["월8", "화1", "수1"];
   input.blocks[1].times = ["화1", "금6", "수2", "수3"];
   const causes = plain(issuesOf(ctx.timetablePrecheck(input), "P5")).map((issue) => `${issue.level} ${issue.cause}`);
@@ -255,7 +257,7 @@ test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같�
     "fail 2학년 b블록: 금6은 전교 고정 시간(창체·회의)과 겹칩니다.",
     "fail 2학년 a블록과 b블록이 같은 시간(화1)입니다.",
     "warn 2학년 a블록: 블록 시간 3칸 ≠ 시수 4시간(시간표에서 다시 놓습니다).",
-    "warn 2학년 b블록: 같은 날 두 번 들어 있습니다(같은 교사 하루 한 번 규칙)."]);
+    "warn 2학년 b블록: 같은 날 두 번 들어 있습니다(같은 블록 하루 한 번 규칙)."]);
   // 블록 8개가 모두 같은 확정 교사를 쓰면 서로 다른 시간이어야 한다: 12 + 20 = 32칸 ≤ 33칸(35 − 창체 2)은 통과, 블록 시수가 늘면 실패
   const shared = school();
   shared.teachers.push({ id: "공동", name: "공동", departments: [], maxHours: 40 });
@@ -263,6 +265,8 @@ test("P5: 블록 시간 — 격자 밖·전교 고정 시간·같은 학년 같�
   assert.equal(issuesOf(ctx.timetablePrecheck(shared), "P5").length, 0);
   shared.blocks[0].hours = 6;
   assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail")).map((issue) => issue.cause).join("\n"), /블록 8개\(.*\)가 같은 교사를 써서 서로 다른 시간이어야 하는데, 모두 34칸이 필요합니다\(주 33칸\)\./);
+  // 블록 하루 한 번을 '반드시'로 두었을 때만: 주 6시간 블록은 5일에 못 넣는다(기본 '최대한'에서는 알리지 않음)
+  shared.rules = { ...(shared.rules || {}), blockTwice: "hard" };
   assert.match(plain(issuesOf(ctx.timetablePrecheck(shared), "P5", "fail"))[0].cause, /^2학년 a블록: 주 6시간인데 요일은 5일 — 같은 교사가 같은 분반에 하루 두 번 들어갈 수밖에 없습니다\./);
 });
 
@@ -520,4 +524,13 @@ test("6단계 시간표 미리 점검은 timetable.js 규칙 하나를 쓴다", 
   const input = { grades: [{ grade: "3", classes: 7 }], creative: { school: 2 }, teachers: [{ id: "a", departments: ["정보"] }, { id: "b", departments: ["정보"] }, { id: "z", departments: ["기타"] }],
     lessons: [{ grade: "3", subject: "인공지능 기초", department: "정보", hours: 4 }], blocks: ["a", "b", "c", "d", "e"].map((id) => ({ id, grade: "3", hours: 4, sections: [{ subject: "기타", department: "기타", credits: 4 }] })) };
   assert.deepEqual([plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.capacity, plain(issuesOf(ctx.timetablePrecheck(input), "P7"))[0].data.shortage], [26, 2]);
+});
+
+test("기본 조건(사용자 결정): 교사 하루 최대 4시간(반드시) — 주 5일이면 한 교사가 설 수 있는 시간은 20시간까지", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(source, ctx);
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.maxPerDay", ctx), 4);
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.lunch", ctx), "hard");
+  assert.equal(vm.runInContext("TIMETABLE_DEFAULT_RULES.lunchSide", ctx), "soft");
+  assert.equal(ctx.timetableDayCapacity(0b1111111, 7, vm.runInContext("TIMETABLE_DEFAULT_RULES", ctx), [3, 4]), 4);
 });

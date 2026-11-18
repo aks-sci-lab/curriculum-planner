@@ -4,12 +4,14 @@
 
 // "hard" = 반드시(해가 없을 때만 완화 사다리에서 풂), "soft" = 최대한, "off" = 끔.
 const TIMETABLE_DEFAULT_RULES = {
-  maxHours: 22,        // 교사 주당 시수 '참고' 상한(학기별): 넘어도 편성하고 알림만(5단계 교사 수가 두 학기 평균 기준이라 필수가 아님)
+  maxHours: 19,        // 교사 주당 시수 '참고' 상한(학기별): 넘어도 편성하고 알림만(5단계 교사 수가 두 학기 평균 기준이라 필수가 아님)
   departmentMax: { 진로: 10 }, // 교과별 필수 상한(진로 교사 10시간). 교사 명단에 교사별 상한이 있으면 그 값이 먼저
-  run: 3,              // 연강 상한(실제 시각 축에서 연속 수업 수)
-  maxPerDay: 6,        // 교사 하루 최대 수업 수
+  run: 2,              // 연강 상한: 쉬는 칸 없이 이어지는 수업 수(사용자 결정 2026-11-18: 3시간 연강은 점심을 사이에 둘 때만)
+  runLunch: 3,         // 점심(비어 있는 점심 칸)을 사이에 두고 이어지는 수업 수 상한. 0 = 점심이 끼면 따로 셈(제한 없음)
+  maxPerDay: 4,        // 교사 하루 최대 수업 수(사용자 결정 2026-11-18: 4시간 이하, 반드시)
   gap: "hard",         // 반 공강 금지(하루 안 빈칸은 뒤쪽만)
   oncePerDay: "hard",  // 같은 교사가 같은 반(분반)에 하루 두 번 들어가지 않음(과목이 달라도, 교사가 다른 조각은 같은 날 가능)
+  blockTwice: "off",   // 같은 선택 블록이 하루에 두 번(사용자 결정 2026-11-18: 정한 조건이 아니므로 세지 않음 — 켜면 hard/soft)
   lunch: "hard",       // 교사 점심(학년별 점심 칸 중 하나는 비움)
   lunchSide: "soft",   // 점심 앞이나 뒤 가운데 한 시간은 공강(앞뒤 모두 수업이면 위반)
   homeroom: "off",     // 담임이 그 학년 반 수업을 맡으면 담임반 포함(담임 명단이 있을 때만)
@@ -160,14 +162,16 @@ function timetableCoverage(groups, capacityOf) {
 function timetableDayCapacity(available, positions, rules, lunchPositions) {
   if (!available) return 0;
   const run = timetableNumber(rules.run, 0);
+  const runLunch = timetableNumber(rules.runLunch, 0);
   const lunchHard = rules.lunch === "hard" && lunchPositions.length > 0;
   let best = 0;
   for (let mask = available; ; mask = (mask - 1) & available) {
     let count = 0;
     let streak = 0;
+    let span = 0; // 비어 있는 점심 칸은 끊지 않고 센 수업 수
     let ok = true;
     for (let pos = 0; pos < positions && ok; pos += 1) {
-      if (mask & (1 << pos)) { count += 1; streak += 1; if (run && streak > run) ok = false; } else streak = 0;
+      if (mask & (1 << pos)) { count += 1; streak += 1; span += 1; if ((run && streak > run) || (runLunch && span > runLunch)) ok = false; } else { streak = 0; if (!lunchPositions.includes(pos)) span = 0; }
     }
     if (ok && lunchHard && lunchPositions.every((pos) => mask & (1 << pos))) ok = false;
     if (ok && count > best) best = count;
@@ -490,7 +494,7 @@ function timetablePrecheck(source) {
       [timetableWhere("teachers", "담당 교과·과목·불가 시간"), timetableWhere("hours", "담당 교과"), timetableWhere("rules", "교사 규칙")],
       { data: { departments, teachers: cluster.teachers, demand: cluster.demand, capacity: cluster.capacity, shortage: cluster.shortage }, relax: ["teacherRules", "otherDepartment", "noTeacher"] });
   }
-  // 참고 상한(기본 22시간): 넘어도 편성은 하지만 어느 교과가 얼마나 넘는지 알린다.
+  // 참고 상한(기본 19시간): 넘어도 편성은 하지만 어느 교과가 얼마나 넘는지 알린다.
   const softOf = (id) => Math.min(capacityOf.get(id), model.teacherOf.get(id)?.softHours ?? Infinity);
   for (const cluster of timetableCoverage(groupsList, softOf).clusters) {
     if (cluster.teachers.some((id) => hardKeys.has(id))) continue;
@@ -545,9 +549,10 @@ function timetablePrecheck(source) {
 
   // P5 블록 놓기
   const onceHard = rules.oncePerDay === "hard";
+  const blockOnceHard = rules.blockTwice === "hard"; // 같은 블록 하루 한 번(반 수업의 하루 한 번과 따로)
   for (const block of model.blocks) {
     const grade = model.gradeOf.get(block.grade);
-    if (onceHard && block.hours > days.length) add("P5", "fail", `${block.grade}학년 ${block.label}: 주 ${block.hours}시간인데 요일은 ${days.length}일 — 같은 교사가 같은 분반에 하루 두 번 들어갈 수밖에 없습니다.`, timetableWhere("rules", "같은 교사 하루 한 번"), { relax: ["oncePerDay"] });
+    if (blockOnceHard && block.hours > days.length) add("P5", "fail", `${block.grade}학년 ${block.label}: 주 ${block.hours}시간인데 요일은 ${days.length}일 — 같은 교사가 같은 분반에 하루 두 번 들어갈 수밖에 없습니다.`, timetableWhere("rules", "같은 블록 하루 한 번"), { relax: [] });
     if (!block.times.length) continue;
     if (block.times.length !== block.hours) add("P5", "warn", `${block.grade}학년 ${block.label}: 블록 시간 ${block.times.length}칸 ≠ 시수 ${block.hours}시간(시간표에서 다시 놓습니다).`, timetableWhere("sections", "블록 시간"));
     const outside = block.times.filter((time) => !grade.slotByKey.has(`${time.day}${time.period}`));
@@ -556,7 +561,7 @@ function timetablePrecheck(source) {
     if (busy.length) add("P5", "fail", `${block.grade}학년 ${block.label}: ${busy.map((time) => `${time.day}${time.period}`).join(", ")}은 전교 고정 시간(창체·회의)과 겹칩니다.`, [timetableWhere("sections", "블록 시간"), timetableWhere("time", "창체·고정 시간")], { relax: ["blockTimes"] });
     const perDay = new Map();
     for (const time of block.times) perDay.set(time.day, (perDay.get(time.day) || 0) + 1);
-    if (onceHard && [...perDay.values()].some((count) => count > 1)) add("P5", "warn", `${block.grade}학년 ${block.label}: 같은 날 두 번 들어 있습니다(같은 교사 하루 한 번 규칙).`, timetableWhere("sections", "블록 시간"), { relax: ["blockTimes"] });
+    if (rules.blockTwice !== "off" && [...perDay.values()].some((count) => count > 1)) add("P5", "warn", `${block.grade}학년 ${block.label}: 같은 날 두 번 들어 있습니다(같은 블록 하루 한 번 규칙).`, timetableWhere("sections", "블록 시간"), { relax: ["blockTimes"] });
   }
   for (const grade of model.grades) {
     const taken = new Map();
@@ -688,7 +693,7 @@ function timetablePrecheck(source) {
         creativeTimes.forEach(mark);
         const creativeFlex = Math.max(0, syncCreative - creativeTimes.length);
         flexHours += creativeFlex;
-        const dayFlexCap = (onceHard ? flexBlocks : Infinity) + creativeFlex;
+        const dayFlexCap = (blockOnceHard ? flexBlocks : Infinity) + creativeFlex;
         let states = new Map([[0, 0]]); // 쓴 유동 시수 → 받을 수 있는 수업 최대
         days.forEach((day, d) => {
           const periods = grade.periodsOf[day];
@@ -765,7 +770,7 @@ function timetablePrecheck(source) {
           const fixedByDay = days.map(() => new Set());
           for (const time of [...fixedCommon, ...creativeTimes]) { const slot = grade.slotByKey.get(`${time.day}${time.period}`); if (slot) fixedByDay[slot.d].add(slot.period); }
           const flexHours = flexCommon + distinct + creativeFlex;
-          const dayFlexCap = (onceHard ? gradeBlocks.length : Infinity) + creativeFlex;
+          const dayFlexCap = (blockOnceHard ? gradeBlocks.length : Infinity) + creativeFlex;
           let states = new Map([[0, 0]]);
           days.forEach((day, d) => {
             const periods = grade.periodsOf[day];

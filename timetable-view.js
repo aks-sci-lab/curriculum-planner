@@ -200,8 +200,7 @@ function timetableResultTables(input, layer) {
     for (const key of item.slots || []) {
       if (!key) continue;
       for (const id of block.classIds) classCell(id, key, { kind: "block", text: block.label, teacher: "", noTeacher: false });
-      if (bare.has(key)) continue;
-      for (const section of block.sections) teacherCell(item.teachers?.[section.id], absOf.get(block.grade).get(key), { text: section.subject, where: block.label });
+      for (const section of block.sections) teacherCell(timetableBlockTeacherAt(item, section.id, key), absOf.get(block.grade).get(key), { text: section.subject, where: block.label });
     }
   }
   for (const entry of result.creative || []) {
@@ -379,6 +378,7 @@ function timetableEditSwap(inputs, result, { semester, classId, a, b, before: gi
     }
     item.slots = item.slots.map((key) => (key === from ? to : key));
     if (item.bareSlots) item.bareSlots = item.bareSlots.map((key) => (key === from ? to : key));
+    if (item.shares) for (const [sectionId, cells] of Object.entries(item.shares)) item.shares[sectionId] = Object.fromEntries(Object.entries(cells).map(([key, id]) => [key === from ? to : key, id])); // 나눠 맡은 칸도 함께 옮긴다(그 교사가 새 칸에 못 서면 검증기가 거절)
   };
   if (blockMove) {
     for (const id of blockMove.riders) move(id, blockMove.to, blockMove.from);
@@ -423,7 +423,9 @@ function timetableTeacherHours(layer, teacherId) {
     if (item.teacherId === teacherId) hours += taught(item) - shared;
     for (const part of item.others || []) if (part.teacherId === teacherId) hours += part.slots.length;
   }
-  for (const item of Object.values(layer?.blocks || {})) hours += Object.values(item.teachers || {}).filter((id) => id === teacherId).length * taught(item);
+  for (const item of Object.values(layer?.blocks || {})) { // 블록 분반: 나눠 맡은 칸(shares)은 그 칸을 맡은 교사 몫
+    for (const sectionId of new Set([...Object.keys(item.teachers || {}), ...Object.keys(item.shares || {})])) for (const key of (item.slots || []).filter(Boolean)) if (timetableBlockTeacherAt(item, sectionId, key) === teacherId) hours += 1;
+  }
   for (const item of layer?.creative || []) if (item.teacherId === teacherId && item.scope === "class") hours += (item.slots || []).filter(Boolean).length;
   return hours;
 }
@@ -897,7 +899,7 @@ function timetablePrecheckFor(round, semester = "1") {
 var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
-var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
+var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", blockTwice: "블록 하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
 var TIMETABLE_NO_TEACHER_REASONS = { manual: "직접 비움", none: "맡을 수 있는 교사가 명단에 없음", capacity: "맡을 수 있는 교사의 시간이 모자람", clash: "맡을 교사가 그 시간에 다른 수업", released: "공강·하루 두 번을 없애려고 비움('공강 먼저')" };
 // 계산 뒤 남은 '반드시' 위반 → 고를 수 있는 선택지(양보가 작은 것부터). 고르면 조건이 바뀌고 바로 다시 계산한다.
 var TIMETABLE_RESULT_CHOICES = { gap: ["frameSoft", "releaseTeacher", "blockTimes", "creativeFree", "creativeGroup", "gaps"], oncePerDay: ["releaseTeacher", "oncePerDay"], run: ["teacherRules", "frameOrder"], maxPerDay: ["teacherRules"], lunch: ["frameOrder"] };;
@@ -905,10 +907,12 @@ var TIMETABLE_LEVELS = [["hard", "반드시"], ["soft", "최대한"], ["off", "�
 var TIMETABLE_RULE_FIELDS = [
   { key: "maxHours", label: "교사 주당 시수 참고 상한(넘어도 편성 · 알림만)", min: 1, max: 40, unit: "시간" },
   { key: "departmentMax.진로", label: "진로 교사 주당 시수 상한", min: 1, max: 40, unit: "시간(반드시)" },
-  { key: "run", label: "교사 연강 상한", min: 1, max: 8, unit: "시간 연속" },
+  { key: "run", label: "교사 연강 상한(쉬는 칸 없이 이어지는 수업)", min: 1, max: 8, unit: "시간 연속" },
+  { key: "runLunch", label: "점심을 사이에 두고 이어지는 수업 상한(0 = 제한 없음)", min: 0, max: 9, unit: "시간" },
   { key: "maxPerDay", label: "교사 하루 최대 수업", min: 1, max: 9, unit: "시간" },
   { key: "gap", label: "반 공강 금지(하루 안 빈칸은 뒤쪽만)", level: true },
   { key: "oncePerDay", label: "같은 교사가 같은 반에 하루 한 번만(과목이 달라도)", level: true },
+  { key: "blockTwice", label: "같은 선택 블록은 하루 한 번만", level: true },
   { key: "lunch", label: "교사 점심(학년별 점심 칸 가운데 하나는 비움)", level: true },
   { key: "lunchSide", label: "교사 점심 앞이나 뒤 한 시간 공강", level: true, later: true },
   { key: "homeroom", label: "담임이 그 학년 반 수업을 맡으면 담임반 포함", level: true, later: true },
@@ -954,8 +958,8 @@ var TIMETABLE_CHOICES = {
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).oncePerDay !== "hard",
     patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), oncePerDay: "soft" } }) },
   teacherRules: { label: "교사 규칙 양보: 연강 4시간 · 하루 7시간까지", gives: "교사에 따라 4시간 연강, 하루 7시간 수업이 생길 수 있습니다.",
-    skip: (tt) => { const rules = { ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }; return rules.run >= 4 && rules.maxPerDay >= 7; },
-    patch: (tt) => { const rules = { ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }; return { ...tt, rules: { ...(tt.rules || {}), run: Math.max(4, rules.run), maxPerDay: Math.max(7, rules.maxPerDay) } }; } },
+    skip: (tt) => { const rules = { ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }; return rules.run >= 4 && rules.maxPerDay >= 7 && !(Number(rules.runLunch) > 0); },
+    patch: (tt) => { const rules = { ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }; return { ...tt, rules: { ...(tt.rules || {}), run: Math.max(4, rules.run), runLunch: 0, maxPerDay: Math.max(7, rules.maxPerDay) } }; } },
   gaps: { label: "반 공강 허용(최대한 줄이고 끝 교시 쪽으로)", gives: "어떤 반은 하루 가운데에 빈 시간이 생길 수 있습니다.",
     skip: (tt) => ({ ...TIMETABLE_DEFAULT_RULES, ...(tt.rules || {}) }).gap !== "hard",
     patch: (tt) => ({ ...tt, rules: { ...(tt.rules || {}), gap: "soft" } }) },
