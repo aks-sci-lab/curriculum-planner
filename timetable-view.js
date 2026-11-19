@@ -896,7 +896,7 @@ function timetablePrecheckFor(round, semester = "1") {
 
 // ---- 화면: 조건 설정 + 사전 점검 결과 + 시간표 계산·결과 ----
 // 메뉴 '7. 시간표' = 내부 단계 6. 그리기 입구는 renderTimetable 하나(보이지 않으면 미루고, 다시 그릴 때 스크롤·포커스를 지킨다).
-var TIMETABLE_VIEW = { semester: "1", open: { time: true }, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
+var TIMETABLE_VIEW = { semester: "1", open: {}, prepared: null, result: null, change: "", before: null, changeInfo: null, status: "", statusError: false, runStatus: "", runError: false, grid: "class", pick: { class: "", teacher: "" }, editPick: "", editTargets: null, editStatus: "", editError: false, undo: [] }
 var TIMETABLE_RUN = null; // 계산 중: { round, signature, workers, plans, progress, results, startedAt, timer, stopping }
 var TIMETABLE_SOLVE_SECONDS = 180; // 기본 계산 시간 상한(초). 넘으면 그때까지 가장 좋은 답을 쓴다. settings.solveSeconds로 바꿈.
 var TIMETABLE_VIOLATION_LABELS = { gap: "공강", oncePerDay: "하루 두 번", blockTwice: "블록 하루 두 번", run: "연강", maxPerDay: "하루 최대", lunch: "점심", lunchSide: "점심 앞·뒤 모두 수업", homeroom: "담임", frame: "두 학기 뼈대", shortDay: "하루 최소 교시" };
@@ -2053,7 +2053,7 @@ function renderTimetableView() {
   let stale = false;
   if (saved && !TIMETABLE_RUN) { try { stale = timetableCurrentSignature(round) !== saved.signature || !timetablePinsHeld(saved.result, settings.pins, settings.teacherPins); } catch { stale = true; } }
   const status = TIMETABLE_VIEW.runStatus ? `<p class="tt-status${TIMETABLE_VIEW.runError ? " is-error" : ""}" id="timetableRunStatus" role="status">${timetableEsc(TIMETABLE_VIEW.runStatus)}</p>` : "";
-  body.innerHTML = `${timetableVerdictHtml(result)}${timetableRunBarHtml(result, saved, stale)}${status}${timetableChangeHtml(TIMETABLE_VIEW.changeInfo)}${timetableResultHtml(saved, stale, semester, prepared, result)}${timetableConditionsHtml(prepared)}${timetableIssuesHtml(result, choices)}${timetableAssumptionsHtml(prepared)}${timetableGradesHtml(result)}`;
+  body.innerHTML = `${timetableVerdictHtml(result)}${timetableRunBarHtml(result, saved, stale)}${status}${timetableChangeHtml(TIMETABLE_VIEW.changeInfo)}${timetableResultHtml(saved, stale, semester, prepared, result)}${timetableIssuesHtml(result, choices)}${timetableConditionsHtml(prepared)}${timetableAssumptionsHtml(prepared)}${timetableGradesHtml(result)}`;
 }
 
 // 조건 한 칸을 저장한다. 돌려주는 값: 바꾼 것 이름(화면의 '방금 바꾼 조건'), 못 쓰는 값이면 ""(상태 줄에 이유).
