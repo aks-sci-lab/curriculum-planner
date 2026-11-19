@@ -2654,3 +2654,195 @@ td[data-plan-group-cell]:hover .curriculum-group-handle, .is-group-resizing .cur
 @media screen and (min-width: 1200px) and (max-width: 1499px) {
   .curriculum-card-line > .plan-compliance-open:has(.plan-compliance-badge) .plan-compliance-word { display: none; }
 }
+
+/* ==========================================================================
+   디자인 정리(2026-11): 모든 단계가 같은 모양을 쓰도록 맨 끝에서 공통 규칙을 덮는다.
+   - 색·간격·모서리는 아래 토큰만 쓴다. 단계마다 새 색을 만들지 말 것.
+   - 머리 줄·사이드바·단계 제목·카드·단추·입력 칸·접는 영역(details)·안내 글 모양을 한 가지로.
+   - 설정·안내는 작고 흐리게, 각 단계의 메인 표·결과는 크게(설정 정보보다 메인 기능이 먼저 보이게).
+   ========================================================================== */
+:root {
+  --ink: #18233a;
+  --muted: #5d6a80;
+  --subtle: #7a8598;
+  --line: #e2e7f0;
+  --line-strong: #cfd8e6;
+  --surface: #fff;
+  --surface-2: #f7f9fc;
+  --canvas: #f2f4f8;
+  --blue: #3563e9;
+  --blue-dark: #2650cc;
+  --blue-soft: #edf2ff;
+  --ok: #217a50;
+  --ok-soft: #e6f4ec;
+  --warn: #9a5b00;
+  --warn-soft: #fff5e0;
+  --bad: #b3261e;
+  --bad-soft: #fdecea;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgb(24 35 58 / 5%), 0 1px 1px rgb(24 35 58 / 3%);
+  --control-h: 34px;
+  font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+}
+body { background: var(--canvas); color: var(--ink); }
+
+/* ---- 맨 위 머리 줄: 앱 이름은 여기 한 번만(사이드바 이름은 숨김) ---- */
+.teacher-header { min-height: 44px; padding: 4px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.teacher-header > strong { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; letter-spacing: -.3px; }
+.teacher-header > strong::before { content: "✓"; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--blue); color: #fff; font-size: 13px; }
+.teacher-header #curriculumLoginStatus { color: var(--subtle); font-size: 12px; }
+.teacher-header .button { min-height: 30px; padding: 0 10px; font-size: 12px; }
+
+/* ---- 화면 틀: 사이드바 폭을 줄이고 본문을 넓게 ---- */
+.workspace { grid-template-columns: 216px minmax(0, 1fr); gap: 12px; padding: 12px 16px 16px 12px; }
+.app-sidebar { top: 8px; gap: 8px; }
+.sidebar-brand { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; border-radius: var(--radius); box-shadow: var(--shadow); }
+.sidebar-brand .brand > :not(.app-version) { display: none; }
+.sidebar-brand .app-version { margin: 0; color: var(--subtle); font-size: 11px; font-weight: 600; }
+.sidebar-brand .file-button { min-height: 26px; margin: 0; padding: 0 8px; border-color: transparent; background: var(--blue-soft); font-size: 12px; text-decoration: none; }
+.workflow-panel { padding: 10px 8px; border-radius: var(--radius); box-shadow: var(--shadow); }
+.workflow-panel > .panel-heading { margin: 2px 6px 8px; color: var(--subtle); font-size: 11px; font-weight: 700; letter-spacing: .2px; }
+.workflow-steps { gap: 2px; }
+/* 단계 단추: 이름 한 줄 + 상태 작은 글자 한 줄(이름이 길어도 줄바꿈 없이 같은 높이) */
+.workflow-step-button {
+  display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; justify-items: start; row-gap: 1px;
+  min-height: 44px; padding: 5px 10px 5px 12px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: #3d4a61; font-size: 13.5px; font-weight: 650; line-height: 1.3; white-space: nowrap;
+  position: relative;
+}
+.workflow-step-button:hover { background: var(--surface-2); color: var(--ink); }
+.workflow-step-button[aria-current="step"] { background: var(--blue-soft); color: var(--blue-dark); }
+.workflow-step-button[aria-current="step"]::before { content: ""; position: absolute; left: 3px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--blue); }
+.workflow-step-state { padding: 0; border-radius: 0; background: none !important; font-size: 11px; font-weight: 600; color: var(--subtle); }
+.workflow-step-state::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #c3cad6; vertical-align: 1px; }
+.workflow-step-state[data-state="done"] { color: var(--ok); }
+.workflow-step-state[data-state="done"]::before { background: #3a9d6c; }
+.workflow-step-state[data-state="todo"] { color: var(--bad); }
+.workflow-step-state[data-state="todo"]::before { background: #d6574d; }
+.workflow-deferred > summary { padding: 6px 10px; color: var(--subtle); font-size: 11px; }
+.workflow-step-button.is-deferred { min-height: 34px; font-size: 12px; }
+
+/* ---- 작업 대상 머리 줄·다음 작업 안내: 얇은 한 줄씩 ---- */
+.main { gap: 10px; }
+.workspace-context { padding: 6px 12px 0; border-radius: var(--radius); border-color: var(--line); box-shadow: var(--shadow); }
+.workspace-context-heading strong#workspaceContextSummary { font-size: 13.5px; }
+.workspace-context .workspace-storage > span { font-size: 12px; }
+.workspace-round-control { font-size: 13px; }
+.workspace-round-control select { min-height: 30px; padding: 2px 8px; }
+.workflow-readiness { margin: 0; padding: 6px 8px 6px 14px; border: 1px solid #d5e0fb; border-left: 3px solid var(--blue); border-radius: var(--radius-sm); background: var(--blue-soft); }
+.workflow-readiness p { color: #2a3f6c; font-size: 13px; }
+.workflow-readiness .button { min-height: 30px; padding: 0 12px; font-size: 13px; }
+
+/* ---- 단계 화면(카드)·단계 제목 ---- */
+.workflow-step-panel, #aggregatePanel, #retakePanel, #roundComparePanel, #classifierPanel {
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow);
+}
+.workflow-step-panel > h3,
+.workflow-step-panel > .curriculum-heading-row > h3,
+.workflow-step-panel > .application-heading > h3,
+.workflow-step-panel > .hours-heading h3,
+#aggregatePanel .aggregate-toolbar-title,
+.certificate-preview-column .main-heading h1 {
+  margin: 0; color: var(--ink); font-size: 18px; font-weight: 750; letter-spacing: -.4px; line-height: 1.35;
+}
+.workflow-step-panel > .hours-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 16px; margin: 0 0 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.workflow-step-panel > .hours-heading > div:first-child { min-width: 0; }
+/* 단계 제목 밑 설명은 짧게 보이는 작은 글자(설정·안내보다 메인 기능이 먼저 보이게) */
+.workflow-step-panel > .hours-heading .note { max-width: 980px; margin: 4px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.workflow-step-panel > .curriculum-heading-row { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+.workflow-step-panel > .application-heading { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+.count-pill { padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue-dark); font-size: 11px; font-weight: 700; vertical-align: 2px; letter-spacing: 0; }
+.workflow-step-panel .note, .cs-note { color: var(--muted); }
+
+/* ---- 단추: 높이·모서리·색 한 가지 ---- */
+.button, .file-button { min-height: var(--control-h); padding: 0 12px; border-radius: var(--radius-sm); border-color: var(--line-strong); font-size: 13px; font-weight: 650; box-shadow: none; transition: background .12s, border-color .12s, color .12s; }
+.button:hover, .file-button:hover { border-color: #a9b8d6; background: var(--surface-2); }
+.button-primary, .file-button.button-primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+.button-primary:hover, .file-button.button-primary:hover { border-color: var(--blue-dark); background: var(--blue-dark); color: #fff; }
+.button-secondary { border-color: var(--line-strong); background: var(--surface); color: #384a6a; }
+.button-quiet { border-color: transparent; background: transparent; color: var(--muted); }
+.button-quiet:hover { border-color: transparent; background: var(--surface-2); color: var(--ink); }
+.button-danger { border-color: #efc4c8; background: #fff; color: #9b2a35; }
+.button-danger:hover { border-color: #d67f89; background: #fff4f5; color: #7e1d28; }
+.button[aria-pressed="true"]:not(.application-mode-card), .button[aria-selected="true"] { border-color: var(--blue); background: var(--blue-soft); color: var(--blue-dark); }
+.button.button-primary[aria-pressed="true"], .button.button-primary[aria-selected="true"] { background: var(--blue); color: #fff; }
+
+/* ---- 입력 칸 ---- */
+.workflow-step-panel :is(input[type="text"], input[type="number"], input[type="search"], input:not([type]), select),
+#aggregatePanel :is(input[type="text"], input[type="number"], select),
+dialog :is(input[type="text"], input[type="number"], input[type="search"], select) {
+  border-color: var(--line-strong); border-radius: 6px;
+}
+.workflow-step-panel :is(input, select):focus, dialog :is(input, select):focus { border-color: #7f9cf0; box-shadow: 0 0 0 3px #e3eaff; outline: none; }
+
+/* ---- 안쪽 카드·띠(cs-card·근거 줄 등) ---- */
+.cs-card { margin: 10px 0; padding: 12px 14px; border-color: var(--line); border-radius: var(--radius); }
+.cs-card > h4 { margin: 0 0 8px; font-size: 14.5px; font-weight: 750; }
+.cs-card > h4 .cs-note { font-size: 12px; font-weight: 400; }
+.round-basis-line { border-color: var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--muted); }
+
+/* ---- 접는 영역(details) 머리: 같은 화살표·같은 글자 ---- */
+.workflow-step-panel details > summary, #aggregatePanel details > summary, dialog details > summary { cursor: pointer; }
+.tt-section > summary, .cs-advanced > summary, #classSectionsUnassigned > summary {
+  padding: 6px 4px; border-radius: 6px; color: #33415c; font-size: 13.5px;
+}
+.tt-section > summary:hover, .cs-advanced > summary:hover, #classSectionsUnassigned > summary:hover { background: var(--surface-2); }
+
+/* ---- 표 공통(앱이 만든 표만, 학교 양식 표는 건드리지 않음) ---- */
+.cs-table { border-collapse: collapse; }
+.cs-table thead th { background: var(--surface-2); color: #44526b; font-size: 12px; font-weight: 700; }
+.cs-table :is(th, td) { border-bottom: 1px solid var(--line); }
+
+/* ---- 대화 상자 ---- */
+dialog { border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 18px 48px rgb(24 35 58 / 22%); }
+dialog::backdrop { background: rgb(24 35 58 / 35%); }
+dialog h2 { font-size: 17px; letter-spacing: -.3px; }
+
+/* ==== 단계별: 메인 기능이 먼저 보이게 ==== */
+/* 2단계: 수강신청 방식 고르기는 접힌 한 줄(펼치면 카드) */
+.application-mode-settings { border-color: var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.application-mode-settings > summary { font-size: 12.5px; }
+
+/* 6단계: 미배정 목록이 화면을 다 덮지 않게 */
+#classSectionsUnassigned { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 8px 4px; }
+#classSectionsUnassigned > summary { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.cs-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; }
+.cs-group { min-width: 0; padding: 7px 10px; border-radius: var(--radius-sm); }
+.cs-merge { border-color: var(--line-strong); background: var(--surface-2); }
+.cs-merge .cs-note { color: var(--subtle); font-size: 11.5px; }
+.cs-group.is-active { border-color: var(--blue); background: var(--blue-soft); box-shadow: inset 0 0 0 1px var(--blue); }
+
+/* 7단계: 판정·계산 줄을 크게, 조건 설정은 사전 점검 뒤로(접힌 상태가 기본) */
+.tt-verdict { border-radius: var(--radius-sm); }
+
+@media (max-width: 720px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); padding: 8px; }
+  .sidebar-brand { display: none; }
+  .teacher-header > strong { white-space: nowrap; }
+  .teacher-header #curriculumLoginStatus { display: none; }
+  .workspace-context .workspace-storage { gap: 4px 10px; }
+  .workspace-context .workspace-storage > span { flex-basis: auto; margin-right: 0; }
+  .workspace-context .workspace-settings { display: inline-block; }
+  .cs-groups { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .workflow-step-button { min-height: 44px; }
+}
+/* 머리 줄 접기 손잡이: 카드 아래 테두리 위에 얹어 높이를 차지하지 않게 */
+.workspace-context:not(.is-compact) { padding-bottom: 8px; }
+.workspace-context:not(.is-compact) > .workspace-context-divider { position: absolute; left: 0; right: 0; bottom: -9px; height: 18px; margin: 0; z-index: 2; }
+.workspace-context:not(.is-compact) > .workspace-context-divider::before { display: none; }
+.workspace-context:not(.is-compact) > .workspace-context-divider .collapse-handle { opacity: .55; }
+.workspace-context:not(.is-compact):hover > .workspace-context-divider .collapse-handle,
+.workspace-context-divider .collapse-handle:focus-visible { opacity: 1; }
+/* 7단계 '시간표 계산'은 그 화면의 주 동작 */
+.button.primary { border-color: var(--blue); background: var(--blue); color: #fff; min-height: 38px; padding: 0 18px; font-size: 14px; }
+.button.primary:hover { border-color: var(--blue-dark); background: var(--blue-dark); color: #fff; }
+/* 3단계 확인서도 다른 단계처럼 한 장의 카드 안에 */
+#certificatePanel:not(.hidden) { padding: 12px 16px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+#certificatePanel .certificate-info-line { margin: 0 0 10px; padding: 0 0 10px; border-bottom: 1px solid var(--line); }
+#certificatePanel .roster-panel { border-color: var(--line); border-radius: var(--radius); box-shadow: none; background: var(--surface-2); }
+#certificatePanel .preview-area { border-radius: var(--radius); }
+/* 5단계: 시수표 위 설정 띠들을 촘촘한 한 묶음으로(시수표가 먼저 보이게) */
+#hoursStatsContent > .round-basis-line, #hoursStatsContent > .hours-summary-line { margin: 0 0 6px; padding: 5px 10px; border-color: var(--line); background: var(--surface-2); font-size: 12.5px; }
+#hoursStatsContent > .hours-summary-line .hours-note { color: var(--subtle); font-size: 11.5px; line-height: 1.45; }
+#hoursStatsContent > .hours-form-wrap { margin-top: 10px; }

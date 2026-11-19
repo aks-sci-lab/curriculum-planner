@@ -1220,7 +1220,13 @@
       const hasResults = (state.students || []).length > 0 || Object.values(state.rounds || {}).some((round) => round?.students?.length);
       if (settings && !hasResults && !renderApplicationMode.autoOpened) {
         renderApplicationMode.autoOpened = true;
+        renderApplicationMode.openedByApp = true;
         settings.open = true;
+        settings.querySelector?.("summary")?.addEventListener("click", () => { renderApplicationMode.openedByApp = false; }, { once: true });
+      } else if (settings && hasResults && renderApplicationMode.openedByApp) {
+        // 시작할 때 자료를 읽기 전에 펼친 것이면(결과가 있는 작업 자료) 다시 접어 메인 기능(그룹·결과)이 먼저 보이게 한다.
+        renderApplicationMode.openedByApp = false;
+        settings.open = false;
       }
     }
 
