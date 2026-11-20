@@ -388,9 +388,12 @@ async function stepAggregate({ page, h, report }, round) {
     result.headlineAfter = after.split("\n").filter((line) => /^(현 [12]학년 → [23]학년 · |합계 )/.test(line)).join(" / ");
     const mismatch = [...after.matchAll(/목표 불일치 (\d+)/g)].map((m) => Number(m[1]));
     result.mismatch = mismatch;
-    h.check(mismatch.every((v) => v === 0), "경미", "4단계", `${round}차 자동 조정 뒤에도 목표 학급수 불일치 그룹이 남음`, { expected: 0, actual: mismatch, note: "34명 이하로는 맞출 수 없음 — 협의회 결정 필요 안내가 뜨는 그룹 포함" });
+    h.check(mismatch.every((v) => v === 0), "경미", "4단계", `${round}차 자동 조정 뒤에도 목표 학급수 불일치 그룹이 남음`, { expected: 0, actual: mismatch, note: "자동 조정은 34명을 넘기더라도 목표에 맞춘다(개설 과목 수 > 목표인 그룹만 남을 수 있음)" });
     const overMax = courses.filter((c) => c.classes > 0 && c.count / c.classes > 34);
-    h.check(!overMax.length, "중요", "4단계", `${round}차 자동 조정 뒤 학급당 34명 초과 과목`, { actual: overMax.map((c) => `${c.label} ${c.count}명/${c.classes}학급`) });
+    // 34명 이하로는 목표(택n × 학급 수)를 못 맞추는 그룹은 목표에 맞추고 34명 초과를 알린다(사용자 결정: 총 학급수 먼저 — 6단계 블록당 최대 분반을 넘지 않게).
+    const squeezedShown = /학급에 맞춤 — 학급당 \d+명 초과/.test(after);
+    h.check(!overMax.length || squeezedShown, "중요", "4단계", `${round}차 자동 조정 뒤 학급당 34명 초과 과목(목표에 맞춘 안내 없음)`, { actual: overMax.map((c) => `${c.label} ${c.count}명/${c.classes}학급`) });
+    if (overMax.length && squeezedShown) report.data[`squeezed${round}`] = overMax.map((c) => `${c.label} ${c.count}명/${c.classes}학급`);
     if (round > 1) {
       const closed1 = new Set((report.data.closed1 || []).map((c) => `${c.grade}:${c.name}`));
       const wrong = courses.filter((c) => c.decision === "closed" && !decisions.some((d) => d.key === c.key && d.choice === "closed") && !closed1.has(`${c.key.split(":")[0]}:${courseName(c.label)}`));

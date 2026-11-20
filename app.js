@@ -4833,8 +4833,10 @@
     }
 
     // 학급수 자동 조정(순수 함수). 폐강 과목은 0학급, 신청자가 있는 과목은 학급당 최대 인원을 넘지 않는
-    // 최소 학급(최소 1)에서 시작한다. 목표보다 적으면 학급당 인원이 가장 많은 과목부터(동률이면 표 순서) 한 학급씩 더하고,
-    // 최소 합계가 목표보다 많으면 바꾸지 않고 counts를 null로 돌려준다.
+    // 최소 학급(최소 1)에서 시작한다. 목표보다 적으면 학급당 인원이 가장 많은 과목부터(동률이면 표 순서) 한 학급씩 더한다.
+    // 최소 합계가 목표보다 많아도 목표에 맞춘다(사용자 결정: 총 학급수 = 택n × 학급 수를 지켜야 6단계 블록당 최대 분반을 넘지 않음):
+    // 과목마다 1학급에서 시작해 같은 방법으로 목표까지 더하고(학급당 최대 인원이 가장 작아지는 배분), 최대 인원을 넘는 과목은
+    // reason "over-max"·over(과목 키)로 알린다(경고로 남김). 개설 과목 수가 목표보다 많으면 폐강 없이는 맞출 수 없어 counts를 null로 돌려준다.
     function planGroupClassCounts(courses, target, maxClassSize) {
       const items = (courses || []).map((course, order) => {
         const enrollment = Math.max(0, Number(course.enrollment) || 0);
@@ -4843,18 +4845,21 @@
           count: closed || enrollment === 0 ? 0 : Math.max(1, Math.ceil(enrollment / maxClassSize)) };
       });
       const minimum = items.reduce((sum, item) => sum + item.count, 0);
-      const result = { target, minimum, maxClassSize, ok: false, reason: "", counts: null };
+      const result = { target, minimum, maxClassSize, ok: false, reason: "", counts: null, over: [] };
       if (!Number.isInteger(target) || target < 0) return { ...result, reason: "no-target" };
-      if (minimum > target) return { ...result, reason: "too-few" };
       const open = items.filter((item) => item.count > 0);
-      if (minimum < target && !open.length) return { ...result, reason: "no-courses" };
-      for (let remaining = target - minimum; remaining > 0; remaining--) {
+      if (open.length > target) return { ...result, reason: "too-many-courses" };
+      const squeezed = minimum > target;
+      if (squeezed) for (const item of open) item.count = 1;
+      if (target > 0 && !open.length) return { ...result, reason: "no-courses" };
+      for (let remaining = target - open.reduce((sum, item) => sum + item.count, 0); remaining > 0; remaining--) {
         let best = open[0];
         // 학급당 인원 비교는 나눗셈 대신 곱셈으로 한다(a/b > c/d ⇔ a·d > c·b).
         for (const item of open) if (item.enrollment * best.count > best.enrollment * item.count) best = item;
         best.count += 1;
       }
-      return { ...result, ok: true, counts: Object.fromEntries(items.map((item) => [item.key, item.count])) };
+      const over = open.filter((item) => item.enrollment > item.count * maxClassSize).map((item) => item.key);
+      return { ...result, ok: true, reason: squeezed ? "over-max" : "", over, counts: Object.fromEntries(items.map((item) => [item.key, item.count])) };
     }
 
     function aggregateGroupLabel(semester, group) {
@@ -4862,7 +4867,8 @@
     }
 
     function aggregatePlanMessage(plan) {
-      if (plan.reason === "too-few") return `${plan.maxClassSize}명 이하로는 최소 ${plan.minimum}학급이 필요해 목표 ${plan.target}학급과 맞출 수 없음 — 협의회 결정 필요`;
+      if (plan.reason === "over-max") return `${plan.maxClassSize}명 이하로는 최소 ${plan.minimum}학급이 필요하지만 목표 ${plan.target}학급에 맞춤 — 학급당 ${plan.maxClassSize}명 초과 ${plan.over.length}과목`;
+      if (plan.reason === "too-many-courses") return `개설 과목이 목표 ${plan.target}학급보다 많아 과목마다 1학급으로도 맞출 수 없음 — 폐강 결정 필요`;
       if (plan.reason === "no-courses") return `신청자가 있는 개설 과목이 없어 목표 ${plan.target}학급을 채울 수 없음 — 협의회 결정 필요`;
       if (plan.reason === "no-target") return "택 수를 알 수 없어 목표 학급수가 없음";
       return "";
@@ -5178,6 +5184,7 @@
       const previous = {};
       const changed = [];
       const problems = [];
+      const notes = [];
       const touchedGroups = new Set();
       for (const semester of report.semesters) {
         for (const group of semester.groups) {
@@ -5196,6 +5203,7 @@
             problems.push(`${label}: ${aggregatePlanMessage(plan)}`);
             continue;
           }
+          if (plan.reason === "over-max") notes.push(`${label}: ${aggregatePlanMessage(plan)}`);
           let touched = false;
           for (const course of group.courses) {
             const key = `${report.summary.grade}:${course.column}`;
@@ -5214,7 +5222,7 @@
       }
       // 조정 취소는 마지막 조정 한 번만 기억한다. groups: 조정한 그룹(그 그룹의 총 학급수 칸에 '조정 취소'를 둔다).
       if (Object.keys(previous).length) aggregateAdjustUndo = { round, grade: String(grade), previous, groups: touchedGroups };
-      return { changed, problems };
+      return { changed, problems, notes };
     }
 
     function undoAggregateClassAdjust() {
@@ -7464,9 +7472,10 @@
         if (role === "students") { attrs.push('title="이 차수 신청 결과의 학생 수"'); return value; }
         if (role === "group-note" && info) {
           const diff = info.target === null ? 0 : info.total - info.target;
-          const plan = diff && typeof planGroupClassCounts === "function"
+          const crowdedGroup = info.group.courses.some((item) => aggregateCourseWarnings(item, summary, maxClassSize).over);
+          const plan = (diff || crowdedGroup) && typeof planGroupClassCounts === "function"
             ? planGroupClassCounts(aggregatePlanCourses({ summary }, info.group), info.target, maxClassSize) : null;
-          return `${value}${diff ? ` <span class="af-group-diff">· 현재 ${info.total}학급 (${diff > 0 ? "+" : ""}${diff})</span>` : ' <span class="af-group-ok">· 일치 ✓</span>'}${plan && !plan.ok ? ` <span class="af-plan-message">${esc(aggregatePlanMessage(plan))}</span>` : ""}`;
+          return `${value}${diff ? ` <span class="af-group-diff">· 현재 ${info.total}학급 (${diff > 0 ? "+" : ""}${diff})</span>` : ' <span class="af-group-ok">· 일치 ✓</span>'}${plan && (!plan.ok || plan.reason === "over-max") ? ` <span class="af-plan-message">${esc(aggregatePlanMessage(plan))}</span>` : ""}`;
         }
         if (role === "total" && info) {
           const diff = info.target === null ? 0 : info.total - info.target;
@@ -9112,7 +9121,8 @@
           const message = [
             result.changed.length ? `학급수 조정: ${result.changed.join(", ")}` : "",
             result.problems.length ? `맞출 수 없음: ${result.problems.join(" / ")}` : "",
-            !result.changed.length && !result.problems.length ? "이미 목표 학급수와 일치합니다." : ""
+            result.notes?.length ? result.notes.join(" / ") : "",
+            !result.changed.length && !result.problems.length && !result.notes?.length ? "이미 목표 학급수와 일치합니다." : ""
           ].filter(Boolean).join(" · ");
           status.style.color = result.problems.length ? "#a44939" : "#287956";
           status.textContent = message;
