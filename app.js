@@ -6353,9 +6353,12 @@
       if (!box) return;
       const grade = String(state.applicationMenuGrade || "1");
       const entry = applicationRosterFor(grade);
+      // 한 줄로 짧게(자세한 설명은 바깥 칸의 title). 인원 표기 '명렬: n명'은 e2e가 읽는다.
       box.textContent = entry
-        ? `이 PC에 저장한 현 ${grade}학년 명렬: ${entry.students.length}명 · ${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} (담임반 현황·출석부의 미제출 학생 확인용, 서버로 보내지 않음)`
-        : `이 PC에 저장한 현 ${grade}학년 명렬이 없습니다. 웹 신청을 쓰지 않았거나 이미 만든 신청이면 '명렬 올리기'로 같은 명렬 파일을 올리세요(서버 변경 없음).`;
+        ? `현 ${grade}학년 명렬: ${entry.students.length}명${entry.uploadedAt ? ` · ${new Date(entry.uploadedAt).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" })} 저장` : ""}`
+        : `현 ${grade}학년 명렬 없음`;
+      box.title = entry ? `${entry.uploadedAt ? new Date(entry.uploadedAt).toLocaleString("ko-KR") : ""}${entry.source ? ` · ${entry.source}` : ""} · 이 PC에만 저장(서버로 보내지 않음)` : "";
+      box.classList.toggle("is-missing", !entry);
     }
 
     // 명렬 파일(웹 신청과 같은 양식)을 받아 그 현 학년 명렬로 이 PC에만 저장한다. 서버 요청 없음, 로그인 필요 없음.
@@ -6377,7 +6380,7 @@
       if (!file) return;
       const result = await importApplicationRosterFile(file, state.applicationMenuGrade || "1");
       const box = document.getElementById("cloudRosterLocalSummary");
-      if (box) box.textContent = result.count ? `${result.message} ${box.textContent}` : result.message;
+      if (box) box.textContent = result.message;
     }
 
     function downloadTextFile(text, filename, type) {

@@ -160,7 +160,7 @@ state.classSections = {
 내부 단계 번호 8, 메뉴 '6. 분반 편성'. 예전 보류 메뉴 '이동수업 반편성'은 '이동수업 과목 분류 (보류)'로 이름을 바꿨다.
 화면 예(합성 자료): `docs/class-sections-screens/*.png`. 클릭 확인 스크립트: `e2e/class-sections-ui.cjs`.
 
-- **화면 순서(2026.11.33, 사용자 결정 '분반 편성이 너무 복잡해')**: 메인 = `자동 편성` 단추(같은 학기 그룹이 둘 이상이면 id `classSectionsSolveSemester` = 전 학년 함께 계산, 하나면 `classSectionsAuto` = 이 그룹 계산) + `바뀐 학생만 다시 계산` + 한 줄 요약 `#classSectionsAutoSummary`(분반은 4단계 확정 수 그대로·정원·방식·'직접 조정 n개 적용 중') + 진급 반 편성. 기준 칸·블록별 최대·블록 시간·블록 시간 추천·과목 표·`이 그룹만 계산`(`classSectionsSolve`)·`방식 비교·추천`은 접힌 `<details id="classSectionsManual">` '직접 조정' 안(펼침은 localStorage `class-sections-manual-open`, 보기 편의). 블록 시간은 비워 두면 7단계가 정한다는 안내. 아래 항목은 그 안의 칸 설명.
+- **화면 순서(2026.11.34, 사용자 결정 '분반 편성이 너무 복잡해')**: 메인 = `자동 편성` 단추(같은 학기 그룹이 둘 이상이면 id `classSectionsSolveSemester` = 전 학년 함께 계산, 하나면 `classSectionsAuto` = 이 그룹 계산) + `바뀐 학생만 다시 계산` + 한 줄 요약 `#classSectionsAutoSummary`(분반은 4단계 확정 수 그대로·정원·방식·'직접 조정 n개 적용 중') + 진급 반 편성. 기준 칸·블록별 최대·블록 시간·블록 시간 추천·과목 표·`이 그룹만 계산`(`classSectionsSolve`)·`방식 비교·추천`은 접힌 `<details id="classSectionsManual">` '직접 조정' 안(펼침은 localStorage `class-sections-manual-open`, 보기 편의). 블록 시간은 비워 두면 7단계가 정한다는 안내. 아래 항목은 그 안의 칸 설명.
 - 머리: 차수 고르기(기본 = 가장 최근 확정 차수, 확정 전 차수는 '확정 전 시안'), `교사·시간 설정`.
 - 그룹 단추(현학년 → 학년 학기 · 그룹, 학생 수·과목 수·택n, 미편성/편성됨/확인 필요). 그룹 = 4단계 집계의 (학년, 학기, 택n 그룹).
 - 표시: '확정 전 시안', '입력 변경됨, 재계산 필요'(입력 서명이 저장 결과와 다를 때).

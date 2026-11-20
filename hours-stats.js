@@ -1662,13 +1662,13 @@ function renderHoursStatsView() {
     : "교사 수 추천";
   const allocateTools = stats.departments.filter((department) => department.common && department.items.length).map((department) =>
     `<button class="button button-quiet" type="button" data-hours-auto-allocate="${department.group}" title="세부 교과 교사 수를 기준으로 공통 과목을 반 단위로 나눠 세부 교과 1인당 시수가 비슷해지게 배분 칸(오른쪽 파란 칸)을 채웁니다.">${department.group} 공통 시수 자동 배분</button>`).join("");
-  const tools = `<p class="hours-summary-line hours-table-tools">
+  const tools = `<div class="hours-summary-line hours-table-tools">
     <button class="button" type="button" data-open-dialog="hoursRecommendDialog" aria-haspopup="dialog">${escapeHtml(recommendLabel)}</button>
     ${allocateTools}
     ${hoursPlainObject(settings.undo) ? `<button class="button button-quiet" type="button" data-hours-action="undo">되돌리기 (${escapeHtml(settings.undo.label)})</button>` : ""}
     <label class="hours-zero-toggle"><input type="checkbox" data-hours-show-zero="1" data-focus-key="show-zero"${settings.showZeroClasses ? " checked" : ""}> 개설반 0 과목도 보기</label>
-    <span class="hours-note">흰 칸(교사수·전년도 평균·배분·창체 학점·메모)은 표에서 바로 고칩니다. 개설반은 연동 값(점선 밑줄 숫자, 누르면 고치는 곳으로): 검은 숫자는 편제표 × 학급 수, <span class="hours-legend-red">빨간 숫자</span>는 4단계 개설 학급 수, '확대' 표시는 확대학급(수준별 이동수업) 개설반입니다. 흐린 칸은 직접 입력입니다.</span>
-  </p>`;
+    <details class="hours-legend-pop"><summary>표 보는 법</summary><div class="hours-legend-pop-body">흰 칸(교사수·전년도 평균·배분·창체 학점·메모)은 표에서 바로 고칩니다. 개설반은 연동 값(점선 밑줄 숫자, 누르면 고치는 곳으로): 검은 숫자는 편제표 × 학급 수, <span class="hours-legend-red">빨간 숫자</span>는 4단계 개설 학급 수, '확대' 표시는 확대학급(수준별 이동수업) 개설반입니다. 흐린 칸은 직접 입력입니다.</div></details>
+  </div>`;
   const departmentOptions = (selected) => HOURS_DEPARTMENTS.map((department) =>
     `<option value="${department.id}"${department.id === selected ? " selected" : ""}>${escapeHtml(hoursDepartmentName(department.id))}</option>`).join("") +
     `<optgroup label="비교과 교사 (교과 평균에서 뺌)">${HOURS_NON_TEACHING.map((role) => {

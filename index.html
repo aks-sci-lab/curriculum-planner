@@ -265,11 +265,14 @@
         </div>
         </div>
         <div id="applicationGradeWorkspace" role="tabpanel" aria-labelledby="applicationGrade1Tab">
-        <p class="note" id="applicationGradeDescription">현재 1학년 학생의 2학년 과목·그룹과 신청 결과를 관리합니다.</p>
-        <p class="note application-roster-local">
-          <label class="file-button" for="cloudRosterLocalInput" tabindex="0" role="button">명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)</label>
-          <input class="hidden" id="cloudRosterLocalInput" type="file" accept=".xlsx" aria-label="명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)">
-          <span id="cloudRosterLocalSummary" role="status"></span></p>
+        <div class="application-grade-context">
+          <span class="note-inline visually-hidden" id="applicationGradeDescription">현 1학년 → 2학년 과목</span>
+          <span class="application-roster-local" title="명렬은 이 PC에만 저장합니다(서버로 보내지 않음). 담임반 현황·출석부에서 미제출 학생까지 셀 때 씁니다. 웹 신청을 만들 때 자동으로 저장되며, 웹 신청을 쓰지 않았거나 이미 만든 신청이면 같은 명렬 파일을 올리세요.">
+            <span id="cloudRosterLocalSummary" role="status"></span>
+            <label class="file-button file-button-small" for="cloudRosterLocalInput" tabindex="0" role="button" aria-label="명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)">명렬 올리기</label>
+            <input class="hidden" id="cloudRosterLocalInput" type="file" accept=".xlsx" aria-label="명렬 올리기(이 PC에만 저장 · 담임반 현황 미제출 확인용)">
+          </span>
+        </div>
         <section class="application-subject-box" id="applicationGroupsPanel" role="tabpanel" aria-labelledby="applicationGroupsTab">
           <details>
           <summary class="application-subject-title">신청 받을 과목 확인 (학생선택교육과정)</summary>
@@ -277,7 +280,7 @@
           </details>
           <div class="panel-title-row">
             <h3>수강신청 선택 그룹 설정</h3>
-            <span class="note-inline">과목을 그룹 카드로 끌어 놓아 배치 · 미분류에 놓으면 해제</span>
+            <span class="note-inline">과목 칩을 끌어 다른 그룹으로 옮깁니다</span>
             <button class="button button-quiet panel-help-button" type="button" aria-haspopup="dialog" data-open-dialog="groupHelpDialog">그룹 설정 방법</button>
             <button class="button panel-help-button" id="courseCheckOpenGroups" type="button" aria-haspopup="dialog" data-open-dialog="courseCheckDialog">위계·학점 점검</button>
           </div>
@@ -309,8 +312,7 @@
         </section>
         <section class="application-subject-box hidden" id="supabaseTeacherPanel" role="tabpanel" aria-labelledby="applicationOnlineTab">
           <h3>온라인 신청 관리</h3>
-          <p class="note">학년별 그룹을 먼저 확인한 뒤 학생 명렬을 올려 신청을 만드세요. 생성된 신청은 아래 목록에서 관리할 수 있습니다.</p>
-          <p class="note">서버 접근 만료 정책 적용 시 다음 해 3월 1일부터 지난 학년도 온라인 신청에 접근할 수 없습니다. 데이터는 삭제되지 않습니다. 설치·업데이트 절차는 <a href="README.md#supabase-온라인-수강신청-권장" target="_blank" rel="noopener">운영자 설명서</a>에서 확인하세요.</p>
+          <p class="note">학년별 그룹을 먼저 확인한 뒤 학생 명렬을 올려 신청을 만드세요. 생성된 신청은 아래 목록에서 관리합니다.</p>
           <div id="cloudTeacherLogin">
             <button class="button" id="cloudTeacherGoogleLogin" type="button">구글로 로그인</button>
             <p class="note hidden" id="cloudTeacherOfflineNotice" role="status">오프라인입니다. 편제표·학생 명단·집계 등 로컬 기능은 사용할 수 있지만, 온라인 수강신청 생성·동기화에는 인터넷과 교사 로그인이 필요합니다.</p>
@@ -371,6 +373,7 @@
               <div id="cloudEventList"></div>
             </section>
             <p id="cloudSyncStatus" role="status" aria-live="polite">연동된 신청은 로그인 중 30초마다 집계표에 반영됩니다.</p>
+            <p class="note">서버 접근 만료 정책 적용 시 다음 해 3월 1일부터 지난 학년도 온라인 신청에 접근할 수 없습니다. 데이터는 삭제되지 않습니다. 설치·업데이트 절차는 <a href="README.md#supabase-온라인-수강신청-권장" target="_blank" rel="noopener">운영자 설명서</a>에서 확인하세요.</p>
           </div>
           <p id="cloudTeacherMessage" role="status" aria-live="polite"></p>
         </section>
@@ -379,8 +382,7 @@
       <section class="workflow-step-panel hidden" id="workflowStep6Panel" aria-labelledby="timetableTitle">
         <div class="hours-heading">
           <div>
-            <h3 id="timetableTitle">7단계 · 시간표 <span class="count-pill" id="timetableRoundBadge"></span></h3>
-            <p class="note">5단계 시수와 6단계 분반 결과로 시간표 조건을 정하고, 계산 전에 걸리는 곳(원인과 고칠 곳)을 미리 점검합니다. 조건을 바꾸면 점검이 바로 다시 돕니다. '시간표 계산'을 누르면 두 학기를 함께 편성해 반·교사 시간표와 못 지킨 조건을 보여 줍니다.</p>
+            <h3 id="timetableTitle" title="5단계 시수와 6단계 분반 결과로 시간표 조건을 정하고, 계산 전에 걸리는 곳(원인과 고칠 곳)을 미리 점검합니다. 조건을 바꾸면 점검이 바로 다시 돕니다. '시간표 계산'을 누르면 두 학기를 함께 편성해 반·교사 시간표와 못 지킨 조건을 보여 줍니다.">7단계 · 시간표 <span class="count-pill" id="timetableRoundBadge"></span></h3>
           </div>
           <div class="hours-toolbar" id="timetableSemesterTabs" role="group" aria-label="학기">
             <button class="button" type="button" data-tt-semester="1" aria-pressed="true">1학기</button>
@@ -395,7 +397,6 @@
           <span class="count-pill" id="certificateRoundBadge">1차</span>
           <span class="certificate-info-summary" id="certificateInfoSummary">확인 날짜 · 학교명</span>
           <button class="button certificate-info-button" id="openCertificateInfo" type="button" aria-haspopup="dialog" aria-controls="certificateInfoDialog">기본 정보</button>
-          <span class="note-inline">결과 차수는 상단에서 바꿉니다. 두 학년의 결과를 함께 사용합니다.</span>
         </div>
         <div class="certificate-setup-grid">
           <div class="certificate-controls">
@@ -446,7 +447,7 @@
           </div>
           <button class="button button-primary" id="downloadAggregate" type="button">집계표 엑셀 다운로드</button>
         </div>
-        <p class="aggregate-status-line"><span id="roundConfirmNote" class="round-confirm-note">기준 미달 과목의 개설/폐강을 결정한 뒤 확정하세요.</span> <span class="aggregate-scope-note">확정·해제는 학년 탭과 관계없이 이 차수의 두 학년 결과 전체에 함께 적용됩니다.</span> <span class="panel-subtitle" id="aggregateDescription">학생별 신청 명단에서 과목별 인원을 계산했습니다.</span></p>
+        <p class="aggregate-status-line"><span id="roundConfirmNote" class="round-confirm-note">기준 미달 과목의 개설/폐강을 결정한 뒤 확정하세요.</span> <span class="panel-subtitle visually-hidden" id="aggregateDescription">학생별 신청 명단에서 과목별 인원을 계산했습니다.</span></p>
         <div class="aggregate-grade-bar" id="aggregateGradeBar"></div>
         <div class="aggregate-content" id="aggregateContent"></div>
       </section>
@@ -488,8 +489,7 @@
       <section class="workflow-step-panel hidden" id="workflowStep8Panel" aria-labelledby="classSectionsTitle">
         <div class="hours-heading">
           <div>
-            <h3 id="classSectionsTitle">6단계 · 분반 편성 <span class="count-pill" id="classSectionsRoundBadge"></span></h3>
-            <p class="note">4단계에서 정한 개설 과목·분반 수와 학생 신청으로 블록(같은 시간 분반 묶음)·학생 분반·교사를 편성합니다. 요일·교시 전체 시간표는 만들지 않습니다.</p>
+            <h3 id="classSectionsTitle" title="4단계에서 정한 개설 과목·분반 수와 학생 신청으로 블록(같은 시간 분반 묶음)·학생 분반·교사를 편성합니다. 요일·교시 전체 시간표는 7단계에서 만듭니다.">6단계 · 분반 편성 <span class="count-pill" id="classSectionsRoundBadge"></span></h3>
           </div>
           <div class="hours-toolbar">
             <button class="button" id="classSectionsTeachersOpen" type="button" aria-haspopup="dialog">교사·시간 설정</button>

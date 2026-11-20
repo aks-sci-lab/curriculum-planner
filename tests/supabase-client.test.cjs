@@ -1299,7 +1299,7 @@ test("course groups omit assignment dropdowns and move unclassified subjects by 
   assert.equal(f.context.getCourseApplicationGroups()[0].count, 1);
   const saved = JSON.parse(f.storage.get("curriculum-color-semester-groups-v3"));
   assert.deepEqual(saved[0].courses, ["A", "B"]);
-  findSemesterPanel(editor,"2","1").children.find((child) => child.textContent === "새 선택 그룹 추가").onclick();
+  findSemesterPanel(editor,"2","1").children.find((child) => child.textContent === "＋ 그룹 추가").onclick();
   assert.equal(f.context.getApplicationGroupSettings().length, 2);
 });
 
@@ -1354,8 +1354,8 @@ test("compact group cards show preparation counts and reject cross-semester and 
   const editor = f.elements.courseGroupEditor;
   f.context.setApplicationTargetGrades(["2", "3"]);
   let semester = findSemesterPanel(editor, "2", "1");
-  assert.match(semester.children[0].textContent, /1과목 · 1그룹 · 미분류 0/);
-  semester.children.find((child) => child.textContent === "새 선택 그룹 추가").onclick();
+  assert.equal(semester.children[0].textContent, "1학기 · 1과목 · 1그룹", "미분류 수는 있을 때만 표시");
+  semester.children.find((child) => child.textContent === "＋ 그룹 추가").onclick();
   semester = findSemesterPanel(editor, "2", "1");
   let cards = findDescendant(semester, "course-group-grid").children;
   assert.equal(cards[1].children[3].textContent, "과목을 여기에 끌어 놓으세요.");
@@ -1776,10 +1776,10 @@ test("'신청 마감'은 한 번 묻고(통합 신청이면 두 학년 모두 �
   assert.ok(handler.indexOf("window.appConfirm") > 0 && handler.indexOf("window.appConfirm") < handler.indexOf('rpc("manage_course_event"'));
 });
 
-test("그룹 카드 칸 폭: 그룹명 최소 120px(16px로 줄지 않음), '선택 수' 글자 꺾임 없음, 연동 안내는 아래 줄에 줄바꿈(칩이 카드 밖으로 넘치지 않게)", () => {
+test("그룹 카드 칸 폭: 그룹명 최소 120px(16px로 줄지 않음), '선택 수' 글자 꺾임 없음, 연동 안내 줄은 반복하지 않음", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "legacy.css"), "utf8");
   assert.match(css, /\.course-group-grid \.course-group-name input \{ min-width:120px; \}/);
   assert.match(css, /@container \(min-width:560px\) \{\n\s*\.course-group-grid fieldset \{ grid-template-columns:minmax\(200px,1fr\) auto auto; \}/);
   assert.match(css, /\.course-group-grid \.course-group-count \{ white-space:nowrap; \}/);
-  assert.match(css, /\.course-group-grid \.course-group-linked-note \{ grid-column:1 \/ -1; white-space:normal; min-width:0; \}/);
+  assert.doesNotMatch(css, /course-group-linked-note/, "편제표 연동 그룹은 카드마다 같은 안내 줄을 반복하지 않음(배지 title로)");
 });

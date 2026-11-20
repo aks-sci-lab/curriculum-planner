@@ -40,7 +40,7 @@ const check = (ok, text, actual) => { console.log(`${ok ? "ok  " : "FAIL"} ${tex
   await open2("2");
   const text2 = await summary();
   console.log("summary:", text2);
-  check(new RegExp(`이 PC에 저장한 현 2학년 명렬: ${counts["2"]}명`).test(text2), "2단계 웹 신청 화면에 저장한 명렬 인원", text2);
+  check(new RegExp(`현 2학년 명렬: ${counts["2"]}명`).test(text2), "2단계 웹 신청 화면에 저장한 명렬 인원", text2);
   await page.screenshot({ path: path.join(OUT, "01-roster-saved.png"), fullPage: false });
   // 새로 고침 뒤에도 남음
   await page.reload(); await page.waitForLoadState("networkidle"); await sleep(2500);
