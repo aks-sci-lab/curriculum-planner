@@ -250,6 +250,8 @@ function attendanceInfo(sheet) {
   console.log("▶ 출석부 화면 보기·인쇄");
   const view = page.locator("#classSectionsAttendanceView");
   check(await view.count() === 1, "출석부 보기 영역");
+  check(!(await view.evaluate((el) => el.open)), "출석부 보기는 기본으로 접혀 있음(스크롤 줄이기)");
+  await view.locator("summary").first().click(); await sleep(300);
   const readTable = () => page.locator("#classSectionsAttendanceTable").evaluate((table) => ({ sheet: table.dataset.sheet,
     rows: [...table.querySelectorAll("tr")].map((tr) => [...tr.children].map((cell) => cell.textContent)) }));
   const first = await readTable();

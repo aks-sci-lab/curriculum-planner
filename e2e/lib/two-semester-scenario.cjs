@@ -177,13 +177,21 @@ async function twoSemesterScenario(page, { OUT, check, DIAGNOSE = false, log = c
 
   // 5단계에서 선택과목 칸을 누르면 4단계 그 과목 칸으로 · 학교 지정 과목은 직접 입력 ----------------------------------
   {
-    await read5();
+    const before5 = await read5();
     // 학교 지정 과목 개설반은 편제표 × 학급 수 연동(읽기 전용 값 단추 → 학급 수 칸 또는 1단계 편제표), 입력 상자가 아니다.
     const designated = page.locator('#workflowStep7Panel .hours-form button.hf-link[data-hours-goto-classes="2"], #workflowStep7Panel .hours-form button.hf-link[data-hours-cross]').first();
     const designatedLabel = (await designated.count()) ? await designated.getAttribute("aria-label") : "";
     const designatedInputs = await page.locator('#workflowStep7Panel .hours-form input[aria-label^="2학년 1학기 "][aria-label$=" 개설반"]').count();
     check(/^2학년 \d학기 .+ 개설반 \d+ — /.test(designatedLabel) && designatedInputs === 0, `학교 지정 과목 개설반은 편제표 연동 값 단추(${designatedLabel})`, `${designatedLabel} · 입력 상자 ${designatedInputs}개`);
-    await hoursCell("2").click(); await sleep(900);
+    // 화면 전환 대신 팝업(UI 규칙): 칸을 누르면 4단계 값 팝업(개설 학급수·개설/폐강), '4단계 집계표에서 보기'를 눌러야 4단계로 간다.
+    await hoursCell("2").click(); await sleep(600);
+    const quick = page.locator("#aggregateQuickDialog[open]");
+    const quickInput = quick.locator("[data-quick-classes]");
+    const quickValue = (await quickInput.count()) ? Number(await quickInput.inputValue()) : null;
+    check(await quick.isVisible() && !(await page.locator("#aggregatePanel").isVisible()) && new RegExp(`3학년 2학기 ${COURSE}`).test(await quick.locator("h2").innerText()) && quickValue === before5["2"]?.classes,
+      "5단계 선택과목 칸을 누르면 화면을 옮기지 않고 4단계 값 팝업(같은 개설 학급수)", { quickValue, five: before5["2"] });
+    await shot("05b-quick.png");
+    await quick.locator("[data-quick-goto4]").click(); await sleep(900);
     const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") || "");
     // 확정된 차수는 개설 학급수 칸이 잠겨 있어 그 과목 이름 단추(개설/폐강 메뉴)에 초점이 간다.
     check(await page.locator("#aggregatePanel").isVisible() && (new RegExp(`^3학년 2학기 ${COURSE}.* 개설 학급수`).test(focused) || new RegExp(`^${COURSE}.* — 개설/폐강/미정 결정`).test(focused)),

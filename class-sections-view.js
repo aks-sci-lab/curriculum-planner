@@ -1398,7 +1398,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
         <span class="cs-size" aria-label="인원">${section.size}/${section.capacity}명</span>
         <span class="cs-neis" title="나이스 개설강의실 이름(내보내기에 이 이름을 씀)">나이스 ${esc(section.roomName)}</span>
         ${typeof classSectionsRoomCardHtml === "function" ? classSectionsRoomCardHtml(round, group, section) : ""}
-        <span class="cs-controls">${teacherSelect}<label class="cs-pin" title="이 분반을 ${esc(block.letter)}블록에 고정합니다. 다시 계산해도 블록이 바뀌지 않습니다."><input type="checkbox" data-cs-pin="${esc(section.id)}" data-cs-pin-block="${esc(block.id)}"${entry.pins.sections[section.id] ? " checked" : ""} aria-label="${esc(section.roomName)} 블록 고정"> 블록 고정</label></span></li>`;
+        <span class="cs-controls">${teacherSelect}<label class="cs-pin" title="이 분반을 ${esc(block.letter)}블록에 고정합니다. 다시 계산해도 블록이 바뀌지 않습니다."><input type="checkbox" data-cs-pin="${esc(section.id)}" data-cs-pin-block="${esc(block.id)}"${entry.pins.sections[section.id] ? " checked" : ""} aria-label="${esc(section.roomName)} 블록 고정"> 고정</label></span></li>`;
     }).join("");
     return `<div class="cs-block"><h5>${esc(block.letter)}블록 <span>${block.sectionIds.length}개${block.maxSections ? ` / 최대 ${block.maxSections}` : ""}</span>${block.times?.length ? ` <em>${esc(classSectionsTimesText(block.times))}</em>` : ""}</h5><ul>${cards}</ul></div>`;
   }).join("");

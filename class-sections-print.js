@@ -1211,7 +1211,7 @@ function classSectionsAttendanceCurrent(round, group, list) {
 function classSectionsAttendanceViewHtml(round, group) {
   if (CLASS_SECTIONS_PRINT_VIEW.attScope === "homeroom") return classSectionsHomeroomViewHtml(round, group);
   const esc = classSectionsPrintEsc;
-  const open = CLASS_SECTIONS_PRINT_VIEW.attOpen !== false;
+  const open = CLASS_SECTIONS_PRINT_VIEW.attOpen === true; // 길어서 기본은 접음(UI 규칙: 스크롤 줄이기), 펼치면 다시 그려도 유지
   const { list } = classSectionsAttendanceViewList(round, group);
   if (!list.length) return "";
   const { index, info, student, id } = classSectionsAttendanceCurrent(round, group, list);
@@ -1385,7 +1385,7 @@ function classSectionsHomeroomCurrent(round, group, homerooms) {
 
 function classSectionsHomeroomViewHtml(round, group) {
   const esc = classSectionsPrintEsc;
-  const open = CLASS_SECTIONS_PRINT_VIEW.attOpen !== false;
+  const open = CLASS_SECTIONS_PRINT_VIEW.attOpen === true; // 길어서 기본은 접음(UI 규칙: 스크롤 줄이기), 펼치면 다시 그려도 유지
   const { homerooms, unsubmitted, rosterInfo } = classSectionsHomeroomData(round, group);
   if (!homerooms.length) return "";
   const { index, homeroom, student } = classSectionsHomeroomCurrent(round, group, homerooms);
