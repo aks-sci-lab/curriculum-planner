@@ -210,6 +210,7 @@ async function restore(page, H, file) {
   const browser = await chromium.launch();
   const route = (context) => context.route(/supabase\.co|googleapis|gstatic/, (r) => r.abort());
   let context = await browser.newContext({ viewport: { width: 1500, height: 1000 }, locale: "ko-KR", acceptDownloads: true });
+  await context.addInitScript(() => { try { localStorage.setItem("class-sections-manual-open", "1"); } catch { /* 보기 편의 */ } }); // 6단계 '직접 조정'을 펼쳐 둔 PC(펼치기 클릭 확인은 class-sections-ui.cjs)
   await route(context);
   let page = await openApp(context, url);
   let H = helpers(page);
@@ -327,6 +328,7 @@ async function restore(page, H, file) {
   const oldLogs = page.logs;
   await context.close();
   context = await browser.newContext({ viewport: { width: 1500, height: 1000 }, locale: "ko-KR", acceptDownloads: true });
+  await context.addInitScript(() => { try { localStorage.setItem("class-sections-manual-open", "1"); } catch { /* 보기 편의 */ } }); // 6단계 '직접 조정'을 펼쳐 둔 PC(펼치기 클릭 확인은 class-sections-ui.cjs)
   await route(context);
   page = await openApp(context, url); page.logs.push(...oldLogs);
   H = helpers(page);

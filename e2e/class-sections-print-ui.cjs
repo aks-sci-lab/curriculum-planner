@@ -36,6 +36,7 @@ function attendanceInfo(sheet) {
   const { server, url } = await startStaticServer(ROOT);
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 }, locale: "ko-KR", acceptDownloads: true, deviceScaleFactor: 2 });
+  await context.addInitScript(() => { try { localStorage.setItem("class-sections-manual-open", "1"); } catch { /* 보기 편의 */ } }); // 6단계 '직접 조정'을 펼쳐 둔 PC(펼치기 클릭 확인은 class-sections-ui.cjs)
   await context.route(/supabase\.co|googleapis|gstatic/, (route) => route.abort());
   // 내려받기 이름은 앱이 붙인 a.download로 확인(Playwright는 blob 이름을 'download'로만 줌). 인쇄 창은 열지 않고 횟수만 센다.
   await context.addInitScript(() => {

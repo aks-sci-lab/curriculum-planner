@@ -24,6 +24,7 @@ async function startHarness({ outDir, seed, headless = true, hardened = true }) 
   const { server, url } = await startStaticServer(ROOT);
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, locale: "ko-KR", timezoneId: "Asia/Seoul", acceptDownloads: true });
+  await context.addInitScript(() => { try { localStorage.setItem("class-sections-manual-open", "1"); } catch { /* 보기 편의 */ } }); // 6단계 '직접 조정'을 펼쳐 둔 PC(펼치기 클릭 확인은 class-sections-ui.cjs)
   const net = await attachMockSupabase(context, mock, { baseUrl: url });
   // 테스트봇의 난수 시드를 고정한다(봇은 Date.now()로 시드를 정하므로 하네스가 createRng를 감싼다: 앱 코드는 그대로).
   await context.addInitScript((botSeed) => {

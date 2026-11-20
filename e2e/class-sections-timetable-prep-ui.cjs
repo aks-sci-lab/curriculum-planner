@@ -21,6 +21,7 @@ const check = (ok, message, detail) => { if (!ok) { problems.push({ message, det
   const { server, url } = await startStaticServer(ROOT);
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 }, locale: "ko-KR", deviceScaleFactor: 1 });
+  await context.addInitScript(() => { try { localStorage.setItem("class-sections-manual-open", "1"); } catch { /* 보기 편의 */ } }); // 6단계 '직접 조정'을 펼쳐 둔 PC(펼치기 클릭 확인은 class-sections-ui.cjs)
   await context.route(/supabase\.co|googleapis|gstatic/, (route) => route.abort());
   const page = await context.newPage();
   const logs = [];

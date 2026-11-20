@@ -143,7 +143,7 @@ test("solving every group of a semester together: inputs skip saved occupancy, v
   const input = plain(ctx.classSectionsBuildInput("1", group, entry, { noOccupied: true }));
   assert.deepEqual(input.occupied, []);
   assert.equal(input.noOccupied, undefined);
-  assert.match(view, /id="classSectionsSolveSemester"[\s\S]*?>전 학년 함께 다시 계산</);
+  assert.match(view, /id="classSectionsSolveSemester"[\s\S]*?>자동 편성</);
   assert.match(view, /kind: "solveAll"/);
 });
 
@@ -766,4 +766,25 @@ test("시간표 미리 점검: 블록 밖 빈 칸 = 주 교시 − 블록 시수
   assert.equal(saved.issues.length, 1, `반 수업 ${saved.rows[0].hours}시간 ÷ 1명 > 15칸`);
   assert.match(ctx.CLASS_SECTIONS_VIEW.statusTail, /시간표 미리 점검 경고 1건/);
   assert.match(ctx.classSectionsTimetableCheckHtml(entry.sectionResult), /id="classSectionsTimetableCheck" data-count="1"/);
+});
+
+test("블록 늘리기 제안의 한 주 칸: 7단계 사전 점검 P1 학년 줄 − 6단계 블록 시수, 계산 입력에만 붙고 입력 서명은 그대로", () => {
+  const ctx = context();
+  const group = ctx.classSectionsSource("1").groups[0];
+  const entry = ctx.classSectionsEntry("1", group.key, true);
+  const input = ctx.classSectionsBuildInput("1", group, entry);
+  // 7단계 자료가 없으면(함수 없음) 모름 → 막지 않음
+  assert.equal(ctx.classSectionsWeekSpare(input), null);
+  // 2학년 주 35칸, 가장 많은 반 = 반 수업 13 + 창체 2 + 블록 18 = 33(블록 18) → 블록 밖 15, 6단계 블록 시수 2블록 × 3 = 6 → 남는 칸 14
+  let calls = 0;
+  ctx.timetablePrecheckFor = (round, semester) => { calls += 1; return { grades: [{ grade: String(group.targetGrade), slots: 35, total: 33, blockHours: 18 }], round, semester }; };
+  const planned = plain(ctx.classSectionsTimetablePrecheckFor(ctx.classSectionsSource("1"), group, "1")).blockHours;
+  assert.equal(ctx.classSectionsWeekSpare(input), 35 - 15 - planned);
+  const request = plain(ctx.classSectionsWithWeekSpare({ kind: "solveAll", input: { groups: [input, input] } }));
+  assert.deepEqual(request.input.groups.map((item) => item.weekSpare), [35 - 15 - planned, 35 - 15 - planned]);
+  assert.equal(calls, 2, "같은 차수·학기 사전 점검은 요청마다 한 번");
+  assert.equal(ctx.classSectionsSignature({ ...input, weekSpare: 3 }), ctx.classSectionsSignature(input));
+  // 사전 점검이 실패하면 모름
+  ctx.timetablePrecheckFor = () => { throw new Error("no data"); };
+  assert.equal(ctx.classSectionsWeekSpare(input), null);
 });

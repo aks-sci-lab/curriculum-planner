@@ -1156,7 +1156,7 @@ async function classSectionsAttendanceExport(kind) {
   const context = classSectionsCurrent();
   if (!context?.group || typeof createWorkbookBlob !== "function" || typeof downloadBlob !== "function" || CLASS_SECTIONS_PRINT_VIEW.busy) return;
   const { list, warnings } = classSectionsAttendanceInfos(context.round, context.group, kind === "group" ? "group" : "semester");
-  if (!list.length) return void classSectionsSetStatus("출석부를 만들 분반이 없습니다(먼저 편성 계산).", true);
+  if (!list.length) return void classSectionsSetStatus("출석부를 만들 분반이 없습니다(먼저 자동 편성).", true);
   const days = Number(classSectionsPrintOption("attendanceDays")) || 17;
   const homeroomKind = kind === "homeroom" || kind === "homeroomFile";
   const homerooms = homeroomKind ? classSectionsHomeroomData(context.round, context.group).homerooms : null;
