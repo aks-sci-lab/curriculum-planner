@@ -1928,7 +1928,7 @@ async function main() {
         // 명렬 업로드 뒤 그룹 탭으로 넘어가므로: 그룹명 칸 폭, 온라인 탭에서 '수강신청 생성' 단추가 보이는지
         await page.locator("#applicationGroupsTab").click(); await sleep(300);
         const nameWidths = await page.locator("#courseGroupEditor .course-group-name input").evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().width)));
-        h.check(nameWidths.length && nameWidths.every((w) => w > 40), "중요", "2단계", `그룹명 칸이 너무 좁음(폭 ${Math.min(...nameWidths)}px ≤ 40px)`, { actual: nameWidths });
+        h.check(nameWidths.every((w) => w > 40), "중요", "2단계", `그룹명 칸이 너무 좁음(폭 ${Math.min(...nameWidths)}px ≤ 40px)`, { actual: nameWidths });
         await page.locator("#applicationOnlineTab").click();
         await sleep(300);
         const createVisible = await page.locator("#cloudCreateEvent").isVisible();

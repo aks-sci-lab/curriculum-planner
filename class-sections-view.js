@@ -1114,9 +1114,9 @@ function classSectionsMergeHtml(source) {
   const esc = classSectionsEsc;
   const list = source.mergeable || [];
   if (!list.length) return "";
-  return `<div class="cs-merge" id="classSectionsMerge"><strong>이동수업 그룹 합치기</strong>
+  // 설명은 제목 title로(한 줄 유지). 문제가 있을 때만 아래 줄에 보인다.
+  return `<div class="cs-merge" id="classSectionsMerge"><strong title="켜면 그 학기의 그룹들을 한 블록 세트로 편성합니다(학생은 그룹마다 고른 과목을 서로 다른 블록에서, 과목은 모두 이동 분반). 편제표·4단계 집계는 바뀌지 않고, 끄면 그룹마다 편성한 예전 결과가 그대로 있습니다.">이동수업 그룹 합치기 <span class="cs-help-mark" aria-hidden="true">?</span></strong>
     ${list.map((item) => `<label><input type="checkbox" data-cs-merge="${esc(item.id)}"${item.on ? " checked" : ""}> 현${esc(item.grade)} → ${esc(item.targetGrade)}학년 ${esc(item.semester)}학기 (${esc(item.parts.join(" + "))})</label>`).join("")}
-    <span class="cs-note">켜면 그 학기의 그룹들을 한 블록 세트로 편성합니다(학생은 그룹마다 고른 과목을 서로 다른 블록에서, 과목은 모두 이동 분반). 편제표·4단계 집계는 바뀌지 않고, 끄면 그룹마다 편성한 예전 결과가 그대로 있습니다.</span>
     ${list.filter((item) => item.problem).map((item) => `<p class="cs-note is-warn" data-cs-merge-problem="${esc(item.id)}">${esc(item.problem)}</p>`).join("")}</div>`;
 }
 
@@ -1247,22 +1247,24 @@ function classSectionsClassesHtml(group, entry) {
   const uploaded = classSectionsClassMap(group.grade);
   const promotion = classSectionsPromotion(group);
   const mapped = uploaded ? group.students.filter((student) => uploaded[student.key]?.classroom).length : 0;
+  // 학급 수·진급 반 편성·배정표를 한 줄로(긴 설명은 title, 자세한 경고만 아래 줄).
   const classLine = group.nextClasses
-    ? `현 ${group.grade}학년 ${group.rosterClasses}학급 → 내년 ${group.targetGrade}학년 ${group.nextClasses}학급 (블록당 최대 분반·학급 단위 반 수 기본값 = 내년 학급 수)`
+    ? `현 ${group.grade}학년 ${group.rosterClasses}학급 → 내년 ${group.targetGrade}학년 ${group.nextClasses}학급`
     : `내년 ${group.targetGrade}학년 학급 수가 없어 지금 반 수 ${group.rosterClasses}학급으로 잡았습니다. 4단계 기준 설정에서 내년 학급 수를 넣으세요.`;
-  let mapLine;
-  if (uploaded) mapLine = `내년 반 배정표: ${mapped}/${group.students.length}명 · 담임반 묶기·학급 단위 학생 배정·나이스 반·번호를 새 반 기준으로 합니다.`;
-  else if (promotion.value === "same") mapLine = "진급 때 반이 그대로 올라감 · 지금 반을 내년 반으로 보고 담임반 묶기·학급 단위 학생 배정·나이스 반을 정합니다(나이스 번호는 진급 때 다시 매길 수 있어 비움). 배정표를 올리면 그것이 우선입니다.";
-  else if (promotion.value === "new") mapLine = "내년 반 배정표 없음 · 진급 때 반을 새로 편성하므로 ‘같은 담임반끼리 묶기’는 지금 반 기준이라 효과가 없어 추천에서 뺍니다. 학급 단위 과목 학생 배정은 배정표를 올린 뒤.";
-  else mapLine = "내년 반 배정표 없음 · 진급 때 반이 바뀌면 ‘같은 담임반끼리 묶기’(지금 반 기준)는 효과가 없으므로 추천에서 뺍니다. 반이 그대로 올라가면 ‘진급 때 반 편성’을 ‘그대로 올라감’으로 고르세요.";
+  const classTitle = group.nextClasses ? "블록당 최대 분반·학급 단위 반 수 기본값 = 내년 학급 수" : "";
+  let mapLine, mapShort;
+  if (uploaded) { mapLine = `내년 반 배정표: ${mapped}/${group.students.length}명 · 담임반 묶기·학급 단위 학생 배정·나이스 반·번호를 새 반 기준으로 합니다.`; mapShort = `내년 반 배정표 ${mapped}/${group.students.length}명`; }
+  else if (promotion.value === "same") { mapLine = "진급 때 반이 그대로 올라감 · 지금 반을 내년 반으로 보고 담임반 묶기·학급 단위 학생 배정·나이스 반을 정합니다(나이스 번호는 진급 때 다시 매길 수 있어 비움). 배정표를 올리면 그것이 우선입니다."; mapShort = "지금 반 = 내년 반(그대로 올라감)"; }
+  else if (promotion.value === "new") { mapLine = "내년 반 배정표 없음 · 진급 때 반을 새로 편성하므로 ‘같은 담임반끼리 묶기’는 지금 반 기준이라 효과가 없어 추천에서 뺍니다. 학급 단위 과목 학생 배정은 배정표를 올린 뒤."; mapShort = "내년 반 배정표 없음 · 담임반 묶기는 추천 제외"; }
+  else { mapLine = "내년 반 배정표 없음 · 진급 때 반이 바뀌면 ‘같은 담임반끼리 묶기’(지금 반 기준)는 효과가 없으므로 추천에서 뺍니다. 반이 그대로 올라가면 ‘진급 때 반 편성’을 ‘그대로 올라감’으로 고르세요."; mapShort = "내년 반 배정표 없음 · 담임반 묶기는 추천 제외"; }
   const warnText = promotion.value === "new" ? "지금 반 기준 — 진급 때 반을 새로 편성하므로 효과 없음" : "지금 반 기준 — 진급 때 반이 바뀌면 효과 없음";
   const warn = (entry.mode || "move") === "homeroom" && !uploaded && promotion.value !== "same"
     ? `<p class="cs-note is-warn" id="classSectionsHomeroomWarn">같은 담임반끼리 묶기: ${esc(warnText)}. 내년 반 배정표를 올리면 새 반 기준으로 묶습니다.</p>` : "";
   const options = ["same", "new", "unknown"].map((value) => `<option value="${value}"${promotion.value === value ? " selected" : ""}${promotion.forced && value !== "new" ? " disabled" : ""}>${CLASS_SECTIONS_PROMOTION_LABELS[value]}</option>`).join("");
-  return `<p class="cs-note${group.nextClasses ? "" : " is-warn"}" id="classSectionsClassesLine">${esc(classLine)}</p>
-    <div class="cs-fields"><label>진급 때 반 편성 <select data-cs-promotion="${esc(group.grade)}" data-focus-key="cs-promotion-${esc(group.grade)}" aria-label="현 ${esc(group.grade)}학년 진급 때 반 편성"${promotion.forced ? ' title="' + esc(promotion.reason) + '"' : ""}>${options}</select></label>
-      ${promotion.forced ? `<span class="cs-note" id="classSectionsPromotionReason">${esc(promotion.reason)}</span>` : ""}</div>
-    <p class="cs-note" id="classSectionsClassMapLine">${esc(mapLine)}</p>${warn}`;
+  return `<div class="cs-fields cs-classes-row"><span class="cs-note${group.nextClasses ? "" : " is-warn"}" id="classSectionsClassesLine"${classTitle ? ` title="${esc(classTitle)}"` : ""}>${esc(classLine)}</span>
+      <label>진급 때 반 편성 <select data-cs-promotion="${esc(group.grade)}" data-focus-key="cs-promotion-${esc(group.grade)}" aria-label="현 ${esc(group.grade)}학년 진급 때 반 편성"${promotion.forced ? ' title="' + esc(promotion.reason) + '"' : ""}>${options}</select></label>
+      ${promotion.forced ? `<span class="cs-note" id="classSectionsPromotionReason" title="${esc(promotion.reason)}">학급 수가 바뀌어 새로 편성</span>` : ""}
+      <span class="cs-note" id="classSectionsClassMapLine" title="${esc(mapLine)}">${esc(mapShort)}</span></div>${warn}`;
 }
 
 // 교사 수 안내: 무엇으로 블록 분반 수를 제한하는지, 비어 있는 교과는 제한 없이 계산함을 분명히.

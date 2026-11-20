@@ -664,9 +664,7 @@
     .curriculum-selection-group-linked td { background: #f5f8ff; color: #44506e; }
     .course-group-card.is-linked { border-color: #9fb3ea; background: #f7f9ff; }
     .course-group-course-chip.is-linked { cursor: default; opacity: .9; border-style: dashed; }
-    .course-group-linked-note { margin: 4px 0 6px; color: #3c568f; font-size: 12px; }
     /* 연동 그룹에는 버튼이 없어 안내 문장이 이름 칸 줄로 끼어들며 이름 칸을 0px로 줄이던 문제: 안내는 이름·선택 수 줄 끝에 둔다. */
-    .course-group-grid .course-group-linked-note { align-self: center; margin: 0; white-space: nowrap; }
     .curriculum-sem-button {
       width: 100%;
       min-height: 30px;
@@ -1077,7 +1075,6 @@
     .course-group-grid .course-group-name input { min-width:120px; }
     /* '선택 수' 글자가 한 글자씩 세로로 꺾이지 않게, 연동 안내(nowrap)가 셋째 열을 넓혀 칩이 카드 밖으로 넘치지 않게 안내는 아래 줄에 줄바꿈해 둔다. */
     .course-group-grid .course-group-count { white-space:nowrap; }
-    .course-group-grid .course-group-linked-note { grid-column:1 / -1; white-space:normal; min-width:0; }
     @container (min-width:560px) {
       .course-group-grid fieldset { grid-template-columns:minmax(200px,1fr) auto auto; }
       .course-group-grid .course-group-name { grid-column:1; grid-row:1; }
@@ -2881,3 +2878,53 @@ dialog h2 { font-size: 17px; letter-spacing: -.3px; }
 .cs-card[aria-label="학급 단위 과목"] > .cs-table th, .cs-card[aria-label="학급 단위 과목"] > .cs-table td { padding:0; border:0; background:none; white-space:nowrap; }
 .cs-card[aria-label="학급 단위 과목"] > .cs-table td { flex:1; min-width:0; }
 .cs-card[aria-label="학급 단위 과목"] > .cs-table select { width:100%; }
+
+/* ---- 업무 흐름에 맞춘 정리(2026-11-20): 반복 안내 줄 없애고 주요 작업이 먼저 보이게 ---- */
+/* 2단계: 학년 탭 아래 한 줄 = 기준 편제표 + 명렬 상태·올리기 */
+.application-grade-context { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:4px 12px; margin:0 0 8px; }
+.application-grade-context .note-inline { font-size:12px; }
+.application-roster-local { display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+.application-roster-local #cloudRosterLocalSummary.is-missing { color:#8a6d1d; }
+.file-button.file-button-small { min-height:28px; padding:0 10px; font-size:12px; }
+/* 2단계 그룹 카드: 편제표 연동 그룹은 이름·선택 수 입력 칸 없이 제목 + 과목 칩만 */
+.course-group-legend-count { color:var(--muted); font-size:12px; font-weight:400; }
+.course-group-linked-badge { display:inline-block; margin-left:2px; padding:0 6px; border-radius:999px; background:#e8eefc; color:#3c568f; font-size:11px; font-weight:600; line-height:18px; vertical-align:1px; cursor:help; }
+.course-group-subject-summary { display:flex; flex-wrap:wrap; gap:4px; line-height:1.4; }
+.course-group-subject-summary .course-group-course-chip { margin:0; }
+.course-group-card.is-linked { background:#fff; }
+.course-group-unassigned p { display:flex; flex-wrap:wrap; gap:4px; line-height:1.4; }
+.course-group-unassigned p:empty { display:none; }
+.course-group-unassigned.is-empty { padding:5px 8px; border:1px dashed var(--line-strong, #cad5e5); background:transparent; color:var(--muted); font-size:12px; }
+.course-group-unassigned.is-empty strong { font-weight:400; }
+.course-group-unassigned-count { padding:0 6px; border-radius:999px; background:#fff3cd; color:#7a5a00; font-size:12px; }
+.course-group-semester > .button { border-color:transparent; background:transparent; color:var(--blue-dark); }
+.course-group-semester > .button:hover { background:var(--blue-soft); }
+.visually-hidden { position:absolute !important; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+/* 5단계: 표 읽는 법은 작은 펼침(겹쳐 뜨는 상자)으로 — 표 위 네 줄 설명을 없앰 */
+.hours-legend-pop { position:relative; margin-left:auto; font-size:12px; }
+.hours-legend-pop > summary { cursor:pointer; color:var(--blue-dark); list-style:none; padding:4px 8px; border-radius:6px; }
+.hours-legend-pop > summary::-webkit-details-marker { display:none; }
+.hours-legend-pop > summary::before { content:"? "; font-weight:700; }
+.hours-legend-pop > summary:hover { background:var(--blue-soft); }
+.hours-legend-pop-body { position:absolute; right:0; top:calc(100% + 4px); z-index:20; width:min(440px, 80vw); padding:10px 12px; border:1px solid var(--line-strong); border-radius:8px; background:#fff; box-shadow:0 8px 24px rgba(20,40,80,.14); color:#4b5872; line-height:1.55; }
+/* 6단계: 도움말은 ? 표시에 마우스를 올려 봄 */
+.cs-help-mark { display:inline-grid; width:16px; height:16px; place-items:center; margin-left:2px; border-radius:50%; background:#e8eefc; color:#3c568f; font-size:11px; font-weight:700; cursor:help; vertical-align:1px; }
+.cs-merge > strong { cursor:help; }
+/* 3단계 학생 목록: 한 줄 높이 줄여 한 화면에 더 많이(59px → 약 40px) */
+.student-item { padding:5px 8px; gap:8px; }
+.student-avatar { width:28px; height:28px; flex-basis:28px; border-radius:8px; font-size:11px; }
+.student-name { margin-bottom:1px; }
+/* 7단계 사전 점검: '고칠 곳'과 접힌 선택지를 한 줄에(펼치면 아래로) */
+.tt-issue > .tt-where { grid-column:2; display:inline-flex; }
+.tt-issue:has(> .tt-where) > .tt-choices-fold:not([open]) { grid-column:2; justify-self:start; margin-top:0; }
+@media (min-width: 1100px) {
+  .tt-issue { grid-template-columns:auto minmax(0,1fr) auto; }
+  .tt-issue > .tt-cause { grid-column:2 / 4; }
+  .tt-issue > .tt-where { grid-column:2; }
+  .tt-issue:has(> .tt-where) > .tt-choices-fold:not([open]) { grid-column:3; grid-row:2; align-self:center; }
+  .tt-issue > .tt-choices-fold[open] { grid-column:2 / 4; }
+}
+/* 도움말·점검 단추가 둘이면 오른쪽에 나란히(가운데 떠 있지 않게) */
+.panel-title-row .panel-help-button + .panel-help-button, .round-toolbar .panel-help-button + .panel-help-button { margin-left:0; }
+.cs-classes-row { align-items:center; }
+.cs-classes-row .cs-note[title] { cursor:help; }

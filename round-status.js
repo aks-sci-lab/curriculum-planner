@@ -252,8 +252,10 @@ function renderRoundStatusControls() {
     const updatedAt = state.roundStatuses[round]?.updatedAt;
     const date = updatedAt ? new Date(updatedAt).toLocaleString("ko-KR") : "";
     const drift = roundSnapshotDrift(round);
-    note.textContent = `${date ? `${date} 확정 · ` : ""}결과 교체·개설 학급수·개설 결정이 잠겨 있고, 시수 통계는 확정 시점 결과를 씁니다.` +
-      (drift.length ? ` 확정 이후 ${drift.join(", ")}이(가) 바뀌어 화면 집계가 확정 시점과 다를 수 있습니다. 반영하려면 확정 해제 후 다시 확정하세요.` : "");
+    // 한 줄로 짧게(잠기는 것·쓰임은 title). 확정 뒤 바뀐 것은 행동이 필요하니 그대로 보인다.
+    note.textContent = `${date ? `${date} 확정 · ` : ""}수정 잠김` +
+      (drift.length ? ` · 확정 이후 ${drift.join(", ")}이(가) 바뀌어 화면 집계가 확정 시점과 다를 수 있습니다. 반영하려면 확정 해제 후 다시 확정하세요.` : "");
+    note.title = "결과 교체·개설 학급수·개설 결정이 잠겨 있고, 시수 통계·분반 편성은 확정 시점 결과를 씁니다. 확정·해제는 이 차수의 두 학년 결과 전체에 함께 적용됩니다.";
   } else if (!hasData) {
     note.textContent = `${round}차 결과가 없습니다. 2단계에서 결과 엑셀을 반영한 뒤 확정하세요.`;
   } else {

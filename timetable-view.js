@@ -1226,7 +1226,7 @@ function timetableIssuesHtml(result, choices) {
     ${issue.where?.length ? `<span class="tt-where">고칠 곳 ${timetableWhereButtons(issue.where)}</span>` : ""}
     ${issue.level === "fail" ? timetableChoicesFoldHtml(choices?.get(timetableIssueKey(issue)), timetableIssueKey(issue)) : ""}</li>`;
   return `<section class="cs-card" id="timetablePrecheck" data-count="${shown.length}">
-    <h4>사전 점검 <span class="cs-note">계산 전에 1초 안에 도는 필요 조건 점검입니다. '조건 위반'은 지금 조건으로는 반드시 걸리는 곳이고, 항목마다 고를 수 있는 선택지와 예상 효과를 보여 줍니다(자동으로 풀지 않습니다).</span></h4>
+    <h4>사전 점검 <span class="cs-note" title="계산 전에 1초 안에 도는 필요 조건 점검입니다. '조건 위반'은 지금 조건으로는 반드시 걸리는 곳이고, 항목마다 고를 수 있는 선택지와 예상 효과를 보여 줍니다(자동으로 풀지 않습니다).">'조건 위반' = 지금 조건으로는 반드시 걸리는 곳 · 선택지는 직접 고릅니다</span></h4>
     ${shown.length ? `<ul class="tt-issues">${shown.map(item).join("")}</ul>` : '<p class="cs-note">걸리는 곳이 없습니다.</p>'}
     ${info.length ? `<details class="tt-info"><summary>참고 ${info.length}건</summary><ul class="tt-issues">${info.map(item).join("")}</ul></details>` : ""}</section>`;
 }
