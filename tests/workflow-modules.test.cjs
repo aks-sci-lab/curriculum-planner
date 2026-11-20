@@ -876,7 +876,7 @@ test("4단계 기준 미달 요약은 교사 결정(미정·폐강·개설)을 �
   assert.equal([...attention.courses].filter((key) => ["1:A", "1:B", "1:C"].includes(key)).length, counts.undecided);
 });
 
-test("class-count adjustment meets n × classes, gives extra classes to the fullest course, and leaves impossible groups alone", () => {
+test("class-count adjustment meets n × classes, gives extra classes to the fullest course, and keeps the target even above the per-class maximum", () => {
   const { ctx } = aggregateHelpers();
   const plan = (rows, target, max = 34) => {
     const result = ctx.planGroupClassCounts(rows.map(([key, enrollment, closed]) => ({ key, enrollment, closed })), target, max);
@@ -888,12 +888,23 @@ test("class-count adjustment meets n × classes, gives extra classes to the full
   assert.deepEqual(plan([["a", 30], ["b", 60], ["c", 10]], 5).counts, { a: 2, b: 2, c: 1 });
   // 목표 7: a·b가 15·30명 → b, 그다음 b 20명 > a 15명 → b.
   assert.deepEqual(plan([["a", 30], ["b", 60], ["c", 10]], 7).counts, { a: 2, b: 4, c: 1 });
-  // 34명 이하로는 최소 6학급이 필요한데 목표가 5면 맞출 수 없다(값을 바꾸지 않음).
-  const impossible = plan([["a", 100], ["b", 100]], 5);
-  assert.equal(impossible.ok, false);
-  assert.equal(impossible.counts, null);
-  assert.equal(impossible.minimum, 6);
-  assert.match(ctx.aggregatePlanMessage(impossible), /34명 이하로는 최소 6학급이 필요해 목표 5학급과 맞출 수 없음 — 협의회 결정 필요/);
+  // 34명 이하로는 최소 6학급이 필요한데 목표가 5면: 목표에 맞추고(사용자 결정) 학급당 최대가 가장 작게 — a 3·b 2, b는 34명 초과로 알린다.
+  const squeezed = plan([["a", 100], ["b", 100]], 5);
+  assert.equal(squeezed.ok, true);
+  assert.equal(squeezed.reason, "over-max");
+  assert.deepEqual(squeezed.counts, { a: 3, b: 2 });
+  assert.deepEqual(squeezed.over, ["b"]);
+  assert.equal(squeezed.minimum, 6);
+  assert.match(ctx.aggregatePlanMessage(squeezed), /34명 이하로는 최소 6학급이 필요하지만 목표 5학급에 맞춤 — 학급당 34명 초과 1과목/);
+  // 시뮬레이션(고른 분포) 2-1 택3: 최소 34학급 > 목표 33 → 33학급, 학급당 최대가 가장 작은 배분.
+  const uniform = plan([["물", 160], ["화", 172], ["생", 151], ["지", 174], ["세", 109], ["사", 117], ["문", 128]], 33);
+  assert.equal(Object.values(uniform.counts).reduce((a, b) => a + b, 0), 33);
+  assert.equal(uniform.over.length, 1);
+  // 개설 과목이 목표보다 많으면 과목마다 1학급으로도 못 맞춘다(값을 바꾸지 않음).
+  const tooMany = plan([["a", 10], ["b", 10], ["c", 10]], 2);
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.counts, null);
+  assert.match(ctx.aggregatePlanMessage(tooMany), /개설 과목이 목표 2학급보다 많아 .*폐강 결정 필요/);
   // 폐강 과목은 0학급으로 빠지고, 신청자 없는 과목도 0학급이다.
   assert.deepEqual(plan([["a", 50, true], ["b", 40], ["z", 0]], 3).counts, { a: 0, b: 3, z: 0 });
   // 최대 인원은 설정값을 쓴다(40명이면 80명은 2학급).
@@ -958,11 +969,12 @@ test("automatic class adjustment saves manual class counts, skips closed courses
   state.roundClosures["1"] = { "1:1": "closed" };
   ctx.adjustAggregateClassCounts("1", "2학년 1학기", "2-1 택2");
   assert.deepEqual(plain(state.classOverrides), { "1:0": 4, "1:2": 2 });
-  // 최대 10명이면 최소 5 + 3 = 8 > 목표 6 → 바꾸지 않고 이유를 돌려준다.
+  // 최대 10명이면 최소 5 + 3 = 8 > 목표 6 → 목표 6에 맞추고(A 4·C 2 = 지금 값 그대로) 학급당 10명 초과를 알린다.
   values["#maxClassSize"] = "10";
-  const impossible = ctx.adjustAggregateClassCounts("1");
-  assert.deepEqual(plain(impossible.changed), []);
-  assert.match(impossible.problems[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요해 목표 6학급과 맞출 수 없음/);
+  const squeezed = ctx.adjustAggregateClassCounts("1");
+  assert.deepEqual(plain(squeezed.changed), []);
+  assert.deepEqual(plain(squeezed.problems), []);
+  assert.match(squeezed.notes[0], /2-1 택2: 10명 이하로는 최소 8학급이 필요하지만 목표 6학급에 맞춤 — 학급당 10명 초과 2과목/);
   assert.deepEqual(plain(state.classOverrides), { "1:0": 4, "1:2": 2 });
   locked = true;
   assert.equal(ctx.adjustAggregateClassCounts("1"), null);

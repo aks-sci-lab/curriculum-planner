@@ -521,7 +521,10 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
   const courses = group.courses.map((course) => {
     const sections = entry.classCounts[course.key] !== undefined ? Number(entry.classCounts[course.key]) || 0 : course.classCount;
     const capacities = String(entry.capacities[course.key] || "").split(/[,\s]+/).map(Number).filter((value) => value > 0);
-    return { key: course.key, name: course.name, sections, capacity: base.capacity, capacities,
+    // 4단계가 목표 학급수에 맞추느라 학급당 최대 인원을 넘긴 과목(사용자 결정: 총 학급수 먼저)은 그 과목 정원을 신청 ÷ 분반으로 올려 받는다.
+    const demand = Number(course.enrollment) || 0;
+    const capacity = sections > 0 && demand > sections * base.capacity ? Math.ceil(demand / sections) : base.capacity;
+    return { key: course.key, name: course.name, sections, capacity, capacities,
       department: classSectionsCourseConf(settings, "courseDepartments", group.grade)[course.key] || course.department, room: classSectionsCourseConf(settings, "courseRooms", group.grade)[course.key] || "",
       credits: course.credits, mode: classSectionsCourseModes(settings, group)[course.key] === "class" ? "class" : "move" };
   });
@@ -1379,7 +1382,7 @@ function classSectionsResultHtml(round, group, entry, result, settings) {
   const errors = uniq(issues.filter((issue) => issue.severity === "error"));
   const warnings = uniq(issues.filter((issue) => issue.severity !== "error"));
   const suggestions = (explain.suggestions || []).map((item, index) => `<li>${esc(item.message)}${item.verified ? ' <span class="cs-tag">확인됨</span>' : ""}
-    ${["capacity", "sections", "block-limit", "more-blocks", "class-unit", "class-unit-rooms"].includes(item.type) ? `<button class="button" type="button" data-cs-apply="${index}">제안 적용</button>`
+    ${["capacity", "sections", "more-blocks", "class-unit", "class-unit-rooms"].includes(item.type) ? `<button class="button" type="button" data-cs-apply="${index}">제안 적용</button>`
       : item.type === "recommend-times" ? `<button class="button" type="button" data-cs-apply="${index}">블록 시간 추천 실행</button>` : ""}</li>`).join("");
   const causes = (explain.causes || []).map((item) => `<li>${esc(item.message)}</li>`).join("");
   const blocks = result.blocks.map((block) => {
@@ -1607,8 +1610,6 @@ async function classSectionsApplySuggestion(index) {
     if (classSectionsPlain(entry.classUnit.assign)) for (const [room, key] of Object.entries(entry.classUnit.assign)) if (!key) delete entry.classUnit.assign[room];
   } else if (item.type === "recommend-times") {
     return void classSectionsRecommendTimesCurrent();
-  } else if (item.type === "block-limit") {
-    entry.maxSectionsPerBlock = item.maxSectionsPerBlock;
   }
   classSectionsChanged(false);
   classSectionsSolveCurrent("solve");

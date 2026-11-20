@@ -1886,16 +1886,10 @@ function classSectionsSuggest(model, place, result, rng, deadline, input) {
   const suggestions = [];
   const maxTotal = model.blocks.reduce((sum, block) => sum + block.maxSections, 0);
   if (model.sections.length > maxTotal) {
-    // 분반이 블록에 다 들어가지 않으면 정원 올리기(같은 분반 수)로는 풀리지 않는다 → 분반 수 줄이기·블록 한도 늘리기.
+    // 분반이 블록에 다 들어가지 않으면 정원 올리기(같은 분반 수)로는 풀리지 않는다 → 분반 수 줄이기.
     const fewer = classSectionsSectionsSuggestion(model, input, deadline);
     if (fewer) suggestions.push(fewer);
-    const need = Math.ceil(model.sections.length / model.blocks.length);
-    if (input && !(deadline && classSectionsNow() > deadline)) {
-      const trial = classSectionsSolve({ ...input, maxSectionsPerBlock: need,
-        blocks: Array.isArray(input.blocks) ? input.blocks.map((block) => ({ ...block, maxSections: Math.max(need, Number(block.maxSections) || 0) })) : input.blocks, suggest: false });
-      if (trial.explain.feasible) suggestions.push({ type: "block-limit", verified: true, maxSectionsPerBlock: need,
-        message: `블록당 최대 분반을 ${need}개로 늘리면 지금 분반 수·정원으로 모두 배정됩니다.` });
-    }
+    // 블록당 최대 분반(= 내년 학급 수)은 늘리자고 하지 않는다(사용자 결정 2026-11-20: 최대 분반은 무조건 지킴 — 넘으면 교실이 모자람).
     // 블록 한도와 함께 교사 수도 모자라면(예: 택1 한 블록) 블록 늘리기·학급 단위 제안도 함께.
     suggestions.push(...classSectionsTeacherSuggestions(model, result, input, deadline).filter((item) => !suggestions.some((other) => other.type === item.type)));
     return suggestions;
@@ -1934,17 +1928,6 @@ function classSectionsSuggest(model, place, result, rng, deadline, input) {
     const maxTo = Math.max(...raise.map((item) => item.to));
     suggestions.push({ type: "capacity", source, sections: raise, verified: true,
       message: `${top}${parts.length > 4 ? ` 등 모두 ${raise.length}개` : ""} 분반을 ${maxTo}명${raise.some((item) => item.to !== maxTo) ? "까지" : ""}으로 올리면 모두 배정됩니다${source === "new-placement" ? "(블록 배치도 바뀜)" : ""}.` });
-  }
-  // 3) 블록당 최대 분반 +1
-  const limited = model.blocks.every((block) => Number.isFinite(block.maxSections));
-  if (limited && input && !(deadline && classSectionsNow() > deadline)) {
-    const more = classSectionsNormalize({ ...input, maxSectionsPerBlock: Math.max(...model.blocks.map((block) => block.maxSections)) + 1,
-      blocks: Array.isArray(input.blocks) ? input.blocks.map((block) => ({ ...block, maxSections: block.maxSections ? block.maxSections + 1 : block.maxSections })) : input.blocks, suggest: false });
-    const found = classSectionsPlace(more, classSectionsRng(model.seed + 11), deadline, null);
-    if (found.router.overflow === 0 && found.router.impossible === 0 && !found.issues.length) {
-      suggestions.push({ type: "block-limit", verified: true, maxSectionsPerBlock: more.blocks[0].maxSections,
-        message: `블록당 최대 분반을 ${more.blocks[0].maxSections}개로 늘리면 지금 정원으로 모두 배정됩니다.` });
-    }
   }
   if (structural) suggestions.push({ type: "structural", message: "폐강 과목 신청·블록 수보다 많은 신청은 정원으로 풀리지 않습니다(재신청 또는 블록 수 조정)." });
   return suggestions;

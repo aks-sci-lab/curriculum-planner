@@ -472,7 +472,8 @@ test("more sections than blocks × limit: not feasible, cause shown, and a verif
     ? { ...course, sections: changed.get(course.key).toSections, capacity: changed.get(course.key).capacity } : course) }));
   assert.equal(applied.explain.feasible, true, applied.explain.summary);
   assert.ok(applied.metrics.blockSections.every((count) => count <= 11));
-  assert.ok(result.explain.suggestions.some((item) => item.type === "block-limit" && item.maxSectionsPerBlock === 12));
+  // 블록당 최대 분반은 늘리자고 하지 않는다(사용자 결정: 최대 분반은 무조건 지킴).
+  assert.ok(!result.explain.suggestions.some((item) => item.type === "block-limit"), JSON.stringify(result.explain.suggestions));
 });
 
 test("min cost flow and the worker source run the same solver", () => {
