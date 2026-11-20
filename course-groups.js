@@ -470,10 +470,17 @@ function validateApplicationGroupData(groups, seeded) {
       const gradeGroups = groups.filter((g) => g.grade === grade && g.semester === semester);
       const assigned = new Set(gradeGroups.flatMap((g) => g.courses));
       const unassigned = courses.filter((course) => !assigned.has(course.subject));
+      // 학기 머리: 과목·그룹 수, 미분류는 있을 때만 경고 표시
       const heading = document.createElement("h4");
-      heading.textContent = `${semester==="0"?"학기 미정":semester+"학기"} · ${courses.length}과목 · ${gradeGroups.length}그룹 · 미분류 ${unassigned.length}`;
+      heading.textContent = `${semester==="0"?"학기 미정":semester+"학기"} · ${courses.length}과목 · ${gradeGroups.length}그룹`;
+      if (unassigned.length) {
+        const warn = document.createElement("span");
+        warn.className = "course-group-unassigned-count";
+        warn.textContent = `미분류 ${unassigned.length}`;
+        heading.appendChild(document.createTextNode(" ")); heading.appendChild(warn);
+      }
       scopePanel.appendChild(heading);
-      scopePanel.appendChild(button("새 선택 그룹 추가", () => {
+      scopePanel.appendChild(button("＋ 그룹 추가", () => {
         groups.push({ id: crypto.randomUUID(), grade, semester, name: `선택 그룹 ${gradeGroups.length + 1}`, count: null, courses: [] });
         persist();
         renderCourseGroups();
@@ -501,7 +508,20 @@ function validateApplicationGroupData(groups, seeded) {
         });
         if (group.fill) panel.style.borderTop=`6px solid ${group.fill}`;
         const legend = document.createElement("legend");
-        legend.textContent = `${group.name} (${group.courses.length}과목)${group.linked ? " · 편제표 택n 연동" : ""}`; panel.appendChild(legend);
+        legend.textContent = `${group.name} `;
+        const legendCount = document.createElement("span");
+        legendCount.className = "course-group-legend-count";
+        legendCount.textContent = `${group.courses.length}과목`;
+        legend.appendChild(legendCount);
+        panel.appendChild(legend);
+        if (group.linked) {
+          // 편제표 택n 묶음과 연결된 그룹: 이름·선택 수는 1단계에서 정하므로 입력 칸 대신 짧은 표시만(설명은 title·'그룹 설정 방법' 팝업).
+          const badge = document.createElement("span");
+          badge.className = "course-group-linked-badge";
+          badge.textContent = "편제표 연동";
+          badge.title = `편제표 택${group.count} 묶음과 연결된 그룹입니다. 과목 칩을 다른 그룹으로 끌면 확인 후 1단계 편제표의 묶음이 바뀝니다. 그룹 이름·선택 수는 1단계 편제표 묶음 띠에서 수정하세요.`;
+          legend.appendChild(document.createTextNode(" ")); legend.appendChild(badge);
+        }
         const nameLabel = document.createElement("label"); nameLabel.textContent = "그룹명 ";
         nameLabel.className = "course-group-name";
         const input = document.createElement("input"); input.value = group.name; input.maxLength = 100;
@@ -514,7 +534,7 @@ function validateApplicationGroupData(groups, seeded) {
           persist();
           renderCourseGroups();
         };
-        nameLabel.appendChild(input); panel.appendChild(nameLabel);
+        nameLabel.appendChild(input); if (!group.linked) panel.appendChild(nameLabel);
         const countLabel = document.createElement("label"); countLabel.textContent = "선택 수";
         countLabel.className = "course-group-count";
         const count = document.createElement("input"); count.type = "number"; count.min = "0"; count.max = String(group.courses.length);
@@ -537,22 +557,11 @@ function validateApplicationGroupData(groups, seeded) {
           }
           persist(); renderCourseGroups();
         };
-        countLabel.appendChild(count); panel.appendChild(countLabel);
-        if (group.linked) {
-          input.disabled = true;
-          count.disabled = true;
-          // 긴 안내 문장은 카드마다 반복하지 않고 마우스를 올리면 보이게 한다(전체 설명은 '그룹 설정 방법' 팝업).
-          const linkedNote = document.createElement("p");
-          linkedNote.className = "note course-group-linked-note";
-          linkedNote.textContent = "선택 수는 1단계 편제표에서 · 과목은 끌어 옮기면 편제표에 반영";
-          linkedNote.title = `편제표 택${group.count} 묶음과 연결된 그룹입니다. 과목 칩을 다른 그룹으로 끌면 확인 후 1단계 편제표의 묶음이 바뀝니다. 선택 수는 1단계 편제표 묶음 띠에서 수정하세요.`;
-          panel.appendChild(linkedNote);
-        }
+        countLabel.appendChild(count); if (!group.linked) panel.appendChild(countLabel);
         const subjectList = document.createElement("p");
         subjectList.className = "course-group-subject-summary";
         if (!group.courses.length) subjectList.textContent = "과목을 여기에 끌어 놓으세요.";
-        group.courses.forEach((subject, index) => {
-          if (index) subjectList.appendChild(document.createTextNode(" · "));
+        group.courses.forEach((subject) => {
           const course = available.get(`${grade}:${semester}:${subject}`);
           if (course) subjectList.appendChild(makeDraggableCourse(course));
         });
@@ -571,12 +580,13 @@ function validateApplicationGroupData(groups, seeded) {
       const unassignedPanel = document.createElement("section");
       unassignedPanel.className = "course-group-unassigned";
       const unassignedTitle = document.createElement("strong");
+      // 미분류가 없으면 눈에 띄지 않는 놓는 자리(점선)만, 있으면 노란 경고 칸.
+      unassignedPanel.classList.toggle("is-empty", !unassigned.length);
       unassignedTitle.textContent = unassigned.length
-        ? `과목군 미지정 ${unassigned.length}과목`
-        : "과목군 미지정 없음 · 그룹에서 해제하려면 여기에 놓으세요";
+        ? `미분류 ${unassigned.length}과목 · 그룹으로 끌어 놓으세요`
+        : "미분류 없음 · 그룹에서 뺄 과목은 여기에 놓기";
       const unassignedList = document.createElement("p");
-      unassigned.forEach((course, index) => {
-        if (index) unassignedList.appendChild(document.createTextNode(" · "));
+      unassigned.forEach((course) => {
         unassignedList.appendChild(makeDraggableCourse(course));
       });
       unassignedPanel.addEventListener("dragover", (event) => {
@@ -660,8 +670,10 @@ function validateApplicationGroupData(groups, seeded) {
       switchApplicationGroupCohort(cohortYearForPlanGrade(String(Number(grade) + 1)));
     }
     const cohortYear = typeof getApplicationCohortYear === "function" ? getApplicationCohortYear(grade) : "";
-    document.getElementById("applicationGradeDescription").textContent =
-      `현재 ${grade}학년 학생(${cohortYear}학년도 신입생)의 해당 3개년 편제표에서 ${Number(grade) + 1}학년 과목을 확인합니다. 올해 전학년 편제표는 수강신청 과목 기준으로 사용하지 않습니다.`;
+    // 한 줄 출처 표시(긴 설명은 title): 어느 편제표의 몇 학년 열인지.
+    const gradeDescription = document.getElementById("applicationGradeDescription");
+    gradeDescription.textContent = `기준: ${cohortYear}학년도 입학생 편제표 ${Number(grade) + 1}학년 열`;
+    gradeDescription.title = `현재 ${grade}학년 학생(${cohortYear}학년도 신입생)의 3개년 편제표에서 ${Number(grade) + 1}학년 과목을 가져옵니다. 올해 전학년 편제표는 수강신청 과목 기준으로 쓰지 않습니다.`;
     setApplicationTargetGrades([String(Number(grade) + 1)]);
     renderApplicationSubjects();
     renderRoundStatus();
