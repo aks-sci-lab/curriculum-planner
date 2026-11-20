@@ -1208,6 +1208,15 @@ function timetableChoicesHtml(list) {
   return `<div class="tt-choices"><span class="tt-choices-title">선택지(무엇을 양보할지 고르세요)</span><ul>${list.map(row).join("")}</ul></div>`;
 }
 
+// 스크롤을 줄이려고(UI 규칙) 항목마다 선택지는 접어 두고 요약 한 줄만 보인다. 펼친 상태는 TIMETABLE_VIEW.open['fold:…']에 둔다.
+function timetableChoicesFoldHtml(list, key) {
+  const inner = timetableChoicesHtml(list);
+  if (!inner) return "";
+  const solved = list.filter((choice) => choice.kind === "setting" && choice.effect?.solved).length;
+  const open = TIMETABLE_VIEW.open[`fold:choices:${key}`] ? " open" : "";
+  return `<details class="tt-choices-fold" data-tt-fold="choices:${timetableEsc(key)}"${open}><summary>선택지 ${list.length}개${solved ? ` · 바로 풀리는 것 ${solved}개` : ""}</summary>${inner}</details>`;
+}
+
 function timetableIssuesHtml(result, choices) {
   const shown = result.issues.filter((issue) => issue.level !== "info");
   const info = result.issues.filter((issue) => issue.level === "info");
@@ -1215,7 +1224,7 @@ function timetableIssuesHtml(result, choices) {
     <span class="tt-level" data-level="${issue.level}">${TIMETABLE_ISSUE_LABELS[issue.level] || issue.level}</span>
     <span class="tt-cause">${timetableEsc(issue.cause)}</span>
     ${issue.where?.length ? `<span class="tt-where">고칠 곳 ${timetableWhereButtons(issue.where)}</span>` : ""}
-    ${issue.level === "fail" ? timetableChoicesHtml(choices?.get(timetableIssueKey(issue))) : ""}</li>`;
+    ${issue.level === "fail" ? timetableChoicesFoldHtml(choices?.get(timetableIssueKey(issue)), timetableIssueKey(issue)) : ""}</li>`;
   return `<section class="cs-card" id="timetablePrecheck" data-count="${shown.length}">
     <h4>사전 점검 <span class="cs-note">계산 전에 1초 안에 도는 필요 조건 점검입니다. '조건 위반'은 지금 조건으로는 반드시 걸리는 곳이고, 항목마다 고를 수 있는 선택지와 예상 효과를 보여 줍니다(자동으로 풀지 않습니다).</span></h4>
     ${shown.length ? `<ul class="tt-issues">${shown.map(item).join("")}</ul>` : '<p class="cs-note">걸리는 곳이 없습니다.</p>'}
@@ -1224,10 +1233,12 @@ function timetableIssuesHtml(result, choices) {
 
 function timetableAssumptionsHtml(prepared) {
   if (!prepared.assumptions.length) return "";
-  return `<section class="cs-card" id="timetableAssumptions" data-count="${prepared.assumptions.length}">
-    <h4>가정 ${prepared.assumptions.length}건 <span class="cs-note">자료가 없어 기본값으로 채운 것입니다. 실제 값을 넣으면 사라집니다.</span></h4>
+  // 가정 목록은 길어서(9건 안팎) 접어 두고 제목 줄만 보인다(UI 규칙: 스크롤 줄이기).
+  const open = TIMETABLE_VIEW.open["fold:assumptions"] ? " open" : "";
+  return `<details class="cs-card tt-fold-card" id="timetableAssumptions" data-count="${prepared.assumptions.length}" data-tt-fold="assumptions"${open}>
+    <summary><h4>가정 ${prepared.assumptions.length}건 <span class="cs-note">자료가 없어 기본값으로 채운 것입니다. 실제 값을 넣으면 사라집니다.</span></h4></summary>
     <ul class="tt-issues">${prepared.assumptions.map((entry) => `<li class="tt-issue" data-tt-assumption="${timetableEsc(entry.key)}"><span class="tt-level" data-level="assume">가정</span>
-      <span class="tt-cause">${timetableEsc(entry.text)}</span><span class="tt-where">넣는 곳 ${timetableWhereButtons([entry.where])}</span></li>`).join("")}</ul></section>`;
+      <span class="tt-cause">${timetableEsc(entry.text)}</span><span class="tt-where">넣는 곳 ${timetableWhereButtons([entry.where])}</span></li>`).join("")}</ul></details>`;
 }
 
 function timetableGradesHtml(result) {
@@ -2260,8 +2271,14 @@ function timetableGoto(key, step) {
     target?.querySelector("input, select")?.focus?.();
     return;
   }
+  // 교사 명단은 문서 맨 아래 팝업(6단계 교사·시간 설정)이라 단계를 옮기지 않고 그대로 연다(UI 규칙: 화면 전환 대신 팝업). 닫으면 다시 점검.
+  const teacherDialog = key === "teachers" ? document.getElementById("classSectionsTeacherDialog") : null;
+  if (teacherDialog && document.getElementById("classSectionsTeachersOpen")) {
+    teacherDialog.addEventListener("close", () => renderTimetable(), { once: true });
+    document.getElementById("classSectionsTeachersOpen").click();
+    return;
+  }
   if (typeof switchWorkflowStep === "function") switchWorkflowStep(Number(step));
-  if (key === "teachers") document.getElementById("classSectionsTeachersOpen")?.click();
 }
 
 function timetableHandleClick(event) {
@@ -2348,7 +2365,12 @@ function initTimetable() {
   panel.addEventListener("change", timetableHandleChange);
   panel.addEventListener("keydown", (event) => { const cell = event.target?.closest?.("[data-tt-edit]"); if (cell && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); timetableEditClick(cell.dataset.ttEdit); } });
   // 접는 영역을 연 상태를 기억한다(다시 그려도 그대로). toggle은 위로 올라오지 않아 잡는 단계에서 받는다.
-  panel.addEventListener("toggle", (event) => { const key = event.target?.dataset?.ttSection; if (key) TIMETABLE_VIEW.open[key] = event.target.open; }, true);
+  panel.addEventListener("toggle", (event) => {
+    const data = event.target?.dataset || {};
+    if (data.ttSection) TIMETABLE_VIEW.open[data.ttSection] = event.target.open;
+    // 접어 둔 선택지·가정 목록: 펼친 것은 다시 그려도 펼친 채로(화면 상태만).
+    if (data.ttFold) TIMETABLE_VIEW.open[`fold:${data.ttFold}`] = event.target.open;
+  }, true);
 }
 
 if (typeof document !== "undefined" && document.getElementById) {

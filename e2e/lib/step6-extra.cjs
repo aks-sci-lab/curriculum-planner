@@ -837,7 +837,7 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
   // 화면: 범위 '담임반별'
   const view = page.locator("#classSectionsAttendanceView");
   if (!(await view.evaluate((el) => el.open).catch(() => true))) { await view.locator("summary").click(); await sleep(300); }
-  await page.locator("#classSectionsAttendanceScope").selectOption("homeroom"); await sleep(500);
+  { const v = page.locator("#classSectionsAttendanceView"); if ((await v.count()) && !(await v.evaluate((el) => el.open))) { await v.locator("summary").first().click(); await sleep(300); } } await page.locator("#classSectionsAttendanceScope").selectOption("homeroom"); await sleep(500);
   const options = await page.locator("#classSectionsHomeroomPick option").evaluateAll((els) => els.map((o) => ({ value: o.value, text: o.textContent })));
   const firstOwn = options.findIndex((o) => new RegExp(`(내년 ${Number(groupKey[0]) + 1}|현 ${groupKey[0]})학년`).test(o.text));
   if (firstOwn >= 0) { await page.locator("#classSectionsHomeroomPick").selectOption(options[firstOwn].value); await sleep(400); }
@@ -883,7 +883,7 @@ async function homeroomScenario({ page, h, info, groupKey, dir, classMap, nextCl
     if (mapGrades.includes(g)) h.check(note && ["map", "roster"].includes(note.basis) && /미제출 \d+명/.test(note.text), "중요", "6단계", `담임반 화면(현${g}, 내년 반 배정표): '미제출 n명 · 내년 반 배정표 기준' 요약이 없음`, { actual: note });
     else h.check(note && /미제출 확인 불가/.test(note.text), "중요", "6단계", `담임반 화면(현${g}, 그대로 올라감·명렬 없음): '미제출 확인 불가' 안내가 없음`, { actual: note });
   }
-  await page.locator("#classSectionsAttendanceScope").selectOption("group"); await sleep(300);
+  { const v = page.locator("#classSectionsAttendanceView"); if ((await v.count()) && !(await v.evaluate((el) => el.open))) { await v.locator("summary").first().click(); await sleep(300); } } await page.locator("#classSectionsAttendanceScope").selectOption("group"); await sleep(300);
   out.sections = sections;
   return out;
 }

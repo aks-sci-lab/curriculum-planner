@@ -241,7 +241,7 @@ test("screen tidy-up: status belongs to its group, readable section names with t
   assert.equal(ctx.classSectionsCircled(2), "②");
   const view = fs.readFileSync(path.join(root, "class-sections-view.js"), "utf8");
   assert.match(view, /나이스 \$\{esc\(section\.roomName\)\}/, "card shows the NEIS room name in small text");
-  assert.match(view, /> 블록 고정<\/label>/);
+  assert.match(view, /블록 고정"> 고정<\/label>/, "pin checkbox keeps its full label, short visible text (two-line card)");
   assert.match(view, /같은 담임반 학생이 같은 분반에 모인 비율/);
   // 그룹 순서: 현 학년 → 학기 → 택n 큰 것
   assert.match(view, /a\.grade\.localeCompare\(b\.grade\) \|\| a\.semester\.localeCompare\(b\.semester\)/);

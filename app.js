@@ -4689,6 +4689,130 @@
       return true;
     }
 
+    // 5단계 등 다른 단계에서 4단계 과목 하나를 화면 이동 없이 고치는 팝업(UI 규칙: 화면 전환 대신 팝업).
+    // 4단계 집계표와 같은 계산(aggregateRecords)으로 그 과목을 찾아 신청 인원·그룹 목표·개설 학급수·개설/폐강/미정을 보여 주고,
+    // 값은 4단계 칸과 같은 곳(state.classOverrides, setAggregateClosure)에 쓴다. 못 찾으면 예전처럼 4단계로 간다.
+    function aggregateQuickCourse(currentGrade, semester, subject) {
+      if (!state.students?.length || !state.courses?.length) return null;
+      let thresholds;
+      try { thresholds = aggregateThresholds(); } catch (error) { return null; }
+      const key = (text) => typeof normalizeResultCourseName === "function" ? normalizeResultCourseName(text) : String(text || "").replace(/\s+/g, "");
+      const round = String(state.currentRound);
+      const closures = typeof effectiveRoundClosures === "function" ? effectiveRoundClosures(round) : state.roundClosures?.[round] || {};
+      const classBases = typeof nextYearClassBases === "function" ? nextYearClassBases() : {};
+      const grade = String(currentGrade);
+      const aggregate = aggregateRecords(
+        state.students.filter((student) => String(student.grade) === grade), state.courses, thresholds.openingPercent, thresholds.divisionPercent,
+        state.classOverrides, state.semesterAssignments, state.groupAssignments, classBases, closures
+      );
+      const report = aggregate.reports.find((item) => String(item.summary.grade) === grade);
+      const head = `${Number(grade) + 1}학년 ${semester}학기`;
+      const wanted = key(subject);
+      for (const semesterItem of report?.semesters || []) {
+        if (semesterItem.name !== head) continue;
+        for (const group of semesterItem.groups) {
+          const course = group.courses.find((item) => [item.displayName, item.subjectName, item.name].some((name) => key(name) === wanted));
+          if (course) {
+            const courseKey = `${grade}:${course.column}`;
+            return { round, grade, head, group, course, courseKey, summary: report.summary,
+              decision: aggregateClosureDecision(closures, courseKey, course.atRisk),
+              locked: typeof isRoundLocked === "function" && isRoundLocked(round),
+              target: aggregateGroupTarget(group, report.summary.classes) };
+          }
+        }
+      }
+      return null;
+    }
+
+    function openAggregateCourseQuick(currentGrade, semester, subject, { onChange } = {}) {
+      const info = aggregateQuickCourse(currentGrade, semester, subject);
+      if (!info) return focusAggregateCourse(currentGrade, semester, subject);
+      let dialog = document.getElementById("aggregateQuickDialog");
+      if (!dialog) {
+        const holder = document.createElement("div");
+        holder.innerHTML = '<dialog class="curriculum-subject-dialog aggregate-quick-dialog" id="aggregateQuickDialog" aria-labelledby="aggregateQuickTitle"></dialog>';
+        dialog = holder.firstElementChild;
+        document.body.append(dialog);
+        const refresh = () => {
+          const args = dialog.quickArgs;
+          if (!args) return;
+          const next = aggregateQuickCourse(...args);
+          if (next) dialog.innerHTML = aggregateCourseQuickHtml(next);
+          dialog.quickOnChange?.();
+        };
+        dialog.addEventListener("click", (event) => {
+          const args = dialog.quickArgs;
+          const choice = event.target.closest("[data-quick-closure]");
+          if (choice && !choice.disabled) {
+            const current = aggregateQuickCourse(...args);
+            if (current) setAggregateClosure(current.round, current.courseKey, choice.dataset.quickClosure);
+            refresh();
+            return;
+          }
+          if (event.target.closest("[data-quick-goto4]")) {
+            dialog.close();
+            focusAggregateCourse(...args);
+            return;
+          }
+          if (event.target.closest("[data-quick-close]") || event.target === dialog) dialog.close();
+        });
+        dialog.addEventListener("change", (event) => {
+          const input = event.target.closest("[data-quick-classes]");
+          if (!input) return;
+          const current = aggregateQuickCourse(...dialog.quickArgs);
+          if (!current || current.locked || current.course.closed) { refresh(); return; }
+          const value = input.value === "" ? null : Number(input.value);
+          if (value !== null && (!Number.isInteger(value) || value < 0)) {
+            input.setCustomValidity("0 이상의 정수를 입력하세요.");
+            input.reportValidity();
+            input.setCustomValidity("");
+            return;
+          }
+          if (value === null) delete state.classOverrides[current.courseKey];
+          else state.classOverrides[current.courseKey] = value;
+          aggregateAdjustUndo = null;
+          persistStateSoon();
+          renderAggregate();
+          refresh();
+          dialog.querySelector("[data-quick-classes]")?.focus();
+        });
+      }
+      dialog.quickArgs = [currentGrade, semester, subject];
+      dialog.quickOnChange = onChange || null;
+      dialog.innerHTML = aggregateCourseQuickHtml(info);
+      if (!dialog.open) { if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", ""); }
+      (dialog.querySelector("[data-quick-classes]:not(:disabled)") || dialog.querySelector("[data-quick-close]"))?.focus();
+      return true;
+    }
+
+    function aggregateCourseQuickHtml(info) {
+      const { course, group, summary, decision, locked, target } = info;
+      const name = course.displayName || course.name;
+      const total = group.courses.reduce((sum, item) => sum + (Number(item.classCount) || 0), 0);
+      const perClass = course.classCount ? (course.enrollment / course.classCount).toFixed(1) : "-";
+      const decisionText = course.closed ? "폐강" : decision === "open" ? "개설" : "미정";
+      const choices = [["open", "개설"], ["closed", "폐강"], ["", "미정"]].map(([value, text]) =>
+        `<button type="button" class="aggregate-course-choice${value === "closed" ? " is-closed" : ""}" data-quick-closure="${value}" aria-pressed="${value === decision}"${locked ? " disabled" : ""}>${text}</button>`).join("");
+      const groupLine = `${escapeHtml(group.category)} · 그룹 합계 ${total}학급${target !== null ? ` / 목표 ${target}학급${target !== total ? ' <strong class="aggregate-quick-off">맞지 않음</strong>' : ""}` : ""}`;
+      const inputLock = locked ? " disabled" : course.closed ? ' disabled title="폐강으로 정한 과목은 0학급입니다. 결정을 바꾸면 고칠 수 있습니다."' : "";
+      return `<h2 id="aggregateQuickTitle">${escapeHtml(info.head)} ${escapeHtml(name)}</h2>
+        <p class="note">4단계 집계·개설 확정 값 · ${escapeHtml(info.round)}차 · 현 ${escapeHtml(info.grade)}학년 신청${locked ? " · 확정됨(수정 잠금)" : ""}</p>
+        <dl class="aggregate-quick-facts">
+          <div><dt>신청 인원</dt><dd>${course.enrollment}명${course.atRisk ? ' <strong class="aggregate-quick-off">개설 기준 미달</strong>' : ""}</dd></div>
+          <div><dt>학급당</dt><dd>${perClass}명 <small>(추천 ${course.recommendedClasses}학급)</small></dd></div>
+          <div><dt>선택 그룹</dt><dd>${groupLine}</dd></div>
+          <div><dt>개설 결정</dt><dd>${decisionText}</dd></div>
+        </dl>
+        <label class="aggregate-quick-input">개설 학급수
+          <input type="number" min="0" step="1" value="${escapeHtml(String(course.classCount))}" data-quick-classes aria-label="${escapeHtml(`${info.head} ${name} 개설 학급수`)}"${inputLock}></label>
+        <div class="aggregate-course-choices" role="group" aria-label="개설 결정">${choices}</div>
+        <p class="note">${locked ? `${escapeHtml(info.round)}차가 확정되어 바꿀 수 없습니다. 확정을 해제하려면 4단계에서 하세요.` : "바꾸면 4단계 집계표와 이 화면에 바로 반영됩니다."}</p>
+        <div class="curriculum-version-dialog-actions">
+          <button type="button" class="button" data-quick-goto4>4단계 집계표에서 보기</button>
+          <button type="button" class="button button-primary" data-quick-close>닫기</button>
+        </div>`;
+    }
+
     // 교사 결정이 없으면 기준을 충족한 과목은 개설, 기준 미달 과목은 미정으로 본다(확정 스냅샷과 같은 기준).
     function aggregateClosureDecision(closures, key, atRisk) {
       return Object.hasOwn(closures || {}, key) ? closures[key] : atRisk ? "" : "open";

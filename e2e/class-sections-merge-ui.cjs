@@ -145,7 +145,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
     check(attendance.length === 66, `출석부 이 그룹 파일: 분반 ${attendance.length}장`, attendance.slice(0, 3).map((sheet) => sheet.name));
     check((await page.locator("#classSectionsAttendanceTable").count()) === 1, "출석부 미리 보기 표");
     // 담임반 현황·학생 배부용 쪽지(출석부 보기 범위 = 담임반별)
-    await page.getByLabel("출석부 보기 범위").selectOption("homeroom"); await sleep(800);
+    { const v = page.locator("#classSectionsAttendanceView"); if ((await v.count()) && !(await v.evaluate((el) => el.open))) { await v.locator("summary").first().click(); await sleep(300); } } await page.getByLabel("출석부 보기 범위").selectOption("homeroom"); await sleep(800);
     check((await page.locator("#classSectionsHomeroomTable").count()) === 1 && (await page.locator("#classSectionsHandoutPreview").count()) === 1, "담임반 현황 표·학생 배부용 쪽지 미리 보기");
     const slip = clean(await page.locator("#classSectionsHandoutPreview").innerText().catch(() => ""));
     check(new Set((slip.match(/[a-f]블록/g) || [])).size === 6, "배부용 쪽지에 블록 6개(a~f)", slip.slice(0, 200));

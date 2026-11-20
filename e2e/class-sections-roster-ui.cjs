@@ -33,6 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (await ok.count()) await ok.first().click().catch(() => {});
   await nav; await sleep(2500);
   await page.getByRole("button", { name: /6\. 분반 편성/ }).click(); await sleep(800);
+  { const view = page.locator("#classSectionsAttendanceView"); if ((await view.count()) && !(await view.evaluate((el) => el.open))) { await view.locator("summary").first().click(); await sleep(300); } }
   await page.getByLabel("출석부 보기 범위").selectOption("homeroom"); await sleep(600);
   const options = await page.getByLabel("담임반 고르기").locator("option").allInnerTexts();
   const idx = options.findIndex((text) => /내년 3학년|현 2학년/.test(text));

@@ -55,7 +55,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   check(first.length > 0 && first.every((item) => item.text.length > 10), `사전 점검 항목 ${first.length}건(원인 문장)`);
   const whereCount = await panel.locator("#timetablePrecheck .tt-goto").count();
   check(whereCount >= first.length, `항목마다 '고칠 곳' 단추(${whereCount}개)`);
-  const assumptions = await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts();
+  const assumptions = await panel.locator("#timetableAssumptions .tt-cause").allTextContents();
   check(assumptions.length >= 5 && assumptions.some((text) => /점심/.test(text)), `가정 목록 ${assumptions.length}건`, assumptions);
   check(assumptions.some((text) => /교사 0명 → 1명 배치로 계산\(5단계 교사 수에 넣으면 사라짐/.test(text)) && !first.some((item) => /^진로: .*담당 교사 없음/.test(item.text)),
     "교사 0명인데 수업이 있는 교과(진로)는 1명 배치로 계산(가정 표시), '담당 교사 없음'으로 나오지 않음", assumptions);
@@ -106,7 +106,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await panel.getByRole("button", { name: "학년별로 놓기" }).click(); await sleep(400);
   const creativeAfter = clean(await panel.locator("#timetableCreative").innerText());
   check(/학년별 2·2·2시간/.test(creativeAfter) && (await panel.locator('[data-tt-field="creative.school"]').inputValue()) === "0", "창체 '학년별로 놓기' → 전교 동시 0 · 학년별 2·2·2", { creativeBefore, creativeAfter });
-  check(!(await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts()).some((text) => /^창체/.test(text)), "창체 가정이 사라짐");
+  check(!(await panel.locator("#timetableAssumptions .tt-cause").allTextContents()).some((text) => /^창체/.test(text)), "창체 가정이 사라짐");
   // 학년마다 운영 방식 고르기: 3학년만 '교시 지정 없이 일반 수업처럼' → 3학년 시간 칸이 사라지고 1·2학년은 그대로, 세 학년 모두 고르면 방식 단추가 눌림
   await panel.locator('[data-tt-field="creative.mode:3"]').selectOption("class"); await sleep(300);
   check((await panel.locator('[data-tt-creative-grade="3"]').getAttribute("data-mode")) === "class" && (await panel.locator('[data-tt-field="creative.gradeTimes:3"]').count()) === 0
@@ -136,6 +136,9 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   const panelText = clean(await panel.innerText());
   check(!/증원|강사|순회|명 필요/.test(panelText) && (await panel.locator("#timetableTeacherAdd").count()) === 0, "교사를 늘리는 문구·입력이 없음", (panelText.match(/.{20}(증원|강사|순회|명 필요).{20}/) || [])[0]);
   await page.screenshot({ path: path.join(OUT, "03-choices.png"), fullPage: true });
+  // 선택지는 접혀 있다(UI 규칙: 스크롤 줄이기) — 요약 줄을 눌러 펼친 뒤 고른다.
+  check(!(await liberalItem.locator('[data-tt-choice="teacherRules"]').isVisible()) && /선택지 3개/.test(clean(await liberalItem.locator("details.tt-choices-fold > summary").innerText())), "선택지는 '선택지 n개' 한 줄로 접혀 있음");
+  await liberalItem.locator("details.tt-choices-fold > summary").click(); await sleep(200);
   await liberalItem.locator('[data-tt-choice="teacherRules"]').click(); await sleep(500);
   check(!(await issues()).some((item) => item.level === "fail" && /^교양: 맡을 수 있는 교사가 설 수 있는 시간/.test(item.text)), "선택 적용 → 교양 '설 수 있는 시간' 위반이 사라짐");
   check(/방금 바꾼 조건: 선택 — 교사 규칙 양보/.test(clean(await change.innerText())) && /풀림|달라짐/.test(clean(await change.innerText())), "변경 요약: 선택 — 교사 규칙 양보", clean(await change.innerText()).slice(0, 200));
@@ -159,10 +162,10 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await openSection("teachers");
 
   console.log("▶ 담임(6단계 교사 명단의 '담임' 칸) · 다른 교과 교사 허용 교과");
-  check(/담임 명단 없음/.test(clean(await panel.locator("#timetableHomeroomCount").innerText())) && (await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts()).some((text) => /^담임 명단 없음/.test(text)), "처음: 담임 명단 없음(가정)");
+  check(/담임 명단 없음/.test(clean(await panel.locator("#timetableHomeroomCount").innerText())) && (await panel.locator("#timetableAssumptions .tt-cause").allTextContents()).some((text) => /^담임 명단 없음/.test(text)), "처음: 담임 명단 없음(가정)");
   await panel.locator('[data-tt-section="teachers"] .tt-goto[data-tt-goto="teachers"]').first().click(); await sleep(700);
   const teacherDialog = page.locator("#classSectionsTeacherDialog");
-  check(await teacherDialog.evaluate((el) => el.open), "'고칠 곳: 6단계 교사 명단' → 6단계 교사·시간 설정 창이 열림");
+  check(await teacherDialog.evaluate((el) => el.open) && await panel.isVisible(), "'고칠 곳: 6단계 교사 명단' → 7단계 화면 그대로 6단계 교사·시간 설정 창(팝업)이 열림");
   const homeroom = teacherDialog.locator('[data-cs-t="0|homeroom"]');
   await homeroom.fill("5반"); await homeroom.press("Tab"); await sleep(400);
   check(/담임 '5반'를 읽지 못했습니다/.test(clean(await teacherDialog.locator("#classSectionsTeacherMessage").innerText())) && (await teacherDialog.locator('[data-cs-t="0|homeroom"]').inputValue()) === "", "담임 '5반'은 받지 않고 설정 창 안에 안내(예: 2-3)");
@@ -174,7 +177,7 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await openStep();
   await openSection("teachers"); await openSection("rules");
   check(/담임 1명/.test(clean(await panel.locator("#timetableHomeroomCount").innerText())), "7단계 교사 영역: 담임 1명");
-  check(!(await panel.locator("#timetableAssumptions .tt-cause").allInnerTexts()).some((text) => /^담임 명단 없음/.test(text)), "담임 가정이 사라짐");
+  check(!(await panel.locator("#timetableAssumptions .tt-cause").allTextContents()).some((text) => /^담임 명단 없음/.test(text)), "담임 가정이 사라짐");
   check((await panel.locator('[data-tt-field="rules.homeroom"]').inputValue()) === "soft", "담임 명단이 있으면 담임 규칙 '최대한'");
   check((await issues()).some((item) => /^담임이 정해지지 않은 반 \d+개/.test(item.text)), "담임이 정해지지 않은 반 알림");
   const openBoxes = await panel.locator('#timetableOpenDepartments input[data-tt-field^="open:"]').evaluateAll((els) => els.filter((el) => el.checked).map((el) => el.dataset.ttField));
@@ -210,13 +213,13 @@ const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
   await page.screenshot({ path: path.join(OUT, "04-split.png"), fullPage: true });
 
   console.log("▶ 고칠 곳 단추·새로고침");
-  const gotoHours = panel.locator('#timetablePrecheck .tt-goto[data-tt-step="7"]').first();
+  const gotoHours = panel.locator('#timetablePrecheck .tt-goto[data-tt-step="7"]:visible').first();
   if (await gotoHours.count()) {
     await gotoHours.click(); await sleep(500);
     check(await page.locator("#workflowStep7Panel").isVisible(), "'고칠 곳: 5단계 …' 단추 → 5단계 화면");
   } else check(false, "5단계로 가는 '고칠 곳' 단추가 없음");
   await openStep();
-  const gotoOwn = panel.locator('.tt-goto[data-tt-step="6"][data-tt-goto="rules"]').first();
+  const gotoOwn = panel.locator('.tt-goto[data-tt-step="6"][data-tt-goto="rules"]:visible').first();
   if (await gotoOwn.count()) { await gotoOwn.click(); await sleep(300); check(await panel.locator('[data-tt-section="rules"]').evaluate((el) => el.open), "'고칠 곳: 시간표 조건 · 규칙' → 규칙 영역이 열림"); }
   await sleep(600);
   await page.reload(); await page.waitForLoadState("networkidle"); await sleep(2500);
