@@ -1770,6 +1770,17 @@ function classSectionsClassUnitRoomsSuggestion(result, input, deadline) {
   return out;
 }
 
+// 블록을 하나 더 두면 그 학년 한 주에 그 블록 시수가 들어갈 칸이 남는지(7단계 사전 점검 P1과 같은 셈).
+// input.weekSpare = 지금 블록·반 수업·창체를 넣고 남는 주 칸 수(6단계 화면이 계산할 때 붙임). 모르면 null → 막지 않는다.
+// 돌려주는 값: { fits, hours(새 블록 시수), spare }
+function classSectionsExtraBlockRoom(model, input) {
+  const hours = Math.max(0, ...model.courses.filter((course) => course.mode !== "class").map((course) => Number(course.credits) || 0)) || 0;
+  const raw = input?.weekSpare;
+  const spare = raw === null || raw === undefined || raw === "" ? NaN : Number(raw);
+  if (!Number.isFinite(spare)) return { fits: true, hours, spare: null };
+  return { fits: hours <= spare, hours, spare };
+}
+
 function classSectionsTeacherSuggestions(model, result, input, deadline) {
   const short = (result.issues || []).filter((issue) => ["teacher-count", "teacher-shortage", "placement-forced"].includes(issue.type) && issue.severity === "error");
   if (!short.length || !input) return [];
@@ -1781,9 +1792,13 @@ function classSectionsTeacherSuggestions(model, result, input, deadline) {
   if (blockCount < CLASS_SECTIONS_BLOCK_LETTERS.length && !late()) {
     const letter = CLASS_SECTIONS_BLOCK_LETTERS[blockCount];
     const blocks = Array.isArray(input.blocks) ? [...input.blocks, { id: letter }] : blockCount + 1;
+    const room = classSectionsExtraBlockRoom(model, input);
     const trial = classSectionsSolve({ ...input, blocks, suggest: false });
-    if (ok(trial)) out.push({ type: "more-blocks", verified: true, blocks: blockCount + 1,
-      message: `블록을 ${blockCount + 1}개로 늘리면(새 블록 시간은 따로 정함) 교사 수 안에서 모두 배정됩니다.` });
+    // 교사 수로는 되어도 한 주 칸이 모자라면 시간표가 나오지 않으므로 제안하지 않고 이유만 알린다(적용 단추 없음).
+    if (ok(trial) && room.fits) out.push({ type: "more-blocks", verified: true, blocks: blockCount + 1, hours: room.hours,
+      message: `블록을 ${blockCount + 1}개로 늘리면(새 블록 시간은 시간표에서 정함) 교사 수 안에서 모두 배정됩니다${room.spare === null ? "" : ` · 한 주에 남는 칸 ${room.spare}칸 ≥ 새 블록 ${room.hours}시간`}.` });
+    else if (ok(trial)) out.push({ type: "week-full", verified: false, blocks: blockCount + 1, hours: room.hours, spare: room.spare,
+      message: `블록을 ${blockCount + 1}개로 늘리면 교사 수로는 배정되지만, ${model.targetGrade ? `${model.targetGrade}학년 ` : ""}한 주에 남는 칸이 ${room.spare}칸이라 ${room.hours}시간 블록을 더 넣으면 시간표가 나오지 않습니다(7단계 사전 점검 P1). 블록 수는 그대로 두었습니다.` });
   }
   // 학급 단위로: 과목 하나씩 → 안 되면 모자라는 교과의 과목 전부(예: 제2외국어 일본어·중국어 11분반 > 교사 2명).
   // 확인 = 그 과목을 듣는 반(그 반 전원)과 나머지 반(이동)이 함께 성립: 반 배분 → 학생 이동 과목 다시 만들기 → 다시 풀기.
@@ -2846,7 +2861,7 @@ function CLASS_SECTIONS_FUNCTIONS_FOR_WORKER() {
   return [classSectionsText, classSectionsCompact, classSectionsNow, classSectionsRng, classSectionsSlot, classSectionsSlots, classSectionsOverlap,
     classSectionsStable, classSectionsHash, classSectionsSignature, classSectionsStudentCourseList, classSectionsHomeroomOf, classSectionsChangedStudents,
     classSectionsNormalize, classSectionsSupply, classSectionsPlacementNew, classSectionsCanPlace, classSectionsPut, classSectionsCooccurrence,
-    classSectionsInitialPlacement, classSectionsJosa, classSectionsClassUnitTrial, classSectionsClassUnitRoomsSuggestion, classSectionsClassUnitStudents, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
+    classSectionsInitialPlacement, classSectionsJosa, classSectionsClassUnitTrial, classSectionsClassUnitRoomsSuggestion, classSectionsClassUnitStudents, classSectionsExtraBlockRoom, classSectionsTeacherSuggestions, classSectionsKeepMap, classSectionsKeepRoomNames, classSectionsKeyPart, classSectionsStudentKey, classSectionsUnits, classSectionsRouterNew, classSectionsCellCost, classSectionsEnumerate, classSectionsHomeArr,
     classSectionsUnitDelta, classSectionsUnitApply, classSectionsUnitPlaceOne, classSectionsRouterRebuild, classSectionsRouterRecount,
     classSectionsRouterCost, classSectionsRouterSnapshot, classSectionsRouterRestore, classSectionsRouterSearch, classSectionsRouterSnapshotY,
     classSectionsRouterRestoreY, classSectionsPlacementMove, classSectionsUndo, classSectionsPlace, classSectionsRoute, classSectionsMinCostFlow,

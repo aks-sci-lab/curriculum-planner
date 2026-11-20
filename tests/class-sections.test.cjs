@@ -739,6 +739,17 @@ test("6차·7차 계산: 서명에서 다른 학년 점유 제외, 학생 키 �
   assert.equal(shortResult.explain.suggestions.find((item) => item.type === "more-blocks").verified, true);
   assert.ok(types.includes("check-teachers"));
   assert.match(shortResult.explain.suggestions.find((item) => item.type === "check-teachers").message, /물리 교사가 그 시간에 모자랍니다/);
+  // 한 주 칸이 모자라면(7단계 사전 점검 P1) 블록 늘리기는 제안하지 않고 이유만(적용할 수 없는 안내)
+  const credited = { ...short, targetGrade: 2, courses: short.courses.map((course) => ({ ...course, credits: 3 })) };
+  const full = plain(ctx.classSectionsSolve({ ...credited, weekSpare: 2 }));
+  const fullTypes = full.explain.suggestions.map((item) => item.type);
+  assert.ok(!fullTypes.includes("more-blocks"), JSON.stringify(full.explain.suggestions));
+  const weekFull = full.explain.suggestions.find((item) => item.type === "week-full");
+  assert.ok(weekFull && weekFull.verified === false && weekFull.spare === 2 && weekFull.hours === 3, JSON.stringify(full.explain.suggestions));
+  assert.match(weekFull.message, /2학년 한 주에 남는 칸이 2칸이라 3시간 블록/);
+  const roomy = plain(ctx.classSectionsSolve({ ...credited, weekSpare: 3 }));
+  assert.match(roomy.explain.suggestions.find((item) => item.type === "more-blocks").message, /남는 칸 3칸 ≥ 새 블록 3시간/);
+  assert.equal(plain(ctx.classSectionsExtraBlockRoom({ courses: [{ mode: "move", credits: 3 }, { mode: "class", credits: 5 }] }, { weekSpare: null })).fits, true);
 });
 
 test("real-scale teacher shortages are actually solved by a verified suggestion (수학 11 > 10, 제2외국어 11 > 2, 지리 교사 2)", () => {

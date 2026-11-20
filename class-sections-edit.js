@@ -577,7 +577,7 @@ function classSectionsEditClick(target) {
     if (!context?.entry) return true;
     const count = Object.keys(context.entry.pins.sections || {}).length;
     context.entry.pins.sections = {};
-    classSectionsSetStatus(`블록 고정 ${count}개를 모두 풀었습니다. '편성 계산'을 누르면 블록 배치부터 다시 찾습니다.`);
+    classSectionsSetStatus(`블록 고정 ${count}개를 모두 풀었습니다. '자동 편성'을 누르면 블록 배치부터 다시 찾습니다.`);
     if (typeof classSectionsChanged === "function") classSectionsChanged();
     return true;
   }

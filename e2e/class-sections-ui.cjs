@@ -33,6 +33,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const groups = await page.locator("[data-cs-group]").allInnerTexts();
   console.log("groups:", groups.map((t) => t.replace(/\s+/g, " ")));
   await shot("01-step6-start.png");
+  // 메인 = '자동 편성' 단추, 기준·과목별 분반·블록 시간·방식은 '직접 조정'에 접혀 있음 → 펼치기(펼침은 이 PC에 기억)
+  const manual = page.locator("#classSectionsManual");
+  console.log("auto button:", await page.getByRole("button", { name: "자동 편성" }).isVisible(), "| manual open by default:", await manual.evaluate((el) => el.open),
+    "| summary:", (await page.locator("#classSectionsAutoSummary").innerText()).replace(/\s+/g, " "));
+  await manual.locator("summary").first().click(); await sleep(300);
+  console.log("manual open after click:", await manual.evaluate((el) => el.open));
   // 담당 교과 기본값(편제표 교과군): 사회와 문화가 '기타'가 아닌지
   const deptOf = async (name) => page.getByLabel(`${name} 담당 교과`).evaluate((el) => el.options[el.selectedIndex]?.textContent || "");
   console.log("dept 사회와 문화:", await deptOf("사회와 문화").catch(() => "(없음)"));
@@ -48,7 +54,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await page.locator("[data-cs-group]").first().click(); await sleep(300);
   }
   // 기본 편성
-  await page.getByRole("button", { name: "편성 계산" }).click();
+  await page.getByRole("button", { name: "이 그룹만 계산" }).click();
   await page.locator("#classSectionsSummary").waitFor({ timeout: 60000 });
   console.log("summary1:", await page.locator("#classSectionsSummary").innerText());
   await shot("02-solved.png");
@@ -88,7 +94,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.getByRole("button", { name: "닫기" }).first().click();
   // 블록 시간 추천 → 추천안 표 → 한 칸 고치기 → 추천 적용
   // 이미 열려 있으면(블록 시간이 있는 자료) 닫지 않는다.
-  await page.locator("details.cs-advanced").first().evaluate((el) => { el.open = true; });
+  await page.locator("#classSectionsBlocksBox").evaluate((el) => { el.open = true; });
   let t0 = Date.now();
   await page.getByRole("button", { name: "블록 시간 추천" }).click();
   await page.locator("#classSectionsTimesProposal").waitFor({ timeout: 60000 });
@@ -97,7 +103,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.getByRole("button", { name: "추천 적용" }).click(); await sleep(400);
   console.log("block a times:", await page.getByLabel("a블록 요일·교시").inputValue());
   console.log("stale badge:", await page.locator("#classSectionsStale").count());
-  await page.getByRole("button", { name: "편성 계산" }).click();
+  await page.getByRole("button", { name: "이 그룹만 계산" }).click();
   await sleep(500);
   await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
   console.log("summary2:", await page.locator("#classSectionsSummary").innerText());
@@ -107,7 +113,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const groupButtons = page.locator("[data-cs-group]");
   for (let i = 1; i < await groupButtons.count(); i++) {
     await groupButtons.nth(i).click(); await sleep(300);
-    await page.getByRole("button", { name: "편성 계산" }).click(); await sleep(500);
+    await page.getByRole("button", { name: "이 그룹만 계산" }).click(); await sleep(500);
     await page.waitForFunction(() => !document.querySelector("#classSectionsSolve")?.disabled, null, { timeout: 60000 });
     console.log(`group ${i}:`, (await groupButtons.nth(i).innerText()).replace(/\s+/g, " "), "|", await page.locator("#classSectionsSummary").innerText());
   }
@@ -116,7 +122,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await groupButtons.first().click(); await sleep(300);
   t0 = Date.now();
   // 계산 중에도 화면이 반응하는지(Worker): 계산을 시작한 직후 다른 입력에 글자를 넣어 본다.
-  await page.getByRole("button", { name: "전 학년 함께 다시 계산" }).click();
+  await page.getByRole("button", { name: "자동 편성" }).click();
   const typed = Date.now();
   await page.getByLabel("학생 찾기(현학년-반-번호)").fill("1-2-3").catch(() => {});
   console.log("typing during solve ms:", Date.now() - typed);

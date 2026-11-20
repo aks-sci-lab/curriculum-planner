@@ -21,6 +21,7 @@ const check = (ok, message, detail) => { if (!ok) { problems.push({ message, det
   const { server, url } = await startStaticServer(ROOT);
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 }, locale: "ko-KR", deviceScaleFactor: 1 });
+  await context.addInitScript(() => { try { localStorage.setItem("class-sections-manual-open", "1"); } catch { /* 보기 편의 */ } }); // 6단계 '직접 조정'을 펼쳐 둔 PC(펼치기 클릭 확인은 class-sections-ui.cjs)
   await context.route(/supabase\.co|googleapis|gstatic/, (route) => route.abort());
   const page = await context.newPage();
   const logs = [];
@@ -37,7 +38,7 @@ const check = (ok, message, detail) => { if (!ok) { problems.push({ message, det
   await page.locator("#workflowStep8Panel").waitFor({ state: "visible" });
   await sleep(800);
   const openAdvanced = async () => {
-    const details = page.locator("details.cs-advanced");
+    const details = page.locator("#classSectionsBlocksBox");
     if (await details.count() && !(await details.evaluate((el) => el.open))) { await details.locator("summary").click(); await sleep(300); }
   };
   const groups = await page.locator("[data-cs-group]").evaluateAll((els) => els.map((el) => ({ key: el.dataset.csGroup, text: el.textContent.replace(/\s+/g, " ").trim() })));
@@ -59,7 +60,7 @@ const check = (ok, message, detail) => { if (!ok) { problems.push({ message, det
   }
   if (unitOnly.length) {
     await page.locator(`[data-cs-group="${unitOnly[0].key}"]`).click(); await sleep(400); await openAdvanced();
-    await page.locator('details.cs-advanced').screenshot({ path: path.join(OUT, "01-class-unit-only.png") });
+    await page.locator('#classSectionsBlocksBox').screenshot({ path: path.join(OUT, "01-class-unit-only.png") });
   }
   // 블록 시간 추천(학급 단위 그룹이 있는 학기의 다른 그룹에서): 추천안 표에 학급 단위 그룹이 없음
   const unitSemester = unitOnly[0]?.key.split(":")[1];

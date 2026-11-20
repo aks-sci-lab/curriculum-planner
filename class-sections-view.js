@@ -4,7 +4,8 @@
 // 저장: state.classSections = { settings: {교사·고정 시간·특별실·기준}, "<차수>": { "<현학년>:<학기>:<그룹>": 그룹 설정 + sectionResult } }
 // 개인정보: 저장하는 학생 키는 '현학년-반-번호'뿐이다. 성명은 명렬표·나이스 내보내기 때 차수 자료에서 읽어 파일에만 쓴다.
 
-var CLASS_SECTIONS_VIEW = { round: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1 };
+var CLASS_SECTIONS_VIEW = { round: "", group: "", running: false, worker: null, workerFailed: false, compare: null, search: "", teacherSlot: -1, manualOpen: false };
+var CLASS_SECTIONS_MANUAL_KEY = "class-sections-manual-open"; // '직접 조정' 펼침(보기 편의, localStorage)
 var CLASS_SECTIONS_DAY_NAMES = ["월", "화", "수", "목", "금"];
 var CLASS_SECTIONS_PERIODS = 7;
 var CLASS_SECTIONS_MODE_OPTIONS = [["move", "완전 이동"], ["homeroom", "같은 담임반끼리 묶기 우선"], ["balance", "분반 인원 균형"]];
@@ -586,7 +587,40 @@ function classSectionsBuildInput(round, group, entry, extra = {}) {
 }
 
 // ---- 계산(Worker, 실패하면 메인 스레드) ----
+// 그 학년·학기 한 주에 블록을 더 넣을 칸이 몇 칸 남는지(7단계 사전 점검 P1과 같은 셈): 주 칸 − (가장 많은 반의 반 수업 + 창체) − 6단계 블록 시수.
+// 6단계 제안('블록을 n개로 늘리면')이 시간표가 나오지 않는 안을 내지 않게 계산 입력에 붙인다(classSectionsExtraBlockRoom). 모르면 null.
+// 입력 서명(classSectionsSignature)에는 넣지 않는다 — 다른 단계 자료가 바뀌었다고 '입력 변경됨'이 되지 않게.
+function classSectionsWeekSpare(input, memo = new Map()) {
+  if (!input || typeof timetablePrecheckFor !== "function") return null;
+  try {
+    const [round, ...rest] = String(input.groupId || "").split(":");
+    const key = rest.join(":");
+    const source = classSectionsSource(round);
+    const group = source?.groups?.find((item) => item.key === key);
+    if (!group) return null;
+    const memoKey = `${round}|${group.semester || "1"}`;
+    if (!memo.has(memoKey)) memo.set(memoKey, timetablePrecheckFor(round, String(group.semester || "1")));
+    const check = memo.get(memoKey);
+    const row = (check?.grades || []).find((item) => String(item.grade) === String(group.targetGrade));
+    if (!row || !(Number(row.slots) > 0)) return null;
+    const planned = classSectionsTimetablePrecheckFor(source, group, round)?.blockHours;
+    const blocks = Number.isFinite(Number(planned)) ? Number(planned) : Number(row.blockHours) || 0;
+    return Math.max(0, Number(row.slots) - (Number(row.total) - (Number(row.blockHours) || 0)) - blocks);
+  } catch {
+    return null;
+  }
+}
+
+function classSectionsWithWeekSpare(request) {
+  const input = request?.input;
+  if (!input) return request;
+  const memo = new Map(); // 같은 차수·학기 사전 점검은 한 번만
+  if (Array.isArray(input.groups)) return { ...request, input: { ...input, groups: input.groups.map((group) => (group.weekSpare !== undefined ? group : { ...group, weekSpare: classSectionsWeekSpare(group, memo) })) } };
+  return input.weekSpare !== undefined ? request : { ...request, input: { ...input, weekSpare: classSectionsWeekSpare(input) } };
+}
+
 function classSectionsRunSolver(request) {
+  request = classSectionsWithWeekSpare(request);
   if (!CLASS_SECTIONS_VIEW.workerFailed && typeof Worker === "function" && typeof classSectionsWorkerSource === "function") {
     try {
       if (!CLASS_SECTIONS_VIEW.worker) {
@@ -772,7 +806,7 @@ function classSectionsPairNoteHtml(round, group, source) {
   const list = classSectionsPairStatus(round, group, source);
   if (!list.length) return "";
   return `<div id="classSectionsPairs">${list.map((pair) => (pair.shared.length
-    ? `<p class="cs-note is-warn" data-cs-pair="${esc(pair.text)}" data-shared="${pair.shared.length}">같은 시간에 열 블록 쌍 ${esc(pair.text)}: 두 블록에 같은 교사 ${pair.shared.length}명(${esc(pair.shared.slice(0, 4).join(", "))}${pair.shared.length > 4 ? " …" : ""})이 있습니다. '전 학년 함께 다시 계산'을 누르면 겹치지 않게 다시 배정합니다.</p>`
+    ? `<p class="cs-note is-warn" data-cs-pair="${esc(pair.text)}" data-shared="${pair.shared.length}">같은 시간에 열 블록 쌍 ${esc(pair.text)}: 두 블록에 같은 교사 ${pair.shared.length}명(${esc(pair.shared.slice(0, 4).join(", "))}${pair.shared.length > 4 ? " …" : ""})이 있습니다. '자동 편성'을 누르면 겹치지 않게 다시 배정합니다.</p>`
     : `<p class="cs-note" data-cs-pair="${esc(pair.text)}" data-shared="0">같은 시간에 열 블록 쌍 ${esc(pair.text)}: 교사가 겹치지 않습니다(두 학년 블록 칸 수 합이 한 주 칸 수보다 많아 이 두 블록은 같은 시간에 엽니다).</p>`)).join("")}</div>`;
 }
 
@@ -819,7 +853,7 @@ async function classSectionsSolveSemesterCurrent() {
       const saved = entry.sectionResult;
       try {
         const check = await classSectionsRunSolver({ kind: "solve", input: classSectionsBuildInput(round, groups[index], entry) });
-        const fresh = classSectionsGroupSuggestions(groups[index], check.explain?.suggestions || []).filter((item) => ["more-blocks", "class-unit", "class-unit-rooms", "recommend-times", "check-teachers"].includes(item.type));
+        const fresh = classSectionsGroupSuggestions(groups[index], check.explain?.suggestions || []).filter((item) => ["more-blocks", "week-full", "class-unit", "class-unit-rooms", "recommend-times", "check-teachers"].includes(item.type));
         const fallback = [{ type: "check-teachers", verified: false, message: `교사 명단·5단계 교사 수를 확인하세요: ${[...new Set((saved.issues || []).filter((issue) => issue.type === "teacher-shortage").map((issue) => issue.department))].join(", ")} 교사가 그 시간에 모자랍니다.` }];
         const have = new Set((saved.explain?.suggestions || []).map((item) => item.type));
         const merged = [...(saved.explain?.suggestions || []), ...(fresh.length ? fresh : fallback).filter((item) => !have.has(item.type))];
@@ -837,7 +871,7 @@ async function classSectionsSolveSemesterCurrent() {
       settingsNow.blockPairs[String(round)] = pairs;
       const missing = all.pairing.pairs.reduce((sum, pair) => sum + (pair.missing || 0), 0);
       const changed = before && before !== pairs.map((pair) => `${pair.a}×${pair.b}`).sort().join(",");
-      pairText = ` · 같은 시간에 열 블록 쌍: ${all.pairing.pairs.map((pair) => `${pair.a.grade}학년 ${pair.a.letter}블록 × ${pair.b.grade}학년 ${pair.b.letter}블록`).join(", ")}(${missing ? `분반 ${missing}개 담당 교사 비움` : "교사 겹침 없음"})${changed ? " — 앞서 정한 쌍과 달라졌습니다. 다른 학기도 '전 학년 함께 다시 계산'으로 같은 쌍에 맞추세요" : ""}`;
+      pairText = ` · 같은 시간에 열 블록 쌍: ${all.pairing.pairs.map((pair) => `${pair.a.grade}학년 ${pair.a.letter}블록 × ${pair.b.grade}학년 ${pair.b.letter}블록`).join(", ")}(${missing ? `분반 ${missing}개 담당 교사 비움` : "교사 겹침 없음"})${changed ? " — 앞서 정한 쌍과 달라졌습니다. 다른 학기도 '자동 편성'으로 같은 쌍에 맞추세요" : ""}`;
     }
     classSectionsSetStatus(`${group.semester}학기 전 학년 ${groups.length}개 그룹을 함께 다시 계산했습니다${problems ? ` · 확인 필요 ${problems}개` : " · 모두 배정"}${orderText}${shortText}${pairText}.`, problems > 0 || Boolean(shortText), scope);
   } catch (error) {
@@ -952,7 +986,7 @@ function classSectionsApplyTimes() {
     }
   }
   CLASS_SECTIONS_VIEW.timesProposal = null;
-  classSectionsSetStatus(`블록 ${count}개에 시간을 넣었습니다. ‘전 학년 함께 다시 계산’으로 교사 배정을 다시 하세요.`);
+  classSectionsSetStatus(`블록 ${count}개에 시간을 넣었습니다. ‘자동 편성’으로 교사 배정을 다시 하세요.`);
   classSectionsChanged();
 }
 
@@ -1197,6 +1231,11 @@ function renderClassSectionsView() {
   const modeOptions = CLASS_SECTIONS_MODE_OPTIONS.map(([value, label]) => `<option value="${value}"${(entry.mode || "move") === value ? " selected" : ""}>${label}</option>`).join("");
   const statusHere = CLASS_SECTIONS_VIEW.status && CLASS_SECTIONS_VIEW.status.round === round && CLASS_SECTIONS_VIEW.status.group === group.key ? CLASS_SECTIONS_VIEW.status : null;
   const teacherNote = classSectionsTeacherNote(settings, group, input);
+  const semesterGroups = source.groups.filter((item) => item.semester === group.semester).length;
+  // 직접 조정 칸에 값이 들어간 수(4단계와 다른 분반 수·분반별 정원·블록별 최대·블록 시간·블록 수·정원·방식): 접어 둔 채로도 알 수 있게 요약에 적는다.
+  const manualCount = group.courses.filter((course) => entry.classCounts[course.key] !== undefined && Number(entry.classCounts[course.key]) !== course.classCount).length
+    + Object.values(entry.capacities || {}).filter(Boolean).length + Object.values(entry.blockMax || {}).filter(Boolean).length + Object.values(entry.blockTimes || {}).filter(Boolean).length
+    + (Number(entry.blocks) ? 1 : 0) + (entry.mode && entry.mode !== "move" ? 1 : 0);
   panel.innerHTML = `${basis}
     <div class="cs-groups" role="group" aria-label="편성할 그룹">${groupsHtml}</div>
     ${classSectionsMergeHtml(source)}
@@ -1206,38 +1245,45 @@ function renderClassSectionsView() {
       ${stale && entry.sectionResult?.homeroomRoomsKey && entry.sectionResult.homeroomRoomsKey !== classSectionsHomeroomBasisKey(group) ? '<span class="cs-note is-warn" id="classSectionsStaleReason">내년 반 배정표(진급 반 편성)가 바뀌어 담임반·학급 단위 배정을 다시 계산해야 합니다.</span>' : ""}
       <span class="cs-note" id="classSectionsTeacherNote">${esc(teacherNote)}</span>
     </div>
-    <section class="cs-card" aria-label="편성 기준">
-      <h4>기준</h4>
-      <div class="cs-fields">
-        <label>기본 정원 <input class="cs-num" type="number" min="1" max="60" value="${base.capacity}" data-cs-field="defaultCapacity" data-focus-key="cs-capacity" aria-label="분반 기본 정원"></label>
-        <label>블록 수 <input class="cs-num" type="number" min="1" max="10" value="${base.blocks}" data-cs-field="blocks" data-focus-key="cs-blocks" aria-label="블록 수"></label>
-        ${(() => { const hint = classSectionsSuggestedBlocks(group, settings); return hint.removed ? `<span class="cs-note${Number(entry.blocks) && Number(entry.blocks) !== hint.blocks ? " is-warn" : ""}" id="classSectionsBlocksHint">학급 단위 과목 ${hint.removed}개를 빼면 블록 ${hint.blocks}개(택${group.choice} − ${hint.removed}) 제안${Number(entry.blocks) && Number(entry.blocks) !== hint.blocks ? ` · 지금 ${entry.blocks}개로 직접 입력됨` : ""}</span>` : ""; })()}
-        <label>블록당 최대 분반 <input class="cs-num" type="number" min="1" max="40" value="${base.maxSectionsPerBlock || ""}" data-cs-field="maxSectionsPerBlock" data-focus-key="cs-max" aria-label="블록당 최대 분반 수"></label>
-        <label>편성 방식 <select data-cs-field="mode" data-focus-key="cs-mode" aria-label="편성 방식">${modeOptions}</select></label>
-        <span class="cs-note${limit && sum > limit ? " is-warn" : ""}">분반 합 ${sum}개${limit ? ` / 블록 ${base.blocks}개 × ${base.maxSectionsPerBlock}개 = ${limit}개` : ""}</span>
-      </div>
-      ${classSectionsClassesHtml(group, entry)}
-      <details class="cs-advanced"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length || CLASS_SECTIONS_VIEW.timesProposal ? " open" : ""}>
-        <summary>블록별로 다르게 · 블록 시간(요일·교시)</summary>
-        <p class="cs-note">블록 시간을 넣으면 교사 불가 시간·다른 학년 블록과의 겹침을 점검합니다. 블록 시수 = 과목 학점.</p>
-        <table class="cs-table"><thead><tr><th>블록</th><th>최대 분반</th><th>요일·교시</th></tr></thead><tbody>${blockRows}</tbody></table>
-        <div class="cs-actions"><button class="button" id="classSectionsRecommendTimes" type="button" title="이 학기 모든 학년 그룹의 블록에 요일·교시를 추천합니다(고정 시간·교사 불가 시간·학년 간 교사 수 고려)"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>블록 시간 추천</button>
-          <span class="cs-note">한 주 ${esc(settings.gridDays)} × ${settings.gridPeriods}교시 격자(교사·시간 설정에서 바꿈). 전체 시간표가 아니라 블록 칸만 정합니다.</span></div>
-        ${classSectionsTimesProposalHtml(round, source, group)}
-      </details>
-      <div class="cs-scroll" data-scroll-key="cs-courses"><table class="cs-table">
-        <thead><tr><th>과목</th><th>신청</th><th>4단계 분반</th><th>6단계 분반</th><th>분반별 정원</th><th>운영</th><th>담당 교과</th><th>특별실</th></tr></thead>
-        <tbody>${courseRows}</tbody></table></div>
+    <section class="cs-card cs-auto" aria-label="자동 편성">
       <div class="cs-actions">
-        <button class="button button-primary" id="classSectionsSolve" type="button"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>편성 계산</button>
-        <button class="button" id="classSectionsCompare" type="button"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>방식 비교·추천</button>
-        ${source.groups.filter((item) => item.semester === group.semester).length > 1 ? `<button class="button" id="classSectionsSolveSemester" type="button" title="${group.semester}학기 그룹 ${source.groups.filter((item) => item.semester === group.semester).length}개를 함께 풀어 학년 간 교사 겹침이 편성 순서에 따라 달라지지 않게 합니다"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>전 학년 함께 다시 계산</button>` : ""}
+        ${semesterGroups > 1
+          ? `<button class="button button-primary" id="classSectionsSolveSemester" type="button" title="${group.semester}학기 그룹 ${semesterGroups}개를 함께 풀어 학년 간 교사 겹침까지 맞춥니다. 블록 시간은 7단계 시간표가 정합니다."${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>자동 편성</button>`
+          : `<button class="button button-primary" id="classSectionsAuto" type="button" title="이 그룹을 편성합니다. 블록 시간은 7단계 시간표가 정합니다."${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>자동 편성</button>`}
         ${result ? `<button class="button" id="classSectionsPartial" type="button"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>바뀐 학생만 다시 계산</button>` : ""}
         <span class="cs-status" id="classSectionsStatus" role="status" aria-live="polite" data-state="${statusHere?.error ? "error" : "ok"}">${esc(statusHere?.text || "")}</span>
       </div>
+      <p class="cs-note${limit && sum > limit ? " is-warn" : ""}" id="classSectionsAutoSummary">${semesterGroups > 1 ? `${esc(group.semester)}학기 ${semesterGroups}개 그룹을 함께 편성` : "이 그룹을 편성"} · 분반은 4단계 확정 수 그대로(합 ${sum}개${limit ? ` / 블록 ${base.blocks}개 × 최대 ${base.maxSectionsPerBlock}분반 = ${limit}개` : ""}) · 정원 ${base.capacity}명 · ${esc((CLASS_SECTIONS_MODE_OPTIONS.find(([value]) => value === (entry.mode || "move")) || [, "완전 이동"])[1])} · 시간표가 나오는 안만 제안(한 주 칸·교실 수·교과 교사 수)${manualCount ? ` · <strong>직접 조정 ${manualCount}개 적용 중</strong>` : ""}</p>
+      ${classSectionsClassesHtml(group, entry)}
+      <details class="cs-advanced" id="classSectionsManual"${CLASS_SECTIONS_VIEW.manualOpen ? " open" : ""}>
+        <summary>직접 조정 — 기준·과목별 분반·블록 시간·편성 방식</summary>
+        <div class="cs-fields">
+          <label>기본 정원 <input class="cs-num" type="number" min="1" max="60" value="${base.capacity}" data-cs-field="defaultCapacity" data-focus-key="cs-capacity" aria-label="분반 기본 정원"></label>
+          <label>블록 수 <input class="cs-num" type="number" min="1" max="10" value="${base.blocks}" data-cs-field="blocks" data-focus-key="cs-blocks" aria-label="블록 수"></label>
+          ${(() => { const hint = classSectionsSuggestedBlocks(group, settings); return hint.removed ? `<span class="cs-note${Number(entry.blocks) && Number(entry.blocks) !== hint.blocks ? " is-warn" : ""}" id="classSectionsBlocksHint">학급 단위 과목 ${hint.removed}개를 빼면 블록 ${hint.blocks}개(택${group.choice} − ${hint.removed}) 제안${Number(entry.blocks) && Number(entry.blocks) !== hint.blocks ? ` · 지금 ${entry.blocks}개로 직접 입력됨` : ""}</span>` : ""; })()}
+          <label>블록당 최대 분반 <input class="cs-num" type="number" min="1" max="40" value="${base.maxSectionsPerBlock || ""}" data-cs-field="maxSectionsPerBlock" data-focus-key="cs-max" aria-label="블록당 최대 분반 수"></label>
+          <label>편성 방식 <select data-cs-field="mode" data-focus-key="cs-mode" aria-label="편성 방식">${modeOptions}</select></label>
+          <span class="cs-note${limit && sum > limit ? " is-warn" : ""}">분반 합 ${sum}개${limit ? ` / 블록 ${base.blocks}개 × ${base.maxSectionsPerBlock}개 = ${limit}개` : ""}</span>
+        </div>
+        <details class="cs-advanced" id="classSectionsBlocksBox"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length || CLASS_SECTIONS_VIEW.timesProposal ? " open" : ""}>
+          <summary>블록별로 다르게 · 블록 시간(요일·교시)</summary>
+          <p class="cs-note">보통은 비워 두세요. 블록 시간은 7단계 시간표가 공강·교사 겹침을 보며 정합니다. 넣으면 교사 불가 시간·다른 학년 블록과의 겹침을 점검합니다. 블록 시수 = 과목 학점.</p>
+          <table class="cs-table"><thead><tr><th>블록</th><th>최대 분반</th><th>요일·교시</th></tr></thead><tbody>${blockRows}</tbody></table>
+          <div class="cs-actions"><button class="button" id="classSectionsRecommendTimes" type="button" title="이 학기 모든 학년 그룹의 블록에 요일·교시를 추천합니다(고정 시간·교사 불가 시간·학년 간 교사 수 고려)"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>블록 시간 추천</button>
+            <span class="cs-note">한 주 ${esc(settings.gridDays)} × ${settings.gridPeriods}교시 격자(교사·시간 설정에서 바꿈). 전체 시간표가 아니라 블록 칸만 정합니다.</span></div>
+          ${classSectionsTimesProposalHtml(round, source, group)}
+        </details>
+        <div class="cs-scroll" data-scroll-key="cs-courses"><table class="cs-table">
+          <thead><tr><th>과목</th><th>신청</th><th>4단계 분반</th><th>6단계 분반</th><th>분반별 정원</th><th>운영</th><th>담당 교과</th><th>특별실</th></tr></thead>
+          <tbody>${courseRows}</tbody></table></div>
+        <div class="cs-actions">
+          <button class="button" id="classSectionsSolve" type="button" title="이 그룹만 계산합니다(다른 학년 그룹의 저장 결과를 겹침 기준으로 씀)"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>이 그룹만 계산</button>
+          <button class="button" id="classSectionsCompare" type="button"${CLASS_SECTIONS_VIEW.running ? " disabled" : ""}>방식 비교·추천</button>
+        </div>
+      </details>
     </section>
     ${classSectionsCompareHtml(group, entry)}
-    ${result ? classSectionsResultHtml(round, group, entry, result, settings) : '<p class="cs-empty">아직 편성하지 않았습니다. 기준을 확인하고 ‘편성 계산’을 누르세요.</p>'}
+    ${result ? classSectionsResultHtml(round, group, entry, result, settings) : '<p class="cs-empty">아직 편성하지 않았습니다. ‘자동 편성’을 누르세요.</p>'}
     ${result && typeof classSectionsEditHtml === "function" ? classSectionsEditHtml(round, group, entry, result) : ""}
     ${classSectionsClassUnitHtml(group, entry, settings)}`;
 }
@@ -1346,7 +1392,7 @@ function classSectionsOtherChangedHtml(round, group, result) {
   const newer = source.groups.filter((other) => other.key !== group.key && other.semester === group.semester && other.grade !== group.grade)
     .filter((other) => { const saved = store[other.key]?.sectionResult; return saved && saved.batch !== result.batch && String(saved.createdAt) > String(result.createdAt); });
   if (!newer.length) return "";
-  return `<p class="cs-note is-warn" id="classSectionsOtherChanged">다른 학년 편성(${classSectionsEsc(newer.map((item) => item.label).join(", "))})이 이 결과보다 나중에 바뀌어 학년 간 교사 겹침을 다시 확인해야 합니다. ‘전 학년 함께 다시 계산’을 권합니다.</p>`;
+  return `<p class="cs-note is-warn" id="classSectionsOtherChanged">다른 학년 편성(${classSectionsEsc(newer.map((item) => item.label).join(", "))})이 이 결과보다 나중에 바뀌어 학년 간 교사 겹침을 다시 확인해야 합니다. ‘자동 편성’을 권합니다.</p>`;
 }
 
 var CLASS_SECTIONS_UNASSIGNED_REASONS = { capacity: "정원 부족", "no-block": "같은 블록 과목", closed: "폐강", "too-many": "블록 수 초과", "class-unit-other-room": "학급 단위 과목(그 반은 이동)" };
@@ -1598,6 +1644,15 @@ async function classSectionsApplySuggestion(index) {
       entry.capacities[course.courseKey] = Array(course.toSections).fill(course.capacity).join(",");
     }
   } else if (item.type === "more-blocks") {
+    // 제안을 낸 뒤 같은 학년·학기의 다른 그룹 블록이 늘었을 수 있다(두 그룹 제안을 하나씩은 되지만 함께는 한 주를 넘음):
+    // 적용하기 직전에 지금 남는 칸으로 다시 본다(7단계 사전 점검 P1과 같은 셈).
+    const spare = classSectionsWeekSpare(classSectionsBuildInput(context.round, context.group, entry));
+    const hours = Number(item.hours) || 0;
+    if (spare !== null && hours > spare) {
+      classSectionsSetStatus(`지금은 ${context.group.targetGrade}학년 ${context.group.semester}학기 한 주에 남는 칸이 ${spare}칸이라 ${hours}시간 블록을 더 넣으면 시간표가 나오지 않습니다(같은 학기 다른 그룹의 블록이 늘었습니다). 블록 수는 그대로 두었습니다. 다시 계산하면 지금 조건으로 제안을 다시 찾습니다.`, true, { round: context.round, group: context.group.key });
+      renderClassSections();
+      return;
+    }
     entry.blocks = item.blocks;
   } else if (item.type === "class-unit") {
     // 희망과 다른 학생이 생기면 미리 묻는다(제안 문구에도 n명(%)을 보임).
@@ -1622,7 +1677,7 @@ function classSectionsHandleClick(event) {
   if (!target) return;
   if (typeof classSectionsEditClick === "function" && classSectionsEditClick(target)) return;
   if (target.dataset.csGroup) { CLASS_SECTIONS_VIEW.group = target.dataset.csGroup; CLASS_SECTIONS_VIEW.search = ""; CLASS_SECTIONS_VIEW.status = null; renderClassSections(); return; }
-  if (target.id === "classSectionsSolve") return void classSectionsSolveCurrent("solve");
+  if (target.id === "classSectionsSolve" || target.id === "classSectionsAuto") return void classSectionsSolveCurrent("solve");
   if (target.id === "classSectionsCompare") return void classSectionsSolveCurrent("compare");
   if (target.id === "classSectionsPartial") return void classSectionsSolveCurrent("partial");
   if (target.id === "classSectionsSolveSemester") return void classSectionsSolveSemesterCurrent();
@@ -1982,6 +2037,14 @@ function initClassSections() {
   const content = document.getElementById("classSectionsContent");
   content.addEventListener("click", classSectionsHandleClick);
   content.addEventListener("change", classSectionsHandleChange);
+  // '직접 조정' 접기 상태를 다시 그려도 지킨다(toggle은 거품이 없어 잡기 단계에서 받음).
+  // 이 PC에서 연 적이 있으면 다음에도 펼쳐 둔다(보기 편의만, 작업 자료 아님).
+  try { CLASS_SECTIONS_VIEW.manualOpen = localStorage.getItem(CLASS_SECTIONS_MANUAL_KEY) === "1"; } catch { /* 저장소를 못 쓰면 접힌 채로 */ }
+  content.addEventListener("toggle", (event) => {
+    if (event.target?.id !== "classSectionsManual") return;
+    CLASS_SECTIONS_VIEW.manualOpen = event.target.open;
+    try { localStorage.setItem(CLASS_SECTIONS_MANUAL_KEY, event.target.open ? "1" : "0"); } catch { /* 보기 편의만 */ }
+  }, true);
   document.getElementById("classSectionsTeachersOpen")?.addEventListener("click", () => {
     renderClassSectionsTeachers();
     document.getElementById("classSectionsTeacherDialog")?.showModal();
