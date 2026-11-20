@@ -788,3 +788,23 @@ test("블록 늘리기 제안의 한 주 칸: 7단계 사전 점검 P1 학년 �
   ctx.timetablePrecheckFor = () => { throw new Error("no data"); };
   assert.equal(ctx.classSectionsWeekSpare(input), null);
 });
+
+test("블록 늘리기 제안 적용: 적용하기 직전에 지금 남는 주 칸으로 다시 보고, 그사이 다른 그룹 블록이 늘어 모자라면 블록 수를 바꾸지 않음", async () => {
+  const ctx = context();
+  ctx.renderClassSections = () => {};
+  ctx.persistStateSoon = () => {};
+  ctx.classSectionsSolveCurrent = async () => {};
+  const context6 = ctx.classSectionsCurrent();
+  const { entry, group } = context6;
+  entry.sectionResult = { explain: { suggestions: [{ type: "more-blocks", verified: true, blocks: 3, hours: 3, message: "블록을 3개로 늘리면" }] } };
+  let spare = 2;
+  ctx.timetablePrecheckFor = () => ({ grades: [{ grade: String(group.targetGrade), slots: 35, total: 35 - spare, blockHours: 0 }] });
+  ctx.classSectionsTimetablePrecheckFor = () => ({ blockHours: 0 });
+  await ctx.classSectionsApplySuggestion(0);
+  assert.equal(entry.blocks, undefined, "칸이 모자라면 그대로");
+  assert.match(ctx.CLASS_SECTIONS_VIEW.status.text, /한 주에 남는 칸이 2칸이라 3시간 블록을 더 넣으면 시간표가 나오지 않습니다/);
+  assert.equal(ctx.CLASS_SECTIONS_VIEW.status.error, true);
+  spare = 3;
+  await ctx.classSectionsApplySuggestion(0);
+  assert.equal(entry.blocks, 3);
+});

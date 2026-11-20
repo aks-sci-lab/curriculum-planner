@@ -1265,7 +1265,7 @@ function renderClassSectionsView() {
           <label>편성 방식 <select data-cs-field="mode" data-focus-key="cs-mode" aria-label="편성 방식">${modeOptions}</select></label>
           <span class="cs-note${limit && sum > limit ? " is-warn" : ""}">분반 합 ${sum}개${limit ? ` / 블록 ${base.blocks}개 × ${base.maxSectionsPerBlock}개 = ${limit}개` : ""}</span>
         </div>
-        <details class="cs-advanced"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length || CLASS_SECTIONS_VIEW.timesProposal ? " open" : ""}>
+        <details class="cs-advanced" id="classSectionsBlocksBox"${Object.keys(entry.blockMax).length || Object.keys(entry.blockTimes).length || CLASS_SECTIONS_VIEW.timesProposal ? " open" : ""}>
           <summary>블록별로 다르게 · 블록 시간(요일·교시)</summary>
           <p class="cs-note">보통은 비워 두세요. 블록 시간은 7단계 시간표가 공강·교사 겹침을 보며 정합니다. 넣으면 교사 불가 시간·다른 학년 블록과의 겹침을 점검합니다. 블록 시수 = 과목 학점.</p>
           <table class="cs-table"><thead><tr><th>블록</th><th>최대 분반</th><th>요일·교시</th></tr></thead><tbody>${blockRows}</tbody></table>
@@ -1642,6 +1642,15 @@ async function classSectionsApplySuggestion(index) {
       entry.capacities[course.courseKey] = Array(course.toSections).fill(course.capacity).join(",");
     }
   } else if (item.type === "more-blocks") {
+    // 제안을 낸 뒤 같은 학년·학기의 다른 그룹 블록이 늘었을 수 있다(두 그룹 제안을 하나씩은 되지만 함께는 한 주를 넘음):
+    // 적용하기 직전에 지금 남는 칸으로 다시 본다(7단계 사전 점검 P1과 같은 셈).
+    const spare = classSectionsWeekSpare(classSectionsBuildInput(context.round, context.group, entry));
+    const hours = Number(item.hours) || 0;
+    if (spare !== null && hours > spare) {
+      classSectionsSetStatus(`지금은 ${context.group.targetGrade}학년 ${context.group.semester}학기 한 주에 남는 칸이 ${spare}칸이라 ${hours}시간 블록을 더 넣으면 시간표가 나오지 않습니다(같은 학기 다른 그룹의 블록이 늘었습니다). 블록 수는 그대로 두었습니다. 다시 계산하면 지금 조건으로 제안을 다시 찾습니다.`, true, { round: context.round, group: context.group.key });
+      renderClassSections();
+      return;
+    }
     entry.blocks = item.blocks;
   } else if (item.type === "class-unit") {
     // 희망과 다른 학생이 생기면 미리 묻는다(제안 문구에도 n명(%)을 보임).

@@ -1795,7 +1795,7 @@ function classSectionsTeacherSuggestions(model, result, input, deadline) {
     const room = classSectionsExtraBlockRoom(model, input);
     const trial = classSectionsSolve({ ...input, blocks, suggest: false });
     // 교사 수로는 되어도 한 주 칸이 모자라면 시간표가 나오지 않으므로 제안하지 않고 이유만 알린다(적용 단추 없음).
-    if (ok(trial) && room.fits) out.push({ type: "more-blocks", verified: true, blocks: blockCount + 1,
+    if (ok(trial) && room.fits) out.push({ type: "more-blocks", verified: true, blocks: blockCount + 1, hours: room.hours,
       message: `블록을 ${blockCount + 1}개로 늘리면(새 블록 시간은 시간표에서 정함) 교사 수 안에서 모두 배정됩니다${room.spare === null ? "" : ` · 한 주에 남는 칸 ${room.spare}칸 ≥ 새 블록 ${room.hours}시간`}.` });
     else if (ok(trial)) out.push({ type: "week-full", verified: false, blocks: blockCount + 1, hours: room.hours, spare: room.spare,
       message: `블록을 ${blockCount + 1}개로 늘리면 교사 수로는 배정되지만, ${model.targetGrade ? `${model.targetGrade}학년 ` : ""}한 주에 남는 칸이 ${room.spare}칸이라 ${room.hours}시간 블록을 더 넣으면 시간표가 나오지 않습니다(7단계 사전 점검 P1). 블록 수는 그대로 두었습니다.` });
