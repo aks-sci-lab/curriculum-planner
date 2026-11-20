@@ -328,7 +328,7 @@ function hoursClassesLink(item) {
       title: `편제표 연동 · ${item.basis} · 개설반 = 편제표 × 학급 수, 누르면 ${item.grade}학년 학급 수 칸으로 갑니다(4단계 기준 설정과 같은 값)` };
   }
   return { attrs: { "data-hours-goto4": `${item.currentGrade}|${item.semester}|${item.subject}` }, label: `${name} — 4단계에서 고치기`,
-    title: `4단계 연동 · ${item.basis} · 누르면 4단계에서 고칩니다` };
+    title: `4단계 연동 · ${item.basis} · 누르면 팝업에서 4단계 개설 학급수·개설/폐강을 고칩니다` };
 }
 
 function hoursClassesLinkHtml(link, value) {
@@ -2793,7 +2793,9 @@ function initHoursStats() {
     const goto4 = event.target.closest("[data-hours-goto4]");
     if (goto4) {
       const [grade, semester, ...subject] = goto4.dataset.hoursGoto4.split("|");
-      if (typeof focusAggregateCourse === "function") focusAggregateCourse(grade, semester, subject.join("|"));
+      // 화면을 옮기지 않고 팝업에서 4단계 값(개설 학급수·개설/폐강)을 고친다. 팝업 안 '4단계 집계표에서 보기'로만 단계를 옮긴다.
+      if (typeof openAggregateCourseQuick === "function") openAggregateCourseQuick(grade, semester, subject.join("|"), { onChange: () => renderHoursStats() });
+      else if (typeof focusAggregateCourse === "function") focusAggregateCourse(grade, semester, subject.join("|"));
       else switchWorkflowStep("4");
       return;
     }
@@ -2810,8 +2812,10 @@ function initHoursStats() {
     }
     const thresholds = event.target.closest("[data-hours-thresholds]");
     if (thresholds) {
+      // 4단계 기준 설정은 문서 맨 아래 팝업이라 단계를 옮기지 않고 그대로 연다(닫으면 시수표를 다시 그림).
       thresholds.closest("dialog")?.close?.();
-      switchWorkflowStep("4");
+      const settings = document.getElementById("aggregateSettingsDialog");
+      settings?.addEventListener("close", () => renderHoursStats(), { once: true });
       document.getElementById("openAggregateSettings")?.click();
       return;
     }
